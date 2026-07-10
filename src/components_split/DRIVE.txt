@@ -1,0 +1,88 @@
+        {activeTab === "DRIVE" && (
+          <div style={{ display: "grid", gap: 24 }}>
+            <div className="card">
+              <h2 style={{ marginTop: 0, fontSize: 18 }}><Ico name="cloud" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('drv_upload_title')}</h2>
+              <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 600 ? "1fr 1fr 1fr" : "1fr", gap: 15, marginBottom: 20 }}>
+                <div>
+                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub}}>{t('drv_doc_name')}</label>
+                  <input placeholder={t('drv_doc_name_ph')} value={newLink.title} onChange={(e: any)=>setNewLink({...newLink, title:e.target.value})} />
+                </div>
+                <div>
+                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub}}>{t('drv_link_label')}</label>
+                  <input placeholder="https://..." value={newLink.url} onChange={(e: any)=>setNewLink({...newLink, url:e.target.value})} />
+                </div>
+                <div>
+                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub}}>{t('drv_audience')}</label>
+                  <select value={linkAudience} onChange={(e: any)=>setLinkAudience(e.target.value as any)}>
+                    <option value="ALL_STUDENTS">{t('drv_aud_all')}</option>
+                    <option value="TEACHERS">{t('drv_aud_teachers')}</option>
+                    <option value="SPECIFIC_STUDENT">{t('drv_aud_specific')}</option>
+                  </select>
+                </div>
+              </div>
+
+              {linkAudience === "SPECIFIC_STUDENT" && (
+                <div style={{marginBottom: 20}}>
+                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub}}>{t('drv_pick_student')}</label>
+                  <select value={linkTargetId} onChange={(e: any)=>setLinkTargetId(e.target.value)} style={{maxWidth: 400}}>
+                    <option value="">{t('drv_pick_student_opt')}</option>
+                    {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              <button onClick={handleAddLink} style={{ background: C.accent, color: "#fff", padding: "12px 24px" }}>{t('drv_save_doc')}</button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 800 ? "1fr 1fr 1fr" : "1fr", gap: 20 }}>
+               <div className="card" style={{background: C.bg, border: `1px solid ${C.border}`}}>
+                 <h3 style={{marginTop: 0, fontSize: 14, color: C.err, borderBottom: `2px solid ${C.err}`, paddingBottom: 10}}><Ico name="lock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('drv_internal')}</h3>
+                 <div style={{display: 'grid', gap: 10}}>
+                   {sharedLinks.filter(l => l && l.audience === "TEACHERS").map(l => (
+                     <div key={l.id} style={{background: C.card, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`}}>
+                       <div style={{fontWeight: 800, fontSize: 13, marginBottom: 8}}>{getFileIcon(l.url)} {l.title}</div>
+                       <div style={{display: 'flex', gap: 5}}>
+                         <a href={l.url} target="_blank" rel="noreferrer" style={{fontSize: 11, background: C.accent, color: '#fff', padding: '4px 8px', borderRadius: 4, textDecoration: 'none'}}>{t('drv_open')}</a>
+                         <button onClick={()=>copyToClipboard(l.url)} style={{fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 8px', cursor: 'pointer', color: C.text}}>Copy</button>
+                         <button onClick={()=>{ const nx=sharedLinks.filter(x=>x && x.id!==l.id); setSharedLinks(nx as SharedLink[]); syncData({sharedLinks:nx}); }} style={{fontSize: 11, background: `${C.err}15`, color: C.err, padding: '4px 8px', marginLeft: 'auto'}}>{t('common_delete')}</button>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+
+               <div className="card" style={{background: C.bg, border: `1px solid ${C.border}`}}>
+                 <h3 style={{marginTop: 0, fontSize: 14, color: C.succ, borderBottom: `2px solid ${C.succ}`, paddingBottom: 10}}><Ico name="pin" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('drv_common')}</h3>
+                 <div style={{display: 'grid', gap: 10}}>
+                   {sharedLinks.filter(l => l && l.audience === "ALL_STUDENTS").map(l => (
+                     <div key={l.id} style={{background: C.card, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`}}>
+                       <div style={{fontWeight: 800, fontSize: 13, marginBottom: 8}}>{getFileIcon(l.url)} {l.title}</div>
+                       <div style={{display: 'flex', gap: 5}}>
+                         <a href={l.url} target="_blank" rel="noreferrer" style={{fontSize: 11, background: C.accent, color: '#fff', padding: '4px 8px', borderRadius: 4, textDecoration: 'none'}}>{t('drv_open')}</a>
+                         <button onClick={()=>copyToClipboard(l.url)} style={{fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 8px', cursor: 'pointer', color: C.text}}>Copy</button>
+                         <button onClick={()=>{ const nx=sharedLinks.filter(x=>x && x.id!==l.id); setSharedLinks(nx as SharedLink[]); syncData({sharedLinks:nx}); }} style={{fontSize: 11, background: `${C.err}15`, color: C.err, padding: '4px 8px', marginLeft: 'auto'}}>{t('common_delete')}</button>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+
+               <div className="card" style={{background: C.bg, border: `1px solid ${C.border}`}}>
+                 <h3 style={{marginTop: 0, fontSize: 14, color: C.warn, borderBottom: `2px solid ${C.warn}`, paddingBottom: 10}}><Ico name="user" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('drv_personal')}</h3>
+                 <div style={{display: 'grid', gap: 10}}>
+                   {sharedLinks.filter(l => l && l.audience === "SPECIFIC_STUDENT").map(l => (
+                     <div key={l.id} style={{background: C.card, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`}}>
+                       <div style={{fontSize: 10, color: C.warn, fontWeight: 800, marginBottom: 4}}>{t('drv_assigned_to')} {l.targetStudentName}</div>
+                       <div style={{fontWeight: 800, fontSize: 13, marginBottom: 8}}>{getFileIcon(l.url)} {l.title}</div>
+                       <div style={{display: 'flex', gap: 5}}>
+                         <a href={l.url} target="_blank" rel="noreferrer" style={{fontSize: 11, background: C.accent, color: '#fff', padding: '4px 8px', borderRadius: 4, textDecoration: 'none'}}>{t('drv_open')}</a>
+                         <button onClick={()=>copyToClipboard(l.url)} style={{fontSize: 11, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 8px', cursor: 'pointer', color: C.text}}>Copy</button>
+                         <button onClick={()=>{ const nx=sharedLinks.filter(x=>x && x.id!==l.id); setSharedLinks(nx as SharedLink[]); syncData({sharedLinks:nx}); }} style={{fontSize: 11, background: `${C.err}15`, color: C.err, padding: '4px 8px', marginLeft: 'auto'}}>{t('common_delete')}</button>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+            </div>
+          </div>
+        )}

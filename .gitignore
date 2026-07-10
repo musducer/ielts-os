@@ -24,3 +24,23 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Python/cache
+__pycache__/
+*.py[cod]
+
+# Local agent/editor state
+.agents/
+.claude/
+.codex/
+.mcp.json
+skills/
+skills-lock.json
+
+# Backups/temp files
+.emoji_backup/
+*.backup
+*.bak_*
+*.encoding-backup
+*.lnk
+~$*

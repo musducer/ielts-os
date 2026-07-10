@@ -1,0 +1,518 @@
+  if (reviewQuiz) {
+      let currentContext = "";
+      const rvSections = reviewQuiz.quiz.sections || [];
+      const rvHasSections = rvSections.length > 1;
+      const rvMemberOf: Record<string, number> = {};
+      rvSections.forEach((sec, i) => (sec.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
+      const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
+      const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
+      const rvIsListening = reviewQuiz.quiz.type === "Listening";
+      // Timestamp [mm:ss]/[h:mm:ss] trong giải thích AI -> nút bấm tua audio review tới đúng mốc
+      const rvSeek = (tstr: string) => {
+          const p = tstr.replace(/[\[\]]/g, '').split(':').map(Number);
+          const secs = p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
+          const el = document.getElementById('review-audio') as HTMLAudioElement | null;
+          if (!el) return;
+          // Chặn mốc vượt độ dài file (mốc rác) — không tua bậy
+          if (el.duration && isFinite(el.duration) && secs > el.duration) return;
+          el.currentTime = secs; el.play();
+      };
+      const rvRenderExplain = (txt: string) => {
+          const parts = String(txt || '').split(/(\[(?:\d{1,2}:)?\d{1,2}:\d{2}\])/g);
+          return parts.map((p, pi) => /^\[(?:\d{1,2}:)?\d{1,2}:\d{2}\]$/.test(p)
+              ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
+              : <React.Fragment key={pi}>{p}</React.Fragment>);
+      };
+      return (
+          <div style={{ height: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {globalStyles}
+              <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
+                  <div style={{fontWeight: 900, fontSize: 18}}>REVIEW: {reviewQuiz.quiz.title}</div>
+                  <button onClick={() => setReviewQuiz(null)} style={{background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '8px 20px'}}>Back</button>
+              </div>
+              {rvHasSections && (
+                  <div style={{ flex: 'none', display: 'flex', background: C.card, borderBottom: `1px solid ${C.border}`, padding: '0 24px', overflowX: 'auto', zIndex: 90 }}>
+                      {rvSections.map((sec, idx) => {
+                          const isActive = rvActiveIdx === idx;
+                          return (
+                              <div key={idx} onClick={() => setReviewSectionIdx(idx)} style={{ flexShrink: 0, padding: '12px 22px', cursor: 'pointer', fontWeight: isActive ? 900 : 600, fontSize: 14, color: isActive ? C.accent : C.sub, borderBottom: isActive ? `3px solid ${C.accent}` : '3px solid transparent', transition: '0.15s', whiteSpace: 'nowrap' }}>
+                                  {rvIsListening ? `Part ${idx + 1}` : `Passage ${idx + 1}`}
+                              </div>
+                          );
+                      })}
+                  </div>
+              )}
+              {/* THANH AUDIO DÍNH TRÊN — sao chép phòng thi: play/pause · thời gian · thanh tua · tốc độ; luôn hiện, khỏi cuộn tìm */}
+              {rvIsListening && reviewQuiz.quiz.audioUrl && (() => {
+                  const src = reviewQuiz.quiz.audioUrl;
+                  const safeCur = Math.min(rvAudioCur, rvAudioDur || 0);
+                  const pct = rvAudioDur ? (safeCur / rvAudioDur) * 100 : 0;
+                  return (
+                      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 24px', background: C.card, borderBottom: `1px solid ${C.border}`, zIndex: 80 }}>
+                          <audio id="review-audio" ref={audioRef} preload="auto" playsInline src={src}
+                              onContextMenu={(e) => e.preventDefault()}
+                              onLoadedMetadata={(e: any) => setRvAudioDur(e.currentTarget.duration || 0)}
+                              onTimeUpdate={(e: any) => setRvAudioCur(e.currentTarget.currentTime || 0)}
+                              onPlay={() => setRvAudioPlaying(true)} onPause={() => setRvAudioPlaying(false)} onEnded={() => setRvAudioPlaying(false)}
+                              onError={(e: any) => console.warn("Review audio source failed:", e.currentTarget.error)}
+                              style={{ display: 'none' }} />
+                          <button title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) requestReviewAudioPlayback(); else a.pause(); }}
+                              style={{ width: 32, height: 32, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, color: C.text, cursor: 'pointer', padding: 0 }}>
+                              {rvAudioPlaying ? <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
+                          </button>
+                          <span style={{ flex: 'none', fontFamily: 'Consolas, monospace', fontSize: 12, color: C.sub }}>{fmtTime(Math.floor(safeCur))}</span>
+                          <input type="range" min={0} max={rvAudioDur || 0} step={0.1} value={safeCur}
+                              onChange={(e: any) => { const a = audioRef.current; if (a) { a.currentTime = Number(e.target.value); setRvAudioCur(Number(e.target.value)); } }}
+                              style={{ flex: 1, height: 4, borderRadius: 2, appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer', background: `linear-gradient(to right, ${C.accent} 0%, ${C.accent} ${pct}%, ${C.border} ${pct}%, ${C.border} 100%)` }} />
+                          <span style={{ flex: 'none', fontFamily: 'Consolas, monospace', fontSize: 12, color: C.sub }}>{fmtTime(Math.floor(rvAudioDur))}</span>
+                          <div style={{ display: 'flex', gap: 5, flex: 'none' }}>
+                              {[1, 1.25, 1.5, 2].map(r => (
+                                  <button key={r} title={`Speed ${r}x`} onClick={() => { setPlaybackRate(r); const a = audioRef.current; if (a) a.playbackRate = r; }}
+                                      style={{ border: `1px solid ${playbackRate === r ? C.accent : C.border}`, background: playbackRate === r ? C.accent : C.bg, color: playbackRate === r ? '#fff' : C.sub, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}>{r}×</button>
+                              ))}
+                          </div>
+                      </div>
+                  );
+              })()}
+              <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                  {reviewQuiz.quiz.type !== "Listening" && (() => {
+                      const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
+                      const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
+                      const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
+                      const hasSlots = headingQs.length > 0 && /\[HEADING_SLOT\]/i.test(passageHtml);
+                      const headingOpts: any[] = (headingQs.find((q: any) => q.options && q.options.length)?.options) || [];
+                      const rnorm = (v: any) => String(v ?? "").trim().toLowerCase();
+                      const headingBody = (roman: string) => {
+                          const o = headingOpts.find((opt: any) => {
+                              const tt = typeof opt === 'string' ? opt : (opt.text || "");
+                              const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]/i);
+                              return m && rnorm(m[1]) === rnorm(roman);
+                          });
+                          const tt = o ? (typeof o === 'string' ? o : (o.text || "")) : "";
+                          return tt.replace(/^\s*[ivxlcdm]+[\.\)]\s*/i, '');
+                      };
+                      return (
+                      <div style={{ width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", borderRight: `1px solid ${C.border}`, lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
+                          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
+                              <h2 style={{marginTop: 0, color: C.accent, margin: 0}}>READING PASSAGE</h2>
+                          </div>
+                          {/* LIST OF HEADINGS — hiện rõ để đối chiếu (review matching headings) */}
+                          {hasSlots && headingOpts.length > 0 && (
+                              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 18, background: C.bg }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.sub, marginBottom: 8 }}>List of Headings</div>
+                                  {headingOpts.map((opt: any, oi: number) => {
+                                      const tt = typeof opt === 'string' ? opt : (opt.text || "");
+                                      const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]\s*(.*)/i);
+                                      return (
+                                          <div key={oi} style={{ display: 'flex', gap: 10, fontSize: 13.5, lineHeight: 1.5, marginBottom: 5 }}>
+                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{m ? m[1].toLowerCase() : ''}</span>
+                                              <span>{m ? m[2] : tt}</span>
+                                          </div>
+                                      );
+                                  })}
+                              </div>
+                          )}
+                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
+                          {hasSlots ? (() => {
+                              const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>|\[HEADING_SLOT\]/gi);
+                              return (
+                                  <div id="ielts-passage-content" style={{ textAlign: 'justify' }}>
+                                      {chunks[0] && chunks[0].trim() && <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatContent(chunks[0]) }} />}
+                                      {headingQs.map((hq: any, hi: number) => {
+                                          const para = String.fromCharCode(65 + hi);
+                                          const placed = reviewQuiz.result.answers?.[hq.id];
+                                          const correct = String(hq.correctAnswer || "");
+                                          const ok = !!placed && rnorm(placed) === rnorm(correct);
+                                          return (
+                                              <React.Fragment key={hq.id}>
+                                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '20px 0 10px', fontSize: 14, lineHeight: 1.4 }}>
+                                                      <span style={{ fontWeight: 800, color: C.text, flexShrink: 0 }}>Paragraph {para}</span>
+                                                      <span style={{ background: ok ? `${C.succ}1e` : `${C.err}1e`, color: ok ? C.succ : C.err, border: `1px solid ${ok ? C.succ : C.err}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
+                                                          Your answer: {placed ? `${String(placed).toLowerCase()} — ${headingBody(String(placed))}` : '—'}
+                                                      </span>
+                                                      {!ok && (
+                                                          <span style={{ background: `${C.accent}1e`, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
+                                                              Correct: {correct.toLowerCase()} — {headingBody(correct)}
+                                                          </span>
+                                                      )}
+                                                  </div>
+                                                  {chunks[hi + 1] && chunks[hi + 1].trim() && <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatContent(chunks[hi + 1]) }} />}
+                                              </React.Fragment>
+                                          );
+                                      })}
+                                  </div>
+                              );
+                          })() : (
+                              <div id="ielts-passage-content" style={{whiteSpace: 'pre-wrap', textAlign: 'justify'}} dangerouslySetInnerHTML={{__html: formatContent(passageHtml)}} />
+                          )}
+                      </div>
+                      );
+                  })()}
+                  {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
+                  {rvIsListening && (() => {
+                      let leftCtx = "";
+                      const tr = reviewQuiz.quiz.transcript || "";
+                      const downloadTranscript = () => {
+                          const body = /<[a-z][\s\S]*>/i.test(tr) ? tr : tr.split(/\n+/).map(l => `<p>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`).join('');
+                          const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'><head><meta charset='utf-8'><title>Transcript</title></head><body>${body}</body></html>`;
+                          const blob = new Blob(['﻿', html], { type: 'application/msword' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a'); a.href = url; a.download = `${(reviewQuiz.quiz.title || 'transcript').replace(/[^\w-]+/g,'_')}_transcript.doc`;
+                          document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+                      };
+                      let lastBank = "";
+                      return (
+                          <div className="rv-qview" style={{ width: '50%', height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px', borderRight: `1px solid ${C.border}`, background: '#fff', color: '#333' }}>
+                              {/* Read-only, TINH GỌN, KHÔNG TRÀN VIỀN: chống overflow bảng/ảnh + thu nhỏ so với phòng thi vì chỉ có nửa màn hình */}
+                              <style>{`
+                                .rv-qview, .rv-qview * { box-sizing: border-box; }
+                                .rv-qview .group-context, .rv-qview .rv-ql-text { overflow-wrap: anywhere; word-break: break-word; }
+                                .rv-qview .group-context { max-width: 100%; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin-bottom: 12px; }
+                                .rv-qview .group-context table { max-width: 100%; border-collapse: collapse; font-size: 12.5px; }
+                                .rv-qview .group-context td, .rv-qview .group-context th { border: 1px solid ${C.border}; padding: 4px 7px; }
+                                .rv-qview .group-context img { max-width: 100%; height: auto; }
+                                .rv-qview .rv-ql { margin-bottom: 13px; }
+                                .rv-qview .rv-ql-head { display: flex; gap: 8px; line-height: 1.5; font-size: 13.5px; }
+                                .rv-qview .rv-ql-num { font-weight: 800; color: ${C.accent}; flex-shrink: 0; min-width: 20px; }
+                                .rv-qview .rv-ql-opts { list-style: none; margin: 6px 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+                                .rv-qview .rv-ql-opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.45; color: #444; }
+                                .rv-qview .rv-ql-mark { flex-shrink: 0; width: 15px; height: 15px; border: 1.5px solid #9aa4b2; margin-top: 1px; }
+                                .rv-qview .rv-ql-mark.round { border-radius: 50%; }
+                                .rv-qview .rv-ql-bank { margin: 6px 0 4px 28px; display: flex; flex-wrap: wrap; gap: 6px; }
+                                .rv-qview .rv-ql-tag { border: 1px solid ${C.border}; border-radius: 5px; padding: 3px 9px; font-size: 12.5px; background: ${C.bg}; color: #333; }
+                                .rv-qview .rv-ql-blank { display: inline-block; min-width: 30px; padding: 0 8px; border-bottom: 1.5px solid #9aa4b2; color: ${C.accent}; font-weight: 700; text-align: center; }
+                              `}</style>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: `2px solid ${C.accent}`, marginBottom: 14, paddingBottom: 10 }}>
+                                  <h2 style={{ margin: 0, color: C.accent, fontSize: 16 }}>{rvHasSections ? `PART ${rvActiveIdx + 1} — QUESTIONS` : 'QUESTIONS'}</h2>
+                                  {tr ? (
+                                      <button onClick={downloadTranscript} style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                          Transcript (.doc)
+                                      </button>
+                                  ) : null}
+                              </div>
+                              {reviewQuiz.quiz.questions.map((q, i) => {
+                                  if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+                                  const showCtx = q.groupContext && q.groupContext !== leftCtx;
+                                  if (showCtx) { leftCtx = q.groupContext as string; lastBank = ""; }
+                                  const opts = Array.isArray(q.options) ? q.options : [];
+                                  const isMulti = q.type === 'CHOICE_MULTIPLE';
+                                  const isMCQ = (q.type === 'CHOICE' || isMulti) && opts.length > 0;
+                                  const isBankType = (q.type === 'DRAG_DROP' || q.type === 'MATCHING' || q.type === 'DRAG_DROP_HEADING') && opts.length > 0;
+                                  // Kho lựa chọn (matching/drag-drop) DÙNG CHUNG cả nhóm -> chỉ hiện MỘT lần khi options đổi.
+                                  const bankKey = isBankType ? JSON.stringify(opts) : "";
+                                  const showBank = isBankType && bankKey !== lastBank;
+                                  if (showBank) lastBank = bankKey;
+                                  // Câu là ô trống inline trong form/context -> đã hiện trong group-context, không lặp text.
+                                  const textInCtx = showCtx || (leftCtx && (leftCtx as string).indexOf(`[${i + 1}]`) !== -1);
+                                  return (
+                                      <React.Fragment key={q.id}>
+                                          {showCtx && <div className="group-context" dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />}
+                                          {showBank && (
+                                              <div className="rv-ql-bank">
+                                                  {opts.map((o: any, oi: number) => <span key={oi} className="rv-ql-tag">{String(o).replace(/^\s*[A-Za-z][\.\)]\s*/, '')}</span>)}
+                                              </div>
+                                          )}
+                                          {!textInCtx && (
+                                              <div className="rv-ql">
+                                                  <div className="rv-ql-head">
+                                                      <span className="rv-ql-num">{i + 1}.</span>
+                                                      <span className="rv-ql-text" dangerouslySetInnerHTML={{ __html: formatContent(q.text || "") }} />
+                                                  </div>
+                                                  {isMCQ && (
+                                                      <ul className="rv-ql-opts">
+                                                          {opts.map((o: any, oi: number) => (
+                                                              <li key={oi} className="rv-ql-opt">
+                                                                  <span className={`rv-ql-mark ${isMulti ? '' : 'round'}`} />
+                                                                  <span dangerouslySetInnerHTML={{ __html: formatContent(String(o).replace(/^\s*[A-Za-z][\.\)]\s*/, '')) }} />
+                                                              </li>
+                                                          ))}
+                                                      </ul>
+                                                  )}
+                                              </div>
+                                          )}
+                                      </React.Fragment>
+                                  );
+                              })}
+                          </div>
+                      );
+                  })()}
+                  <div style={{ flex: 1, minWidth: 0, width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
+                      
+                      {(() => {
+                          const rqQuiz = reviewQuiz.quiz;
+                          const rqRes = reviewQuiz.result;
+                          
+                          // Phân tích và tính toán dữ liệu thống kê
+                          let correctCount = rqRes.score;
+                          let totalQs = rqRes.total;
+                          let skippedCount = 0;
+                          
+                          rqQuiz.questions.forEach(q => {
+                              const ans = rqRes.answers[q.id];
+                              let isSkipped = false;
+                              if (ans === undefined || ans === null || ans === "") isSkipped = true;
+                              if (Array.isArray(ans) && ans.length === 0) isSkipped = true;
+                              if (isSkipped) skippedCount++;
+                          });
+                          
+                          let incorrectCount = totalQs - correctCount - skippedCount;
+                          if (incorrectCount < 0) incorrectCount = 0;
+                          
+                          const accuracy = ((correctCount / totalQs) * 100).toFixed(1);
+                          const bandNum = Number(rqRes.band) || 0;
+                          const bandPct = (bandNum / 9) * 100;
+                          const durM = Math.floor((rqRes.durationSeconds || 0) / 60);
+                          const durS = (rqRes.durationSeconds || 0) % 60;
+                          const timeStr = durM > 0 ? `${durM} ${t('acad_min')} ${durS} ${t('acad_sec')}` : `${durS} ${t('acad_sec')}`;
+
+                          return (
+                              <>
+                                  {/* DASHBOARD THỐNG KÊ TỔNG QUAN (UI MỚI TỪ ẢNH MẪU) */}
+                                  <div style={{background: '#fff', borderRadius: 16, marginBottom: 24, boxShadow: '0 4px 20px rgba(0,0,0,0.05)', overflow: 'hidden', border: `1px solid #e2e8f0`}}>
+                                      
+                                      {/* KHỐI 1: PHẦN KIỂM TRA (TOP) */}
+                                      <div style={{padding: '30px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', flexWrap: 'wrap', gap: 20}}>
+                                          <div>
+                                              <div style={{fontSize: 18, fontWeight: 900, color: '#1e293b', marginBottom: 20}}>{t('rev_test_part')}</div>
+                                              <div style={{display: 'flex', gap: 40, flexWrap: 'wrap'}}>
+                                                  <div>
+                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_part')}</div>
+                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{rqQuiz.title}</div>
+                                                  </div>
+                                                  <div>
+                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_mcq')}</div>
+                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{correctCount}/{totalQs}</div>
+                                                  </div>
+                                                  <div>
+                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_total_band')}</div>
+                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{rqRes.band}</div>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                          
+                                          {/* Vòng tròn điểm (Donut Chart CSS) */}
+                                          <div style={{position: 'relative', width: 120, height: 120, borderRadius: '50%', background: `conic-gradient(#facc15 ${bandPct}%, #e2e8f0 0)`, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                                              <div style={{width: 90, height: 90, background: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 900, color: '#eab308'}}>
+                                                  {rqRes.band}
+                                              </div>
+                                          </div>
+                                      </div>
+
+                                      {/* KHỐI 2: CHI TIẾT BÀI THI (BOTTOM) */}
+                                      <div style={{padding: '30px 40px', background: '#f8fafc'}}>
+                                          <div style={{fontSize: 16, fontWeight: 800, color: '#1e293b', marginBottom: 20}}>{t('rev_detail')}</div>
+                                          <div style={{display: 'flex', gap: 24, flexWrap: 'wrap'}}>
+                                              
+                                              {/* 3 Cột icon tròn (Đúng / Sai / Bỏ qua) */}
+                                              <div style={{flex: 1, display: 'flex', justifyContent: 'space-around', background: '#fff', padding: '24px 20px', borderRadius: 12, border: '1px solid #e2e8f0', minWidth: 300}}>
+                                                  <div style={{textAlign: 'center'}}>
+                                                      <div style={{width: 48, height: 48, background: '#22c55e', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
+                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                      </div>
+                                                      <div style={{fontSize: 13, color: '#22c55e', fontWeight: 600}}>{t('rev_correct')}</div>
+                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{correctCount} {t('rev_questions_unit')}</div>
+                                                  </div>
+                                                  <div style={{textAlign: 'center'}}>
+                                                      <div style={{width: 48, height: 48, background: '#ef4444', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
+                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                                      </div>
+                                                      <div style={{fontSize: 13, color: '#ef4444', fontWeight: 600}}>{t('rev_incorrect')}</div>
+                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{incorrectCount} {t('rev_questions_unit')}</div>
+                                                  </div>
+                                                  <div style={{textAlign: 'center'}}>
+                                                      <div style={{width: 48, height: 48, background: '#f97316', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
+                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+                                                      </div>
+                                                      <div style={{fontSize: 13, color: '#f97316', fontWeight: 600}}>{t('rev_skipped')}</div>
+                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{skippedCount} {t('rev_questions_unit')}</div>
+                                                  </div>
+                                              </div>
+
+                                              {/* Lưới thông tin phụ (Grid 2x2) */}
+                                              <div style={{flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, background: '#fff', padding: '24px', borderRadius: 12, border: '1px solid #e2e8f0', minWidth: 300}}>
+                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="clipboard" size={18} /></div>
+                                                      <div>
+                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_result')}</div>
+                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{correctCount}/{totalQs} {t('rev_questions_unit')}</div>
+                                                      </div>
+                                                  </div>
+                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="clock" size={18} /></div>
+                                                      <div>
+                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_time')}</div>
+                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{timeStr}</div>
+                                                      </div>
+                                                  </div>
+                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="target" size={18} /></div>
+                                                      <div>
+                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_accuracy')}</div>
+                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{accuracy}%</div>
+                                                      </div>
+                                                  </div>
+                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="check" size={18} /></div>
+                                                      <div>
+                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_correct_count')}</div>
+                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{correctCount} / {totalQs} {t('rev_questions_unit')}</div>
+                                                      </div>
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      </div>
+                                  </div>
+
+                                  {/* CÁC THÔNG TIN BỔ SUNG (Audio, Feedback, Flagged, Scratchpad, Weakness Analysis) */}
+                                  <div style={{background: '#fff', padding: '30px 40px', borderRadius: 16, marginBottom: 24, border: `1px solid #e2e8f0`, boxShadow: '0 4px 20px rgba(0,0,0,0.02)'}}>
+                                      
+                                      {rqRes.teacherFeedback && <div style={{marginBottom: 15, background: `#fffbeb`, border: '1px solid #fde68a', color: '#92400e', padding: 16, borderRadius: 12, fontSize: 14}}><b style={{color: '#b45309'}}><Ico name="chat" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />Teacher's feedback:</b><br/>{rqRes.teacherFeedback}</div>}
+                                      
+                                      {rqRes.flaggedQuestions && rqRes.flaggedQuestions.length > 0 && (
+                                          <div style={{marginBottom: 15, color: '#ef4444', fontSize: 14, background: '#fef2f2', border: '1px solid #fecaca', padding: 16, borderRadius: 12}}>
+                                              <b style={{color: '#b91c1c'}}><Ico name="pin" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />Flagged questions during exam:</b> {rqRes.flaggedQuestions.map((id: string) => rqQuiz.questions.findIndex(q=>q.id===id)+1).join(', ')}
+                                          </div>
+                                      )}
+                                      
+                                      {rqRes.scratchpad && (
+                                          <div style={{marginBottom: 20, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: 16, borderRadius: 12, fontSize: 14, whiteSpace: 'pre-wrap'}}>
+                                              <b style={{color: '#15803d'}}> Your notes:</b><br/>{rqRes.scratchpad}
+                                          </div>
+                                      )}
+
+                                      <div style={{marginTop: 10}}>
+                                          <div style={{fontSize: 14, fontWeight: 800, marginBottom: 15, color: '#1e293b'}}><Ico name="barChart" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />WEAKNESS ANALYSIS BY TYPE</div>
+                                          <div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>
+                                              {(() => {
+                                                  const groups: Record<string, QuizQuestion[]> = {};
+                                                  rqQuiz.questions.forEach(q => {
+                                                      const label = q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : 'Sentence Completion');
+                                                      if (!groups[label]) groups[label] = [];
+                                                      groups[label].push(q);
+                                                  });
+                                                  return Object.entries(groups).map(([label, typeQs]) => {
+                                                      let correctInType = 0;
+                                                      typeQs.forEach(q => {
+                                                          const sAns = rqRes.answers[q.id];
+                                                          if ((q.type === "CHOICE" || q.type === "MATCHING") && sAns === q.correctAnswer) correctInType++;
+                                                          else if (q.type === "CHOICE_MULTIPLE") {
+                                                              const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
+                                                              if (sAns !== undefined && sAns !== "" && correctArr.includes(Number(sAns))) correctInType++;
+                                                          }
+                                                          else if (sAns !== undefined && sAns !== null) {
+                                                              if (String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase()).includes(String(sAns).trim().toLowerCase())) correctInType++;
+                                                          }
+                                                      });
+                                                      const rate = Math.round((correctInType / typeQs.length) * 100);
+                                                      return (
+                                                          <div key={label} style={{flex: '1 1 calc(50% - 15px)', minWidth: 160, background: '#f8fafc', padding: 16, borderRadius: 12, border: `1px solid #e2e8f0`}}>
+                                                              <div style={{fontSize: 12, color: '#64748b', fontWeight: 700, textTransform: 'uppercase'}}>{label}</div>
+                                                              <div style={{fontSize: 18, fontWeight: 900, marginTop: 4, color: rate >= 70 ? '#22c55e' : '#ef4444'}}>{correctInType}/{typeQs.length} ({rate}%)</div>
+                                                          </div>
+                                                      );
+                                                  });
+                                              })()}
+                                          </div>
+                                      </div>
+                                  </div>
+                              </>
+                          );
+                      })()}
+                      
+                      {reviewQuiz.quiz.questions.map((q, i) => {
+                          if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+                          const studentAns = (reviewQuiz.result.answers && reviewQuiz.result.answers[q.id] !== undefined) ? reviewQuiz.result.answers[q.id] : undefined;
+                          let isCorrect = false;
+                              let correctDisplay: string | number = String(q.correctAnswer);
+                              
+                              if (q.type === "CHOICE" || q.type === "MATCHING") {
+                                  isCorrect = studentAns === q.correctAnswer;
+                                  correctDisplay = q.options ? q.options[q.correctAnswer as number] : String(q.correctAnswer);
+                              } else if (q.type === "CHOICE_MULTIPLE") {
+                                  const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
+                                  isCorrect = studentAns !== undefined && studentAns !== "" && correctArr.includes(Number(studentAns));
+                                  correctDisplay = correctArr.map((idx: any) => q.options ? q.options[idx] : idx).join(" / ");
+                              } else {
+                                  const sA = String(studentAns || "").trim().toLowerCase();
+                                  const cA = String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase());
+                                  isCorrect = cA.includes(sA);
+                              }
+
+                          const showContext = q.groupContext && q.groupContext !== currentContext;
+                          if (showContext) currentContext = q.groupContext as string;
+
+                          // === HIỆN ĐỦ LỰA CHỌN + đánh dấu đúng/sai (MCQ, matching heading) ===
+                          const rvOpts = Array.isArray(q.options) ? q.options : [];
+                          const rvShowOpts = rvOpts.length > 0 && ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP_HEADING"].includes(q.type);
+                          const rvIsMulti = q.type === "CHOICE_MULTIPLE";
+                          const rvNorm = (v: any) => String(v ?? "").trim().toLowerCase();
+                          const rvCMulti = rvIsMulti ? (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]).map(Number) : [];
+                          const rvSMulti = rvIsMulti ? (Array.isArray(studentAns) ? studentAns.map(Number) : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : [])) : [];
+                          const rvOptMark = (oi: number, otext: string) => {
+                              if (q.type === "CHOICE" || q.type === "MATCHING") return { correct: Number(q.correctAnswer) === oi, chosen: studentAns !== undefined && studentAns !== "" && Number(studentAns) === oi };
+                              if (rvIsMulti) return { correct: rvCMulti.includes(oi), chosen: rvSMulti.includes(oi) };
+                              const lab = (otext.match(/^\s*([ivxlcdm]+|[A-Za-z])[\.\)]/i) || [])[1];
+                              return { correct: !!lab && rvNorm(q.correctAnswer) === rvNorm(lab), chosen: !!lab && rvNorm(studentAns) === rvNorm(lab) };
+                          };
+                          return (
+                          <React.Fragment key={q.id}>
+                              {showContext && <div className="group-context" dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />}
+                              <div className="card" style={{marginBottom: 20, borderLeft: `5px solid ${isCorrect ? C.succ : C.err}`}}>
+                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {i+1}: <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: formatContent(q.text)}} /></div>
+                                  {rvShowOpts ? (
+                                      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                                          {rvOpts.map((o: any, oi: number) => {
+                                              const { correct, chosen } = rvOptMark(oi, String(o));
+                                              const bd = correct ? C.succ : (chosen ? C.err : C.border);
+                                              const bg = correct ? `${C.succ}14` : (chosen ? `${C.err}12` : 'transparent');
+                                              const clean = String(o).replace(/^\s*([ivxlcdm]+|[A-Za-z]{1,3})[\.\)]\s*/i, '');
+                                              return (
+                                                  <li key={oi} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 11px', borderRadius: 8, border: `1px solid ${bd}`, background: bg, fontSize: 14, lineHeight: 1.5 }}>
+                                                      <span style={{ flexShrink: 0, marginTop: 1, color: correct ? C.succ : (chosen ? C.err : C.sub) }}>
+                                                          {correct
+                                                              ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                                              : (chosen
+                                                                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                                                  : <span style={{ display: 'inline-block', width: 15, height: 15, border: `1.5px solid ${C.border}`, borderRadius: rvIsMulti ? 3 : '50%' }} />)}
+                                                      </span>
+                                                      <span style={{ flex: 1, color: C.text }} dangerouslySetInnerHTML={{ __html: formatContent(clean) }} />
+                                                      {chosen && <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: correct ? C.succ : C.err, alignSelf: 'center', whiteSpace: 'nowrap' }}>Your answer</span>}
+                                                      {correct && !chosen && <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: C.succ, alignSelf: 'center', whiteSpace: 'nowrap' }}>Correct</span>}
+                                                  </li>
+                                              );
+                                          })}
+                                      </ul>
+                                  ) : (
+                                  <div style={{display:'flex', gap: 10, fontSize: 14, flexWrap: 'wrap'}}>
+                                      <div style={{background: isCorrect ? `${C.succ}20` : `${C.err}20`, color: isCorrect ? C.succ : C.err, padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
+                                          <b>Your answer:</b> {(studentAns === undefined || studentAns === "" || (Array.isArray(studentAns) && studentAns.length === 0)) ? "No answer" : String(studentAns)}
+                                      </div>
+                                      {!isCorrect && (
+                                          <div style={{background: `${C.accent}20`, color: C.accent, padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
+                                              <b>Correct answer:</b> {correctDisplay}
+                                          </div>
+                                      )}
+                                  </div>
+                                  )}
+                                  {!isCorrect && (
+                                      <div style={{marginTop: 12}}>
+                                          {!explainMap[q.id] ? (
+                                              <button onClick={() => handleAiExplain(q, studentAns, reviewQuiz.quiz)} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '6px 14px', borderRadius: 8}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_why')}</button>
+                                          ) : explainMap[q.id].loading ? (
+                                              <div style={{fontSize: 13, color: C.sub, fontWeight: 600}}><Ico name="refresh" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_loading')}</div>
+                                          ) : (
+                                              <div style={{background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-line'}}>
+                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text)}
+                                              </div>
+                                          )}
+                                      </div>
+                                  )}
+                              </div>
+                          </React.Fragment>
+                      )})}
+                  </div>
+              </div>
+          </div>
+      );
+  }

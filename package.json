@@ -5,23 +5,29 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --skipLibCheck && vite build",
-    "lint": "eslint .",
+    "build": "python3 compile_app.py && tsc -b && vite build",
+    "lint": "eslint src",
     "preview": "vite preview"
   },
   "dependencies": {
+    "animate.css": "^4.1.1",
+    "dompurify": "^3.4.11",
+    "exceljs": "^4.4.0",
     "firebase": "^12.13.0",
+    "html2pdf.js": "^0.14.0",
     "i18next": "^26.2.0",
     "mammoth": "^1.12.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-i18next": "^17.0.8"
+    "react-i18next": "^17.0.8",
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.185.0",
     "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -30,5 +36,8 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.12"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

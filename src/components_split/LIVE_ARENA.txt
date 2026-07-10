@@ -1,0 +1,74 @@
+        {activeTab === "LIVE_ARENA" && (
+          <div style={{ display: "grid", gap: 24 }}>
+            <div className="card" style={{ background: `linear-gradient(135deg, #EFF6FF, #FFFFFF)`, border: `1px solid #BFDBFE`, padding: 40 }}>
+               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30, flexWrap: 'wrap', gap: 15}}>
+                   <h2 style={{marginTop: 0, margin: 0, display: 'flex', alignItems: 'center', gap: 12, color: '#1E3A8A', fontSize: 24, fontWeight: 900, letterSpacing: -0.5}}>
+                       <span style={{fontSize: 24, animation: 'pulseFast 1.5s infinite'}}><Ico name="dot" size={18} /></span> LIVE EXAM ARENA
+                   </h2>
+                   <div style={{fontSize: 14, fontWeight: 800, color: '#1E40AF', background: '#DBEAFE', padding: '10px 20px', borderRadius: 100, border: '1px solid #93C5FD'}}>
+                       {(Array.isArray(liveSessions) ? liveSessions : []).filter(s => getRealTime() - (s?.lastUpdate || 0) < 30000).length} {t('live_count_suffix')}
+                   </div>
+               </div>
+               
+               <div style={{display: 'grid', gap: 15}}>
+                   {liveSessions.filter(s => getRealTime() - s.lastUpdate < 30000).sort((a,b) => b.progressPct - a.progressPct).map(session => (
+                       <div key={session.id} style={{background: '#FFFFFF', padding: 24, borderRadius: 20, border: `1px solid #E2E8F0`, boxShadow: '0 4px 15px rgba(0,0,0,0.03)', position: 'relative', overflow: 'hidden'}}>
+                           {/* Hiệu ứng nhấp nháy đỏ báo hiệu gian lận */}
+                           {session.isCheating && <div style={{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(239,68,68,0.05)', border: '2px solid rgba(239,68,68,0.5)', animation: 'pulseFast 1s infinite', pointerEvents: 'none'}} />}
+                           
+                           <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 15, position: 'relative', zIndex: 2}}>
+                               <div>
+                                   <div style={{fontWeight: 900, fontSize: 18, color: '#0F172A'}}>{session.studentName}</div>
+                                   <div style={{fontSize: 13, color: '#64748B', marginTop: 5}}> {t('live_exam_label')} {session.quizTitle}</div>
+                               </div>
+                               <div style={{textAlign: 'right'}}>
+                                   <div style={{fontSize: 28, fontWeight: 900, color: session.progressPct >= 100 ? C.succ : C.accent}}>{session.progressPct}%</div>
+                                   <div style={{fontSize: 12, color: '#64748B', marginTop: 5}}>{t('live_done', { a: session.answeredCount, b: session.totalQ })}</div>
+                               </div>
+                           </div>
+                           
+                           {/* Thanh tiến trình (Progress Bar) */}
+                           <div style={{height: 12, background: '#F1F5F9', borderRadius: 10, overflow: 'hidden', marginBottom: 10, position: 'relative', zIndex: 2}}>
+                               <div style={{width: `${session.progressPct}%`, height: '100%', background: session.progressPct >= 100 ? C.succ : C.accent, transition: 'width 1s ease-in-out'}} />
+                           </div>
+                           
+                           {/* Cảnh báo gian lận */}
+                           {session.isCheating && (
+                               <div style={{fontSize: 12, color: C.err, fontWeight: 900, display: 'flex', alignItems: 'center', gap: 5, marginTop: 10}}>
+                                   {t('live_cheat')}
+                               </div>
+                           )}
+                           
+                           <div style={{marginTop: 15, paddingTop: 15, borderTop: `1px dashed ${C.border}`}}>
+                               <button onClick={() => {
+                                   const msg = prompt(`Nhập thông báo gửi đến thí sinh ${session.studentName} (VD: Đính chính câu 5, cộng 5 phút...):`);
+                                   if (msg) {
+                                       const targetStudent = students.find(s => s.id === session.studentId);
+                                       if (targetStudent) {
+                                           const currentPending = targetStudent.pendingNotifications || [];
+                                           const newNotif = { id: Date.now().toString(), title: "Message from Invigilator", body: msg };
+                                           const nx = students.map(s => s.id === session.studentId ? { ...s, pendingNotifications: [...currentPending, newNotif] } : s);
+                                           setStudents(nx);
+                                           syncData({ students: nx });
+                                           alert("Đã gửi tin nhắn thành công!");
+                                       }
+                                   }
+                               }} style={{background: '#EFF6FF', color: '#1E3A8A', border: '1px solid #BFDBFE', padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 800, width: '100%', display: 'flex', justifyContent: 'center', gap: 8}}>
+                                   {t('live_send_msg')}
+                               </button>
+                           </div>
+                       </div>
+                   ))}
+                   
+                   {liveSessions.filter(s => getRealTime() - s.lastUpdate < 30000).length === 0 && (
+                       <div style={{textAlign: 'center', padding: 50, color: '#666', fontStyle: 'italic', background: 'rgba(255,255,255,0.02)', borderRadius: 10}}>
+                           <div style={{fontSize: 40, marginBottom: 15}}><Ico name="moon" size={36} /></div>
+                           {t('live_empty')}
+                       </div>
+                   )}
+               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= ACADEMICS ================= */}

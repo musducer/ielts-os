@@ -1,0 +1,19 @@
+{
+  "name": "IELTS OS — Computer-Based Testing",
+  "short_name": "IELTS OS",
+  "description": "Nền tảng luyện thi & quản lý IELTS trên máy tính.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#4338ca",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

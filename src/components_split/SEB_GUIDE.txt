@@ -1,0 +1,33 @@
+// ==========================================
+      // VIEW: EXAM INSTRUCTIONS (PRE-START)
+      // ==========================================
+      // ==========================================
+      // VIEW: SEB INSTALLATION GUIDE (CHI TIẾT)
+      // ==========================================
+      if (sebGuideQuiz) {
+          return (
+              <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: C.bg, zIndex: 99999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                  <div style={{ background: '#fff', maxWidth: 650, width: '100%', borderRadius: 12, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden', border: `1px solid #d1d5db` }}>
+                      <div style={{ background: '#dc3545', padding: '25px 30px', color: '#fff', textAlign: 'center' }}>
+                          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 1 }}><Ico name="alert" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('seb_title')}</h2>
+                      </div>
+                      <div style={{ padding: '30px', fontSize: 15, lineHeight: 1.6, color: '#333' }}>
+                          <p style={{ marginTop: 0, fontWeight: 700, fontSize: 16 }}>{t('seb_intro_a')} <span style={{ color: '#0969da' }}>"{sebGuideQuiz.title}"</span> {t('seb_intro_b')}</p>
+
+                          <div style={{ background: '#fff3cd', border: '1px solid #ffe69c', padding: 20, borderRadius: 8, marginTop: 20 }}>
+                              <div style={{ fontWeight: 900, color: '#856404', marginBottom: 15, fontSize: 16 }}><Ico name="wrench" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('seb_steps_header')}</div>
+                              <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 12, color: '#664d03' }}>
+                                  <li><b>Tải phần mềm gốc:</b> Truy cập trang web chính thức <a href="https://safeexambrowser.org/download_en.html" target="_blank" rel="noreferrer" style={{ color: '#0969da', fontWeight: 'bold', textDecoration: 'underline' }}>safeexambrowser.org</a> để tải và cài đặt phiên bản SEB phù hợp cho máy tính của bạn (Windows hoặc macOS).</li>
+                                  <li><b>Tải file phòng thi:</b> Bấm "Đã hiểu và quay lại" để đóng thông báo này. Chuyển sang Tab <b>Kho Tài Liệu (Drive)</b> trên hệ thống IELTS OS. Tìm và tải file cấu hình đuôi <b>.seb</b> (VD: <i>IELTS_OS.seb</i>) mà giáo viên đã cung cấp.</li>
+                                  <li><b>Đóng ứng dụng:</b> Tắt tất cả các phần mềm nhắn tin, trình duyệt khác, hoặc phần mềm quay màn hình đang chạy trên máy tính.</li>
+                                  <li><b>Kích hoạt:</b> Nhấn đúp chuột vào file <b>.seb</b> vừa tải về. SEB sẽ tự động khởi động, khóa máy tính và đưa bạn thẳng vào không gian thi an toàn. Bắt đầu đăng nhập và thi như bình thường.</li>
+                              </ol>
+                          </div>
+                      </div>
+                      <div style={{ padding: '20px 30px', background: '#f8f9fa', borderTop: `1px solid #d1d5db`, display: 'flex', justifyContent: 'center' }}>
+                          <button onClick={() => setSebGuideQuiz(null)} style={{ background: '#343a40', color: '#fff', padding: '12px 40px', fontWeight: 800, fontSize: 15, borderRadius: 4, border: 'none', cursor: 'pointer', transition: '0.2s' }}>{t('seb_back_btn')}</button>
+                      </div>
+                  </div>
+              </div>
+          );
+      }

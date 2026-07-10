@@ -11,9 +11,10 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: 'Space Grotesk', 'Inter', system-ui, 'Segoe UI', sans-serif;
+  --display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --mono: 'Space Mono', ui-monospace, Consolas, monospace;
 
   font: 18px/145% var(--sans);
   letter-spacing: 0.18px;
@@ -108,4 +109,18 @@ code {
   line-height: 135%;
   padding: 4px 8px;
   background: var(--code-bg);
+}
+/* MỞ KHÓA BOLD VÀ CĂN LỀ CHO RICH TEXT EDITOR */
+b, strong, .exam-content-block b, .exam-content-block strong, 
+.idp-q-text-inline b, .idp-q-text-inline strong {
+    font-weight: 900 !important;
+}
+/* FIX radio bảng matching xếp DỌC: rule căn lề cũ ép display:block lên CẢ <td> căn giữa
+   -> ô bảng rớt khỏi table-layout. Loại trừ td/th để bảng giữ nguyên hàng ngang. */
+.ql-align-center, :not(td):not(th)[style*="text-align: center"] { text-align: center !important; display: block !important; }
+.ql-align-right, :not(td):not(th)[style*="text-align: right"] { text-align: right !important; display: block !important; }
+.ql-align-justify, :not(td):not(th)[style*="text-align: justify"] { text-align: justify !important; display: block !important; }
+.idp-text-content, .highlightable-content, .idp-q-text-inline {
+    text-align: inherit;
+    display: block !important;
 }

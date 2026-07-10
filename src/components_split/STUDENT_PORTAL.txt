@@ -1,0 +1,1120 @@
+  if (userRole === "STUDENT") {
+    // --- LỚP BẢO VỆ & ÉP KIỂU (MAGIC FIX): Ép kiểu "as Student" sẽ dập tắt 100% mọi cảnh báo "possibly undefined" của TS ---
+    const me = students.find(s => (s.email || "").toLowerCase() === (currentUser?.email || "").toLowerCase()) as Student;
+    
+    // ============================================================================
+    // COSMETIC VĨNH VIỄN (quà gacha): Theme giao diện / Khung avatar / Linh thú.
+    // CHỈ áp cho portal học viên — KHÔNG đụng phòng thi (đã return trước block này).
+    // Khai báo TRƯỚC guard (!me) để 'C' đã shadow xong khi guard dùng C.sub (tránh TDZ).
+    // ============================================================================
+    const STUDENT_THEMES: Record<string, Record<string, string>> = {
+      "Giao diện: Hoàng Kim": { bg: '#171206', card: '#221A0C', border: 'rgba(231,196,112,0.22)', text: '#F6EBCB', sub: '#C2A867', accent: '#E7C470', succ: '#D8B85A', warn: '#E9C15A', err: '#E59072', glow: '#E7C470' },
+      "Giao diện: Nửa Đêm":   { bg: '#080E1C', card: '#0F1A2E', border: 'rgba(124,164,236,0.20)', text: '#E6EDFB', sub: '#90A6C8', accent: '#7CA4EC', succ: '#56C7A8', warn: '#E9C15A', err: '#EC8B86', glow: '#5B8BE0' },
+      "Giao diện: Anh Đào":   { bg: '#FFF1F4', card: '#FFFFFF', border: 'rgba(232,140,168,0.28)', text: '#5A2740', sub: '#A8728A', accent: '#E86A98', succ: '#14B8A6', warn: '#F59E0B', err: '#EF4444', glow: '#F7B8CE' },
+      "Giao diện: Rừng Sâu":  { bg: '#08130F', card: '#0E1D17', border: 'rgba(78,196,158,0.20)', text: '#DBF2E9', sub: '#84B3A1', accent: '#4EC2A0', succ: '#4EC2A0', warn: '#E9C15A', err: '#EC8B86', glow: '#3FB58F' },
+    };
+    // Tên các vật phẩm cosmetic (render bằng SVG tự vẽ — xem renderFrameArt / renderPetArt phía dưới)
+    const STUDENT_FRAME_NAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
+    const STUDENT_PET_NAMES = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+    const _eqTheme = me?.inventory?.equippedTheme || '';
+    const _themed = !!STUDENT_THEMES[_eqTheme];
+    const C = _themed ? { ..._C_BASE, ...STUDENT_THEMES[_eqTheme] } : _C_BASE;
+    // glow lấy từ theme (C có thể là _C_BASE không có 'glow') — fallback accent cho an toàn kiểu.
+    const _glow = (STUDENT_THEMES[_eqTheme] && STUDENT_THEMES[_eqTheme].glow) || C.accent;
+
+    // NẾU KHÔNG CÓ "ME", CHẶN LUÔN VÀ KHÔNG CHẠY CODE BÊN DƯỚI NỮA
+    if (!me) {
+        return <div style={{padding: 50, textAlign: 'center', fontSize: 20, color: C.sub}}>{t('loading_student')}</div>;
+    }
+
+    // ===================== COSMETIC ART (SVG tự vẽ, KHÔNG emoji) =====================
+
+    // --- KHUNG AVATAR: vòng SVG nhiều lớp (halo nhịp thở + vòng nền + vòng accent xoay + tia lấp lánh + hoạ tiết) ---
+    const FRAME_META: Record<string, any> = {
+      "Khung avatar: Vương Miện": { g: ['#FFF7DD', '#F2D27A', '#A9802F'], ac: '#FFE9A8', spark: '#FFFDF0', glow: '#E7C470', gem: '#C0392B', gem2: '#2E86C1' },
+      "Khung avatar: Rồng Lửa":   { g: ['#FFE08A', '#F97316', '#B91C1C'], ac: '#FFB454', spark: '#FFE7B0', glow: '#F7531C' },
+      "Khung avatar: Băng Giá":   { g: ['#F2FEFF', '#7DD3FC', '#2563EB'], ac: '#CDEFFF', spark: '#FFFFFF', glow: '#5BD0F5' },
+      "Khung avatar: Cầu Vồng":   { g: ['#F87171', '#FBBF24', '#34D399'], ac: '#60A5FA', spark: '#FFFFFF', glow: '#A78BFA' },
+      "Khung avatar: Sao Băng":   { g: ['#EDE9FE', '#A78BFA', '#5B21B6'], ac: '#C4B5FD', spark: '#FFFFFF', glow: '#8B5CF6' },
+    };
+    // Mỗi khung 1 bản sắc riêng, nhiều lớp SVG động (KHÔNG emoji). Dùng cho header (64) + kho đồ (32).
+    const renderFrameArt = (name: string, size: number = 64, ctx: string = '') => {
+      const m = FRAME_META[name]; if (!m) return null;
+      const uid = 'fr' + name.replace(/[^a-z0-9]/gi, '') + ctx;
+      const ring = (n: number, r: number) => Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2 - Math.PI / 2; return { x: +(32 + r * Math.cos(a)).toFixed(2), y: +(32 + r * Math.sin(a)).toFixed(2), deg: +((i / n) * 360).toFixed(1) }; });
+      const halo = (values: string, dur: string) => <circle cx="32" cy="32" r="31" fill={`url(#${uid}h)`}><animate attributeName="opacity" values={values} dur={dur} repeatCount="indefinite" /></circle>;
+      const wrap = (kids: any, extra: any = null) => (
+        <svg width={size} height={size} viewBox="0 0 64 64" style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
+          <defs>
+            <linearGradient id={uid + 'g'} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor={m.g[0]} /><stop offset="50%" stopColor={m.g[1]} /><stop offset="100%" stopColor={m.g[2]} /></linearGradient>
+            <radialGradient id={uid + 'h'}><stop offset="50%" stopColor={m.glow} stopOpacity="0" /><stop offset="82%" stopColor={m.glow} stopOpacity="0.55" /><stop offset="100%" stopColor={m.glow} stopOpacity="0" /></radialGradient>
+            <filter id={uid + 'bl'} x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="1.3" /></filter>
+            {extra}
+          </defs>
+          {kids}
+        </svg>
+      );
+
+      // ===== VƯƠNG MIỆN — vương miện nạm ngọc + vòng ngọc xoay + tia chớp sáng =====
+      if (name === "Khung avatar: Vương Miện") {
+        const gems = ring(10, 27);
+        return wrap(<>
+          {halo('0.4;0.85;0.4', '3.6s')}
+          <circle cx="32" cy="32" r="28" fill="none" stroke={`url(#${uid}g)`} strokeWidth="1.4" opacity="0.7" />
+          <circle cx="32" cy="32" r="25.4" fill="none" stroke={m.ac} strokeWidth="0.9" opacity="0.45" />
+          <g>
+            {gems.map((p, i) => <g key={i} transform={`translate(${p.x} ${p.y}) rotate(${p.deg})`}><path d="M0 -2 L1.6 0 L0 2 L-1.6 0 Z" fill={i % 3 === 0 ? m.gem : i % 3 === 1 ? m.gem2 : m.spark} stroke={m.g[2]} strokeWidth="0.3"><animate attributeName="opacity" values="0.6;1;0.6" dur={`${2 + (i % 4) * 0.4}s`} repeatCount="indefinite" /></path></g>)}
+            <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="24s" repeatCount="indefinite" />
+          </g>
+          <g><path d="M32 5 A27 27 0 0 1 50.1 12.2" fill="none" stroke={m.spark} strokeWidth="2.2" strokeLinecap="round" opacity="0.9" filter={`url(#${uid}bl)`} /><animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="4.5s" repeatCount="indefinite" /></g>
+          <g><path d="M23 9 L27 14 L32 5 L37 14 L41 9 L39 16.5 L25 16.5 Z" fill={`url(#${uid}g)`} stroke={m.g[2]} strokeWidth="0.6" />
+            <circle cx="32" cy="11.5" r="1.5" fill={m.gem} /><circle cx="27" cy="14" r="1" fill={m.gem2} /><circle cx="37" cy="14" r="1" fill={m.gem2} />
+            <circle cx="32" cy="4" r="1.6" fill={m.spark}><animate attributeName="opacity" values="0.5;1;0.5" dur="1.8s" repeatCount="indefinite" /></circle></g>
+        </>);
+      }
+
+      // ===== RỒNG LỬA — vòng lửa nhiễu loạn (turbulence) + ngọn lửa chớp + tàn lửa bay lên =====
+      if (name === "Khung avatar: Rồng Lửa") {
+        const tongues = ring(12, 26.5);
+        const turb = <filter id={uid + 'tb'} x="-30%" y="-30%" width="160%" height="160%"><feTurbulence type="fractalNoise" baseFrequency="0.03 0.07" numOctaves="2" seed="3" result="t"><animate attributeName="baseFrequency" values="0.03 0.06;0.04 0.09;0.03 0.06" dur="2.6s" repeatCount="indefinite" /></feTurbulence><feDisplacementMap in="SourceGraphic" in2="t" scale="3" /></filter>;
+        return wrap(<>
+          {halo('0.5;1;0.5', '1.6s')}
+          <g filter={`url(#${uid}tb)`}>
+            <g>
+              {tongues.map((p, i) => <g key={i} transform={`translate(${p.x} ${p.y}) rotate(${p.deg})`}><path d="M0 3 Q-2.2 -2 0 -6.5 Q2.2 -2 0 3 Z" fill={`url(#${uid}g)`}><animate attributeName="opacity" values={`${0.45 + (i % 3) * 0.2};1;${0.45 + (i % 3) * 0.2}`} dur={`${0.6 + (i % 4) * 0.15}s`} repeatCount="indefinite" /></path></g>)}
+              <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="11s" repeatCount="indefinite" />
+            </g>
+          </g>
+          <circle cx="32" cy="32" r="24.2" fill="none" stroke={m.ac} strokeWidth="1.1" opacity="0.5" />
+          <g fill={m.spark}>
+            {[{ x: 32, d: '2.2s' }, { x: 20, d: '2.7s' }, { x: 44, d: '3s' }, { x: 26, d: '3.3s' }, { x: 39, d: '2.5s' }].map((e, i) => <circle key={i} cx={e.x} cy="50" r={1.5 - (i % 2) * 0.5}><animate attributeName="cy" values="50;6" dur={e.d} begin={`${i * 0.4}s`} repeatCount="indefinite" /><animate attributeName="opacity" values="0;1;0" dur={e.d} begin={`${i * 0.4}s`} repeatCount="indefinite" /><animate attributeName="cx" values={`${e.x};${e.x + (i % 2 ? 5 : -5)}`} dur={e.d} begin={`${i * 0.4}s`} repeatCount="indefinite" /></circle>)}
+          </g>
+        </>, turb);
+      }
+
+      // ===== BĂNG GIÁ — pha lê góc cạnh xoay chậm + bông tuyết 4 hướng + tuyết rơi =====
+      if (name === "Khung avatar: Băng Giá") {
+        const shards = ring(8, 27);
+        return wrap(<>
+          {halo('0.45;0.9;0.45', '4.2s')}
+          <circle cx="32" cy="32" r="25" fill="none" stroke={m.ac} strokeWidth="1" opacity="0.5" />
+          <g>
+            {shards.map((p, i) => <g key={i} transform={`translate(${p.x} ${p.y}) rotate(${p.deg})`}><path d="M0 -4.2 L2.5 0 L0 4.2 L-2.5 0 Z" fill={`url(#${uid}g)`} stroke={m.spark} strokeWidth="0.4" opacity="0.9"><animate attributeName="opacity" values="0.55;1;0.55" dur={`${2.5 + (i % 3) * 0.6}s`} repeatCount="indefinite" /></path></g>)}
+            <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="26s" repeatCount="indefinite" />
+          </g>
+          {[[32, 5], [59, 32], [32, 59], [5, 32]].map((c, i) => <g key={i} transform={`translate(${c[0]} ${c[1]})`} stroke={m.spark} strokeWidth="0.85" strokeLinecap="round"><path d="M0 -3 V3 M-2.6 -1.5 L2.6 1.5 M-2.6 1.5 L2.6 -1.5"><animate attributeName="opacity" values="0.5;1;0.5" dur={`${2 + i * 0.3}s`} repeatCount="indefinite" /></path></g>)}
+          <g fill={m.spark}>{[{ x: 22, d: '3.6s' }, { x: 42, d: '4.2s' }, { x: 32, d: '3.9s' }].map((s, i) => <circle key={i} cx={s.x} cy="8" r="1"><animate attributeName="cy" values="8;52" dur={s.d} begin={`${i * 0.8}s`} repeatCount="indefinite" /><animate attributeName="opacity" values="0;0.9;0" dur={s.d} begin={`${i * 0.8}s`} repeatCount="indefinite" /></circle>)}</g>
+        </>);
+      }
+
+      // ===== CẦU VỒNG — vòng phổ màu (conic giả) xoay nhanh + tia trắng quét + lăng kính lấp lánh =====
+      if (name === "Khung avatar: Cầu Vồng") {
+        const HUES = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#30C0C6', '#007AFF', '#5856D6', '#AF52DE', '#FF2D55', '#FF6B00', '#FFD60A', '#22C55E'];
+        const segs = ring(12, 27);
+        return wrap(<>
+          {halo('0.4;0.85;0.4', '3s')}
+          <g>
+            {segs.map((p, i) => <g key={i} transform={`translate(${p.x} ${p.y}) rotate(${p.deg})`}><rect x="-1.5" y="-2.8" width="3" height="5.6" rx="1.4" fill={HUES[i % HUES.length]} /></g>)}
+            <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="6s" repeatCount="indefinite" />
+          </g>
+          <g><path d="M32 5 A27 27 0 0 1 52.1 16.4" fill="none" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" opacity="0.85" filter={`url(#${uid}bl)`} /><animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="2.4s" repeatCount="indefinite" /></g>
+          <g fill="#FFFFFF">{[[14, 18], [50, 16], [52, 48], [16, 50]].map((c, i) => <path key={i} d={`M${c[0]} ${c[1] - 2.4} l0.7 1.7 1.7 0.7 -1.7 0.7 -0.7 1.7 -0.7 -1.7 -1.7 -0.7 1.7 -0.7 Z`}><animate attributeName="opacity" values="0.2;1;0.2" dur={`${1.4 + i * 0.3}s`} repeatCount="indefinite" /></path>)}</g>
+        </>);
+      }
+
+      // ===== SAO BĂNG — vũ trụ tím, sao chổi quay quanh để lại vệt + tinh tú lấp lánh =====
+      const stars = [[12, 16], [52, 14], [56, 40], [10, 44], [44, 54], [22, 8]];
+      return wrap(<>
+        {halo('0.4;0.9;0.4', '3.4s')}
+        <circle cx="32" cy="32" r="26" fill="none" stroke={m.ac} strokeWidth="1" opacity="0.4" strokeDasharray="2 8"><animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="16s" repeatCount="indefinite" /></circle>
+        <g fill={m.spark}>{stars.map((c, i) => <circle key={i} cx={c[0]} cy={c[1]} r={0.8 + (i % 2) * 0.5}><animate attributeName="opacity" values="0.2;1;0.2" dur={`${1.2 + i * 0.25}s`} repeatCount="indefinite" /></circle>)}</g>
+        <g>
+          <g transform="translate(32 5)">
+            <path d="M0 0 q-10 1.4 -16.5 5.4" stroke={m.ac} strokeWidth="2.4" strokeLinecap="round" fill="none" opacity="0.5" filter={`url(#${uid}bl)`} />
+            <path d="M0 -2.6 l0.85 2 2.1 0.6 -2.1 0.6 -0.85 2 -0.85 -2 -2.1 -0.6 2.1 -0.6 Z" fill={m.spark} />
+          </g>
+          <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="5.5s" repeatCount="indefinite" />
+        </g>
+        <path d="M32 2 l1.2 3.2 3.2 1.2 -3.2 1.2 -1.2 3.2 -1.2 -3.2 -3.2 -1.2 3.2 -1.2 Z" fill={m.spark}><animateTransform attributeName="transform" type="rotate" from="0 32 7" to="360 32 7" dur="10s" repeatCount="indefinite" /></path>
+      </>);
+    };
+
+    // --- LINH THÚ "Living Companion": SVG sticker cao cấp (gradient + mắt bóng + hào quang + bệ sáng
+    //     + nhịp thở + chớp mắt + trick riêng + hạt). Nhóm <g className="petEyes"> để con ngươi dõi chuột. ---
+    const renderPetArt = (name: string, size: number = 46, uid: string = '') => {
+      const U = 'pt' + name.replace(/[^a-zA-Z0-9]/g, '') + uid;
+      const blink = (r: number) => <animate attributeName="ry" values={`${r};${r};0.5;${r}`} keyTimes="0;0.9;0.95;1" dur="4.6s" repeatCount="indefinite" />;
+      const aura = (c: string) => (<><circle cx="70" cy="74" r="40" fill={`url(#${U}au)`} filter={`url(#${U}bl)`}><animate attributeName="opacity" values="0.65;1;0.65" dur="3.1s" repeatCount="indefinite" /></circle></>);
+      const plat = (c: string) => <ellipse cx="70" cy="122" rx="28" ry="6.5" fill={`url(#${U}pl)`}><animate attributeName="rx" values="28;20;28" dur="3.4s" repeatCount="indefinite" /></ellipse>;
+      const auraStop = (c: string) => (<radialGradient id={`${U}au`}><stop offset="0%" stopColor={c} stopOpacity="0.5" /><stop offset="60%" stopColor={c} stopOpacity="0.16" /><stop offset="100%" stopColor={c} stopOpacity="0" /></radialGradient>);
+      const platStop = (c: string) => (<radialGradient id={`${U}pl`}><stop offset="0%" stopColor={c} stopOpacity="0.5" /><stop offset="100%" stopColor={c} stopOpacity="0" /></radialGradient>);
+      const blur = <filter id={`${U}bl`} x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" /></filter>;
+
+      let defs: any = null, art: any = null;
+
+      if (name === "Linh thú: Cáo Lửa") {
+        defs = (<><linearGradient id={`${U}fur`} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#FCD34D" /><stop offset="48%" stopColor="#F97316" /><stop offset="100%" stopColor="#C2410C" /></linearGradient><radialGradient id={`${U}belly`} cx="50%" cy="35%"><stop offset="0%" stopColor="#FFFBEB" /><stop offset="100%" stopColor="#FFE3BF" /></radialGradient>{auraStop('#FB923C')}{platStop('#F97316')}{blur}</>);
+        art = (<><g><path d="M96 92 q34 -6 30 -34 q-9 19 -30 16 Z" fill={`url(#${U}fur)`} /><path d="M120 56 q9 -9 9 -4 q-3 9 -9 8 Z" fill="#FFF3E0" /><animateTransform attributeName="transform" type="rotate" values="-7 96 90;9 96 90;-7 96 90" dur="2.2s" repeatCount="indefinite" /></g>
+          <ellipse cx="68" cy="80" rx="31" ry="30" fill={`url(#${U}fur)`} /><path d="M68 60 q-22 2 -19 27 q19 9 19 -5 Z" fill={`url(#${U}belly)`} /><path d="M68 60 q22 2 19 27 q-19 9 -19 -5 Z" fill={`url(#${U}belly)`} />
+          <path d="M48 52 L43 30 L60 46 Z" fill={`url(#${U}fur)`} /><path d="M88 52 L93 30 L76 46 Z" fill={`url(#${U}fur)`} /><path d="M49 48 L46 36 L56 45 Z" fill="#3A241B" /><path d="M87 48 L90 36 L80 45 Z" fill="#3A241B" />
+          <ellipse cx="56" cy="84" rx="5.5" ry="4" fill="#FBA17A" opacity="0.55" /><ellipse cx="80" cy="84" rx="5.5" ry="4" fill="#FBA17A" opacity="0.55" />
+          <g className="petEyes"><ellipse cx="58" cy="74" rx="3.4" ry="4" fill="#2A1A14">{blink(4)}</ellipse><ellipse cx="78" cy="74" rx="3.4" ry="4" fill="#2A1A14">{blink(4)}</ellipse><circle cx="59.3" cy="72.4" r="1.1" fill="#fff" /><circle cx="79.3" cy="72.4" r="1.1" fill="#fff" /></g>
+          <path d="M64 82 L68 86 L72 82 Z" fill="#2A1A14" /><path d="M44 60 q24 -14 48 0" stroke="#FFF3E0" strokeWidth="2" fill="none" opacity="0.3" strokeLinecap="round" /></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#F97316')}{aura('#FB923C')}<g className="breathe">{art}</g><g fill="#FDBA74"><circle cx="44" cy="74" r="2"><animate attributeName="cy" values="74;36" dur="2.6s" repeatCount="indefinite" /><animate attributeName="opacity" values="0;1;0" dur="2.6s" repeatCount="indefinite" /></circle><circle cx="92" cy="80" r="1.6"><animate attributeName="cy" values="80;44" dur="3.1s" begin="0.6s" repeatCount="indefinite" /><animate attributeName="opacity" values="0;1;0" dur="3.1s" begin="0.6s" repeatCount="indefinite" /></circle><circle cx="70" cy="44" r="1.3"><animate attributeName="cy" values="44;18" dur="2.9s" begin="1.2s" repeatCount="indefinite" /><animate attributeName="opacity" values="0;1;0" dur="2.9s" begin="1.2s" repeatCount="indefinite" /></circle></g></svg>);
+      }
+
+      if (name === "Linh thú: Cú Mèo") {
+        defs = (<><linearGradient id={`${U}bd`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6D5BD0" /><stop offset="100%" stopColor="#312E81" /></linearGradient><radialGradient id={`${U}be`} cx="50%" cy="35%"><stop offset="0%" stopColor="#C7D2FE" /><stop offset="100%" stopColor="#818CF8" /></radialGradient>{auraStop('#A78BFA')}{platStop('#818CF8')}{blur}</>);
+        art = (<><g><ellipse cx="70" cy="82" rx="30" ry="32" fill={`url(#${U}bd)`} /><ellipse cx="70" cy="88" rx="19" ry="22" fill={`url(#${U}be)`} /><path d="M48 40 L46 26 L60 38 Z" fill={`url(#${U}bd)`} /><path d="M92 40 L94 26 L80 38 Z" fill={`url(#${U}bd)`} />
+          <g><circle cx="58" cy="66" r="12" fill="#F8FAFF" /><circle cx="82" cy="66" r="12" fill="#F8FAFF" /><g className="petEyes"><ellipse cx="58" cy="66" rx="5" ry="5.6" fill="#1E1B4B">{blink(5.6)}</ellipse><ellipse cx="82" cy="66" rx="5" ry="5.6" fill="#1E1B4B">{blink(5.6)}</ellipse><circle cx="60" cy="63.5" r="1.7" fill="#fff" /><circle cx="84" cy="63.5" r="1.7" fill="#fff" /></g><path d="M64 74 L70 80 L76 74 Z" fill="#FBBF24" /><path d="M70 30 l1 2.4 2.4 1 -2.4 1 -1 2.4 -1 -2.4 -2.4 -1 2.4 -1 Z" fill="#FDE68A" /><animateTransform attributeName="transform" type="rotate" values="0 70 70;-7 70 70;0 70 70;6 70 70;0 70 70" keyTimes="0;0.12;0.5;0.62;1" dur="6s" repeatCount="indefinite" /></g></g></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#818CF8')}{aura('#A78BFA')}<g fill="#E0E7FF"><path d="M70 18 l1.6 4 4 1.6 -4 1.6 -1.6 4 -1.6 -4 -4 -1.6 4 -1.6 Z" /><circle cx="108" cy="54" r="1.6"><animate attributeName="opacity" values="1;0.2;1" dur="1.4s" repeatCount="indefinite" /></circle><circle cx="32" cy="56" r="1.6"><animate attributeName="opacity" values="0.2;1;0.2" dur="1.7s" repeatCount="indefinite" /></circle><circle cx="104" cy="92" r="1.3"><animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite" /></circle><circle cx="36" cy="92" r="1.3"><animate attributeName="opacity" values="0.3;1;0.3" dur="1.6s" repeatCount="indefinite" /></circle><animateTransform attributeName="transform" type="rotate" from="0 70 70" to="360 70 70" dur="22s" repeatCount="indefinite" /></g><g className="breathe">{art}</g></svg>);
+      }
+
+      if (name === "Linh thú: Mèo Thần Tài") {
+        defs = (<><radialGradient id={`${U}bd`} cx="50%" cy="35%"><stop offset="0%" stopColor="#FFFFFF" /><stop offset="100%" stopColor="#EFE7DA" /></radialGradient>{auraStop('#F6C453')}{platStop('#F6C453')}{blur}</>);
+        art = (<><path d="M48 46 L44 22 L62 40 Z" fill="#FFFFFF" stroke="#E7E1D6" strokeWidth="1" /><path d="M92 46 L96 22 L78 40 Z" fill="#FFFFFF" stroke="#E7E1D6" strokeWidth="1" /><path d="M50 40 L48 30 L58 39 Z" fill="#F4B8C4" /><path d="M90 40 L92 30 L82 39 Z" fill="#F4B8C4" />
+          <ellipse cx="70" cy="82" rx="30" ry="31" fill={`url(#${U}bd)`} stroke="#EDE6D8" strokeWidth="1" />
+          <path d="M34 76 h14 M34 82 h14 M106 76 h-14 M106 82 h-14" stroke="#D8CFC0" strokeWidth="1.2" />
+          <ellipse cx="56" cy="82" rx="5" ry="3.6" fill="#FBD0DB" opacity="0.7" /><ellipse cx="84" cy="82" rx="5" ry="3.6" fill="#FBD0DB" opacity="0.7" />
+          <g className="petEyes"><ellipse cx="58" cy="76" rx="3" ry="4.2" fill="#3A3027">{blink(4.2)}</ellipse><ellipse cx="82" cy="76" rx="3" ry="4.2" fill="#3A3027">{blink(4.2)}</ellipse><circle cx="59.4" cy="74" r="1.2" fill="#fff" /><circle cx="83.4" cy="74" r="1.2" fill="#fff" /></g>
+          <ellipse cx="70" cy="84" rx="2" ry="1.4" fill="#F4A0AE" /><path d="M50 88 q20 11 40 0" stroke="#E0484F" strokeWidth="3" fill="none" /><circle cx="70" cy="96" r="3" fill="#F6C453" stroke="#D89B22" strokeWidth="1" />
+          <g><ellipse cx="100" cy="66" rx="7" ry="8" fill="#FFFFFF" stroke="#EDE6D8" strokeWidth="1" /><animateTransform attributeName="transform" type="rotate" values="-10 100 76;8 100 76;-10 100 76" dur="1.4s" repeatCount="indefinite" /></g>
+          <g><circle cx="44" cy="104" r="8" fill="#F6C453" stroke="#D89B22" strokeWidth="1.4" /><circle cx="44" cy="104" r="3.6" fill="none" stroke="#D89B22" strokeWidth="1.2" /><animate attributeName="opacity" values="1;1" dur="2s" repeatCount="indefinite" /><animateTransform attributeName="transform" type="translate" values="0 0;0 -8;0 0" dur="1.4s" repeatCount="indefinite" /></g></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#F6C453')}{aura('#F6C453')}<g className="breathe">{art}</g></svg>);
+      }
+
+      if (name === "Linh thú: Rồng Con") {
+        defs = (<><linearGradient id={`${U}bd`} x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#86EFAC" /><stop offset="55%" stopColor="#46B36B" /><stop offset="100%" stopColor="#2E7D4F" /></linearGradient><radialGradient id={`${U}gl`} cx="50%" cy="50%"><stop offset="0%" stopColor="#FDE68A" /><stop offset="100%" stopColor="#FDE68A" stopOpacity="0" /></radialGradient>{auraStop('#34D399')}{platStop('#34D399')}{blur}</>);
+        art = (<><g><path d="M44 78 q-22 -12 -34 4 q20 4 32 18 Z" fill="#7CD191" /><animateTransform attributeName="transform" type="rotate" values="-8 44 82;10 44 82;-8 44 82" dur="1.3s" repeatCount="indefinite" /></g><g><path d="M96 78 q22 -12 34 4 q-20 4 -32 18 Z" fill="#7CD191" /><animateTransform attributeName="transform" type="rotate" values="8 96 82;-10 96 82;8 96 82" dur="1.3s" repeatCount="indefinite" /></g>
+          <ellipse cx="70" cy="84" rx="29" ry="30" fill={`url(#${U}bd)`} /><ellipse cx="70" cy="92" rx="17" ry="18" fill="#CFF3DA" /><ellipse cx="70" cy="92" rx="13" ry="14" fill={`url(#${U}gl)`}><animate attributeName="opacity" values="0.3;1;0.3" dur="2.4s" repeatCount="indefinite" /></ellipse>
+          <path d="M54 50 L50 30 L62 46 Z" fill="#FDE68A" /><path d="M86 50 L90 30 L78 46 Z" fill="#FDE68A" />
+          <ellipse cx="70" cy="86" rx="11" ry="8" fill="#5FC57E" /><circle cx="65" cy="85" r="1.4" fill="#2E6B43" /><circle cx="75" cy="85" r="1.4" fill="#2E6B43" />
+          <g className="petEyes"><ellipse cx="60" cy="72" rx="3" ry="3.6" fill="#1C3D2A">{blink(3.6)}</ellipse><ellipse cx="80" cy="72" rx="3" ry="3.6" fill="#1C3D2A">{blink(3.6)}</ellipse><circle cx="61.3" cy="70.4" r="1.1" fill="#fff" /><circle cx="81.3" cy="70.4" r="1.1" fill="#fff" /></g></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#34D399')}{aura('#34D399')}<g className="breathe">{art}</g><g fill="#CBD5E1"><circle cx="62" cy="84" r="2.2" opacity="0.6"><animate attributeName="cy" values="84;58" dur="2.8s" repeatCount="indefinite" /><animate attributeName="opacity" values="0;0.6;0" dur="2.8s" repeatCount="indefinite" /></circle><circle cx="78" cy="84" r="1.8" opacity="0.6"><animate attributeName="cy" values="84;60" dur="3.2s" begin="0.9s" repeatCount="indefinite" /><animate attributeName="opacity" values="0;0.6;0" dur="3.2s" begin="0.9s" repeatCount="indefinite" /></circle></g></svg>);
+      }
+
+      if (name === "Linh thú: Chim Cánh Cụt") {
+        defs = (<><linearGradient id={`${U}bd`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3A4253" /><stop offset="100%" stopColor="#1F2430" /></linearGradient><radialGradient id={`${U}be`} cx="50%" cy="35%"><stop offset="0%" stopColor="#FFFFFF" /><stop offset="100%" stopColor="#E7ECF5" /></radialGradient>{auraStop('#67E8F9')}{platStop('#67E8F9')}{blur}</>);
+        art = (<><g><path d="M42 74 q-10 16 4 30 Z" fill="#1A1F2B" /><animateTransform attributeName="transform" type="rotate" values="-6 44 76;10 44 76;-6 44 76" dur="1.1s" repeatCount="indefinite" /></g><g><path d="M98 74 q10 16 -4 30 Z" fill="#1A1F2B" /><animateTransform attributeName="transform" type="rotate" values="6 96 76;-10 96 76;6 96 76" dur="1.1s" repeatCount="indefinite" /></g>
+          <ellipse cx="70" cy="82" rx="29" ry="34" fill={`url(#${U}bd)`} /><ellipse cx="70" cy="86" rx="18" ry="27" fill={`url(#${U}be)`} />
+          <ellipse cx="56" cy="78" rx="5" ry="3.4" fill="#9FE5F2" opacity="0.6" /><ellipse cx="84" cy="78" rx="5" ry="3.4" fill="#9FE5F2" opacity="0.6" />
+          <g className="petEyes"><ellipse cx="60" cy="66" rx="2.8" ry="3.6" fill="#12161F">{blink(3.6)}</ellipse><ellipse cx="80" cy="66" rx="2.8" ry="3.6" fill="#12161F">{blink(3.6)}</ellipse><circle cx="61.2" cy="64.4" r="1.1" fill="#fff" /><circle cx="81.2" cy="64.4" r="1.1" fill="#fff" /></g>
+          <path d="M64 72 L70 79 L76 72 Z" fill="#F4A33C" /><path d="M58 113 l-4 6 h9 Z" fill="#F4A33C" /><path d="M82 113 l4 6 h-9 Z" fill="#F4A33C" /></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#67E8F9')}{aura('#67E8F9')}<g className="breathe">{art}</g><g fill="#BAE6FD"><circle cx="40" cy="50" r="1.6"><animate attributeName="opacity" values="0;1;0" dur="2.4s" repeatCount="indefinite" /></circle><circle cx="100" cy="58" r="1.3"><animate attributeName="opacity" values="0;1;0" dur="3s" begin="0.8s" repeatCount="indefinite" /></circle></g></svg>);
+      }
+
+      if (name === "Linh thú: Gấu Trúc") {
+        defs = (<><radialGradient id={`${U}bd`} cx="50%" cy="35%"><stop offset="0%" stopColor="#FFFFFF" /><stop offset="100%" stopColor="#ECEEF0" /></radialGradient>{auraStop('#86E3C0')}{platStop('#86E3C0')}{blur}</>);
+        art = (<><circle cx="44" cy="52" r="12" fill="#2B2B2B" /><circle cx="96" cy="52" r="12" fill="#2B2B2B" />
+          <ellipse cx="70" cy="84" rx="31" ry="32" fill={`url(#${U}bd)`} stroke="#E4E6E8" strokeWidth="1" />
+          <ellipse cx="56" cy="78" rx="9" ry="12" fill="#2B2B2B" transform="rotate(-16 56 78)" /><ellipse cx="84" cy="78" rx="9" ry="12" fill="#2B2B2B" transform="rotate(16 84 78)" />
+          <ellipse cx="56" cy="90" rx="5" ry="3.4" fill="#FBC4C4" opacity="0.55" /><ellipse cx="84" cy="90" rx="5" ry="3.4" fill="#FBC4C4" opacity="0.55" />
+          <g className="petEyes"><ellipse cx="57" cy="79" rx="2.6" ry="3.4" fill="#FFFFFF">{blink(3.4)}</ellipse><ellipse cx="83" cy="79" rx="2.6" ry="3.4" fill="#FFFFFF">{blink(3.4)}</ellipse><circle cx="57.6" cy="77.6" r="0.9" fill="#cfcfcf" /><circle cx="83.6" cy="77.6" r="0.9" fill="#cfcfcf" /></g>
+          <ellipse cx="70" cy="92" rx="3.2" ry="2.2" fill="#2B2B2B" /><path d="M70 94 v3 M70 97 q-3 2.2 -5.4 0 M70 97 q3 2.2 5.4 0" stroke="#2B2B2B" strokeWidth="1.4" fill="none" />
+          <ellipse cx="42" cy="98" rx="5.4" ry="7" fill="#2B2B2B" /><ellipse cx="98" cy="98" rx="5.4" ry="7" fill="#2B2B2B" />
+          <g><path d="M104 84 q10 -4 16 -16" stroke="#5BA86A" strokeWidth="2.4" fill="none" strokeLinecap="round" /><path d="M118 70 q5 -1 7 -5 q-5 0 -8 3 Z" fill="#7CC98A" /><path d="M112 78 q5 -1 7 -5 q-5 0 -8 3 Z" fill="#7CC98A" /><animateTransform attributeName="transform" type="rotate" values="0 104 84;5 104 84;0 104 84" dur="2.2s" repeatCount="indefinite" /></g></>);
+        return (<svg width={size} height={size} viewBox="0 0 140 140" style={{ overflow: 'visible' }}><defs>{defs}</defs>{plat('#86E3C0')}{aura('#86E3C0')}<g className="breathe">{art}</g></svg>);
+      }
+
+      return <svg width={size} height={size} viewBox="0 0 140 140" />;
+    };
+
+    const myHistory = history.filter(h => h.studentId === me.id);
+    const myQuizResults = quizResults.filter(r => r.studentId === me.id);
+    const vocabCards = Array.isArray(me.vocabNotebook) ? me.vocabNotebook : [];
+    // Phân loại từ vựng: từ lẻ / cụm động từ / thành ngữ / kết hợp từ / cấu trúc ngữ pháp
+    const VOCAB_CATS = [
+      { key: 'word', icon: 'book', color: C.accent },
+      { key: 'phrasal_verb', icon: 'puzzle', color: '#7c3aed' },
+      { key: 'idiom', icon: 'chat', color: '#db2777' },
+      { key: 'collocation', icon: 'link', color: '#0891b2' },
+      { key: 'grammar', icon: 'ruler', color: '#ea580c' },
+    ];
+    const catMeta = (k: string) => VOCAB_CATS.find(x => x.key === (k || 'word')) || VOCAB_CATS[0];
+    const filteredVocab = vocabFilter === 'all' ? vocabCards : vocabCards.filter(c => (c.category || 'word') === vocabFilter);
+    const _nowMs = getTrueTime();  // FIX: dùng cùng đồng hồ với due (đặt bằng getTrueTime) -> thẻ mới luôn vào flashcard
+    const dueCards = vocabCards.filter(c => (c.due || 0) <= _nowMs);
+    const dueCount = dueCards.length;
+    const activeQuizzes = quizzes.filter(q => {
+      if (!q.active) return false;
+      if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
+      return true;
+    });
+    const myLinks = sharedLinks.filter(l => {
+      if (l.audience === "ALL_STUDENTS") return true;
+      if (l.audience === "SPECIFIC_STUDENT" && l.targetStudentId === me.id) return true;
+      return false;
+    });
+    const nextClass = schedules.find(s => s.studentId === me.id && (s.date || "") >= new Date().toISOString().split('T')[0]);
+    const currentExp = me.exp || 0;
+    const expForNextLevel = ((Math.floor(currentExp / 500) + 1) * 500);
+    const progressPct = (currentExp % 500) / 500 * 100;
+    const recentScores = [...myQuizResults].sort((a,b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5).reverse();
+    const validBandScores = recentScores.filter(r => !isNaN(Number(r.band)));
+    const avgBand = validBandScores.length > 0 ? (validBandScores.reduce((acc, curr) => acc + Number(curr.band), 0) / validBandScores.length).toFixed(1) : "N/A";
+    const trendIcon = recentScores.length >= 2 ? (Number(recentScores[recentScores.length - 1].band) >= Number(recentScores[recentScores.length - 2].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
+    const targetGap = me.target && avgBand !== "N/A" ? (Number(me.target) - Number(avgBand)) : 0;
+    const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
+
+    const handleReviewQuiz = (r: QuizResult) => {
+        setReviewQuiz({quiz: quizzes.find(q=>q.id===r.quizId) as Quiz, result: r});
+        setReviewSectionIdx(0);
+        const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
+        if (!reviewed.includes(r.id)) {
+            const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
+            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + 20, inventory: newInv } : s);
+            setStudents(nx); syncData({ students: nx });
+            alert("CHIẾN THẦN REVIEW: +20 Xu vì đã xem lại lỗi sai trong bài thi!");
+        }
+    };
+
+    const handleBuyConsumable = (itemName: string, price: number) => {
+        if ((me.coins || 0) < price) { alert("Bạn không đủ OS Coins!"); return; }
+        if (confirm(`Dùng ${price} xu để đổi "${itemName}"?`)) {
+            const currentCons = { ...(me.inventory?.consumables || {}) };
+            const currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
+            const newInv = { 
+                ...(me.inventory || {}), 
+                permanents: currentPerms, 
+                consumables: { ...currentCons, [itemName]: (currentCons[itemName] || 0) + 1 } 
+            };
+            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) - price, inventory: newInv } : s);
+            setStudents(nx); syncData({ students: nx });
+            alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
+            setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
+        }
+    };
+
+    const handleRollGacha = () => {
+        if ((me.coins || 0) < 500) { alert("Cần 500 Xu để quay Gacha!"); return; }
+        if (confirm("Dùng 500 Xu để mở Hộp Quà Ngẫu Nhiên?")) {
+            const pool = [
+                // 🏆 DANH HIỆU VĨNH VIỄN — đa dạng, hiển thị cạnh tên (equippedTitle)
+                { type: "PERMANENT", name: "Danh hiệu: Chiến Thần IELTS" },
+                { type: "PERMANENT", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
+                { type: "PERMANENT", name: "Danh hiệu: Học Bá Thượng Đẳng" },
+                { type: "PERMANENT", name: "Danh hiệu: Cao Thủ Reading" },
+                { type: "PERMANENT", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
+                { type: "PERMANENT", name: "Danh hiệu: Vua Tốc Độ" },
+                { type: "PERMANENT", name: "Danh hiệu: Huyền Thoại 8.0+" },
+                { type: "PERMANENT", name: "Danh hiệu: Mọt Sách Bất Bại" },
+                { type: "PERMANENT", name: "Danh hiệu: Thợ Săn Band Điểm" },
+                { type: "PERMANENT", name: "Danh hiệu: Ninja Phòng Thi" },
+                // 🎨 GIAO DIỆN VĨNH VIỄN — đổi màu portal học viên (equippedTheme)
+                { type: "PERMANENT", name: "Giao diện: Hoàng Kim" },
+                { type: "PERMANENT", name: "Giao diện: Nửa Đêm" },
+                { type: "PERMANENT", name: "Giao diện: Anh Đào" },
+                { type: "PERMANENT", name: "Giao diện: Rừng Sâu" },
+                // 🖼️ KHUNG AVATAR VĨNH VIỄN — viền + hiệu ứng quanh ảnh đại diện (equippedFrame)
+                { type: "PERMANENT", name: "Khung avatar: Vương Miện" },
+                { type: "PERMANENT", name: "Khung avatar: Rồng Lửa" },
+                { type: "PERMANENT", name: "Khung avatar: Băng Giá" },
+                { type: "PERMANENT", name: "Khung avatar: Cầu Vồng" },
+                { type: "PERMANENT", name: "Khung avatar: Sao Băng" },
+                // 🐾 LINH THÚ VĨNH VIỄN — pet cosmetic nổi góc màn hình (equippedPet)
+                { type: "PERMANENT", name: "Linh thú: Cú Mèo" },
+                { type: "PERMANENT", name: "Linh thú: Mèo Thần Tài" },
+                { type: "PERMANENT", name: "Linh thú: Rồng Con" },
+                { type: "PERMANENT", name: "Linh thú: Cáo Lửa" },
+                { type: "PERMANENT", name: "Linh thú: Chim Cánh Cụt" },
+                { type: "PERMANENT", name: "Linh thú: Gấu Trúc" },
+                // 🍕 PHẦN THƯỞNG THỰC TẾ (tốn chi phí GV) — hiếm hơn
+                { type: "CONSUMABLE", name: "Thẻ dời deadline (24h)" },
+                { type: "CONSUMABLE", name: "1 Hộp Milo" },
+                { type: "CONSUMABLE", name: "1 Ly Trái Chò" },
+                { type: "CONSUMABLE", name: "1 Trà sữa Viên Viên" },
+                // 😢 Trượt — giữ chút hồi hộp
+                { type: "NONE", name: "Chúc bạn may mắn lần sau" },
+                { type: "NONE", name: "Chúc bạn may mắn lần sau" }
+            ];
+            const reward = pool[Math.floor(Math.random() * pool.length)];
+            let newCoins = (me.coins || 0) - 500;
+            const currentCons = { ...(me.inventory?.consumables || {}) };
+            let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
+            let msg = `BẠN QUAY TRÚNG: ${reward.name}`;
+
+            if (reward.type === "PERMANENT") {
+                if (currentPerms.includes(reward.name)) {
+                    newCoins += 200;
+                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +200 Xu đền bù!`;
+                } else {
+                    currentPerms = [...currentPerms, reward.name];
+                    msg += `\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`;
+                }
+            } else if (reward.type === "CONSUMABLE") {
+                currentCons[reward.name] = (currentCons[reward.name] || 0) + 1;
+                msg += `\n\nĐã thêm vào Túi đồ!`;
+            }
+
+            const newInv = { ...(me.inventory || {}), consumables: currentCons, permanents: currentPerms };
+            // Seed backup chống mất quà NGAY khi trúng (sống qua reload; mergeMyPermanents sẽ union lại kể cả khi sync lỗi).
+            try { localStorage.setItem("ielts_os_perms_" + String(me.email || "").toLowerCase(), JSON.stringify(currentPerms)); } catch (e) {}
+            const nx = students.map(s => s.id === me.id ? { ...s, coins: newCoins, inventory: newInv } : s);
+            setStudents(nx); syncData({ students: nx });
+            alert(msg);
+            if (reward.type !== "NONE") { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000); }
+        }
+    };
+
+    const handleUseItem = (itemName: string) => {
+        if (!confirm(`XÁC NHẬN SỬ DỤNG [${itemName}]?\n\nLƯU Ý: Chỉ bấm Đồng ý khi bạn đang gặp mặt hoặc nhắn tin trực tiếp với Giáo viên để xuất trình mã nhận thưởng. Vật phẩm sẽ bị trừ ngay lập tức!\n\nTiếp tục?`)) return;
+        const currentCons = { ...(me.inventory?.consumables || {}) };
+        if (currentCons[itemName] > 1) currentCons[itemName] -= 1;
+        else delete currentCons[itemName];
+        
+        const newInv = { ...(me.inventory || {}), permanents: me.inventory?.permanents || [], consumables: currentCons };
+        const nx = students.map(s => s.id === me.id ? { ...s, inventory: newInv } : s);
+
+        // Mã thưởng độc nhất + ghi vào SỔ CÁI để giáo viên xác minh (chống photoshop & dùng lại)
+        const code = genRewardCode();
+        const ledgerEntry: RewardCode = { code, studentId: me.id, studentName: me.name, item: itemName, createdAt: Date.now(), redeemed: false };
+        const nxCodes = [...rewardCodes, ledgerEntry];
+        setStudents(nx); setRewardCodes(nxCodes); syncData({ students: nx, rewardCodes: nxCodes });
+        setUseCodeObj({ name: itemName, code });
+    };
+
+    const handleEquipItem = (itemName: string) => {
+        // TOGGLE: bấm lại vật phẩm đang trang bị -> gỡ ra (undefined).
+        const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [] };
+        if (itemName.startsWith("Danh hiệu:")) {
+            const v = itemName.replace("Danh hiệu: ", "");
+            newInv.equippedTitle = newInv.equippedTitle === v ? undefined : v;
+        } else if (itemName.startsWith("Giao diện:")) {
+            newInv.equippedTheme = newInv.equippedTheme === itemName ? undefined : itemName;
+        } else if (itemName.startsWith("Khung avatar:")) {
+            newInv.equippedFrame = newInv.equippedFrame === itemName ? undefined : itemName;
+        } else if (itemName.startsWith("Linh thú:")) {
+            newInv.equippedPet = newInv.equippedPet === itemName ? undefined : itemName;
+        }
+        // CHỐNG TỰ ĐĂNG XUẤT: equip là hành động từ CHÍNH thiết bị này -> re-assert ID phiên thiết bị
+        // (= localStorage 'ielts_os_device_session'), để effect kiểm tra session KHÔNG hiểu nhầm là
+        // "đăng nhập ở thiết bị khác" mỗi khi setStudents chạy. Fallback giữ session cũ nếu chưa có.
+        const _deviceSid = (typeof localStorage !== "undefined" && localStorage.getItem("ielts_os_device_session")) || me.currentSessionId;
+        const nx = students.map(s => s.id === me.id ? { ...s, inventory: newInv, currentSessionId: _deviceSid || s.currentSessionId } : s);
+        setStudents(nx); syncData({ students: nx });
+    };
+
+    return (
+      <div onMouseMove={(e) => { const pet = document.getElementById('os-pet'); if (!pet) return; const r = pet.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2; const dx = Math.max(-1, Math.min(1, (e.clientX - cx) / 240)) * 2.6; const dy = Math.max(-1, Math.min(1, (e.clientY - cy) / 240)) * 2.2; pet.style.setProperty('--pex', dx.toFixed(2) + 'px'); pet.style.setProperty('--pey', dy.toFixed(2) + 'px'); }} style={{ minHeight: "100vh", background: C.bg, color: C.text, position: 'relative', overflowX: 'hidden' }}>
+        {globalStyles}
+        {/* PHỦ THEME + NỀN GLOW TRANG TRÍ (chỉ khi đang bật theme giao diện) */}
+        {_themed && <>
+          <style>{`
+          .card { background: ${C.card} !important; border-color: ${C.border} !important; color: ${C.text} !important; }
+          input, select, textarea { background: ${C.card} !important; color: ${C.text} !important; border-color: ${C.border} !important; }
+          input::placeholder, textarea::placeholder { color: ${C.sub} !important; }
+          .ios-tabs-container { background: ${C.border} !important; }
+          .tab-btn { color: ${C.text} !important; }
+          .tab-btn.active { color: ${C.bg} !important; background: ${C.accent} !important; }
+          ::-webkit-scrollbar-thumb { background: ${C.accent}55 !important; border-color: ${C.bg} !important; }
+          `}</style>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', background: `radial-gradient(1100px 540px at 50% -12%, ${_glow}24, transparent 62%), radial-gradient(760px 520px at 102% 4%, ${C.accent}14, transparent 56%), radial-gradient(640px 480px at -6% 30%, ${_glow}12, transparent 60%)` }} />
+        </>}
+        {/* LINH THÚ "Living Companion" — nổi góc màn hình, mắt dõi chuột, bấm để phản ứng */}
+        <style>{`
+          @keyframes petBob { 0%,100% { transform: translateY(0) rotate(-2.5deg); } 50% { transform: translateY(-9px) rotate(2.5deg); } }
+          .breathe { transform-box: fill-box; transform-origin: 50% 72%; animation: breathe 3.4s ease-in-out infinite; }
+          @keyframes breathe { 0%,100% { transform: translateY(0) scale(1,1); } 50% { transform: translateY(-4px) scale(1.015,.985); } }
+          .petEyes { transform-box: fill-box; transform-origin: center; transform: translate(var(--pex,0px), var(--pey,0px)); transition: transform .12s ease-out; }
+          @keyframes petPop { 0%{transform:scale(1)} 28%{transform:translateY(-16px) scale(1.14,.88)} 60%{transform:translateY(0) scale(.94,1.06)} 100%{transform:scale(1)} }
+          .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
+          .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
+          @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
+        `}</style>
+        {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
+            <div id="os-pet" title={me.inventory?.equippedPet}
+                onClick={(e) => {
+                    const box = e.currentTarget as HTMLElement; const svg = box.querySelector('svg');
+                    if (svg) { svg.classList.remove('petPop'); void (svg as any).getBBox; svg.classList.add('petPop'); setTimeout(() => svg.classList.remove('petPop'), 660); }
+                    for (let i = 0; i < 6; i++) { const s = document.createElement('span'); s.className = 'petHeart'; s.textContent = i % 2 ? '★' : '♥'; s.style.left = (6 + Math.random() * 46) + 'px'; s.style.color = i % 2 ? '#FBBF24' : '#FB7185'; s.style.animationDelay = (i * 0.05) + 's'; box.appendChild(s); setTimeout(() => s.remove(), 1050); }
+                }}
+                style={{ position: 'fixed', right: isMobile ? 12 : 20, bottom: isMobile ? 104 : 20, zIndex: 500, cursor: 'pointer', animation: 'petBob 3.2s ease-in-out infinite', filter: 'drop-shadow(0 9px 11px rgba(0,0,0,0.22))', ['--pex' as any]: '0px', ['--pey' as any]: '0px' }}>
+                {renderPetArt(me.inventory?.equippedPet || '', 64, 'live')}
+            </div>
+        )}
+        {confettiOverlay}
+
+        {/* MÀN HÌNH NHẮC NỢ BẠO CHÚA */}
+        {showDebtWarning && (
+            <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.95)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 20}}>
+                <div style={{background: C.err, width: '100%', maxWidth: 500, padding: 30, borderRadius: 16, textAlign: 'center', boxShadow: '0 10px 50px rgba(255,0,0,0.5)', border: '2px solid #fff'}}>
+                    <div style={{fontSize: 50, marginBottom: 10, display: 'flex', justifyContent: 'center'}}><Ico name="alert" size={50} color="#fff" /></div>
+                    <h1 style={{color: '#fff', margin: '0 0 20px 0', fontSize: 24, textTransform: 'uppercase'}}>{t('debt_notice_title')}</h1>
+                    <div style={{background: '#fff', color: '#000', padding: 20, borderRadius: 8, fontSize: 16, fontWeight: 700, lineHeight: 1.5, textAlign: 'left', whiteSpace: 'pre-wrap'}}>
+                        {me.debtMessage}
+                    </div>
+                    <p style={{color: '#fff', fontSize: 12, marginTop: 20, opacity: 0.8}}>{t('debt_read_carefully')}</p>
+                    <button 
+                        disabled={debtConfirmCountdown > 0} 
+                        onClick={handleAcknowledgeDebt} 
+                        style={{background: debtConfirmCountdown > 0 ? '#666' : '#fff', color: debtConfirmCountdown > 0 ? '#aaa' : C.err, padding: '15px 40px', fontSize: 16, fontWeight: 900, marginTop: 20, border: 'none', borderRadius: 30, cursor: debtConfirmCountdown > 0 ? 'not-allowed' : 'pointer', width: '100%', transition: '0.3s'}}
+                    >
+                        {debtConfirmCountdown > 0 ? t('debt_wait', { s: debtConfirmCountdown }) : t('debt_acknowledge')}
+                    </button>
+                </div>
+            </div>
+        )}
+
+        {showCelebration && (
+            <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999, pointerEvents: 'none', display: 'flex', justifyContent: 'space-around'}}>
+                {Array.from({length: 30}).map((_, i) => (
+                    <div key={i} style={{fontSize: 40, animation: `fall 3s linear infinite`, animationDelay: `${Math.random() * 2}s`}}>{['★','✦','✳','◆','✶'][i%5]}</div>
+                ))}
+            </div>
+        )}
+
+        {announcement && (
+            <div style={{ background: C.warn, color: '#fff', padding: '8px', fontSize: 14, fontWeight: 'bold', display: 'flex', alignItems: 'center', zIndex: 1000 }}>
+                 
+                <div className="marquee-container">
+                    <div className="marquee-content">{announcement}</div>
+                </div>
+            </div>
+        )}
+
+        <nav style={{ background: 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid rgba(226, 232, 240, 0.8)`, padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <BrandLogo size={38} />
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 8 }}><BrandWordmark size={20} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 12, fontWeight: 800, padding: '2px 7px', borderRadius: 6 }}>STUDENT</span></h1>
+          </div>
+          <div style={{display: 'flex', gap: 12, alignItems: 'center'}}>
+             <div style={{fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, background: isTimeSynced ? `${C.succ}15` : `${C.warn}15`, color: isTimeSynced ? C.succ : C.warn, display: window.innerWidth > 600 ? 'block' : 'none'}} title={t('tip_sync_server')}>
+                  {isTimeSynced ? t('time_synced') : t('time_syncing')}
+             </div>
+             {lastLoginTime && <div style={{fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 15, display: window.innerWidth > 600 ? 'block' : 'none'}}>{t('last_login')} {lastLoginTime}</div>}
+             <LanguageToggle role="STUDENT" />
+             <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", padding: "4px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5 }} title={t('contrast_mode')}><Ico name="eye" size={19} /></button>
+             <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, padding: "8px 16px", fontSize: 13, fontWeight: 700, marginLeft: 8 }}>{t('logout')}</button>
+          </div>
+        </nav>
+
+        <main style={{ maxWidth: 800, margin: "0 auto", padding: isMobile ? "16px 14px 92px" : "32px 20px" }}>
+          
+          {me.privateMessage && (
+              <div style={{background: `${C.err}15`, border: `2px solid ${C.err}`, color: C.err, padding: 20, borderRadius: 12, marginBottom: 24}}>
+                  <h3 style={{marginTop: 0, marginBottom: 5, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="bell" size={18} color={C.err} /> {t('private_msg_title')}</h3>
+                  <div style={{fontWeight: 700}}>{me.privateMessage}</div>
+              </div>
+          )}
+
+          {/* STUDENT MOBILE HEADER COMPACT */}
+          <div style={{ background: C.card, border: `1px solid ${C.border}80`, borderRadius: isMobile ? 16 : 20, padding: isMobile ? '14px 16px' : '22px 26px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: isMobile ? 10 : 16, flexWrap: 'wrap', marginBottom: isMobile ? 14 : 20, position: 'relative', overflow: 'hidden' }}>
+            <div style={{display: 'flex', gap: isMobile ? 12 : 18, alignItems: 'center', zIndex: 1}}>
+              {(() => {
+                  const _eqFr = me.inventory?.equippedFrame || '';
+                  if (!FRAME_META[_eqFr]) return <div style={{boxShadow: `0 0 0 4px ${C.bg}, 0 0 0 6px ${C.border}`}}>{getAvatar(me.name || "HV")}</div>;
+                  return (
+                    <div style={{ position: 'relative', width: 40, height: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <div style={{ position: 'absolute', inset: -12 }}>{renderFrameArt(_eqFr, 64, 'hdr')}</div>
+                        <div style={{ position: 'relative', zIndex: 1, borderRadius: '50%' }}>{getAvatar(me.name || "HV")}</div>
+                    </div>
+                  );
+              })()}
+              <div>
+                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 4 : 6}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || "bạn"}</span></h2>
+                {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 6, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
+                <p style={{color: C.sub, margin: 0, fontSize: 13.5}}>{t('ready_conquer')}</p>
+              </div>
+            </div>
+            <div style={{display: 'flex', gap: 10, zIndex: 1}}>
+                <div style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 14}}>
+                   <div style={{marginBottom: 4, display: 'flex', justifyContent: 'center', color: C.warn}}><Ico name="coins" size={20} /></div>
+                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>{me.coins || 0} <span style={{color: C.sub, fontSize: 11, fontWeight: 600}}>{t('coins_label')}</span></div>
+                </div>
+                <div style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 14}}>
+                   <div style={{fontSize: 20, marginBottom: 4}}>{getGamificationBadge(me.level || 1).split(" ")[0]}</div>
+                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>Lv.{me.level || 1}</div>
+                </div>
+            </div>
+          </div>
+
+          {useCodeObj && (
+              <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
+                  <h2 style={{color: C.succ, fontSize: 32}}>{t('reward_code_title')}</h2>
+                  <p style={{fontSize: 18, textAlign: 'center'}}>{t('item_label')}: <b>{useCodeObj!.name}</b></p>
+                  <div style={{background: '#fff', padding: 20, borderRadius: 12, margin: '20px 0'}}>
+                      <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${useCodeObj!.code}`} alt="QR Code" />
+                  </div>
+                  <div style={{fontSize: 28, fontWeight: 900, letterSpacing: 5, background: '#222', padding: '10px 30px', borderRadius: 8}}>{useCodeObj!.code}</div>
+                  <p style={{color: C.warn, fontSize: 14, maxWidth: 500, textAlign: 'center', marginTop: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6}}><Ico name="alert" size={15} color={C.warn} />{t('reward_screenshot_warn')}</p>
+                  <button onClick={() => setUseCodeObj(null)} style={{background: C.accent, color: '#fff', padding: '15px 40px', fontSize: 18, marginTop: 30}}>{t('captured_close')}</button>
+              </div>
+          )}
+
+          {showInventory && (
+              <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20}}>
+                  <div className="card" style={{width: 600, maxWidth: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', background: C.bg}}>
+                      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.border}`, paddingBottom: 15, marginBottom: 15}}>
+                          <h2 style={{margin: 0, display: 'flex', alignItems: 'center', gap: 9}}><Ico name="bag" size={20} /> {t('my_inventory')}</h2>
+                          <button onClick={() => setShowInventory(false)} style={{background: 'transparent', color: C.err, fontSize: 24, padding: 0}}><Ico name="x" size={20} /></button>
+                      </div>
+                      <div style={{display: 'flex', gap: 10, marginBottom: 20}}>
+                          <button onClick={() => setInvTab("CONSUMABLE")} style={{flex: 1, padding: 10, background: invTab === "CONSUMABLE" ? C.accent : C.card, color: invTab === "CONSUMABLE" ? '#fff' : C.text, border: `1px solid ${C.border}`, fontWeight: 900}}><Ico name="gift" size={14} style={{verticalAlign:'-2px', marginRight:6, display:'inline-block'}} />{t('consumables_tab')}</button>
+                          <button onClick={() => setInvTab("PERMANENT")} style={{flex: 1, padding: 10, background: invTab === "PERMANENT" ? C.accent : C.card, color: invTab === "PERMANENT" ? '#fff' : C.text, border: `1px solid ${C.border}`, fontWeight: 900}}><Ico name="trophy" size={16} /> {t('permanent_tab')}</button>
+                      </div>
+                      <div style={{flex: 1, overflowY: 'auto', display: 'grid', gap: 10}}>
+                          {invTab === "CONSUMABLE" && Object.entries(me.inventory?.consumables || {}).map(([name, count]) => (
+                              <div key={name} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${C.border}`}}>
+                                  <div><div style={{fontWeight: 900}}>{name}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
+                                  <button onClick={() => handleUseItem(name)} style={{background: C.succ, color: '#fff', padding: '8px 16px'}}>{t('use_now')}</button>
+                              </div>
+                          ))}
+                          {invTab === "CONSUMABLE" && Object.keys(me.inventory?.consumables || {}).length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub}}>{t('inventory_empty_consumable')}</div>}
+                          
+                         {invTab === "PERMANENT" && (Array.isArray(me.inventory?.permanents) ? me.inventory!.permanents : []).map((id: string) => {
+    const safeName = String(id);
+    const isEquipped = (me.inventory?.equippedTheme === safeName
+        || me.inventory?.equippedFrame === safeName
+        || me.inventory?.equippedPet === safeName
+        || me.inventory?.equippedTitle === safeName.replace("Danh hiệu: ", ""));
+    // Preview nhỏ: ô màu gradient (theme) / khung SVG thu nhỏ (frame) / linh thú SVG (pet) / icon cúp (danh hiệu)
+    const _thm = STUDENT_THEMES[safeName];
+    const _isFrame = STUDENT_FRAME_NAMES.indexOf(safeName) >= 0;
+    const _isPet = STUDENT_PET_NAMES.indexOf(safeName) >= 0;
+    const preview = _thm
+        ? <span style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, background: `linear-gradient(135deg, ${_thm.accent}, ${_thm.card})`, border: `1px solid ${C.border}`, boxShadow: `0 0 9px ${_thm.glow}55` }} />
+        : _isFrame
+        ? <span style={{ position: 'relative', width: 32, height: 32, flexShrink: 0, display: 'inline-block' }}>{renderFrameArt(safeName, 32, 'inv')}</span>
+        : _isPet
+        ? <span style={{ width: 32, height: 32, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{renderPetArt(safeName, 32, 'inv')}</span>
+        : <Ico name="trophy" size={18} color={C.warn} />;
+    return (
+    <div key={safeName} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${isEquipped ? C.succ : C.border}`}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth: 0}}>
+            {preview}
+            <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{safeName}</div>
+        </div>
+        <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
+            <button onClick={() => handleEquipItem(safeName)} style={{background: isEquipped ? C.succ : C.bg, color: isEquipped ? '#fff' : C.text, border: `1px solid ${C.border}`, padding: '8px 16px', fontWeight: 700}}>{isEquipped ? '✓ Đang dùng' : t('equip_btn')}</button>
+        </div>
+    </div>
+)})}
+                          {invTab === "PERMANENT" && (Array.isArray(me.inventory?.permanents) ? me.inventory!.permanents : []).length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub}}>{t('inventory_empty_permanent')}</div>}
+                      </div>
+                  </div>
+              </div>
+          )}
+          {/* THANH TAB ĐIỀU HƯỚNG — chia portal thành các trang nhỏ để hết cuộn dài */}
+          <div style={{ display: isMobile ? 'none' : 'flex', gap: 6, marginBottom: 24, padding: 5, background: C.card, border: `1px solid ${C.border}80`, borderRadius: 14, overflowX: 'auto' }}>
+            {([
+              { k: 'home', icon: 'home', label: t('ptab_home') },
+              { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
+              { k: 'progress', icon: 'trending', label: t('ptab_progress') },
+              { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
+            ] as const).map(tb => {
+              const on = portalTab === tb.k;
+              return (
+                <button key={tb.k} onClick={() => setPortalTab(tb.k)} style={{ flex: '1 0 auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 16px', borderRadius: 10, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 13.5, fontWeight: 700, background: on ? C.accent : 'transparent', color: on ? '#fff' : C.sub, transition: 'background .15s' }}>
+                  <Ico name={tb.icon} size={16} color={on ? '#fff' : C.sub} /> {tb.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ===== TAB: TỔNG QUAN ===== */}
+          {portalTab === "home" && (<>
+          <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 800 ? "repeat(3, 1fr)" : "1fr", gap: 16, marginBottom: 24 }}>
+            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
+                  <div style={{background: C.bg, color: C.text, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="clock" size={17} color={C.sub} /></div>
+                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_hours')}</span>
+              </div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.text, letterSpacing: -0.5 }}>{(myHistory.reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}<span style={{fontSize: 18, fontStyle: 'italic', color: C.sub}}>h</span></div>
+            </div>
+            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
+                  <div style={{background: `${C.succ}15`, color: C.succ, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="trending" size={17} color={C.succ} /></div>
+                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('avg_band')}</span>
+              </div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.succ, letterSpacing: -0.5 }}>{avgBand} <span style={{fontSize: 18}}>{trendIcon}</span></div>
+            </div>
+            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
+                  <div style={{background: `${C.warn}15`, color: C.warn, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="pin" size={17} color={C.warn} /></div>
+                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_quizzes')}</span>
+              </div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.warn, letterSpacing: -0.5 }}>{myQuizResults.length}</div>
+            </div>
+          </div>
+
+          </>)}
+
+          {/* ===== TAB: PHẦN THƯỞNG ===== */}
+          {portalTab === "rewards" && (<>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
+              <button 
+                  onClick={handleRollGacha} 
+                  style={{ background: `linear-gradient(135deg, #FF9500, #FFD60A)`, color: '#000', padding: '16px 40px', borderRadius: 30, fontSize: 18, fontWeight: 900, boxShadow: `0 12px 30px rgba(255, 149, 0, 0.4)`, border: `3px solid #fff`, display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer', transition: 'transform 0.2s ease', outline: 'none' }}
+              >
+                  <Ico name="sparkles" size={30} color={C.accent} />
+                  <div style={{ textAlign: 'left', lineHeight: 1.2 }}>
+                      <div>{t('gacha_spin')}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{t('gacha_cost')}</div>
+                  </div>
+              </button>
+          </div>
+
+          {/* CỬA HÀNG ĐỔI THƯỞNG DÀN NGANG MÀN HÌNH */}
+          <div className="card" style={{ marginBottom: 32 }}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 15}}>
+                  <h3 style={{marginTop: 0, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 11, fontFamily: 'var(--display)', fontSize: 26, fontWeight: 500, color: C.text}}>
+                      <span style={{background: `linear-gradient(135deg, ${C.succ}, #059669)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'}}></span><Ico name="gift" size={24} color={C.succ} style={{marginRight: 10}} /><span style={{color: C.text}}>Rewards Store</span><span style={{display: 'none'}}>REWARDS STORE</span>
+                  </h3>
+                  <button onClick={() => setShowInventory(true)} style={{background: C.accent, color: '#fff', padding: '11px 22px', borderRadius: 14, fontWeight: 700, boxShadow: `0 8px 20px ${C.accent}3a`}}><Ico name="bag" size={15} style={{verticalAlign:'-2px', marginRight:7, display:'inline-block'}} />{t('my_inventory_btn')}</button>
+              </div>
+              
+              <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16}}>
+                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                      <div>
+                          <div style={{fontSize: 28, marginBottom: 8}}>⏳</div>
+                          <div style={{fontWeight: 800, fontSize: 16}}>Thẻ dời deadline (24h)</div>
+                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Gia hạn thêm thời gian nộp bài.</div>
+                      </div>
+                      <button onClick={() => handleBuyConsumable("Thẻ dời deadline (24h)", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                  </div>
+                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                      <div>
+                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
+                          <div style={{fontWeight: 800, fontSize: 16}}>1 Hộp sữa Milo</div>
+                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Cứu trợ năng lượng giữa giờ học.</div>
+                      </div>
+                      <button onClick={() => handleBuyConsumable("1 Hộp Milo", 500)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>500 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                  </div>
+                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                      <div>
+                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
+                          <div style={{fontWeight: 800, fontSize: 16}}>1 Ly nước Trái Chò</div>
+                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Giải nhiệt tuyệt đỉnh.</div>
+                      </div>
+                      <button onClick={() => handleBuyConsumable("1 Ly Trái Chò", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                  </div>
+                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                      <div>
+                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
+                          <div style={{fontWeight: 800, fontSize: 16}}>1 Trà sữa Viên Viên</div>
+                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Đánh bay cơn buồn ngủ.</div>
+                      </div>
+                      <button onClick={() => handleBuyConsumable("1 Trà sữa Viên Viên", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                  </div>
+              </div>
+              {Array.isArray(me.myRewards) && me.myRewards!.length > 0 && (
+                 <div style={{marginTop: 24, paddingTop: 20, borderTop: `1px dashed ${C.border}`, fontSize: 13}}>
+                     <div style={{fontWeight: 800, color: C.succ, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7}}><Ico name="bag" size={14} /> Túi đồ cũ (Đang nâng cấp):</div>
+                     <ul style={{margin: 0, paddingLeft: 20}}>
+                         {me.myRewards!.map((id: string) => <li key={id} style={{color: C.sub, marginBottom: 4}}>{id}</li>)}
+                     </ul>
+                 </div>
+              )}
+          </div>
+          </>)}
+
+          {/* ===== TAB: TỪ VỰNG ===== */}
+          {portalTab === "vocab" && (<>
+          <div className="card" style={{ marginBottom: 24 }}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 14}}>
+                  <h3 style={{margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="book" size={17} color={C.accent} /> {t('vocab_notebook')}</h3>
+                  <div style={{display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap'}}>
+                      <span style={{fontSize: 12, color: C.sub, fontWeight: 700}}>{vocabCards.length} {t('vocab_words')}{dueCount > 0 ? ` · ${dueCount} ${t('vocab_due')}` : ''}</span>
+                      <button onClick={() => setShowVocabKinds(v => !v)} title={t('vocab_kinds_title')} style={{background: showVocabKinds ? C.accent : C.bg, color: showVocabKinds ? '#fff' : C.text, fontSize: 13, fontWeight: 800, padding: '8px 11px', borderRadius: 9, border: `1px solid ${showVocabKinds ? C.accent : C.border}`, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center'}}><Ico name="gear" size={16} /></button>
+                      <button onClick={handleGenerateVocab} disabled={vocabGenLoading} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '8px 13px', borderRadius: 9, opacity: vocabGenLoading ? 0.7 : 1, whiteSpace: 'nowrap'}}>{vocabGenLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {t('vocab_generating')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="sparkles" size={14} /> {t('vocab_generate')}</span>}</button>
+                  </div>
+              </div>
+
+              {/* BẢNG CHỌN NHÓM AI ƯU TIÊN TRÍCH */}
+              {showVocabKinds && (
+                  <div style={{marginBottom: 16, padding: '12px 14px', background: C.bg, borderRadius: 11, border: `1px solid ${C.border}`}}>
+                      <div style={{fontSize: 11.5, fontWeight: 800, color: C.sub, marginBottom: 8}}>{t('vocab_kinds_title')}</div>
+                      <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
+                          {VOCAB_CATS.map(cat => {
+                              const on = vocabKinds.includes(cat.key);
+                              return (
+                                  <button key={cat.key} onClick={() => setVocabKinds(prev => {
+                                      if (prev.includes(cat.key)) { const nx = prev.filter(k => k !== cat.key); return nx.length ? nx : prev; }
+                                      return [...prev, cat.key];
+                                  })} style={{display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 800, padding: '6px 11px', borderRadius: 20, cursor: 'pointer', border: `1px solid ${on ? cat.color : C.border}`, background: on ? cat.color : C.card, color: on ? '#fff' : C.sub}}>
+                                      <span style={{display:'inline-flex',alignItems:'center',gap:4}}>{on ? <Ico name="check" size={12} /> : null}<Ico name={cat.icon} size={14} /></span>{t('vocab_cat_' + cat.key)}
+                                  </button>
+                              );
+                          })}
+                      </div>
+                      <div style={{fontSize: 11, color: C.sub, marginTop: 8, lineHeight: 1.5}}>{t('vocab_kinds_hint')}</div>
+                      {/* CHỌN SỐ LƯỢNG TỪ MUỐN TẠO */}
+                      <div style={{display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, flexWrap: 'wrap', paddingTop: 12, borderTop: `1px solid ${C.border}`}}>
+                          <span style={{fontSize: 11.5, fontWeight: 800, color: C.sub}}>{t('vocab_count_label')}</span>
+                          <div style={{display: 'inline-flex', alignItems: 'center', gap: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 9, padding: '3px 4px'}}>
+                              <button onClick={() => setVocabCount(c => Math.max(5, (c || 15) - 5))} style={{width: 26, height: 26, borderRadius: 7, border: 'none', background: C.bg, color: C.text, fontWeight: 800, fontSize: 16, cursor: 'pointer', lineHeight: 1}}>−</button>
+                              <span style={{minWidth: 30, textAlign: 'center', fontWeight: 800, fontSize: 15, color: C.accent}}>{vocabCount}</span>
+                              <button onClick={() => setVocabCount(c => Math.min(40, (c || 15) + 5))} style={{width: 26, height: 26, borderRadius: 7, border: 'none', background: C.bg, color: C.text, fontWeight: 800, fontSize: 16, cursor: 'pointer', lineHeight: 1}}>+</button>
+                          </div>
+                          {[10, 15, 20, 25].map(n => (
+                              <button key={n} onClick={() => setVocabCount(n)} style={{fontSize: 12, fontWeight: 800, padding: '5px 11px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${vocabCount === n ? C.accent : C.border}`, background: vocabCount === n ? C.accent : C.card, color: vocabCount === n ? '#fff' : C.sub}}>{n}</button>
+                          ))}
+                      </div>
+                  </div>
+              )}
+
+              {vocabCards.length === 0 ? (
+                  <div style={{fontSize: 13, color: C.sub, padding: '12px 0', lineHeight: 1.6}}>{t('vocab_empty_hint')}</div>
+              ) : (
+                  <>
+                      <div style={{display: 'flex', gap: 8, marginBottom: 16}}>
+                          <button onClick={() => { setVocabView('study'); setStudyFlipped(false); }} style={{flex: 1, background: vocabView === 'study' ? C.accent : C.bg, color: vocabView === 'study' ? '#fff' : C.text, padding: '9px', borderRadius: 9, fontWeight: 800, fontSize: 13, border: `1px solid ${C.border}`}}><Ico name="cards" size={15} /> {t('vocab_flashcard')}{dueCount > 0 ? ` (${dueCount})` : ''}</button>
+                          <button onClick={() => setVocabView('list')} style={{flex: 1, background: vocabView === 'list' ? C.accent : C.bg, color: vocabView === 'list' ? '#fff' : C.text, padding: '9px', borderRadius: 9, fontWeight: 800, fontSize: 13, border: `1px solid ${C.border}`}}><Ico name="list" size={15} /> {t('vocab_list')}</button>
+                          <button onClick={() => setVocabView('game')} style={{flex: 1, background: vocabView === 'game' ? 'linear-gradient(135deg,#f59e0b,#ef4444)' : C.bg, color: vocabView === 'game' ? '#fff' : C.text, padding: '9px', borderRadius: 9, fontWeight: 800, fontSize: 13, border: `1px solid ${vocabView === 'game' ? 'transparent' : C.border}`}}><Ico name="zap" size={15} /> Blitz</button>
+                      </div>
+
+                      {vocabView === 'game' ? (() => {
+                          const _gd = new Date(getTrueTime()).toISOString().slice(0, 10);
+                          const _rec = ((me as any).vocabGameDaily && (me as any).vocabGameDaily.date === _gd) ? (me as any).vocabGameDaily : { date: _gd, count: 0 };
+                          const _awardsLeft = Math.max(0, 3 - (_rec.count || 0));
+                          return (
+                          <VocabBlitz cards={vocabCards} C={C} awardsLeft={_awardsLeft}
+                              onReview={(id: string, ok: boolean) => reviewVocabCard(id, ok)}
+                              onAward={(n: number) => {
+                                  const gd = new Date(getTrueTime()).toISOString().slice(0, 10);
+                                  const rec = ((me as any).vocabGameDaily && (me as any).vocabGameDaily.date === gd) ? (me as any).vocabGameDaily : { date: gd, count: 0 };
+                                  if ((rec.count || 0) >= 3 || n <= 0) return; // hết lượt thưởng/ngày
+                                  const newRec = { date: gd, count: (rec.count || 0) + 1 };
+                                  const nx = students.map((s: any) => s.id === me.id ? ({ ...s, coins: (s.coins || 0) + n, vocabGameDaily: newRec }) : s);
+                                  setStudents(nx as any); syncData({ students: nx });
+                              }} />
+                          );
+                      })() : vocabView === 'study' ? (
+                          dueCards.length === 0 ? (
+                              <div style={{textAlign: 'center', padding: 36, color: C.succ, fontWeight: 800, fontSize: 15}}><Ico name="sparkles" size={16} /> {t('vocab_done_today')}</div>
+                          ) : (
+                              <div>
+                                  <style>{`
+                                    .fc-scene{ perspective: 1400px; }
+                                    .fc-card{ display:grid; transform-style:preserve-3d; transition: transform .62s cubic-bezier(.34,1.3,.4,1); will-change: transform; cursor:pointer; outline:none; }
+                                    .fc-card.flip{ transform: rotateY(180deg); }
+                                    .fc-card:focus-visible{ box-shadow:0 0 0 3px ${C.accent}55; border-radius:18px; }
+                                    .fc-face{ grid-area:1/1; -webkit-backface-visibility:hidden; backface-visibility:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px 26px; text-align:center; border-radius:18px; min-height:188px; box-shadow:0 10px 30px -18px ${C.accent}66; }
+                                    .fc-back{ transform: rotateY(180deg); }
+                                    @media (prefers-reduced-motion: reduce){ .fc-card{ transition:none; } }
+                                  `}</style>
+                                  <div className="fc-scene">
+                                      <div className={'fc-card' + (studyFlipped ? ' flip' : '')} tabIndex={0} role="button" aria-label={t('vocab_tap_flip')}
+                                          onClick={() => setStudyFlipped(f => !f)}
+                                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setStudyFlipped(f => !f); } }}>
+                                          {/* MẶT TRƯỚC — từ */}
+                                          <div className="fc-face" style={{userSelect: 'none', border: `2px solid ${C.accent}40`, background: C.bg}}>
+                                              <div style={{fontSize: 30, fontWeight: 900, color: C.text, lineHeight: 1.15}}>{dueCards[0].word}</div>
+                                              {dueCards[0].phonetic && <div style={{fontSize: 14, color: C.sub, marginTop: 6}}>{dueCards[0].phonetic}</div>}
+                                              <div style={{fontSize: 11, color: C.sub, marginTop: 18, textTransform: 'uppercase', letterSpacing: 1}}><Ico name="pointer" size={14} /> {t('vocab_tap_flip')}</div>
+                                          </div>
+                                          {/* MẶT SAU — nghĩa */}
+                                          <div className="fc-face fc-back" style={{userSelect: 'none', border: `2px solid ${C.accent}`, background: `${C.accent}0d`}}>
+                                              <div style={{fontSize: 12, fontWeight: 800, color: catMeta(dueCards[0].category || 'word').color, display: 'inline-flex', alignItems: 'center', gap: 5}}><Ico name={catMeta(dueCards[0].category || 'word').icon} size={13} /> {t('vocab_cat_' + (dueCards[0].category || 'word'))}{dueCards[0].pos ? ` · ${dueCards[0].pos}` : ''}{dueCards[0].cefr ? ` · ${dueCards[0].cefr}` : ''}</div>
+                                              <div style={{fontSize: 19, fontWeight: 800, margin: '10px 0', color: C.text}}>{dueCards[0].meaning}</div>
+                                              {dueCards[0].example && <div style={{fontSize: 13.5, color: C.sub, fontStyle: 'italic', marginTop: 6, lineHeight: 1.5}}>"{dueCards[0].example}"</div>}
+                                          </div>
+                                      </div>
+                                  </div>
+                                  <div style={{display: 'flex', gap: 10, marginTop: 16}}>
+                                      <button onClick={() => { reviewVocabCard(dueCards[0].id, false); setStudyFlipped(false); }} style={{flex: 1, background: `${C.err}15`, color: C.err, padding: '13px', borderRadius: 11, fontWeight: 800, fontSize: 14}}><Ico name="xcircle" size={16} /> {t('vocab_forgot')}</button>
+                                      <button onClick={() => { reviewVocabCard(dueCards[0].id, true); setStudyFlipped(false); }} style={{flex: 1, background: `${C.succ}15`, color: C.succ, padding: '13px', borderRadius: 11, fontWeight: 800, fontSize: 14}}><Ico name="check" size={16} /> {t('vocab_remember')}</button>
+                                  </div>
+                              </div>
+                          )
+                      ) : (
+                          <div>
+                              {/* CHIP LỌC THEO LOẠI */}
+                              <div style={{display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10}}>
+                                  {['all', ...VOCAB_CATS.map(x => x.key)].map(k => {
+                                      const cnt = k === 'all' ? vocabCards.length : vocabCards.filter(c => (c.category || 'word') === k).length;
+                                      const active = vocabFilter === k;
+                                      const m = k === 'all' ? null : catMeta(k);
+                                      const col = m ? m.color : C.accent;
+                                      return (
+                                          <button key={k} onClick={() => setVocabFilter(k)} style={{display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 800, padding: '5px 10px', borderRadius: 20, cursor: 'pointer', border: `1px solid ${active ? col : C.border}`, background: active ? col : C.bg, color: active ? '#fff' : (cnt ? C.text : C.sub), opacity: cnt || k === 'all' ? 1 : 0.5}}>
+                                              {m ? <Ico name={m.icon} size={12} style={{verticalAlign:'-2px',marginRight:4}} /> : null}{t('vocab_cat_' + k)}{cnt > 0 ? ` (${cnt})` : ''}
+                                          </button>
+                                      );
+                                  })}
+                              </div>
+                              <div style={{display: 'grid', gap: 8, maxHeight: 360, overflowY: 'auto'}}>
+                                  {filteredVocab.length === 0 ? (
+                                      <div style={{textAlign: 'center', padding: 24, color: C.sub, fontSize: 13}}>—</div>
+                                  ) : filteredVocab.map(c => {
+                                      const m = catMeta(c.category || 'word');
+                                      return (
+                                      <div key={c.id} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, padding: '11px 13px', background: C.bg, borderRadius: 11, border: `1px solid ${C.border}`, borderLeft: `3px solid ${m.color}`}}>
+                                          <div style={{flex: 1}}>
+                                              <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                                  <b style={{fontSize: 14.5}}>{c.word}</b>
+                                                  <span style={{fontSize: 9.5, fontWeight: 800, background: `${m.color}18`, color: m.color, padding: '1px 7px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 4}}><Ico name={m.icon} size={11} /> {t('vocab_cat_' + (c.category || 'word'))}</span>
+                                                  {c.phonetic && <span style={{fontSize: 11, color: C.sub}}>{c.phonetic}</span>}
+                                                  {c.cefr && <span style={{fontSize: 10, fontWeight: 800, background: `${C.accent}15`, color: C.accent, padding: '1px 6px', borderRadius: 4}}>{c.cefr}</span>}
+                                                  <span style={{fontSize: 9, color: C.succ, letterSpacing: 1}} title={`Box ${c.box || 1}/5`}>{'●'.repeat(c.box || 1)}{'○'.repeat(Math.max(0, 5 - (c.box || 1)))}</span>
+                                              </div>
+                                              <div style={{fontSize: 12.5, color: C.text, marginTop: 3}}>{c.meaning}</div>
+                                              {c.example && <div style={{fontSize: 11.5, color: C.sub, fontStyle: 'italic', marginTop: 2}}>"{c.example}"</div>}
+                                              {c.evidence && <div style={{fontSize: 11, color: m.color, marginTop: 4, paddingLeft: 8, borderLeft: `2px solid ${m.color}55`, lineHeight: 1.45}}><Ico name="pin" size={13} /> {t('vocab_from_test')}: <span style={{color: C.sub, fontStyle: 'italic'}}>"…{c.evidence}…"</span></div>}
+                                          </div>
+                                          <button onClick={() => deleteVocabCard(c.id)} style={{background: 'transparent', color: C.err, fontSize: 13, padding: '2px 6px', flexShrink: 0}}><Ico name="x" size={13} /></button>
+                                      </div>
+                                      );
+                                  })}
+                              </div>
+                          </div>
+                      )}
+                  </>
+              )}
+          </div>
+
+          <div className="card" style={{padding: "20px 24px", background: `linear-gradient(135deg, ${C.card}, ${C.accent}15)`, marginBottom: 24}}>
+              <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, marginBottom: 5 }}><Ico name="sparkles" size={14} /> IDIOM OF THE MONTH (B1+)</div>
+              <div style={{ fontSize: 18, fontWeight: 900, marginTop: 10 }}>"do/work wonders"</div>
+              <div style={{ fontSize: 13, color: C.sub, marginTop: 5, fontStyle: 'italic' }}>to help or improve something greatly (According to Merriam-Webster Dictionary).</div>
+              <div style={{ fontSize: 12, marginTop: 10, background: C.bg, padding: 10, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                  <b>Example:</b> Only making endless efforts may <i>work wonders</i> to help you reach your goal.
+              </div>
+          </div>
+          </>)}
+
+          {/* ===== TAB: TIẾN ĐỘ ===== */}
+          {portalTab === "progress" && (<>
+          {recentScores.length > 0 && (
+            <div className="card" style={{ marginBottom: 24 }}>
+                <h3 style={{marginTop: 0, fontSize: 14, color: C.sub, textTransform: 'uppercase'}}><Ico name="trending" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('chart_my_progress')}</h3>
+                <div style={{marginTop: 12}}>
+                    <BandTrendChart data={bandSeries(myQuizResults)} color={C.accent} height={190} />
+                </div>
+            </div>
+          )}
+          </>)}
+
+          {/* ===== TAB: TỔNG QUAN (tiếp) — lịch học & tiến độ EXP ===== */}
+          {portalTab === "home" && (<>
+          {nextClass && (
+            <div className="card" style={{ marginBottom: 24, background: `${C.warn}10`, border: `1px solid ${C.warn}40` }}>
+              <div style={{ fontSize: 11, fontWeight: 900, color: C.warn, marginBottom: 5 }}><Ico name="calendar" size={13} color={C.warn} /> {t('upcoming_class')}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+                 <div>
+                    <div style={{fontSize: 18, fontWeight: 900}}>{nextClass!.date} <span style={{background: C.warn, color: '#fff', padding: '2px 6px', borderRadius: 4, fontSize: 12, marginLeft: 8}}>{nextClass!.time}</span></div>
+                    <div style={{fontSize: 13, color: C.sub, marginTop: 5, wordBreak: 'break-word'}}>
+                        {t('instructor')}: {nextClass!.teacher} • {t('location')}: {
+                            (nextClass!.location || "").split(/(https?:\/\/[^\s]+)/g).map((part, i) => 
+                                /(https?:\/\/[^\s]+)/.test(part) ? 
+                                    <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{color: C.accent, textDecoration: 'underline', fontWeight: 700}}>{part}</a> 
+                                    : <span key={i}>{part}</span>
+                            )
+                        }
+                    </div>
+                 </div>
+              </div>
+            </div>
+          )}
+
+          <div className="card" style={{ marginBottom: 24, padding: "20px 24px" }}>
+            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 10}}>
+              <span style={{fontSize: 12, fontWeight: 800, color: C.sub}}>{t('current_progress')}</span>
+              <span style={{fontSize: 12, fontWeight: 800, color: C.accent}}>{currentExp} / {expForNextLevel} EXP ({progressPct}%)</span>
+            </div>
+            <div style={{height: 8, background: C.border, borderRadius: 10, overflow: 'hidden'}}>
+               <div style={{width: `${progressPct}%`, height: '100%', background: C.accent, transition: 'width 1s ease-in-out', borderRadius: 10}}></div>
+            </div>
+            <div style={{display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 11, fontWeight: 700, color: C.sub}}>
+              <span>{t('current_cefr')}: {me.cefr || "N/A"}</span>
+              <span style={{textAlign: 'right'}}>
+                  {t('target_band')}: IELTS {me.target || "N/A"}<br/>
+                  <span style={{fontSize: 10, color: targetGap > 0 ? C.warn : C.succ}}>{motivationMsg}</span>
+              </span>
+            </div>
+          </div>
+          </>)}
+
+          {/* ===== TAB: PHÒNG THI ===== */}
+          {portalTab === "exams" && (<>
+          <div className="card" style={{ marginBottom: 24, border: `2px solid ${C.warn}` }}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10}}>
+                <h3 style={{marginTop: 0, color: C.warn, margin: 0}}>{t('test_room_title')}</h3>
+                {examRoomTab === "available" && (
+                  <input placeholder={t('filter_quizzes')} value={stQuizSearch} onChange={(e: any)=>setStQuizSearch(e.target.value)} style={{width: 150, padding: '4px 8px', fontSize: 12}} />
+                )}
+            </div>
+            {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
+            <div style={{display: 'flex', gap: 8, marginTop: 14}}>
+              {([
+                { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length },
+                { k: 'results', label: t('exam_tab_results'), n: myQuizResults.filter(Boolean).length },
+              ] as const).map(sb => {
+                const on = examRoomTab === sb.k;
+                return (
+                  <button key={sb.k} onClick={() => setExamRoomTab(sb.k)} style={{ flex: '0 0 auto', padding: '7px 15px', borderRadius: 8, border: `1px solid ${on ? C.accent : C.border}`, cursor: 'pointer', fontSize: 13, fontWeight: 800, background: on ? C.accent : 'transparent', color: on ? '#fff' : C.sub, transition: 'background .15s' }}>
+                    {sb.label}{sb.n > 0 ? ` · ${sb.n}` : ''}
+                  </button>
+                );
+              })}
+            </div>
+            {examRoomTab === "available" && (
+            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+              {activeQuizzes.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
+                  const attemptCount = myQuizResults.filter(r => r && r.quizId === q.id).length;
+                  const now = getRealTime();
+                  const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
+                  const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
+                  let statusText = "";
+                  let isAvailable = false;
+                  let badgeText = "";
+                  
+                  if (q.isLocked) { statusText = t('status_locked'); badgeText = t('status_locked'); }
+                  else if (now < startTime) { 
+                      statusText = `${t('opens_at')}: ${new Date(startTime).toLocaleString('vi-VN')}`; 
+                      badgeText = t('not_available'); 
+                  } 
+                  else if (now > endTime) { 
+                      statusText = t('status_closed'); 
+                      badgeText = t('status_closed'); 
+                  } 
+                  else if (attemptCount >= (q.maxAttempts || 1)) { 
+                      statusText = t('status_no_attempts'); 
+                      badgeText = t('status_no_attempts'); 
+                  } 
+                  else {
+                      isAvailable = true;
+                      statusText = q.scheduledEnd ? `${t('closes_at')}: ${new Date(endTime).toLocaleString('vi-VN')}` : t('status_available');
+                  }
+
+                  // PHƯƠNG ÁN 2: KIỂM TRA KHÓA CỨNG KHI ĐANG THI TRÊN THIẾT BỊ KHÁC
+                  const localSessionId = localStorage.getItem("ielts_os_device_session");
+                  const isLockedByOtherDevice = me.activeExamId === q.id && me.currentSessionId && me.currentSessionId !== localSessionId;
+
+                  return (
+                      <div key={q.id} style={{ background: C.bg, padding: '11px 14px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: `1px solid ${C.border}` }}>
+                          <div>
+                              <div style={{fontWeight: 800, fontSize: 15}}>
+                                  {q.tag && <span style={{fontSize: 10, background: C.accent, color: '#fff', padding: '2px 6px', borderRadius: 4, marginRight: 5}}>{q.tag}</span>}
+                                  {q.title} {q.passcode && <span title={t('tip_pwd_required')}><Ico name="lock" size={13} color={C.sub} /></span>}
+                                  {q.isSEBRequired && <span title={t('tip_seb_required')} style={{marginLeft: 5}}><Ico name="shield" size={13} color={C.accent} /></span>}
+                                  <span style={{fontSize: 10, background: C.card, padding: '2px 6px', borderRadius: 4, marginLeft: 5}}>{q.type}</span>
+                              </div>
+                              <div style={{fontSize: 12, color: C.sub, marginTop: 4}}>{q.timeLimit} {t('time_limit')} • {(q.questions || []).length} {t('questions_count')} • {t('previous_attempts')}: {attemptCount}/{q.maxAttempts || 1}</div>
+                              <div style={{fontSize: 11, color: isLockedByOtherDevice ? C.warn : (isAvailable ? C.succ : C.err), marginTop: 4, fontWeight: 700}}>
+                                  <Ico name="clock" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{isLockedByOtherDevice ? t('locked_other_device') : statusText}
+                              </div>
+                          </div>
+                          {(isAvailable && !isLockedByOtherDevice) ? (
+                              <div style={{display: 'flex', gap: 10}}>
+                                  <button onClick={() => {
+    // Chuyển sang chế độ Preview (isPreview = true, isStudentTestUI = true)
+    // Điều này sẽ kích hoạt cơ chế mã hóa đề thi và chặn lưu kết quả thật
+    startExam(q, true, true);
+}} style={{ background: C.card, color: C.text, padding: "8px 15px", border: `1px solid ${C.border}`, borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 12 }} title={t('tip_test_ui')}><Ico name="monitor" size={13} /> {t('test_ui_btn')}</button>
+                                  <button onClick={() => {
+                                      // Khóa bài thi vào phiên này
+                                      const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
+                                      const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
+                                      setStudents(nx); syncData({ students: nx });
+                                      startExam(q, false);
+                                  }} style={{ background: C.accent, color: "#fff", padding: "8px 20px", boxShadow: `0 4px 10px ${C.accent}40`, border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}>{t('enter_exam')}</button>
+                              </div>
+                          ) : isLockedByOtherDevice ? (
+                              <button onClick={() => {
+                                  if(confirm("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?")) {
+                                      const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
+                                      const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
+                                      setStudents(nx); syncData({ students: nx });
+                                      startExam(q, false);
+                                  }
+                              }} style={{ background: C.warn, color: "#fff", padding: "8px 15px", border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 11 }}>{t('force_take')}</button>
+                          ) : (
+                              <span style={{background: `${C.err}20`, color: C.err, padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700}}>{badgeText}</span>
+                          )}
+                      </div>
+                  )
+              })}
+              {activeQuizzes.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
+            </div>
+            )}
+
+            {examRoomTab === "results" && (
+                <div style={{marginTop: 14}}>
+                    {myQuizResults.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{t('no_quizzes')}</div>}
+                    {myQuizResults.map(r => {
+                        if (!r) return null;
+                        return (
+                        <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>
+                            <div style={{minWidth: 0}}>
+                                <div style={{fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{r.quizTitle}</div>
+                                <div style={{fontSize: 11, color: C.sub, marginTop: 3}}>{r.date}</div>
+                            </div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0}}>
+                                <div style={{textAlign: 'right'}}>
+                                    <div style={{fontSize: 17, fontWeight: 900, color: C.accent, lineHeight: 1}}>{r.score}/{r.total}</div>
+                                    <div style={{fontSize: 11, fontWeight: 800, color: C.sub, marginTop: 2}}>{t('band_label')} {r.band}</div>
+                                </div>
+                                <button onClick={() => handleReviewQuiz(r)} style={{fontSize: 11, fontWeight: 700, background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: '7px 12px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap'}}>{t('view_review')}</button>
+                            </div>
+                        </div>
+                    )})}
+                </div>
+            )}
+          </div>
+          </>)}
+
+          {/* ===== TAB: TIẾN ĐỘ (tiếp) — tài nguyên & lịch sử buổi học ===== */}
+          {portalTab === "progress" && (<>
+          <div className="card" style={{ marginBottom: 24 }}>
+            <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}><Ico name="folder" size={18} color={C.accent} /> {t('drive_hub_title')}</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 15, marginTop: 15 }}>
+              {myLinks.map(l => {
+                return (
+                <div key={l.id} style={{ background: C.bg, padding: 15, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                  <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: 35 }}>
+                      {getFileIcon(l.url)} {l.title}
+                  </div>
+                  <div style={{display: 'flex', gap: 8}}>
+                    <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, background: C.accent, color: "#fff", padding: "8px", borderRadius: 6, fontSize: 11, textDecoration: "none", textAlign:'center', fontWeight: 700 }}>{t('open_download')}</a>
+                  </div>
+                </div>
+              )})}
+              {myLinks.length === 0 && <div style={{color: C.sub, fontSize: 13, gridColumn: '1 / -1', textAlign: 'center', padding: 20}}>{t('no_shared_links')}</div>}
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
+            {myHistory.map(h => {
+              return (
+              <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
+                  <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
+                </div>
+                <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
+                <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
+                <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+                  {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
+                </div>
+              </div>
+            )})}
+            {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
+          </div>
+          </>)}
+        </main>
+        {/* MOBILE BOTTOM TABS */}
+        {isMobile && (
+          <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 1000, background: 'rgba(255,255,255,0.93)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderTop: `1px solid ${C.border}`, display: 'flex', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+            {([
+              { k: 'home', icon: 'home', label: t('ptab_home') },
+              { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
+              { k: 'progress', icon: 'trending', label: t('ptab_progress') },
+              { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
+            ] as const).map(tb => {
+              const on = portalTab === tb.k;
+              return (
+                <button key={tb.k} onClick={() => { setPortalTab(tb.k); window.scrollTo({ top: 0 }); }} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: on ? C.accent : C.sub }}>
+                  <Ico name={tb.icon} size={21} color={on ? C.accent : C.sub} />
+                  <span style={{ fontSize: 10, fontWeight: on ? 800 : 600 }}>{tb.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }

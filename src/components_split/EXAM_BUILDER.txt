@@ -1,0 +1,768 @@
+        {activeTab === "EXAM_BUILDER" && (() => {
+
+            // Xử lý logic Folder Tree
+            const currentPath = builderFolder;
+            const childFolders = new Set<string>();
+            const childQuizzes: any[] = [];
+
+            const quizzesToProcess = builderSearch ? quizzes.filter((q: any) => q.title.toLowerCase().includes(builderSearch.toLowerCase())) : quizzes;
+
+            quizzesToProcess.forEach((q: any) => {
+                const qPath = q.folder || "Root";
+                if (builderSearch) {
+                    childQuizzes.push(q);
+                } else {
+                    if (qPath === currentPath) {
+                        childQuizzes.push(q);
+                    } else if (qPath.startsWith(currentPath + "/")) {
+                        const remainder = qPath.substring(currentPath.length + 1);
+                        const nextFolder = remainder.split("/")[0];
+                        childFolders.add(nextFolder);
+                    }
+                }
+            });
+
+            // Tiền xử lý gộp nhóm câu hỏi trong Builder
+            const getBuilderGroups = () => {
+                if (!editingQuiz || !editingQuiz.questions) return [];
+                const qs = editingQuiz.questions;
+                const builderGroups: any[] = [];
+                for (let i = 0; i < qs.length; i++) {
+                    const q = qs[i];
+                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING') {
+                        let j = i + 1;
+                        const sharedQs = [q];
+                        // FIX "phân thân": chỉ gộp khi CÙNG groupContext + instruction (khớp logic đề thi),
+                        // nếu không flow-chart sẽ nuốt notes/summary và edit lan sang cả nhóm.
+                        while (j < qs.length && qs[j].type === q.type
+                               && (qs[j].groupContext || "") === (q.groupContext || "")
+                               && (qs[j].instruction || "") === (q.instruction || "")) {
+                            if (q.type === 'CHOICE_MULTIPLE' && JSON.stringify(qs[j].options) !== JSON.stringify(q.options)) break;
+                            sharedQs.push(qs[j]);
+                            j++;
+                        }
+                        if (sharedQs.length > 1) {
+                            builderGroups.push({ isMerged: true, questions: sharedQs, startIndex: i, groupType: q.type });
+                            i = j - 1;
+                            continue;
+                        }
+                    }
+                    builderGroups.push({ isMerged: false, questions: [q], startIndex: i, groupType: q.type });
+                }
+                return builderGroups;
+            };
+
+            const builderGroups = getBuilderGroups();
+
+            // CHỮA BỆNH STALE CLOSURE: Hàm LƯU BẤT TỬ
+            const handleForceSave = () => {
+                setEditingQuiz((currentLatestQuiz: any) => {
+                    if (!currentLatestQuiz) return currentLatestQuiz;
+                    setQuizzes((prevList: any[]) => {
+                        const idx = prevList.findIndex(q => q.id === currentLatestQuiz.id);
+                        const nx = [...prevList];
+                        if (idx > -1) nx[idx] = currentLatestQuiz;
+                        else nx.unshift(currentLatestQuiz);
+                        // Cập nhật Firebase ngay lập tức
+                        if (typeof syncData === 'function') setTimeout(() => syncData({quizzes: nx}), 50);
+                        return nx;
+                    });
+                    alert("Đã lưu mọi nội dung, định dạng và cài đặt thành công!");
+                    return currentLatestQuiz;
+                });
+            };
+
+            // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====
+            // Một họ màu ẤM duy nhất (bỏ xám lạnh slate), bỏ shadow glow, radius thống nhất, 4 font đầy đủ.
+            const EB = {
+                paper: C.bg,                 // canvas giấy ấm
+                sheet: '#FFFFFF',            // tờ soạn thảo
+                wash: '#F4F1EA',             // dải nền ấm thay #f8f9fa/#f1f5f9
+                washSoft: 'rgba(26,23,38,0.025)',
+                line: C.border,              // hairline ấm
+                lineSoft: 'rgba(26,23,38,0.07)',
+                ink: C.text,
+                sub: C.sub,
+                accent: C.accent,
+                warn: C.warn,
+                err: C.err,
+                accentWash: `${C.accent}0E`,
+                radius: 14, radiusSm: 10,
+                shadow: '0 1px 2px rgba(26,23,38,0.04), 0 16px 32px -18px rgba(26,23,38,0.16)',
+                fDisplay: "var(--display), Georgia, 'Times New Roman', serif",
+                fLabel: 'var(--heading), system-ui, sans-serif',
+                fBody: 'var(--sans), system-ui, sans-serif',
+                fMono: 'var(--mono), ui-monospace, Consolas, monospace',
+            };
+            const ebEyebrow: any = { fontFamily: EB.fLabel, fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: EB.sub, display: 'inline-flex', alignItems: 'center', gap: 7 };
+            const ebScopedStyle = (
+                <style>{`
+                  .ebx-root { --ebx-wash:${EB.washSoft}; --ebx-accent:${EB.accent}; --ebx-line:${EB.line}; }
+                  .ebx-root button { border-radius: ${EB.radiusSm}px; }
+                  .ebx-soft { transition: background .18s ease, border-color .18s ease, color .18s ease, transform .12s ease; }
+                  .ebx-soft:hover { background: var(--ebx-wash); }
+                  .ebx-soft:active { transform: scale(0.97); }
+                  .ebx-nav { border-left: 2px solid transparent; transition: background .16s ease, border-color .16s ease, transform .12s ease; }
+                  .ebx-nav:hover { background: var(--ebx-wash); border-left-color: var(--ebx-accent); transform: translateX(2px); }
+                  .ebx-opt { transition: background .16s ease, box-shadow .16s ease; }
+                  .ebx-opt:hover { background: var(--ebx-wash); }
+                  .ebx-icon { transition: background .16s ease, color .16s ease, transform .12s ease; }
+                  .ebx-icon:hover { background: var(--ebx-wash); color: var(--ebx-accent); }
+                  .ebx-icon:active { transform: scale(0.9); }
+                  .ebx-primary { transition: filter .18s ease, transform .12s ease, box-shadow .18s ease; }
+                  .ebx-primary:hover { filter: brightness(1.07); }
+                  .ebx-primary:active { transform: translateY(1px); }
+                  .ebx-block { position: relative; transition: background .2s ease; }
+                  .ebx-tab { transition: color .18s ease, background .18s ease; }
+                  .ebx-card { transition: border-color .2s ease, box-shadow .25s ease, transform .2s ease; }
+                  .ebx-card:hover { border-color: var(--ebx-accent); box-shadow: ${EB.shadow}; transform: translateY(-2px); }
+                  @keyframes ebxRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+                  .ebx-block { animation: ebxRise .34s cubic-bezier(0.21,1.02,0.73,1) both; }
+                `}</style>
+            );
+
+            return (
+            <div className="card ebx-root" style={{position: 'relative', padding: 0, height: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: `1px solid ${EB.line}`, borderRadius: 18, background: EB.paper, boxShadow: EB.shadow}}>
+                {ebScopedStyle}
+
+                {/* HEAD BAR — hairline, không còn viền accent dày */}
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 26px', background: EB.sheet, zIndex: 90, borderBottom: `1px solid ${EB.line}`, flexShrink: 0}}>
+                    <div style={{display: 'flex', alignItems: 'baseline', gap: 12}}>
+                        <span style={{fontFamily: EB.fDisplay, fontSize: 21, fontWeight: 600, color: EB.ink, letterSpacing: '-0.01em'}}>{t('eb_title')}</span>
+                        <span style={{...ebEyebrow, fontSize: 10, letterSpacing: '0.18em'}}>Workspace</span>
+                    </div>
+
+                    {!editingQuiz && !keyEditingQuiz && (
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '9px 16px', borderRadius: EB.radiusSm, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}` }}>
+                            <Ico name="download" size={14} /> {t('eb_upload_docx')}
+                            {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" onChange={handleFileUpload as any} style={{ display: 'none' }} />}
+                          </label>
+                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '9px 20px', fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
+                        </div>
+                    )}
+                </div>
+
+                {/* WORKSPACE AREA */}
+                {keyEditingQuiz ? (
+                    <div key="key-editor" className="ebx-root" style={{background: EB.paper, padding: 0, flex: 1, overflowY: 'auto'}}>
+                      <div style={{maxWidth: 820, margin: '0 auto', padding: '34px 32px 60px'}}>
+                        <div style={{...ebEyebrow, marginBottom: 10}}><Ico name="key" size={13} />{t('eb_edit_key')}</div>
+                        <h3 style={{margin: '0 0 8px', fontFamily: EB.fDisplay, fontWeight: 600, color: EB.ink, fontSize: 32, letterSpacing: '-0.02em'}}>{keyEditingQuiz!.title}</h3>
+                        <div style={{height: 2, width: 56, background: EB.accent, borderRadius: 2, marginBottom: 28}} />
+                        <div style={{display: 'grid', gap: 0, marginBottom: 30}}>
+                          {(keyEditingQuiz!.questions || []).map((q: any, idx: number) => (
+                                <div key={q.id} className="ebx-opt" style={{padding: '14px 4px', borderBottom: `1px solid ${EB.line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20}}>
+                                  <div style={{fontFamily: EB.fMono, fontWeight: 700, fontSize: 14, minWidth: 42, color: EB.accent}}>{idx + 1}</div>
+                                    <div style={{flex: 1, fontSize: 14, maxHeight: 45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}} dangerouslySetInnerHTML={{__html: sanitizeRichHtml(q.text || "")}} />
+                                  <div style={{width: 300}}>
+                                        {q.type === "CHOICE" ? (
+                                            <select value={q.correctAnswer as any} onChange={(e) => {
+                                                const nQ = [...keyEditingQuiz!.questions];
+                                                nQ[idx] = { ...q, correctAnswer: Number(e.target.value) };
+                                                setKeyEditingQuiz({ ...keyEditingQuiz!, questions: nQ });
+                                            }} style={{width: '100%', padding: '9px 12px', borderRadius: 10, fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, fontWeight: 600, boxShadow: 'none'}}>
+                                                {(q.options || []).map((opt: string, oIdx: number) => (
+                                                    <option key={oIdx} value={oIdx}>Option {String.fromCharCode(65 + oIdx)}: {(opt || "").toString().replace(/<[^>]*>/g, '')}</option>
+                                              ))}
+                                            </select>
+                                        ) : (
+                                            <input type="text" value={String(q.correctAnswer)} onChange={(e) => {
+                                                const nQ = [...keyEditingQuiz!.questions];
+                                                nQ[idx] = { ...q, correctAnswer: e.target.value };
+                                                setKeyEditingQuiz({ ...keyEditingQuiz!, questions: nQ });
+                                            }} placeholder={t('eb_answer_ph')} style={{width: '100%', padding: '9px 12px', borderRadius: 10, fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, fontWeight: 600, color: C.succ, boxShadow: 'none', fontFamily: EB.fMono}} />
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <button className="ebx-primary" onClick={() => {
+                            const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
+                            setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
+                            alert("Đã đồng bộ Key!");
+                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
+                      </div>
+                    </div>
+
+                ) : editingQuiz ? (
+
+                    <div key="full-editor" style={{display: 'flex', flex: 1, overflow: 'hidden', background: C.bg, position: 'relative'}}>
+
+                        {/* ============ PANEL TRÁI: QUESTION NAVIGATOR ============ */}
+                        <aside className="no-print" style={{width: 268, flexShrink: 0, background: EB.sheet, borderRight: `1px solid ${EB.line}`, display: 'flex', flexDirection: 'column', overflow: 'hidden'}}>
+                            <div style={{padding: '20px 20px 14px', borderBottom: `1px solid ${EB.line}`}}>
+                                <div style={{...ebEyebrow, marginBottom: 9}}><Ico name="compass" size={13} />{t('eb_nav_title')}</div>
+                                <div style={{fontFamily: EB.fDisplay, fontSize: 17, fontWeight: 600, color: EB.ink, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{editingQuiz.title || t('eb_quiz_fallback')}</div>
+                                <div style={{fontSize: 12, color: EB.sub, marginTop: 6, fontWeight: 500}}>{editingQuiz.type} <span style={{opacity: .5}}>·</span> <span style={{fontFamily: EB.fMono}}>{(editingQuiz.questions || []).length}</span> {t('eb_questions_unit')}</div>
+                            </div>
+                            <div style={{flex: 1, overflowY: 'auto', padding: '10px 8px'}}>
+                                {builderGroups.length === 0 && <div style={{fontSize: 12, color: EB.sub, fontStyle: 'italic', padding: 16, textAlign: 'center'}}>{t('eb_no_questions')}</div>}
+                                {builderGroups.map((grp: any) => {
+                                    const qIndex = grp.startIndex;
+                                    const lastIdx = qIndex + grp.questions.length - 1;
+                                    const navTitle = grp.isMerged ? `${qIndex + 1}–${lastIdx + 1}` : `${qIndex + 1}`;
+                                    const typeIcon = grp.groupType === 'BLANK' ? <Ico name="edit" size={14} /> : grp.groupType === 'MATCHING' ? <Ico name="link" size={14} /> : grp.groupType === 'DRAG_DROP' ? <Ico name="pointer" size={14} /> : grp.groupType === 'CHOICE_MULTIPLE' ? <Ico name="checkSquare" size={14} /> : <Ico name="radio" size={14} />;
+                                    const typeLabel = grp.groupType === 'BLANK' ? t('eb_type_blank') : grp.groupType === 'MATCHING' ? t('eb_type_match') : grp.groupType === 'DRAG_DROP' ? t('eb_type_drag') : grp.groupType === 'CHOICE_MULTIPLE' ? t('eb_type_multi') : t('eb_type_choice');
+                                    return (
+                                    <div key={'nav-' + qIndex} className="ebx-nav" onClick={() => { const el = document.getElementById(`builder-q-${qIndex}`); if (el) { el.scrollIntoView({behavior: 'smooth', block: 'center'}); el.style.transition = 'box-shadow .3s'; el.style.boxShadow = `inset 3px 0 0 ${C.accent}`; setTimeout(() => { el.style.boxShadow = 'none'; }, 1400); } }} style={{display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: EB.radiusSm, cursor: 'pointer', marginBottom: 2}}>
+                                        <span style={{fontFamily: EB.fMono, fontSize: 13, fontWeight: 700, color: EB.sub, minWidth: 34}}>{navTitle}</span>
+                                        <span style={{color: EB.accent, display: 'inline-flex', opacity: .85}}>{typeIcon}</span>
+                                        <div style={{flex: 1, minWidth: 0}}>
+                                            <div style={{fontSize: 12.5, fontWeight: 600, color: EB.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{typeLabel}</div>
+                                        </div>
+                                    </div>
+                                )})}
+                            </div>
+                            <div style={{padding: 14, borderTop: `1px solid ${EB.line}`, display: 'grid', gap: 8}}>
+                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: "Câu hỏi mới", options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
+                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "BLANK", text: "", groupContext: "", correctAnswer: ""}]} : prev)} style={{background: EB.accentWash, color: EB.accent, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${C.accent}22`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="edit" size={13} />{t('eb_add_blank_group')}</button>
+                            </div>
+                        </aside>
+
+                        {/* ============ PANEL GIỮA: SOẠN THẢO KIỂU WORD ============ */}
+                        <div style={{flex: 1, overflowY: 'auto', padding: '0', scrollBehavior: 'smooth', background: EB.paper}}>
+
+                            {/* TOP BAR DÍNH — toolbar hairline, không viền dày */}
+                            <div className="no-print" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, position: 'sticky', top: 0, background: `${EB.paper}F2`, backdropFilter: 'saturate(180%) blur(8px)', WebkitBackdropFilter: 'saturate(180%) blur(8px)', zIndex: 50, padding: '14px 32px', borderBottom: `1px solid ${EB.line}`}}>
+                                <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+                                    <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _showSettings: !prev._showSettings} : prev)} style={{background: editingQuiz._showSettings ? EB.accent : EB.sheet, color: editingQuiz._showSettings ? '#fff' : EB.ink, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${editingQuiz._showSettings ? EB.accent : EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="gear" size={14} />{t('eb_settings')}</button>
+                                </div>
+                                <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
+                                    <button className="ebx-soft" onClick={() => setEditingQuiz(null)} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
+                                    <button className="ebx-primary" onClick={handleForceSave} style={{background: EB.accent, color: '#fff', padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: EB.radiusSm, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="save" size={14} />{t('eb_save')}</button>
+                                </div>
+                            </div>
+
+                          {/* CỘT MANUSCRIPT — giới hạn bề ngang cho dễ đọc */}
+                          <div style={{maxWidth: 880, margin: '0 auto', padding: '34px 32px 80px'}}>
+
+                            {/* TIÊU ĐỀ ĐỀ THI — Fraunces serif, gõ thẳng trên giấy */}
+                            <div style={{marginBottom: 30}}>
+                                <div style={{...ebEyebrow, marginBottom: 10}}>{editingQuiz.type} <span style={{opacity: .4}}>·</span> {(editingQuiz.questions || []).length} {t('eb_questions_unit')}</div>
+                                <input value={editingQuiz.title} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, title:e.target.value}:prev)} placeholder={t('eb_title_ph')} style={{width: '100%', fontFamily: EB.fDisplay, fontSize: 38, fontWeight: 600, color: EB.ink, border: 'none', background: 'transparent', outline: 'none', padding: 0, letterSpacing: '-0.02em', lineHeight: 1.1, boxShadow: 'none'}} />
+                                <div style={{height: 2, width: 56, background: EB.accent, borderRadius: 2, marginTop: 18}} />
+                            </div>
+
+                            {/* SOẠN THẢO BÀI ĐỌC / NGỮ CẢNH — phẳng trên giấy, phân cách bằng hairline */}
+                            <div className="no-print ebx-block" style={{ marginBottom: 38 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+                                    <div style={ebEyebrow}><Ico name="book" size={13} />{t('eb_passage_title')}</div>
+                                    <div style={{ display: 'flex', gap: 2, background: EB.wash, padding: 4, borderRadius: EB.radiusSm }}>
+                                        {[0, 1, 2].map((idx) => {
+                                            const isActive = (editingQuiz._activePassageTab || 0) === idx;
+                                            const label = String(editingQuiz.type).toLowerCase().includes('listen') ? `Section ${idx + 1}` : `Passage ${idx + 1}`;
+                                            return (
+                                            <button key={idx} className="ebx-tab" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _activePassageTab: idx} : prev)} style={{ padding: '6px 15px', fontSize: 12, borderRadius: 7, background: isActive ? EB.sheet : 'transparent', color: isActive ? EB.ink : EB.sub, boxShadow: isActive ? '0 1px 3px rgba(26,23,38,0.10)' : 'none', fontWeight: isActive ? 700 : 500, border: 'none', cursor: 'pointer' }}>{label}</button>
+                                        )})}
+                                    </div>
+                                </div>
+                                <div style={{ border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', background: EB.sheet }}>
+                                    <RichTextEditor
+                                        value={
+                                            editingQuiz.sections?.[editingQuiz._activePassageTab || 0]?.passage
+                                            ?? ((editingQuiz._activePassageTab || 0) === 0 ? (editingQuiz.passage || "") : "")
+                                        }
+                                        onChange={(v: string) => setEditingQuiz((prev: any) => {
+                                            if (!prev) return prev;
+                                            const idx = prev._activePassageTab || 0;
+                                            // FIX "sửa bài đọc không tác động": đề thi render sections[idx].passage,
+                                            // nên LUÔN ghi vào sections[idx]; tab 0 mirror thêm vào passage (fallback đề cũ).
+                                            const nextSecs = [...(prev.sections || [])];
+                                            while(nextSecs.length <= idx) nextSecs.push({ passage: "", questions: [] });
+                                            nextSecs[idx] = { ...nextSecs[idx], passage: v };
+                                            const patch: any = { ...prev, sections: nextSecs };
+                                            if (idx === 0) patch.passage = v;
+                                            return patch;
+                                        })}
+                                        placeholder={t('eb_passage_ph', { n: (editingQuiz._activePassageTab || 0) + 1 })}
+                                    />
+                                </div>
+                            </div>
+
+                            <div style={{...ebEyebrow, marginBottom: 22, paddingBottom: 14, borderBottom: `1px solid ${EB.line}`, width: '100%', justifyContent: 'flex-start'}}><Ico name="clipboard" size={13} />{t('eb_question_list')} <span style={{fontFamily: EB.fMono, color: EB.accent, marginLeft: 2}}>({(editingQuiz.questions || []).length})</span></div>
+
+                            <div style={{display: 'grid', gap: 0}}>
+                                {builderGroups.map((grp: any) => {
+                                    const q = grp.questions[0];
+                                    const qIndex = grp.startIndex;
+                                    const isMerged = grp.isMerged;
+                                    const lastIdx = qIndex + grp.questions.length - 1;
+                                    const titleStr = isMerged ? `${t('eb_q')} ${qIndex + 1} - ${lastIdx + 1}` : `${t('eb_q')} ${qIndex + 1}`;
+
+                                    // CẬP NHẬT TRỰC TIẾP LÊN STATE GỐC ĐỂ TRÁNH MẤT DỮ LIỆU
+                                    const updateGroup = (updater: (qItem: any, offset: number) => any) => {
+                                        setEditingQuiz((prev: any) => {
+                                            if (!prev) return prev;
+                                            const nQ = [...(prev.questions || [])];
+                                            grp.questions.forEach((_qItem: any, offset: number) => {
+                                                const currentIdx = qIndex + offset;
+                                                if(nQ[currentIdx]) nQ[currentIdx] = updater(nQ[currentIdx], offset);
+                                            });
+                                            return { ...prev, questions: nQ };
+                                        });
+                                    };
+
+                                    const iconBtn: any = {background: 'transparent', color: EB.sub, border: `1px solid ${EB.line}`, width: 34, height: 34, borderRadius: EB.radiusSm, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center'};
+                                    const selBox: any = {padding: '8px 12px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, outline: 'none', boxShadow: 'none', width: 'auto'};
+                                    return (
+                                    <div id={`builder-q-${qIndex}`} key={q.id} className="ebx-block" style={{position: 'relative', padding: '30px 0 30px 26px', borderTop: qIndex === 0 ? 'none' : `1px solid ${EB.line}`}}>
+                                        {/* THANH ACCENT DỌC thay cho card */}
+                                        <div style={{position: 'absolute', left: 0, top: 34, bottom: 34, width: 3, background: EB.accent, borderRadius: 3, opacity: .85}} />
+
+                                        {/* HEADER CỦA NHÓM CÂU HỎI */}
+                                        <div className="no-print" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22, flexWrap: 'wrap', gap: 14}}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+                                                <div style={{fontFamily: EB.fLabel, fontWeight: 700, fontSize: 13, color: EB.accent, letterSpacing: '0.04em', textTransform: 'uppercase'}}>{titleStr}</div>
+                                                <select className="ebx-soft" value={q.type} onChange={(e: any) => {
+                                                    updateGroup((qItem: any) => ({ ...qItem, type: e.target.value as any, correctAnswer: e.target.value === "CHOICE" ? 0 : "" }));
+                                                }} style={selBox}>
+                                                    <option value="CHOICE">{t('eb_opt_choice')}</option>
+                                                    <option value="CHOICE_MULTIPLE">{t('eb_opt_multi')}</option>
+                                                    <option value="MATCHING">{t('eb_opt_match')}</option>
+                                                    <option value="BLANK">{t('eb_opt_blank')}</option>
+                                                    <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
+                                                    <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
+                                                    <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
+                                                </select>
+                                                <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
+                                                    updateGroup((qItem: any) => ({ ...qItem, subType: e.target.value }));
+                                                }} style={{...selBox, color: EB.sub}}>
+                                                    <option value="">{t('eb_subtype_none')}</option>
+                                                    <option value="True/False/Not Given">True / False / Not Given</option>
+                                                    <option value="Matching Headings">Matching Headings</option>
+                                                    <option value="Multiple Choice">Multiple Choice</option>
+                                                    <option value="Sentence Completion">Sentence Completion</option>
+                                                </select>
+                                            </div>
+                                            <div style={{display: 'flex', gap: 7}}>
+                                                <button className="ebx-icon" onClick={() => {
+                                                    if (qIndex > 0) {
+                                                        setEditingQuiz((prev: any) => {
+                                                            if (!prev) return prev;
+                                                            const nQ = [...(prev.questions || [])];
+                                                            const groupToMove = nQ.splice(qIndex, grp.questions.length);
+                                                            nQ.splice(qIndex - 1, 0, ...groupToMove);
+                                                            return { ...prev, questions: nQ };
+                                                        });
+                                                    }
+                                                }} style={iconBtn} title={t('eb_move_up')}><Ico name="chevronUp" size={16} /></button>
+
+                                                <button className="ebx-icon" onClick={() => {
+                                                    setEditingQuiz((prev: any) => {
+                                                        if (!prev) return prev;
+                                                        if (lastIdx < (prev.questions?.length || 0) - 1) {
+                                                            const nQ = [...(prev.questions || [])];
+                                                            const groupToMove = nQ.splice(qIndex, grp.questions.length);
+                                                            nQ.splice(qIndex + 1, 0, ...groupToMove);
+                                                            return { ...prev, questions: nQ };
+                                                        }
+                                                        return prev;
+                                                    });
+                                                }} style={iconBtn} title={t('eb_move_down')}><Ico name="chevronDown" size={16} /></button>
+
+                                                <button className="ebx-soft" onClick={() => {
+                                                    setEditingQuiz((prev: any) => {
+                                                        if (!prev) return prev;
+                                                        const nQ = [...(prev.questions || [])];
+                                                        const dups = grp.questions.map((item: any) => ({ ...item, id: getTrueTime().toString() + Math.random() }));
+                                                        nQ.splice(lastIdx + 1, 0, ...dups);
+                                                        return { ...prev, questions: nQ };
+                                                    });
+                                                }} style={{...iconBtn, width: 'auto', padding: '0 13px', gap: 6, fontSize: 13, fontWeight: 600}}><Ico name="copy" size={14} />{t('eb_duplicate')}</button>
+
+                                                <button className="ebx-soft" onClick={() => {
+                                                    if (confirm("Chắc chắn xóa câu hỏi này?")) {
+                                                        setEditingQuiz((prev: any) => {
+                                                            if (!prev) return prev;
+                                                            const nQ = (prev.questions || []).filter((_: any, i: number) => i < qIndex || i > lastIdx);
+                                                            return { ...prev, questions: nQ };
+                                                        });
+                                                    }
+                                                }} style={{...iconBtn, width: 'auto', padding: '0 13px', gap: 6, fontSize: 13, fontWeight: 600, color: EB.err, borderColor: `${C.err}33`}}><Ico name="trash" size={14} />{t('eb_delete')}</button>
+                                            </div>
+                                        </div>
+
+                                        {/* ĐỀ BÀI / HƯỚNG DẪN (INSTRUCTIONS) - dùng chung cho cả nhóm */}
+                                        <div style={{marginBottom: 22}}>
+                                            <label style={{...ebEyebrow, marginBottom: 10, display: 'flex'}}><Ico name="pin" size={13} />{t('eb_instructions_label')}</label>
+                                            <RichTextEditor value={q.instruction || ""} onChange={(v: string) => {
+                                                // FIX "lặp bảng hướng dẫn": đề thi gộp nhóm câu theo instruction giống nhau.
+                                                // Sửa hướng dẫn phải lan sang MỌI câu đang dùng chung hướng dẫn cũ, nếu không nhóm bị tách -> hiện 2 bảng.
+                                                const oldIns = q.instruction || "";
+                                                setEditingQuiz((prev: any) => {
+                                                    if (!prev) return prev;
+                                                    const groupIds = new Set(grp.questions.map((gi: any) => gi.id));
+                                                    const nQ = (prev.questions || []).map((qx: any) =>
+                                                        (groupIds.has(qx.id) || (oldIns && (qx.instruction || "") === oldIns))
+                                                            ? { ...qx, instruction: v }
+                                                            : qx
+                                                    );
+                                                    return { ...prev, questions: nQ };
+                                                });
+                                            }} placeholder={t('eb_instructions_ph')} />
+                                        </div>
+
+                                        {/* NỘI DUNG CHÍNH DỰA THEO TYPE */}
+                                        {grp.groupType === 'DRAG_DROP_HEADING' ? (() => {
+                                            const ROMAN = ['i','ii','iii','iv','v','vi','vii','viii','ix','x','xi','xii','xiii','xiv','xv','xvi','xvii','xviii','xix','xx'];
+                                            const srcQ = grp.questions.find((x:any) => x.options && x.options.length) || grp.questions[0];
+                                            const heads = ((srcQ as any).options || []).map((o:string) => String(o).replace(/^\s*[ivxlcdm]+[.)]\s*/i, ''));
+                                            const writeHeads = (arr:string[]) => { const opts = arr.map((txt,i)=>`${ROMAN[i]}. ${txt}`); updateGroup((qItem:any)=>({...qItem, options: opts})); };
+                                            return (
+                                            <div>
+                                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:10}}>
+                                                    <label style={{...ebEyebrow, display:'flex'}}><Ico name="link" size={13} />List of Headings</label>
+                                                    <button className="ebx-soft" onClick={()=>writeHeads([...heads, ''])} style={{background:EB.accentWash, color:EB.accent, border:`1px solid ${C.accent}22`, padding:'7px 13px', borderRadius:EB.radiusSm, fontWeight:600, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:6}}><Ico name="plus" size={13} />Thêm heading</button>
+                                                </div>
+                                                <div style={{display:'flex', flexDirection:'column', gap:8, marginBottom:24}}>
+                                                    {heads.map((txt:string, hi:number) => (
+                                                        <div key={hi} style={{display:'flex', alignItems:'center', gap:10, background:EB.sheet, border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, padding:'8px 12px'}}>
+                                                            <span style={{fontFamily:EB.fMono, fontWeight:700, color:EB.accent, fontSize:13, minWidth:30, fontStyle:'italic'}}>{ROMAN[hi]}.</span>
+                                                            <input value={txt} onChange={(e:any)=>{ const nx=[...heads]; nx[hi]=e.target.value; writeHeads(nx); }} placeholder="Nội dung heading" style={{flex:1, padding:'8px 10px', fontSize:14, border:'none', background:EB.wash, borderRadius:8, fontWeight:500, outline:'none', color:EB.ink, boxShadow:'none'}} />
+                                                            <button className="ebx-icon" onClick={()=>writeHeads(heads.filter((_:any,i:number)=>i!==hi))} style={{background:'transparent', color:EB.err, border:`1px solid ${C.err}33`, width:30, height:30, borderRadius:8, cursor:'pointer', flexShrink:0}}><Ico name="trash" size={13} /></button>
+                                                        </div>
+                                                    ))}
+                                                    {heads.length===0 && <div style={{fontSize:13, color:EB.sub, fontStyle:'italic', padding:'4px 2px'}}>Chưa có heading. Bấm "Thêm heading".</div>}
+                                                </div>
+                                                <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                    <div style={{...ebEyebrow, marginBottom:6, display:'flex'}}><Ico name="key" size={13} />Đáp án (đoạn → heading)</div>
+                                                    <div style={{fontSize:12, color:EB.sub, marginBottom:14}}>Mỗi đoạn (A, B, C…) là 1 câu theo thứ tự. Chọn heading đúng.</div>
+                                                    <div style={{display:'grid', gap:10}}>
+                                                        {grp.questions.map((qItem:any, offset:number) => {
+                                                            const letter = String.fromCharCode(65+offset);
+                                                            const cur = ((qItem.correctAnswer ?? '') as any).toString().toLowerCase();
+                                                            return (
+                                                            <div key={qItem.id} style={{display:'flex', alignItems:'center', gap:12}}>
+                                                                <div style={{width:30, height:30, borderRadius:'50%', background:EB.accentWash, color:EB.accent, display:'grid', placeItems:'center', fontWeight:700, fontSize:13, flexShrink:0}}>{letter}</div>
+                                                                <select value={cur} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, correctAnswer:e.target.value}:qIt)} style={{flex:1, padding:'9px 12px', fontSize:14, border:`1px solid ${EB.line}`, background:EB.sheet, borderRadius:10, fontWeight:600, color:EB.ink, boxShadow:'none'}}>
+                                                                    <option value="">— chọn heading —</option>
+                                                                    {heads.map((txt:string, hi:number) => <option key={hi} value={ROMAN[hi]}>{ROMAN[hi]}. {txt}</option>)}
+                                                                </select>
+                                                            </div>
+                                                        )})}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            );
+                                        })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
+                                            <div>
+                                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>
+                                                    <label style={{...ebEyebrow, display: 'flex'}}><Ico name="edit" size={13} />{t('eb_inline_para')}</label>
+                                                    <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+                                                        <div style={{fontSize: 12, color: EB.sub, background: EB.wash, padding: '7px 12px', borderRadius: EB.radiusSm}}>{t('eb_blank_hint_a')} <b style={{color: EB.accent, fontFamily: EB.fMono}}>[{qIndex + 1}]</b> {t('eb_blank_hint_b')}</div>
+                                                        <button className="ebx-soft" onClick={() => {
+                                                            let counter = qIndex + 1;
+                                                            const newCtx = (q.groupContext || "").replace(/\[\d+\]/g, () => `[${counter++}]`);
+                                                            updateGroup((qItem: any) => ({ ...qItem, groupContext: newCtx }));
+                                                        }} style={{background: 'transparent', color: EB.warn, border: `1px solid ${C.warn}33`, padding: '7px 13px', borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6}} title={t('eb_renumber_title')}>
+                                                            {t('eb_renumber')}
+                                                        </button>
+                                                        <button className="ebx-soft" onClick={() => {
+                                                            let missingNum = qIndex + 1;
+                                                            for (let i = 0; i < grp.questions.length; i++) {
+                                                                if (!(q.groupContext || "").includes(`[${qIndex + 1 + i}]`)) {
+                                                                    missingNum = qIndex + 1 + i; break;
+                                                                }
+                                                            }
+                                                            updateGroup((qItem: any) => ({ ...qItem, groupContext: (qItem.groupContext || "") + ` [${missingNum}] ` }));
+                                                        }} style={{background: EB.accentWash, color: EB.accent, border: `1px solid ${C.accent}22`, padding: '7px 13px', borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6}}>
+                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                                                            {t('eb_insert_blank')}
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* THE WORD-LIKE EDITOR BLOCK */}
+                                                <div style={{border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', marginBottom: 22, background: EB.sheet}}>
+                                                    <RichTextEditor value={q.groupContext || ""} onChange={(v: string) => { updateGroup((qItem: any) => ({ ...qItem, groupContext: v })); }} placeholder={t('eb_para_ph')} />
+                                                </div>
+
+                                                {(() => {
+                                                  const showText = grp.groupType === 'SHORT_ANSWER' || grp.questions.some((x:any)=>(x.text||'').trim());
+                                                  return (
+                                                <div style={{background: EB.wash, padding: '18px 20px', borderRadius: EB.radius}}>
+                                                    <div style={{...ebEyebrow, marginBottom: 14, display: 'flex'}}><Ico name="key" size={13} />{t('eb_blank_answers')}</div>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: showText ? '1fr' : 'repeat(auto-fill, minmax(220px, 1fr))', gap: showText ? 10 : 12 }}>
+                                                        {grp.questions.map((qItem: any, offset: number) => {
+                                                            const qNum = qIndex + 1 + offset;
+                                                            const isMissing = !showText && !(q.groupContext || "").includes(`[${qNum}]`);
+                                                            return (
+                                                            <div key={qItem.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: EB.sheet, padding: '8px 12px', borderRadius: EB.radiusSm, border: `1px solid ${isMissing ? C.err : EB.line}` }}>
+                                                                <div style={{ fontFamily: EB.fMono, fontWeight: 700, color: isMissing ? C.err : EB.accent, fontSize: 13, minWidth: 30, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                    {qNum} {isMissing && <span title={t('eb_blank_missing_title')} style={{cursor: 'help', display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="alert" size={13} color={C.warn} /></span>}
+                                                                </div>
+                                                                {showText && <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, text:e.target.value}:qIt)} placeholder="Nội dung câu (vd: Plastic was first made in ___)" style={{ flex: 2, padding: '8px 10px', fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 8, fontWeight: 500, outline: 'none', color: EB.ink, boxShadow: 'none' }} />}
+                                                                <input value={qItem.correctAnswer as string} onChange={(e: any) => updateGroup((qIt: any, o: number) => o === offset ? { ...qIt, correctAnswer: e.target.value } : qIt)} placeholder={t('eb_blank_answer_ph')} style={{ flex: 1, padding: '8px 10px', fontSize: 14, border: 'none', background: EB.wash, borderRadius: 8, fontWeight: 600, outline: 'none', color: EB.ink, boxShadow: 'none' }} />
+                                                            </div>
+                                                        )})}
+                                                    </div>
+                                                </div>
+                                                  );
+                                                })()}
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div style={{marginBottom: 22}}>
+                                                    <label style={{...ebEyebrow, marginBottom: 10, display: 'flex'}}><Ico name="edit" size={13} />{t('eb_question_content')}</label>
+                                                    <div style={{border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', background: EB.sheet}}>
+                                                        <RichTextEditor value={q.text || ""} onChange={(v: string) => { updateGroup((qItem: any, offset: number) => offset === 0 ? { ...qItem, text: v } : qItem); }} />
+                                                    </div>
+                                                </div>
+
+                                                <div style={{background: EB.wash, padding: '18px 20px', borderRadius: EB.radius}}>
+                                                    <label style={{...ebEyebrow, marginBottom: 14, display: 'flex'}}><Ico name="key" size={13} />{t('eb_answer_label')} {isMerged ? <span style={{textTransform: 'none', letterSpacing: 0, fontFamily: EB.fBody, color: EB.sub}}>({t('eb_select_n')} {grp.questions.length})</span> : ""}</label>
+                                                    {q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE" || q.type === "MATCHING" ? (
+                                                        <div style={{display: 'flex', flexDirection: 'column', gap: 0}}>
+                                                            {(q.options || []).map((opt: string, optIndex: number) => {
+                                                                const isChecked = isMerged
+                                                                    ? grp.questions.some((qItem: any) => Array.isArray(qItem.correctAnswer) ? qItem.correctAnswer.includes(optIndex) : qItem.correctAnswer === optIndex)
+                                                                    : (q.type === "CHOICE" || q.type === "MATCHING" ? q.correctAnswer === optIndex : (Array.isArray(q.correctAnswer) && q.correctAnswer.includes(optIndex)));
+
+                                                                return (
+                                                                <div key={optIndex} className="ebx-opt" style={{display: 'flex', alignItems: 'center', gap: 14, background: isChecked ? `${C.succ}12` : 'transparent', padding: '10px 14px', borderRadius: EB.radiusSm, borderLeft: `2px solid ${isChecked ? C.succ : 'transparent'}`, marginBottom: 2}}>
+                                                                    <input className="no-print" type={q.type === "CHOICE" || q.type === "MATCHING" ? "radio" : "checkbox"} name={`correct_${q.id}`}
+                                                                        checked={isChecked}
+                                                                        onChange={(e: any) => {
+                                                                            if (isMerged) {
+                                                                                let curArr: number[] = [];
+                                                                                const firstAns = grp.questions[0].correctAnswer;
+                                                                                if (Array.isArray(firstAns)) curArr = [...firstAns];
+                                                                                if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
+                                                                                updateGroup((qItem: any) => ({ ...qItem, correctAnswer: curArr }));
+                                                                            } else {
+                                                                                if (q.type === "CHOICE" || q.type === "MATCHING") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: optIndex }));
+                                                                                else {
+                                                                                    let curArr = Array.isArray(q.correctAnswer) ? [...(q.correctAnswer as number[])] : [];
+                                                                                    if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
+                                                                                    updateGroup((qItem: any) => ({ ...qItem, correctAnswer: curArr }));
+                                                                                }
+                                                                            }
+                                                                        }} style={{width: 19, height: 19, margin: 0, accentColor: C.succ, cursor: 'pointer'}} title={t('eb_pick_correct')} />
+                                                                    <div style={{fontFamily: EB.fMono, fontWeight: 700, fontSize: 14, width: 24, textAlign: 'center', color: isChecked ? C.succ : EB.sub}}>{String.fromCharCode(65 + optIndex)}</div>
+                                                                    <input value={opt} onChange={(e: any) => {
+                                                                        updateGroup((qItem: any) => {
+                                                                            const newOpts = [...(qItem.options || [])];
+                                                                            newOpts[optIndex] = e.target.value;
+                                                                            return { ...qItem, options: newOpts };
+                                                                        });
+                                                                    }} style={{flex: 1, padding: '9px 12px', fontSize: 14, border: `1px solid ${isChecked ? 'transparent' : EB.line}`, background: EB.sheet, outline: 'none', borderRadius: 8, fontWeight: 500, color: EB.ink, boxShadow: 'none'}} placeholder={t('eb_option_ph', { letter: String.fromCharCode(65 + optIndex) })} />
+                                                                </div>
+                                                                )})}
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )})}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* ============ PANEL PHẢI: DRAWER CÀI ĐẶT NÂNG CAO ============ */}
+                        {editingQuiz._showSettings && (
+                          <>
+                            <div className="no-print" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _showSettings: false} : prev)} style={{position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 80}} />
+                            <aside className="no-print" style={{position: 'absolute', top: 0, right: 0, bottom: 0, width: 390, maxWidth: '90%', background: EB.sheet, borderLeft: `1px solid ${EB.line}`, zIndex: 81, overflowY: 'auto', boxShadow: '-16px 0 40px -16px rgba(26,23,38,0.22)'}}>
+                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 22px', borderBottom: `1px solid ${EB.line}`, position: 'sticky', top: 0, background: EB.sheet, zIndex: 5}}>
+                                    <div style={{fontFamily: EB.fDisplay, fontSize: 19, fontWeight: 600, color: EB.ink, display: 'inline-flex', alignItems: 'center', gap: 9}}><span style={{color: EB.accent, display: 'inline-flex'}}><Ico name="gear" size={16} /></span>{t('eb_adv_settings')}</div>
+                                    <button className="ebx-icon" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _showSettings: false} : prev)} style={{background: 'transparent', color: EB.sub, border: `1px solid ${EB.line}`, width: 34, height: 34, borderRadius: EB.radiusSm, cursor: 'pointer'}}><Ico name="x" size={15} /></button>
+                                </div>
+
+                                <div style={{padding: 20, display: 'grid', gap: 22}}>
+
+                                    {/* THÔNG TIN CƠ BẢN */}
+                                    <div>
+                                        <div style={{...ebEyebrow, marginBottom: 14, display: 'flex'}}><Ico name="file" size={13} />{t('eb_basic_info')}</div>
+                                        <div style={{display: 'grid', gap: 12}}>
+                                            <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_folder')}</label><input className="idp-input" value={editingQuiz.folder || "Root"} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, folder:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                            <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_exam_type')}</label>
+                                                <select className="idp-input" value={editingQuiz.type} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, type:e.target.value as any}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}>
+                                                    <option value="Reading">Reading</option><option value="Listening">Listening</option><option value="Integrated">Integrated</option>
+                                                </select>
+                                            </div>
+                                            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12}}>
+                                                <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_time_minutes')}</label><input type="number" className="idp-input" value={editingQuiz.timeLimit} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, timeLimit:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                                <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_max_attempts')}</label><input type="number" className="idp-input" value={editingQuiz.maxAttempts || 1} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, maxAttempts:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                            </div>
+                                            {(editingQuiz.type === "Listening" || editingQuiz.type === "Integrated") && (
+                                                <div>
+                                                    <label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_audio_link')}</label>
+                                                    <input className="idp-input" value={editingQuiz.audioUrl || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, audioUrl:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}} placeholder={t('eb_audio_ph')}/>
+                                                    <div style={{display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap'}}>
+                                                        <button className="ebx-primary" onClick={handleTranscribe} disabled={transcribeLoading || !editingQuiz.audioUrl} style={{background: transcribeLoading ? C.sub : C.accent, color: '#fff', fontSize: 12, fontWeight: 600, padding: '9px 14px', borderRadius: EB.radiusSm, opacity: (transcribeLoading || !editingQuiz.audioUrl) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}>{transcribeLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {transcribeMsg || t('eb_transcribing')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="headphones" size={14} /> {t('eb_transcribe')}</span>}</button>
+                                                        {editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_transcript_hint')}</span>}
+                                                    </div>
+                                                    {/* CHẾ ĐỘ AUDIO: thi thật (1 lần) | luyện tập (tua) */}
+                                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap'}}>
+                                                        <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_audio_mode')}</span>
+                                                        {[{k: 'strict', l: t('eb_audio_strict')}, {k: 'practice', l: t('eb_audio_practice')}].map(o => {
+                                                            const on = (editingQuiz.audioMode || 'strict') === o.k;
+                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* BẢO MẬT & LỊCH */}
+                                    <div>
+                                        <div style={{...ebEyebrow, marginBottom: 14, display: 'flex'}}><Ico name="lock" size={13} />{t('eb_security_sched')}</div>
+                                        <div style={{display: 'grid', gap: 12}}>
+                                            <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_pin')}</label><input className="idp-input" placeholder={t('eb_pin_ph')} value={editingQuiz.passcode || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, passcode:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                            <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_open_at')}</label><input type="datetime-local" className="idp-input" value={editingQuiz.scheduledStart || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, scheduledStart:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                            <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_close_at')}</label><input type="datetime-local" className="idp-input" value={editingQuiz.scheduledEnd || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, scheduledEnd:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
+                                            <label style={{fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: `${C.warn}10`, padding: '12px 15px', borderRadius: 8, color: C.warn, border: `1px solid ${C.warn}40`}}>
+                                                <input type="checkbox" checked={editingQuiz.isSEBRequired || false} onChange={(e) => setEditingQuiz((prev: any) => prev ? {...prev, isSEBRequired: e.target.checked} : prev)} style={{width: 18, height: 18, margin: 0, cursor: 'pointer'}} />
+                                                {t('eb_require_seb')}
+                                            </label>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 10, background: editingQuiz.active ? `${C.succ}12` : EB.wash, padding: '12px 15px', borderRadius: 10, border: `1px solid ${editingQuiz.active ? C.succ : EB.line}`}}>
+                                                <input type="checkbox" checked={editingQuiz.active || false} onChange={(e)=>setEditingQuiz((prev: any) => prev ? {...prev, active: e.target.checked} : prev)} style={{width: 20, height: 20, cursor: 'pointer'}}/>
+                                                <label style={{fontSize: 13, fontWeight: 800, color: editingQuiz.active ? C.succ : C.sub}}>{editingQuiz.active ? t('eb_active_on') : t('eb_active_off')}</label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* PHÂN PHỐI */}
+                                    <div>
+                                        <div style={{...ebEyebrow, marginBottom: 14, display: 'flex'}}><Ico name="users" size={13} />{t('eb_distribution')}</div>
+                                        <select className="idp-input" value={editingQuiz.audience || "ALL"} onChange={(e: any) => setEditingQuiz((prev: any) => prev ? {...prev, audience: e.target.value as any} : prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}>
+                                            <option value="ALL">{t('drv_aud_all')}</option>
+                                            <option value="SPECIFIC">{t('eb_specific')}</option>
+                                        </select>
+                                        {editingQuiz.audience === "SPECIFIC" && (
+                                            <div style={{marginTop: 12, padding: 15, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 200, overflowY: 'auto'}}>
+                                                <div style={{fontSize: 11, fontWeight: 800, color: C.accent, marginBottom: 8}}>{t('eb_pick_students')}</div>
+                                                {students.map((s: any) => (
+                                                    <label key={s.id} style={{display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 6, cursor: 'pointer'}}>
+                                                        <input type="checkbox" checked={(editingQuiz.targetStudentIds || []).includes(s.id)} onChange={(e) => {
+                                                            setEditingQuiz((prev: any) => {
+                                                                if (!prev) return prev;
+                                                                const currentTargets = [...(prev.targetStudentIds || [])];
+                                                                if (e.target.checked) currentTargets.push(s.id);
+                                                                else {
+                                                                    const idx = currentTargets.indexOf(s.id);
+                                                                    if (idx > -1) currentTargets.splice(idx, 1);
+                                                                }
+                                                                return {...prev, targetStudentIds: currentTargets};
+                                                            });
+                                                        }} style={{width: 16, height: 16, margin: 0, cursor: 'pointer'}} />
+                                                        <span style={{fontWeight: 700}}>{s.name}</span> <span style={{color: C.sub}}>({s.email})</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                </div>
+                            </aside>
+                          </>
+                        )}
+                    </div>
+                ) : (
+
+                    // 3. GIAO DIỆN QUẢN LÝ ĐỀ THI GOOGLE DRIVE STYLE (Hoàn chỉnh tính năng)
+                    <div key="drive-list" style={{display: 'flex', flexDirection: 'column', flex: 1, background: EB.paper, minHeight: 0}}>
+                        <div style={{padding: '14px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${EB.line}`, flexWrap: 'wrap', gap: 15, background: EB.sheet}}>
+                            <div style={{display: 'flex', alignItems: 'center', gap: 9, fontSize: 16, fontWeight: 600}}>
+                                <button className="ebx-soft" onClick={() => { setBuilderFolder("Root"); setBuilderSearch(""); }} style={{background: 'transparent', padding: '4px 8px', color: EB.accent, fontSize: 15, fontWeight: 600, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 8}}><Ico name="folder" size={15} color={EB.accent} /> Root</button>
+                                {builderFolder !== "Root" && !builderSearch && builderFolder.split("/").filter(x=>x!=="Root").map((part, idx, arr) => (
+                                    <React.Fragment key={idx}>
+                                        <span style={{color: EB.sub, opacity: .6}}>/</span>
+                                        <button className="ebx-soft" onClick={() => setBuilderFolder("Root/" + arr.slice(0, idx+1).join("/"))} style={{background: 'transparent', padding: '4px 8px', color: idx === arr.length-1 ? EB.ink : EB.accent, fontSize: 15, fontWeight: 600, border: 'none', cursor: 'pointer', borderRadius: 8}}>{part}</button>
+                                    </React.Fragment>
+                                ))}
+                                {builderSearch && <><span style={{color: EB.sub, opacity: .6}}>/</span> <span style={{color: EB.ink}}>{t('eb_search_results')}</span></>}
+
+                                <button className="ebx-soft" onClick={() => {
+                                    const fName = prompt("Nhập tên thư mục mới:");
+                                    if(fName && fName.trim()) {
+                                        const newFolderPath = builderFolder === "Root" ? `Root/${fName.trim()}` : `${builderFolder}/${fName.trim()}`;
+                                        const dummyQuiz = { id: getTrueTime().toString(), title: "Bản nháp (Xóa nếu không dùng)", type: "Reading", folder: newFolderPath, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] };
+                                        const nx = [dummyQuiz, ...quizzes];
+                                        setQuizzes(nx as any); if(typeof syncData === 'function') syncData({quizzes: nx});
+                                    }
+                                }} style={{background: 'transparent', color: EB.sub, padding: '6px 12px', fontSize: 13, borderRadius: EB.radiusSm, marginLeft: 8, border: `1px solid ${EB.line}`, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="plus" size={13} /> {t('eb_new_folder')}</button>
+                            </div>
+                            <div>
+                                <input placeholder={t('eb_search_quiz_ph')} value={builderSearch} onChange={e => setBuilderSearch(e.target.value)} style={{width: 300, padding: '9px 18px', borderRadius: 30, border: `1px solid ${EB.line}`, background: EB.wash, outline: 'none', fontSize: 14, boxShadow: 'none'}} />
+                            </div>
+                        </div>
+
+                        <div style={{flex: 1, overflowY: 'auto', padding: '30px 30px 60px', maxWidth: 1100, width: '100%', margin: '0 auto'}}>
+                            {/* KHU VỰC THƯ MỤC */}
+                            {builderSearch === "" && childFolders.size > 0 && (
+                                <div style={{marginBottom: 40}}>
+                                    <div style={{...ebEyebrow, marginBottom: 15}}><Ico name="folder" size={13} />{t('eb_folders_area')} <span style={{fontFamily: EB.fMono}}>({childFolders.size})</span></div>
+                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12}}>
+                                        {Array.from(childFolders).map(f => (
+                                            <div key={f} className="ebx-card" onClick={() => setBuilderFolder(builderFolder + "/" + f)} style={{background: EB.sheet, padding: '16px 18px', borderRadius: EB.radius, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontWeight: 600}}>
+                                                <span style={{display: 'inline-flex'}}><Ico name="folder" size={22} color={EB.accent} /></span> <span style={{fontSize: 15, color: EB.ink, fontWeight: 600}}>{f}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* KHU VỰC ĐỀ THI */}
+                            <div>
+                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
+                                    <div style={ebEyebrow}><Ico name="file" size={13} />{t('eb_quiz_list')} <span style={{fontFamily: EB.fMono}}>({childQuizzes.length})</span></div>
+                                    {selectedQuizzes.length > 0 && (
+                                        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+                                            <button onClick={() => {
+                                                const dest = prompt("Nhập đường dẫn thư mục đích (VD: Root/IELTS/Test 1):", "Root");
+                                                if(dest) {
+                                                    const nx = quizzes.map((q: any) => selectedQuizzes.includes(q.id) ? { ...q, folder: dest } : q);
+                                                    setQuizzes(nx); if(typeof syncData === 'function') syncData({quizzes: nx}); setSelectedQuizzes([]);
+                                                }
+                                            }} style={{background: C.accent, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="folder" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_move_folder')}</button>
+                                            <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: C.warn, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="lock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_lock_quiz')}</button>
+                                            <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: C.succ, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="unlock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_unlock_quiz')}</button>
+                                            <button onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: C.err, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="trash" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_delete')}</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div style={{display: 'grid', gap: 10}}>
+                                    {childQuizzes.map((q: any) => {
+                                        const isSelected = selectedQuizzes.includes(q.id);
+                                        const ghostBtn: any = {background: 'transparent', color: EB.sub, padding: '7px 13px', fontSize: 13, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6};
+                                        return (
+                                        <div key={q.id} className="ebx-card" style={{background: isSelected ? `${C.warn}0E` : EB.sheet, padding: '16px 20px', borderRadius: EB.radius, border: `1px solid ${isSelected ? C.warn : EB.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 18}}>
+                                            <div style={{display: 'flex', gap: 16, alignItems: 'center'}}>
+                                                <input type="checkbox" checked={isSelected} onChange={(e: any) => {
+                                                    if(e.target.checked) setSelectedQuizzes([...selectedQuizzes, q.id]);
+                                                    else setSelectedQuizzes(selectedQuizzes.filter((id: any) => id !== q.id));
+                                                }} style={{width: 18, height: 18, cursor: 'pointer', accentColor: C.accent}} />
+                                                <div style={{width: 44, height: 44, borderRadius: EB.radiusSm, background: EB.accentWash, display: 'grid', placeItems: 'center', color: EB.accent, flexShrink: 0}}>{q.type === 'Listening' ? <Ico name="headphones" size={22} /> : <Ico name="book" size={22} />}</div>
+                                                <div>
+                                                    <div style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 18, color: EB.ink, marginBottom: 5, letterSpacing: '-0.01em'}}>
+                                                        {q.title} {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 14, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={13} color={EB.sub} /></span>}
+                                                    </div>
+                                                    <div style={{fontSize: 12.5, color: EB.sub, fontWeight: 500}}>
+                                                        {q.type} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')} <span style={{opacity:.5}}>·</span> {q.isLocked ? <span style={{textDecoration: 'line-through'}}>{t('eb_st_locked')}</span> : (q.active ? <span style={{color: C.succ, fontWeight: 600}}>{t('eb_st_open')}</span> : t('eb_st_off'))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
+                                                {typeof startExam === 'function' && <button className="ebx-soft" onClick={() => startExam(q, true, false)} style={ghostBtn}><Ico name="eye" size={14} />{t('eb_preview_exam')}</button>}
+                                                {typeof handleExportExamKey === 'function' && <button className="ebx-soft" onClick={() => handleExportExamKey(q)} style={ghostBtn}><Ico name="download" size={14} />{t('eb_download_key')}</button>}
+                                                {typeof handleRecalculateScores === 'function' && <button className="ebx-soft" onClick={() => handleRecalculateScores(q.id)} style={ghostBtn}><Ico name="refresh" size={14} />{t('eb_recalc')}</button>}
+                                                <button className="ebx-soft" onClick={() => setKeyEditingQuiz(q)} style={{...ghostBtn, color: EB.warn, borderColor: `${C.warn}33`}}><Ico name="key" size={14} />{t('eb_edit_key_btn')}</button>
+                                                {typeof duplicateQuiz === 'function' && <button className="ebx-soft" onClick={() => duplicateQuiz(q)} style={{...ghostBtn, color: C.succ, borderColor: `${C.succ}33`}}><Ico name="copy" size={14} />{t('eb_duplicate')}</button>}
+                                                <button className="ebx-primary" onClick={() => setEditingQuiz(JSON.parse(JSON.stringify(q)))} style={{background: EB.accent, color: '#fff', padding: '7px 20px', fontSize: 13, border: 'none', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="edit" size={14} />{t('eb_edit_exam')}</button>
+                                            </div>
+                                        </div>
+                                    )})}
+                                    {childQuizzes.length === 0 && <div style={{textAlign: 'center', color: EB.sub, padding: 50, fontStyle: 'italic', fontSize: 15}}>{t('eb_folder_empty')}</div>}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+            )
+        })()}

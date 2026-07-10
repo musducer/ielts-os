@@ -1,0 +1,80 @@
+        {activeTab === "FINANCE" && (
+          <div style={{ display: "grid", gap: 24 }}>
+            <div className="card" style={{padding: 30}}>
+               <h3 style={{marginTop: 0, textAlign: 'center'}}><Ico name="barChart" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('fin_overview')}</h3>
+               <div style={{display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20}}>
+                   <div>
+                       <div style={{fontSize: 11, fontWeight: 800, color: C.succ, marginBottom: 5}}>{t('fin_total_in')}: {fmtMoney(totalRev)}</div>
+                       <div style={{height: 12, background: `${C.succ}20`, borderRadius: 6, overflow: 'hidden'}}>
+                           <div style={{width: `${revPct}%`, height: '100%', background: C.succ}} />
+                       </div>
+                   </div>
+                   <div>
+                       <div style={{fontSize: 11, fontWeight: 800, color: C.err, marginBottom: 5}}>{t('fin_total_out')}: {fmtMoney(totalExp)}</div>
+                       <div style={{height: 12, background: `${C.err}20`, borderRadius: 6, overflow: 'hidden'}}>
+                           <div style={{width: `${100 - revPct}%`, height: '100%', background: C.err}} />
+                       </div>
+                   </div>
+               </div>
+               <div style={{textAlign: 'center', fontSize: 18, borderTop: `1px solid ${C.border}`, paddingTop: 15}}>{t('fin_net')}: <span style={{color: C.accent, fontWeight: 900, fontSize: 28}}>{fmtMoney(stats.net)}</span></div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 768 ? "1fr 1fr" : "1fr", gap: 24 }}>
+                <div className="card">
+                <h3>{t('fin_income_report')}</h3>
+                <div style={{marginBottom: 20}}>
+                    {TEACHERS.map(tn => (
+                        <div key={tn} style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
+                        <div><div style={{fontWeight:700, fontSize:14}}>{tn}</div><div style={{fontSize:11, color:C.sub}}>{(history.filter(h=>h && h.teacher===tn).reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}h {t('fin_teaching')}</div></div>
+                        <div style={{fontWeight:900, color:C.accent}}>{fmtMoney(history.filter(h=>h && h.teacher===tn).reduce((s,h)=>s+((h && h.earnings)||0),0))}</div>
+                        </div>
+                    ))}
+                </div>
+
+                <div style={{marginTop: 30, marginBottom: 10, fontWeight: 900}}>{t('fin_extra_income')}</div>
+                <div style={{ display: "flex", flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+                    <input placeholder={t('fin_reason_in')} value={newTrans.title} onChange={(e: any)=>setNewTrans({...newTrans, title:e.target.value})} style={{flex: '1 1 150px'}} />
+                    <input type="number" placeholder={t('fin_amount')} value={newTrans.amount || ""} onChange={(e: any)=>setNewTrans({...newTrans, amount:Number(e.target.value)})} style={{flex: '1 1 100px'}} />
+                    <button onClick={() => handleAddTransaction("INCOME")} style={{ background: C.succ, color: "#fff", padding: "10px 20px" }}>{t('common_save')}</button>
+                </div>
+                {transactions.filter(t=>t && t.type==="INCOME").map(t => {
+                    if (!t) return null;
+                    return (
+                    <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: C.bg, borderRadius: 10, marginBottom: 8 }}>
+                    <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
+                    <div style={{display: "flex", alignItems: "center", gap: 12}}>
+                        <span style={{color:C.succ, fontWeight:800}}>+{fmtMoney(t.amount)}</span>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                    </div>
+                    </div>
+                )})}
+
+                <div style={{ marginTop: 30, padding: 20, background: C.bg, borderRadius: 15, display:'flex', justifyContent:'space-between' }}>
+                    <span style={{fontWeight:900}}>{t('fin_total_in')}:</span><span style={{ color: C.succ, fontSize:24, fontWeight:900 }}>{fmtMoney(stats.totalRev)}</span>
+                </div>
+                </div>
+                
+                <div className="card">
+                <h3>{t('fin_expense_report')}</h3>
+                <div style={{ display: "flex", flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+                    <input placeholder={t('fin_reason_out')} value={newTrans.title} onChange={(e: any)=>setNewTrans({...newTrans, title:e.target.value})} style={{flex: '1 1 150px'}} />
+                    <input type="number" placeholder={t('fin_amount')} value={newTrans.amount || ""} onChange={(e: any)=>setNewTrans({...newTrans, amount:Number(e.target.value)})} style={{flex: '1 1 100px'}} />
+                    <button onClick={() => handleAddTransaction("EXPENSE")} style={{ background: C.err, color: "#fff", padding: "10px 20px" }}>{t('common_save')}</button>
+                </div>
+                {transactions.filter(t=>t && t.type==="EXPENSE").map(t => {
+                    if (!t) return null;
+                    return (
+                    <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: C.bg, borderRadius: 10, marginBottom: 8 }}>
+                    <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
+                    <div style={{display: "flex", alignItems: "center", gap: 12}}>
+                        <span style={{color:C.err, fontWeight:800}}>-{fmtMoney(t.amount)}</span>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                    </div>
+                    </div>
+                )})}
+                </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= HISTORY & REPORT ================= */}

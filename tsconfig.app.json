@@ -16,8 +16,10 @@
     "jsx": "react-jsx",
 
     /* Linting */
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    /* noUnusedLocals/Parameters TẮT: App.tsx là file TỰ SINH ráp từ App.template.tsx + components_split,
+       biến khai báo ở template có thể chỉ dùng trong split (và ngược lại) -> bật lên chỉ sinh hàng trăm lỗi ảo TS6133 trong IDE. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },

@@ -1,0 +1,1759 @@
+      if (activeExam) {
+          const isIntegrated = activeExam.type === "Integrated";
+          // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
+          const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
+          const isTimeRunningOut = examTimeLeft < 300; 
+
+          const getNavigatorGroups = () => {
+              const qs = activeExam?.questions;
+              if (!Array.isArray(qs) || qs.length === 0) return [];
+              const totalQs = qs.length;
+              const groups: { title: string, questions: any[], startIndex: number }[] = [];
+              
+              // Tự động chia nhóm Sa bàn theo các Section (Passage) do Backend trả về
+              if (activeExam?.sections && activeExam.sections.length > 0) {
+                  let startIndex = 0;
+                  const secPrefix = isListening ? "Part" : (isIntegrated ? "Part" : "Passage");
+                  return activeExam.sections.map((sec, i) => {
+                      const group = { title: `${secPrefix} ${i+1}`, questions: sec.questions, startIndex };
+                      startIndex += sec.questions.length;
+                      return group;
+                  });
+              }
+
+              if (isIntegrated) {
+                  groups.push({ title: "Part 1", questions: qs.slice(0, 10), startIndex: 0 });
+                  if (totalQs > 10) groups.push({ title: "Part 2", questions: qs.slice(10, 50), startIndex: 10 });
+                  if (totalQs > 50) groups.push({ title: "Part 3", questions: qs.slice(50), startIndex: 50 });
+                  return groups;
+              }
+
+              if (!isListening && totalQs === 40) {
+                  groups.push({ title: "Passage 1", questions: qs.slice(0, 13), startIndex: 0 });
+                  groups.push({ title: "Passage 2", questions: qs.slice(13, 26), startIndex: 13 });
+                  groups.push({ title: "Passage 3", questions: qs.slice(26, 40), startIndex: 26 });
+                  return groups;
+              }
+              let chunkSize = 10;
+              let prefix = isListening ? "Part" : (totalQs > 40 && totalQs <= 50 ? "Part" : "Group");
+              if (totalQs <= 20) chunkSize = 5;
+              for (let i = 0; i < totalQs; i += chunkSize) {
+                  const end = Math.min(i + chunkSize, totalQs);
+                  groups.push({ title: `${prefix} ${Math.floor(i / chunkSize) + 1}`, questions: qs.slice(i, end), startIndex: i });
+              }
+              return groups;
+          };
+          const navGroups = getNavigatorGroups();
+
+          // Tìm DOM element của 1 câu hỏi (card có id, HOẶC input/span inline có data-qid)
+          const findQuestionEl = (id: string): HTMLElement | null =>
+              (document.getElementById(`question-${id}`) as HTMLElement | null)
+              || (document.querySelector(`[data-qid="${id}"]`) as HTMLElement | null);
+
+          // "Câu đang làm" = câu user vừa tương tác (focus/click). CHỈ câu này mới có ô vuông xanh dương ở nav.
+          const markCurrentFromEvent = (e: any) => {
+              const t = e.target;
+              if (!t || !t.closest) return;
+              const withQid = t.closest('[data-qid]');
+              let id = withQid ? withQid.getAttribute('data-qid') : null;
+              if (!id) { const card = t.closest('[id^="question-"]'); if (card && card.id) id = card.id.slice(9); }
+              if (id) setExamCurrentQId(id);
+          };
+
+          // Viền vàng flash mượt đánh dấu câu vừa nhảy tới (cả input inline)
+          const flashQuestion = (id: string) => {
+              const el = findQuestionEl(id);
+              if (!el) return;
+              el.classList.remove('idp-q-focus-flash');
+              void el.offsetWidth; // ép reflow để chạy lại animation
+              el.classList.add('idp-q-focus-flash');
+              window.setTimeout(() => el.classList.remove('idp-q-focus-flash'), 1700);
+          };
+
+          // Chuyển câu trước/sau theo DANH SÁCH CÂU của section đang xem (chạy cả inline input)
+          const navigateQuestion = (dir: number) => {
+              const grp = navGroups[currentSectionIndex];
+              if (!grp || !grp.questions.length) return;
+              const ids = grp.questions.map((q: any) => q.id);
+              let idx = ids.indexOf(examCurrentQId);
+              if (idx === -1) idx = (dir > 0 ? -1 : 0);
+              const next = Math.max(0, Math.min(ids.length - 1, idx + dir));
+              const targetId = ids[next];
+              const el = findQuestionEl(targetId);
+              if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  setExamCurrentQId(targetId);
+                  flashQuestion(targetId);
+              }
+          };
+
+          const idpC = {
+              bg: "#ffffff", panelBg: "#f4f5f7", border: "#d1d5db", text: "#24292f", sub: "#57606a",
+              accent: "#d32f2f", blueAccent: "#0969da", succ: "#2da44e", warn: "#bf8700"
+          };
+
+          const renderSafeHTML = (raw: string | undefined) => {
+              if (!raw) return "";
+              return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? sanitizeRichHtml(raw) : formatContent(raw);
+          };
+
+          // syncHighlightState: DÙNG BẢN CANONICAL ở App.template (đã có nhánh sections + mirror sections[].questions).
+
+          // ĐàXÓA MỘT CÁCH TRIỆT ĐỂ handleLocalHighlight ĐỂ NHƯỜNG CHỖ CHO TÍNH NĂNG POPUP 2 LỰA CHỌN
+
+          const processedContexts = examProcessedContexts;
+
+          // ==========================================
+          // ĐàFIX: MERGE QUESTION & INLINE INPUT RENDER
+          // ==========================================
+         // ==========================================
+          // ĐàFIX: Render từng câu riêng biệt, không gộp. 
+          // Hỗ trợ highlight Multiple Choice và gỡ Flex wrap phá layout.
+          // ==========================================
+          // ==========================================
+          // ĐàFIX: Khôi phục gộp các câu CHOICE_MULTIPLE liên tiếp (VD: 27-28)
+          // ==========================================
+          const renderQuestionsList = (group: any, injectedList: string[] = []) => {
+              // Ô co giãn theo nhóm (đáp án DÀI NHẤT + nới thêm) cho input standalone/inline trong card.
+              const _rA = group.questions.filter((q: any) => q.type === 'BLANK').map((q: any) => String(q.correctAnswer || "")).filter((s: string) => s.length > 0);
+              const _rVarLen = (s: string) => Math.max(...s.split('/').map((v: string) => v.trim().length), 0);
+              const _rMax = _rA.length ? Math.max(..._rA.map(_rVarLen)) : 10;
+              const rInputW = Math.max(70, Math.min(320, Math.round(_rMax * 9) + 30));
+              const mergedQs: any[] = [];
+              for (let i = 0; i < group.questions.length; i++) {
+                  const q = group.questions[i];
+                  if (q.type === 'CHOICE_MULTIPLE') {
+                      let j = i + 1;
+                      const sharedIds = [q.id];
+                      while (j < group.questions.length && group.questions[j].type === 'CHOICE_MULTIPLE' && JSON.stringify(group.questions[j].options) === JSON.stringify(q.options)) {
+                          sharedIds.push(group.questions[j].id);
+                          j++;
+                      }
+                      if (sharedIds.length > 1) {
+                          mergedQs.push({ ...q, isMerged: true, mergedIds: sharedIds });
+                          i = j - 1;
+                          continue;
+                      }
+                  }
+                  mergedQs.push(q);
+              }
+
+              return mergedQs.map((q: any) => {
+                  const isMerged = q.isMerged;
+                  const qIds = isMerged ? q.mergedIds : [q.id];
+                  const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === qIds[0]) + 1;
+                  const lastGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === qIds[qIds.length - 1]) + 1;
+                  const numberLabel = isMerged ? `${firstGlobalIdx}-${lastGlobalIdx}` : `${firstGlobalIdx}`;
+                  
+                  const isAnswered = isMerged 
+                      ? qIds.some((id: string) => { const a = examAnswers[id]; return Array.isArray(a) ? a.length > 0 : (a !== undefined && a !== ""); })
+                      : Array.isArray(examAnswers[q.id]) ? examAnswers[q.id].length > 0 : (examAnswers[q.id] !== undefined && examAnswers[q.id] !== "");
+
+                  // Ô vuông xanh quanh SỐ CÂU chỉ hiện ở câu ĐANG LÀM (không phải câu đã trả lời).
+                  const isCurrentQ = !!examCurrentQId && qIds.includes(examCurrentQId);
+
+                  const isInjectedIntoContext = injectedList.some(id => qIds.includes(id));
+                  const qTextData = processedContexts.qTexts[q.id] || { html: renderSafeHTML(q.text), inlineInjected: false };
+                  const isInlineInjected = qTextData.inlineInjected || false;
+                  if ((q.type === "BLANK" || q.type === "DRAG_DROP") && isInjectedIntoContext) return null;
+                  
+                  const isBlankType = q.type === "BLANK" || q.type === "DRAG_DROP";
+                  const tfngSource = `${q.subType || ""} ${q.text || ""} ${q.instruction || ""}`;
+                  const isTFNGQuestion =
+                      q.subType === "True/False/Not Given" ||
+                      /true\s*\/\s*false\s*\/\s*not\s*given/i.test(tfngSource) ||
+                      /\btrue\b[\s\S]*\bfalse\b[\s\S]*\bnot\s+given\b/i.test(tfngSource);
+                  const isYNNGQuestion =
+                      q.subType === "Yes/No/Not Given" ||
+                      /yes\s*\/\s*no\s*\/\s*not\s*given/i.test(tfngSource) ||
+                      /\byes\b[\s\S]*\bno\b[\s\S]*\bnot\s+given\b/i.test(tfngSource);
+                  // Fill-in-blank thật (số đã hiện trong ô input) -> BỎ số tròn đầu dòng (kế thừa reading).
+                  const isFillBlank = q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion;
+                  // DRAG_DROP nối (kéo tag thả vào ô) -> số nằm TRONG ô thả, BỎ vòng tròn số như fill-blank (chuẩn IDP hình 2).
+                  const isDragDrop = q.type === "DRAG_DROP";
+                  
+                  
+
+                  // --- [NNG CẤP: KHỐI LIỀN MẠCH & KÉO THẢ] ---
+                  const _isContinuousBlock =
+    q.type === "BLANK" &&
+    (q.subType === "SUMMARY" ||
+     q.subType === "NOTES");
+     
+const _isFlowChart =
+    q.type === "BLANK" &&
+    q.subType === "FLOWCHART";
+                  
+                  let parsedHtmlText = qTextData.html;
+
+                  // 2. GIAO DIỆN SENTENCE COMPLETION & STANDARD CARDS (SUMMARY/NOTES/FLOWCHART fall-through ở đây)
+
+                  // 2. GIAO DIỆN DRAG & DROP HEADING (Chuẩn IDP Kéo-Thả)
+if (q.type === "DRAG_DROP_HEADING") {
+    // Chúng ta không render card câu hỏi ở đây nữa, 
+    // vì Dropzone đã được inject thẳng vào bài đọc ở cột trái.
+    return null; 
+}
+                  // 3. GIAO DIỆN SENTENCE COMPLETION & STANDARD CARDS
+                  return (
+                      <div id={`question-${qIds[0]}`} key={qIds.join('-')} className="idp-q-card" style={isBlankType ? { padding: '0 0 6px 0', marginBottom: 6, borderBottom: 'none' } : {}}>
+                          <div style={{display: 'flex', alignItems: 'flex-start', gap: (isFillBlank || isDragDrop) ? 0 : 12}}>
+                              {/* Số câu chuẩn IDP: số TRẦN, không vòng tròn; ĐANG LÀM -> Ô VUÔNG viền xanh (viền transparent giữ layout không xê dịch).
+                                  CĂN HÀNG: lineHeight của số = ĐÚNG line-box thật của chữ câu hỏi (var(--efont) × 1.15 — vì rule
+                                  `.idp-q-text-inline { line-height:1.15 !important }` đè lên mọi lineHeight khác). Cùng flex-start + border-box
+                                  => tâm số trùng tâm dòng chữ đầu, KHÔNG magic-number, tự co giãn theo cỡ chữ HS chọn. */}
+                              {!isFillBlank && !isDragDrop && (
+                              <div style={{ background: 'transparent', color: idpC.text, border: `1.5px solid ${isCurrentQ ? idpC.blueAccent : 'transparent'}`, minWidth: 26, borderRadius: 3, boxSizing: 'border-box', padding: '0 5px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, flexShrink: 0, lineHeight: 'calc(var(--efont) * 1.15)', marginTop: 'calc(var(--efont) * -0.12)' }}>
+                                  {numberLabel}
+                              </div>
+                              )}
+                              <div style={{flex: 1, lineHeight: 1.6}}>
+                                  <StaticHtmlBlock tagName="span" className="highlightable-content idp-q-text-inline" dataField="text" dataQid={q.id} style={{fontWeight: 400}} html={parsedHtmlText} />
+                                  
+                                  {q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion && !isInjectedIntoContext && !isInlineInjected && (
+                                      (() => {
+                                          const hasBlankInText = (q.text || "").includes("___") || (q.text || "").includes("…") || (q.text || "").includes("____");
+                                          return hasBlankInText ? (
+                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
+                                          ) : null;
+                                      })()
+                                  )}
+                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && (
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} title="Kéo đáp án thả vào đây">
+                                          {(examAnswers[q.id] as string) || firstGlobalIdx}
+                                      </span>
+                                  )}
+                              </div>
+                          </div>
+                          
+                          <div style={{ marginLeft: (isFillBlank || isDragDrop) ? 0 : 40, marginTop: 8 }}>
+                              {q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion && !isInjectedIntoContext && !isInlineInjected && !(q.text || "").includes("___") && !(q.text || "").includes("____") && (
+                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
+                              )}
+                              
+                              {(q.type === "CHOICE" || isTFNGQuestion || isYNNGQuestion) && (
+    <div style={{display: 'flex', flexDirection: 'column'}}>
+        <ul className="vertical" style={{ listStyleType: 'none', padding: 0, margin: '4px 0 0 0' }}>
+            {(() => {
+                // Fallback options cho TFNG nếu backend trả về rỗng
+                let effectiveOptions = q.options;
+                const isTFNG = isTFNGQuestion;
+                const isYNNG = isYNNGQuestion;
+
+if ((!effectiveOptions || effectiveOptions.length === 0)) {
+    if (isTFNG) {
+        effectiveOptions = [
+            "TRUE",
+            "FALSE",
+            "NOT GIVEN"
+        ];
+    } else if (isYNNG) {
+        effectiveOptions = [
+            "YES",
+            "NO",
+            "NOT GIVEN"
+        ];
+    }
+}
+                // Nếu vẫn không có options thì không render (tránh crash)
+                if (!effectiveOptions || effectiveOptions.length === 0) return null;
+                
+                return effectiveOptions.map((opt: string, optIndex: number) => {
+                    const cleanOpt = (opt || "").replace(/^[a-zA-Z][\.\)]\s*/, "");
+                    const isSelected = examAnswers[q.id] === optIndex;
+                    const optionId = `idp_opt_${q.id}_${optIndex}`;
+                    
+                    const _isTFNG = q.subType === "True/False/Not Given" || q.subType === "Yes/No/Not Given" ||
+                                    (effectiveOptions.some((o: any) => {
+                                        const s = String(o ?? "").trim().toUpperCase();
+                                        return s === "TRUE" || s === "FALSE" || s === "NOT GIVEN" || s === "YES" || s === "NO";
+                                    }));
+                    return (
+                        <li key={optIndex} className="idp-mcq-row" style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '2px', gap: '11px', cursor: 'pointer', background: isSelected ? '#cfe2f3' : undefined }}
+                            onClick={(e: any) => {
+                                if (e.target && e.target.tagName === 'INPUT') return; // radio tự xử lý qua onChange
+                                // QUÉT (kéo chuột) != BẤM: engine đã removeAllRanges trước khi click bắn nên phải đo khoảng cách kéo
+                                const dn = (window as any).__examPtrDown;
+                                if (dn && Math.hypot(e.clientX - dn.x, e.clientY - dn.y) > 6) return;
+                                if ((e.currentTarget as HTMLElement).querySelector('.idp-temp-selection, .student-highlight, .student-note-hl')?.contains(e.target)) return;
+                                const sel = window.getSelection();
+                                if (sel && sel.toString().trim().length > 0) return;
+                                handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length);
+                            }}>
+                            {/* Vùng chọn mở rộng ra cả dòng (kể cả text) — quét chữ để highlight vẫn được, chỉ bấm mới tính là chọn */}
+                            <input
+                                type="radio"
+                                id={optionId}
+                                name={`q_${q.id}`}
+                                checked={isSelected}
+                                onChange={() => { handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length); }}
+                                className="idp-mcq-radio"
+                            />
+                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-mcq-opt" dataField="options" dataQid={q.id} dataOptIndex={String(optIndex)} style={{ color: 'var(--etext)' }} html={renderSafeHTML(cleanOpt)} />
+                        </li>
+                    );
+                });
+            })()}
+        </ul>
+    </div>
+)}
+                              
+                              {q.type === "CHOICE_MULTIPLE" && (
+                                  <div style={{display: 'flex', flexDirection: 'column'}}>
+                                      {(q.options || []).map((opt: string, optIndex: number) => {
+                                          const cleanOpt = (opt || "").replace(/^[a-zA-Z][\.\)]\s*/, "");
+                                          let isSelected = false;
+                                          if (isMerged) {
+                                              isSelected = qIds.some((id: string) => {
+                                                  const ans = examAnswers[id];
+                                                  return Array.isArray(ans) ? ans.includes(optIndex) : ans === optIndex;
+                                              });
+                                          } else {
+                                              const selectedArr = Array.isArray(examAnswers[q.id]) ? examAnswers[q.id] as number[] : [];
+                                              isSelected = selectedArr.includes(optIndex);
+                                          }
+
+                                          const toggleThisOpt = (checked: boolean) => {
+                                              if (isMerged) {
+                                                  let currentSel: number[] = [];
+                                                  qIds.forEach((id: string) => {
+                                                      const ans = examAnswers[id];
+                                                      if (Array.isArray(ans)) currentSel.push(...ans);
+                                                      else if (ans !== undefined && ans !== "") currentSel.push(Number(ans));
+                                                  });
+                                                  currentSel = Array.from(new Set(currentSel));
+
+                                                  if (checked) {
+                                                      if (currentSel.length < qIds.length) currentSel.push(optIndex);
+                                                      else { alert(`You can only choose ${qIds.length} options.`); return; }
+                                                  } else {
+                                                      currentSel = currentSel.filter(x => x !== optIndex);
+                                                  }
+
+                                                  const newAnswers = { ...examAnswers };
+                                                  qIds.forEach((id: string, idx: number) => {
+                                                      newAnswers[id] = currentSel[idx] !== undefined ? currentSel[idx] : "";
+                                                  });
+                                                  setExamAnswers(newAnswers);
+                                                  setSaveStatus("Saving...");
+                                                  setTimeout(() => setSaveStatus("Saved"), 500);
+                                              } else {
+                                                  const selectedArr = Array.isArray(examAnswers[q.id]) ? examAnswers[q.id] as number[] : [];
+                                                  let newArr = [...selectedArr];
+                                                  if (checked) newArr.push(optIndex); else newArr = newArr.filter(x => x !== optIndex);
+                                                  handleAnswerChange(q.id, newArr);
+                                              }
+                                          };
+                                          return (
+                                          <div key={optIndex} className={`idp-radio-label ${isSelected ? 'selected' : ''}`} style={{display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 12px', borderRadius: 6, transition: 'colors 0.15s ease-in-out', background: isSelected ? '#f0f6ff' : '#fff', border: `1px solid ${isSelected ? idpC.blueAccent : '#ccc'}`, margin: '0 0 6px 0', cursor: 'pointer'}}
+                                              onClick={(e: any) => {
+                                                  if (e.target && e.target.tagName === 'INPUT') return; // checkbox tự xử lý qua onChange
+                                                  // QUÉT (kéo chuột) != BẤM: đo khoảng cách kéo vì selection đã bị engine xoá trước khi click bắn
+                                                  const dn = (window as any).__examPtrDown;
+                                                  if (dn && Math.hypot(e.clientX - dn.x, e.clientY - dn.y) > 6) return;
+                                                  if ((e.currentTarget as HTMLElement).querySelector('.idp-temp-selection, .student-highlight, .student-note-hl')?.contains(e.target)) return;
+                                                  const sel = window.getSelection();
+                                                  if (sel && sel.toString().trim().length > 0) return;
+                                                  toggleThisOpt(!isSelected);
+                                              }}>
+                                              {/* Vùng chọn mở rộng ra cả dòng (kể cả text) — quét chữ để highlight vẫn được, chỉ bấm mới tính là chọn */}
+                                              <input type="checkbox" className="idp-mcq-check" checked={isSelected} onChange={(e) => toggleThisOpt(e.target.checked)} />
+                                              <StaticHtmlBlock tagName="span" className="highlightable-content idp-mcq-opt" dataField="options" dataQid={q.id} dataOptIndex={String(optIndex)} html={renderSafeHTML(cleanOpt)} />
+                                          </div>
+                                      )})}
+                                  </div>
+                              )}
+                          </div>
+                      </div>
+                  );
+                  }
+              );
+          };
+
+          return (
+              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }} 
+                   onCopy={_e => {_e.preventDefault(); alert("WARNING: Copy function disabled!"); }} 
+                   onCut={_e => { _e.preventDefault(); alert("WARNING: Cut function disabled!"); }} 
+                   onPaste={_e => { _e.preventDefault(); alert("WARNING: Paste function disabled!"); }} 
+                   
+                   onContextMenu={(e: any) => {
+                       if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
+                           e.preventDefault();
+                           const target = e.target as HTMLElement;
+                           const container = target.closest('.highlightable-content');
+                           
+                           target.outerHTML = target.innerHTML;
+                           
+                           if (container) {
+                               const field = container.getAttribute('data-field');
+                               const qId = container.getAttribute('data-qid');
+                               const optIndex = container.getAttribute('data-optindex');
+                               
+                               if (field) {
+                                   const cleanHTML = serializeHighlightHTML(container as HTMLElement);
+                                   setActiveExam(prev => syncHighlightState(prev, field, qId || "", cleanHTML, optIndex));
+                               }
+                           }
+                       } else {
+                           e.preventDefault(); 
+                       }
+                   }}>
+                  
+                  {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
+                      <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""}
+                          onEnded={() => setAudioStatus("ENDED")}
+                          onPlaying={() => setAudioStatus("PLAYING")}
+                          onPause={(e: any) => { if (!e.currentTarget.ended) setAudioStatus("PAUSED"); }}
+                          onError={(e: any) => { audioPlayRequestRef.current = false; console.warn("Exam audio source failed:", e.currentTarget.error); setAudioStatus("IDLE"); }}
+                          onLoadedMetadata={(e: any) => {
+                              const audio = e.currentTarget as HTMLAudioElement;
+                              setAudioDur(audio.duration || 0);
+                              if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
+                                  audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
+                                  setAudioCur(audio.currentTime);
+                                  setPendingAudioResume(null);
+                              }
+                          }}
+                          onTimeUpdate={(e: any) => { if ((activeExam as any).audioMode === 'practice') setAudioCur(e.currentTarget.currentTime || 0); }}
+                          style={{display: 'none'}} />
+                  )}
+
+                  {globalStyles}
+                  {/* HIDDEN DIV DỌN DẸP TS WARNING */}
+                  <div style={{display: 'none'}} data-legacy={String(splitRatio) + String(setSplitRatio) + String(isDraggingSplitter) + String(setIsDraggingSplitter) + String(_isSepia) + String(_setIsSepia) + String(_lineHeight) + String(_setLineHeight) + String(_textAlign) + String(_setTextAlign) + String(_showLineNumbers) + String(_setShowLineNumbers) + String(_fontFam) + String(_setFontFam) + String(_setAudioTested) + String(_setScrollPct) + String(_showQuestionNotes) + String(_setShowQuestionNotes) + String(_toggleStrike) + String(_toggleFlag) + String(_isFocusMode) + String(setIsFocusMode) + String(isFullScreen) + String(setIsFullScreen) + String(isWindowFocused) + String(enableTimerBeep) + String(_setEnableTimerBeep)}></div>
+
+                  <style>{`
+                      html, body, #root { overflow: hidden !important; height: 100% !important; max-height: 100% !important; margin: 0 !important; padding: 0 !important; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+                      /* APPLE SAFARI LANDSCAPE FIX: Đồng bộ tọa độ chạm với hiển thị thực tế */
+                      @supports (-webkit-touch-callout: none) {
+                          html, body, #root, .exam-content-block { height: -webkit-fill-available !important; max-height: -webkit-fill-available !important; }
+                      }
+                      
+                      /* THEME & TEXT SIZE ENGINE CHUẨN IDP */
+                      .exam-content-block { --ebg: #ffffff; --epanel: #ffffff; --eborder: #d1d5db; --etext: #24292f; --esub: #57606a; --eaccent: #d32f2f; --eblue: #0969da; --einput: #ffffff; --efont: 15px; --eboxbg: #f0efe9; --hlbg: #8b1a1a; --hlfg: #ffffff; --notebg: #2563eb; --notefg: #ffffff; }
+                      .exam-content-block.theme-dark { --ebg: #000000; --epanel: #000000; --eborder: #444444; --etext: #ffffff; --esub: #aaaaaa; --eaccent: #ffffff; --eblue: #ffffff; --einput: #222222; --eboxbg: #1c1c1c; --hlbg: #FFE066; --hlfg: #000000; --notebg: #93c5fd; --notefg: #000000; }
+                      .exam-content-block.theme-yellow { --ebg: #000000; --epanel: #000000; --eborder: #ffcc00; --etext: #ffcc00; --esub: #ccaa00; --eaccent: #ffcc00; --eblue: #ffcc00; --einput: #222222; --eboxbg: #1a1500; --hlbg: #9ca3af; --hlfg: #000000; --notebg: #93c5fd; --notefg: #000000; }
+                      .exam-content-block.text-large { --efont: 20px; }
+                      .exam-content-block.text-xlarge { --efont: 24px; }
+
+                      .exam-content-block, .exam-passage-col, .exam-question-col { background: var(--ebg) !important; color: var(--etext) !important; }
+                      /* Cột câu hỏi co tự do -> bảng/nội dung to KHÔNG chặn splitter */
+                      .exam-question-col { min-width: 0 !important; }
+                      .exam-passage-col { min-width: 0 !important; }
+                      
+                      .exam-content-block .highlightable-content, .exam-content-block .highlightable-content *, .exam-content-block .idp-q-text-inline, .exam-content-block .idp-q-text-inline * {
+                          color: var(--etext) !important; background-color: transparent !important; line-height: 1.15 !important; cursor: text;
+                      }
+                      .exam-content-block .idp-instruction, .exam-content-block .idp-context-box, .exam-content-block .idp-text-content, .exam-content-block .scorableItemHeadline { cursor: text; }
+                      /* FIX "cỡ chữ bài đọc không tác động": chỉ đặt cỡ NỀN trên KHỐI (KHÔNG ép '*' bằng !important),
+                         để cỡ chữ giáo viên chỉnh cho từng đoạn ở Builder vẫn hiển thị đúng; phần text không chỉnh tay vẫn theo nút phóng to/thu nhỏ của học viên (--efont). */
+                      .exam-content-block .highlightable-content, .exam-content-block .idp-q-text-inline {
+                          font-size: var(--efont);
+                      }
+                      /* Khôi phục in đậm tuyệt đối và hủy căn giữa máy móc */
+                      .exam-content-block strong, .exam-content-block b, .exam-content-block strong *, .exam-content-block b * { font-weight: 900 !important; font-weight: bold !important; display: inline !important; }
+                      .exam-content-block .idp-text-content { text-align: justify; word-break: break-word; }
+                      .exam-content-block .idp-instruction, .exam-content-block .idp-q-text-inline, .exam-content-block .idp-context-box { text-align: left; }
+                      
+                      .exam-content-block .idp-radio-label { background: var(--einput) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-radio-label.selected { border-color: var(--eblue) !important; }
+                      /* O chon NHO GON chuan IDP (15px). CAN HANG: marginTop = (line-box that cua chu - 15)/2 de tam o tron
+                         trung tam DONG CHU DAU. Line-box that = var(--efont) * 1.15 (rule .highlightable-content ep line-height:1.15).
+                         Row set font-size/line-height tuong minh nen em cua o = var(--efont) -> calc chuan, tu co gian theo co chu. */
+                      .exam-content-block .idp-mcq-row { padding: 5px 8px; border-radius: 4px; font-size: var(--efont); line-height: 1.15; }
+                      .exam-content-block .idp-mcq-radio, .exam-content-block .idp-mcq-check {
+                          width: 15px; height: 15px; flex-shrink: 0; cursor: pointer;
+                          margin: calc((1.15em - 15px) / 2 - 0.12em) 0 0 0;
+                          accent-color: var(--eblue);
+                      }
+                      /* BỎ khung xám xấu quanh ô tròn/vuông khi click (focus ring mặc định) — giao diện IDP gốc không có */
+                      .exam-content-block .idp-mcq-radio:focus, .exam-content-block .idp-mcq-check:focus { outline: none !important; box-shadow: none !important; }
+                      /* Input đã nhập KHÔNG giữ viền xanh — viền chỉ xanh khi :focus (đang làm câu đó), blur ra thì về viền thường. */
+                      .exam-content-block .idp-mcq-row:hover { background: rgba(128,128,128,0.13); }
+                      .exam-content-block .idp-mcq-opt { cursor: pointer; text-align: left !important; }
+                      .exam-content-block input.idp-input, .exam-content-block input.idp-inline-input { background: var(--einput) !important; color: var(--etext) !important; border-color: var(--eborder) !important; font-size: var(--efont) !important; }
+                      .exam-content-block .idp-instruction { background: var(--epanel) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-context-box { background: var(--epanel) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-q-card { border-color: var(--eborder) !important; }
+                      .exam-content-block .idp-footer-nav { background: var(--ebg) !important; border-color: var(--eborder) !important; }
+                      .exam-content-block .idp-nav-sq { background: transparent !important; border: none !important; border-top: 2px solid #9ca3af !important; border-radius: 0 !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-nav-sq.ans { border: none !important; border-top: 2px solid #16a34a !important; }
+                      .exam-content-block .idp-nav-sq.cur { border: 1.5px solid var(--eblue) !important; border-radius: 3px !important; color: var(--eblue) !important; }
+                      
+                      .exam-content-block table, .exam-content-block th, .exam-content-block td { border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block th, .exam-content-block td:first-child { background: var(--epanel) !important; }
+                      .exam-content-block td { background: var(--ebg) !important; }
+                      .exam-content-block .idp-matching-legend { background: var(--epanel) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-matching-legend-key { color: var(--eblue) !important; }
+                      .exam-content-block .idp-dragdrop-pool { background: var(--epanel) !important; border-color: var(--eborder) !important; }
+                      .exam-content-block .idp-draggable { background: var(--einput) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-dropzone { background: var(--epanel) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-dropzone.filled { background: var(--ebg) !important; border-color: var(--eblue) !important; color: var(--etext) !important; }
+                      .exam-content-block .idp-section-header { color: var(--esub) !important; border-bottom-color: var(--eborder) !important; }
+                      .exam-content-block .idp-opt-letter { background: var(--epanel) !important; border-color: var(--eborder) !important; color: var(--etext) !important; }
+
+                      /* ĐàFIX UI CHUẨN: Popup Highlight & Giao diện Tooltip Nhập Ghi Chú */
+                      /* POPUP QUÉT CHỮ — sao chép Inspera: 2 nút NGANG [Note | Highlight], icon trên, chữ dưới, vạch chia dọc */
+                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; }
+                      .idp-popup-menu::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.05)); }
+                      .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
+                      .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
+                      .idp-popup-btn:hover { background: #f4f5f7; }
+                      
+                      /* THANH AUDIO PRACTICE (trên nav bar) — tối giản IDP: track mảnh, thumb tròn đen, không màu mè */
+                      .idp-audio-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 20px; background: var(--epanel); border-top: 1px solid var(--eborder); }
+                      .idp-audio-play { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--eborder); border-radius: 4px; background: var(--einput); color: var(--etext); cursor: pointer; padding: 0; transition: border-color .12s; }
+                      .idp-audio-play:hover { border-color: var(--etext); }
+                      .idp-audio-time { flex: none; font-family: Consolas, monospace; font-size: 12px; color: var(--esub); line-height: 1; }
+                      .idp-audio-range { -webkit-appearance: none; appearance: none; flex: 1; height: 4px; border-radius: 2px; outline: none; cursor: pointer; margin: 0; padding: 0; border: none; }
+                      .idp-audio-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 13px; height: 13px; border-radius: 50%; background: var(--etext); border: none; cursor: pointer; }
+                      .idp-audio-range::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; background: var(--etext); border: none; cursor: pointer; }
+                      .idp-audio-range::-moz-range-track { height: 4px; border-radius: 2px; background: transparent; }
+                      .idp-rate-btn { border: 1px solid var(--eborder); background: var(--einput); color: var(--esub); font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 3px; cursor: pointer; line-height: 1.2; transition: .12s; }
+                      .idp-rate-btn:hover { border-color: var(--etext); color: var(--etext); }
+                      .idp-rate-btn.on { background: var(--etext); color: var(--ebg); border-color: var(--etext); }
+                      /* PANEL NOTES (Inspera style) */
+                      .idp-notes-panel { position: absolute; top: 60px; right: 0; bottom: 0; width: 310px; background: #fff; border-left: 1px solid #d1d5db; z-index: 1500; display: flex; flex-direction: column; box-shadow: -4px 0 16px rgba(0,0,0,0.08); color: #111; }
+                      .idp-notes-panel-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; font-size: 15px; font-weight: 700; border-bottom: 1px solid #e5e7eb; }
+                      .idp-notes-panel-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+                      .idp-note-item { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; background: #fff; transition: background .12s; }
+                      .idp-note-item:hover, .idp-note-item.confirm { background: #2447c5; color: #fff; }
+                      .idp-note-item:hover .idp-note-link, .idp-note-item.confirm .idp-note-link { color: #fff; }
+                      .idp-note-jump { display: block; width: 100%; text-align: left; background: none; border: none; padding: 0 0 8px 0; cursor: pointer; font-size: 13px; line-height: 1.45; color: inherit; }
+                      .idp-note-jump strong { font-weight: 800; margin-right: 6px; }
+                      .idp-note-jump em { font-style: italic; }
+                      .idp-note-jump:hover em { text-decoration: underline; }
+                      .idp-note-panel-input { width: 100%; box-sizing: border-box; border: 1px solid #9ca3af; border-radius: 3px; padding: 8px 10px; font-size: 13px; outline: none; background: #fff; color: #111; transition: border-color .12s, box-shadow .12s; }
+                      .idp-note-panel-input:hover, .idp-note-panel-input:focus { border-color: #2563eb; box-shadow: 0 0 0 1px #2563eb inset; }
+                      .idp-note-link { background: none; border: none; cursor: pointer; font-size: 13px; font-weight: 600; color: #2563eb; padding: 6px 0 0 0; }
+                      .idp-note-link:hover { text-decoration: underline; }
+                      .idp-note-link.light { color: #fff; }
+                      .idp-note-input-modal { position: absolute; background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 999999; transform: translate(-50%, 10px); border: 1px solid #d1d5db; min-width: 250px; }
+                      .idp-note-input-modal::before { content: ''; position: absolute; top: -8px; left: 50%; transform: translateX(-50%); border-width: 0 8px 8px; border-style: solid; border-color: transparent transparent #fff transparent; filter: drop-shadow(0 -2px 2px rgba(0,0,0,0.05)); }
+
+                      .idp-section-tab { flex: 1; text-align: center; padding: 12px 5px; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; color: var(--esub); position: relative; }
+                      .idp-section-tab.active { border-bottom-color: var(--etext); color: var(--etext); font-weight: 900; background: var(--epanel); }
+                      .idp-progress-bg { position: absolute; top: 0; left: 10%; right: 10%; height: 3px; background: var(--eborder); border-radius: 3px; overflow: hidden; }
+                      .idp-progress-fill { height: 100%; background: var(--etext); transition: width 0.3s ease; }
+                      
+                      .student-note-hl { background-color: var(--notebg, #2563eb) !important; color: var(--notefg, #fff) !important; cursor: pointer; position: relative; padding-right: 18px; border-radius: 2px; }
+                      .student-note-hl::after { content: ''; position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2Z"/></svg>') no-repeat center; background-size: contain; }
+                      
+                      /* ĐàFIX: Đồng bộ màu quét chuột nguyên bản với màu FAKE của hệ thống */
+                      .exam-content-block ::selection { background-color: #b3d4fc !important; color: inherit !important; }
+                      .exam-content-block ::-moz-selection { background-color: #b3d4fc !important; color: inherit !important; }
+
+                      .exam-content-block .highlightable-content .student-highlight, .exam-content-block .highlightable-content .student-highlight *, .exam-content-block .idp-q-text-inline .student-highlight, .exam-content-block .idp-q-text-inline .student-highlight * { background-color: var(--hlbg) !important; color: var(--hlfg) !important; cursor: pointer; }
+                      .exam-content-block .highlightable-content .student-note-hl, .exam-content-block .highlightable-content .student-note-hl *, .exam-content-block .idp-q-text-inline .student-note-hl, .exam-content-block .idp-q-text-inline .student-note-hl * { background-color: var(--notebg) !important; color: var(--notefg) !important; cursor: pointer; }
+                      .exam-content-block .idp-temp-selection,
+                      .exam-content-block .highlightable-content .idp-temp-selection,
+                      .exam-content-block .highlightable-content .idp-temp-selection * { background-color: #b3d4fc !important; color: #000 !important; }
+
+                      .exam-passage-col img, .exam-question-col img { max-width: 100% !important; height: auto !important; object-fit: contain; border-radius: 4px; margin: 10px 0; }
+                      .exam-two-column { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
+                      ::-webkit-scrollbar { width: 10px; height: 10px; }
+                      ::-webkit-scrollbar-track { background: #f1f1f1; border-left: 1px solid #ddd; }
+                      ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 10px; }
+                      ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+                      .idp-radio-label { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; transition: 0.1s; margin-bottom: 6px; background: #fff; border: 1px solid #ccc; }
+                      .idp-radio-label:hover { background: #f8f9fa; border-color: #bbb; }
+                      .idp-radio-label.selected { background: #f0f6ff; border-color: ${idpC.blueAccent}; }
+                      input[type="radio"], input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; accent-color: ${idpC.blueAccent}; margin: 0; flex-shrink: 0; }
+                      .idp-input { border: 1px solid #777; padding: 8px 12px; font-size: 15px; border-radius: 4px; width: 100%; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); outline: none; transition: 0.2s; }
+                      .idp-input:focus { border-color: ${idpC.blueAccent}; box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2); }
+                      
+                      /* ĐàFIX: Hỗ trợ Black mode, căn giữa, chữ màu động chuẩn IDP */
+                      .idp-inline-input { border: 1px solid var(--eborder); border-radius: 3px; padding: 2px 8px; min-width: 60px; width: auto; font-size: var(--efont); font-weight: 600; color: var(--etext); outline: none; text-align: center !important; background: var(--einput); box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); margin: 0 6px; font-family: inherit; transition: 0.2s; vertical-align: baseline; display: inline-block; }
+                      .idp-inline-input:focus { border-color: #0969da; box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2); }
+                      .idp-inline-input::placeholder { color: var(--etext); font-weight: 800; opacity: 0.8; }
+                      
+                      /* ĐàFIX: Đưa Instruction và Context về chuẩn IDP (trong suốt, không viền, khoảng cách chuẩn) */
+                      /* THANG SPACING ĐỒNG BỘ (IDP): --q-gap 28px giữa các NHÓM câu; --note-line 7px giữa các dòng note/form. */
+                      .exam-content-block { --q-gap: 16px; --note-line: 6px; }
+                      .question-rubric { margin-bottom: 10px; }
+                      .question-rubric h3.scorableItemHeadline { font-size: 16px; font-weight: 700; color: var(--etext); margin: 0 0 8px 0; font-family: inherit; }
+
+                      .idp-instruction { background: transparent !important; border: none !important; color: var(--etext) !important; padding: 0 !important; margin: 0 !important; font-size: var(--efont); line-height: 1.5; }
+                      .idp-instruction strong, .idp-instruction b { font-weight: 700 !important; }
+                      .idp-instruction p, .idp-instruction div { margin: 0 !important; padding: 0 !important; }
+                      /* Dòng nhãn cột kéo-thả: ẩn khỏi instruction (đã hiện ở header cột) nhưng GIỮ trong DOM để serialize không làm mất */
+                      .idp-instruction .idp-draglabel-hide { display: none !important; }
+
+                      .idp-context-box { background: transparent !important; border: none !important; color: var(--etext) !important; padding: 0; margin-bottom: 10px; font-size: var(--efont); line-height: 1.55; overflow-x: auto; max-width: 100%; }
+                      /* Bảng điền từ: full-width để 2 bảng (vd S3 Q24-30) LUÔN BẰNG NHAU. */
+                      .idp-context-box table { width: 100% !important; max-width: 100%; font-size: calc(var(--efont) - 1px); }
+                      /* Bảng KHÔNG xuống dòng lẻ ký tự. Thay vào đó: cột hẹp tới đâu -> TỰ THU NHỎ chữ + ô nhập
+                         (container query theo bề rộng cột câu hỏi), quá nữa thì cuộn ngang trong khung. */
+                      .idp-context-box { container-type: inline-size; }
+                      .idp-context-box td, .idp-context-box th { word-break: normal; }
+                      .idp-context-box table input.idp-inline-input { box-sizing: border-box; }
+                      @container (max-width: 760px) {
+                          .idp-context-box table, .idp-context-box td, .idp-context-box th { font-size: calc(var(--efont) - 2px) !important; }
+                          .idp-context-box td, .idp-context-box th { padding: 5px 7px !important; }
+                          .idp-context-box table input.idp-inline-input { width: 110px !important; min-width: 0; padding: 2px 5px; }
+                      }
+                      @container (max-width: 600px) {
+                          .idp-context-box table, .idp-context-box td, .idp-context-box th { font-size: calc(var(--efont) - 3.5px) !important; }
+                          .idp-context-box td, .idp-context-box th { padding: 4px 5px !important; }
+                          .idp-context-box table input.idp-inline-input { width: 84px !important; font-size: calc(var(--efont) - 3px) !important; }
+                      }
+                      .idp-context-box td, .idp-context-box th { font-size: calc(var(--efont) - 1px); }
+                      .idp-context-box table input.idp-inline-input { max-width: 100%; }
+                      .idp-context-box p { margin: 0 0 var(--note-line) 0 !important; }
+                      .idp-context-box p:last-child { margin-bottom: 0 !important; }
+                      .idp-context-box > div:first-child strong { display: block; font-size: calc(var(--efont) + 2px); margin-bottom: 10px; text-transform: none; letter-spacing: normal; font-weight: 700 !important; }
+
+                      .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
+                      .idp-q-card:last-child { border-bottom: none; }
+                      .idp-flowchart-panel { border: 1.5px solid #0969da; border-radius: 8px; padding: 18px 24px; background: var(--ebg); max-width: 680px; margin: 0 auto 18px; }
+                      .idp-flowchart-node { border: 1px solid #d8dee4; border-radius: 6px; background: rgba(255,255,255,0.65); padding: 10px 12px; line-height: 1.45; font-size: var(--efont); font-weight: 600; color: var(--etext); }
+                      .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
+                      .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
+                      .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
+                      .idp-flow-arrow { text-align: center; font-size: 20px; font-weight: 800; line-height: 1; margin: 8px 0; color: var(--etext); }
+                      
+                      /* ĐàFIX: Ép văn bản câu hỏi thành Inline, Line spacing khít khịt theo yêu cầu */
+                      .idp-q-text-inline p, .idp-q-text-inline div { margin: 0; padding: 0; }
+                      .idp-q-text-inline { font-weight: 400 !important; line-height: 1.15; font-size: var(--efont); }
+                      .idp-q-text-inline strong, .idp-q-text-inline b { font-weight: 700 !important; }
+                      
+                      /* ĐàFIX: Nới rộng Navigator thoải mái */
+                      .idp-footer-nav { position: relative; width: 100%; min-height: 52px; max-height: 40vh; background: #fff; border-top: 2px solid #ccc; display: flex; justify-content: space-between; align-items: stretch; z-index: 1000; flex-shrink: 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
+                      .idp-nav-squares { display: flex; gap: 8px; padding: 0; flex: 1; align-items: flex-start; height: 100%; flex-wrap: wrap; }
+                      /* NAV CHUẨN IELTS: số trần, đã trả lời = gạch chân xanh, câu hiện tại = khung xanh */
+                      .idp-nav-sq { min-width: 26px; height: 30px; padding: 3px 6px 0; border: none; border-top: 2px solid #cbd0d6; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: #1a1a1a; display: flex; justify-content: center; align-items: center; border-radius: 0; flex-shrink: 0; box-sizing: border-box; transition: 0.12s; }
+                      .idp-nav-sq.ans { border-top: 2px solid #16a34a; }
+                      .idp-nav-sq.cur { border: 1.5px solid #0a66c2; border-radius: 3px; color: #0a66c2; font-weight: 800; }
+                      .idp-nav-sq.flagged { border-top: 2px solid #bf8700; color: #7a5200; }
+                      .idp-nav-sq:hover { background: rgba(128,128,128,0.12); }
+                      .idp-pnav-label { background: transparent; border: none; cursor: pointer; font-size: 14px; font-weight: 700; color: var(--esub); padding: 4px 2px; white-space: nowrap; transition: color 0.15s; }
+                      .idp-pnav-label.active { color: var(--etext); font-weight: 800; }
+                      .idp-pnav-label:hover { color: var(--eblue); }
+                      .idp-submit-btn { width: 50px; height: 100%; background: #222; border: none; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: 0.2s; }
+                      .idp-submit-btn:hover { background: #000; }
+                      /* === NÚT CHUYỂN CÂU (PREV/NEXT) + SUBMIT — giống realieltsexams === */
+                      /* Mũi tên chuyển câu: VUÔNG GÓC, sát nhau (chuẩn Inspera) */
+                      .idp-qnav-fab { position: absolute; right: 20px; bottom: 18px; display: flex; gap: 5px; z-index: 40; }
+                      .idp-qnav-btn { width: 44px; height: 44px; border-radius: 2px; background: #1b1e2b; color: #fff; border: 1px solid #1b1e2b; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .18s ease, color .18s ease; box-shadow: 0 2px 8px rgba(27,30,43,0.25); }
+                      .idp-qnav-btn:hover { background: #fff; color: #1b1e2b; }
+                      /* Nút nộp: khít TOÀN BỘ vùng trắng, vuông góc */
+                      .idp-submit-fab { width: 64px; height: 100%; border-radius: 0; background: #ececec; color: #3a3d47; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .18s ease, color .18s ease; }
+                      .idp-submit-fab:hover { background: #1b1e2b; color: #fff; }
+                      .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
+                      .highlight-flash { animation: flashYellow 1.5s; }
+                      @keyframes flashYellow { 0%, 100% { background-color: transparent; } 50% { background-color: #fff3cd; } }
+                      /* Quầng vàng đánh dấu câu mũi tên vừa tới — nở quầng sáng mờ ảo rồi tan dần */
+                      .idp-q-focus-flash { animation: qFocusFlash 2.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards; border-radius: 8px; will-change: box-shadow, background-color; }
+                      @keyframes qFocusFlash {
+                          0%   { box-shadow: 0 0 0 0 rgba(245,158,11,0), 0 0 0 0 rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
+                          14%  { box-shadow: 0 0 18px 6px rgba(245,158,11,0.45), 0 0 0 1px rgba(245,158,11,0.55); background-color: rgba(245,158,11,0.13); }
+                          45%  { box-shadow: 0 0 14px 5px rgba(245,158,11,0.26), 0 0 0 1px rgba(245,158,11,0.30); background-color: rgba(245,158,11,0.07); }
+                          100% { box-shadow: 0 0 26px 10px rgba(245,158,11,0), 0 0 0 1px rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
+                      }
+                      
+                      /* ĐàFIX: Tăng độ ưu tiên CSS (Specificity) cực đại để ghi đè luật transparent của hệ thống */
+                      .exam-content-block .highlightable-content .student-highlight,
+                      .exam-content-block .highlightable-content .student-highlight *,
+                      .exam-content-block .idp-q-text-inline .student-highlight,
+                      .exam-content-block .idp-q-text-inline .student-highlight * {
+                          background-color: var(--hlbg) !important;
+                          color: var(--hlfg) !important;
+                          cursor: pointer;
+                      }
+
+                      /* Hình 9: Loading spinner */
+                      .idp-spinner { width: 48px; height: 48px; border: 4px solid #e0e0e0; border-top-color: #111; border-radius: 50%; animation: idp-spin 0.8s linear infinite; margin: 0 auto 24px; }
+                      @keyframes idp-spin { to { transform: rotate(360deg); } }
+
+                      /* Hình 3: Matching matrix table */
+                      .idp-matching-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+                      .idp-matching-table th { background: #f4f5f7; border: 1px solid #ccc; padding: 8px 12px; text-align: center; font-weight: 700; color: #24292f; min-width: 42px; }
+                      .idp-matching-table td { border: 1px solid #ddd; padding: 10px 12px; vertical-align: middle; background: #fff; }
+                      .idp-matching-table td:first-child { background: #fafafa; font-size: 13px; }
+                      .idp-matching-table tbody tr:hover td { background: #f8f9ff; }
+                      .idp-matching-table input[type="radio"] { display: block; margin: 0 auto; width: 17px; height: 17px; cursor: pointer; accent-color: #0969da; }
+                      .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
+                      .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
+                      .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
+
+                      /* Hình 6: Drag-drop 2-column layout */
+                      .idp-dragdrop-workspace { display: flex; gap: 24px; align-items: flex-start; }
+                      .idp-dragdrop-flowchart { flex: 1; min-width: 0; }
+                      .idp-dragdrop-pool { flex: 0 0 180px; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
+                      .idp-dragdrop-pool-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #57606a; margin-bottom: 10px; }
+                      .idp-draggable { display: block; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
+                      .idp-draggable:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+                      .idp-draggable:active { cursor: grabbing; opacity: 0.7; }
+                      .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
+                      .idp-dropzone.filled { border-style: solid; border-color: #0969da; background: #e6f0ff; color: #0550ae; }
+                      .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f6ff; }
+
+                      /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
+                      .idp-wordbank { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; background: var(--epanel); border: 1px solid var(--eborder); border-radius: 8px; margin-bottom: 18px; }
+                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--einput); border: 1px solid var(--eborder); border-radius: 6px; cursor: grab; font-size: var(--efont); font-weight: 600; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
+                      .idp-wordbank-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+                      .idp-wordbank-item:active { cursor: grabbing; }
+                      .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
+                      .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
+                      /* ===== KÉO-THẢ NỐI 2 CỘT (compact, chuẩn IDP) — cột trái kho tag, cột phải mục có ô thả ===== */
+                      .idp-match2 { display: flex; gap: 40px; align-items: flex-start; margin-top: 4px; }
+                      .idp-match2-bank { flex: 0 0 auto; min-width: 150px; max-width: 300px; display: flex; flex-direction: column; gap: 6px; }
+                      /* Cột mục = lưới 2 cột: nhãn co theo nội dung (fit-content -> ngắn thì bó sát, câu dài thì tự xuống dòng),
+                         ô thả nằm SÁT ngay sau nhãn (không phí khoảng trắng). justify-content:start dồn về trái, kho tag ở xa phải. */
+                      .idp-match2-items { flex: 1; min-width: 0; display: grid; grid-template-columns: fit-content(46%) minmax(150px, 300px); column-gap: 18px; row-gap: 8px; align-items: center; justify-content: start; }
+                      .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
+                      /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
+                      .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
+                      .idp-match2-tag { text-align: center; }
+                      .idp-match2-name { text-align: left; }
+                      .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 6px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
+                      .idp-match2-tag:hover { border-color: var(--eblue); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+                      .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
+                      .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
+                      .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
+                      .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
+                      .idp-drag-summary { line-height: 2.2; }
+                      /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
+                      .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
+                      .idp-drag-summary .idp-dropzone { min-width: 96px; }
+
+                      /* Section header Listening */
+                      .idp-section-header { font-size: 12px; font-weight: 700; color: #57606a; text-transform: uppercase; letter-spacing: 0.6px; padding: 0 0 8px 0; margin-bottom: 14px; border-bottom: 2px solid #d1d5db; display: flex; align-items: center; gap: 8px; }
+
+                      /* Option letter badge */
+                      .idp-opt-letter { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #bbb; font-size: 12px; font-weight: 700; color: #555; flex-shrink: 0; background: #f4f5f7; }
+                      .idp-radio-label.selected .idp-opt-letter { border-color: #0969da; color: #0969da; background: #e6f0ff; }
+                  `}</style>
+
+                  {showScratchpad && (
+                      <div style={{ position: 'fixed', bottom: 60, right: 30, width: 350, background: '#fff', border: `1px solid ${idpC.border}`, borderRadius: 8, boxShadow: '0 10px 40px rgba(0,0,0,0.2)', zIndex: 99999, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                          <div style={{ background: idpC.panelBg, padding: '10px 15px', borderBottom: `1px solid ${idpC.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 'bold' }}>
+                               My Notes
+                              <button onClick={() => setShowScratchpad(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, color: idpC.sub }}><Ico name="x" size={16} /></button>
+                          </div>
+                          <textarea 
+                              value={scratchpadText} 
+                              onChange={(e: any) => setScratchpadText(e.target.value)}
+                              placeholder="Type your rough notes here..."
+                              style={{width: '100%', height: 200, border: 'none', padding: 15, resize: 'none', outline: 'none', fontSize: 14, fontFamily: 'monospace'}}
+                          />
+                      </div>
+                  )}
+
+                  {!isFullScreen && userRole === "STUDENT" && !isPreview && (
+                      <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#000', zIndex: 9999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
+                          <h1 style={{fontSize: 40, fontWeight: 900, textAlign: 'center', color: C.err}}><Ico name="alert" size={34} color={C.err} style={{verticalAlign:'-4px', marginRight:12, display:'inline-block'}} />FULLSCREEN REQUIRED</h1>
+                          <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center', marginTop: 10, lineHeight: 1.5}}>The system requires fullscreen mode to ensure the best experience and fairness. Please click the button below to return to your test.</p>
+                          <button onClick={() => { if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(()=>{}); }} style={{background: C.accent, color: '#fff', padding: '15px 30px', fontSize: 18, marginTop: 30, borderRadius: 8, fontWeight: 800}}>CLICK HERE TO RETURN</button>
+                      </div>
+                  )}
+
+                  {hardLocked && !isPreview && (
+                      <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(215, 58, 73, 0.95)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
+                          <h1 style={{fontSize: 40, fontWeight: 900, margin: 0, textAlign: 'center'}}>YOU HAVE LEFT THE EXAM SCREEN!</h1>
+                          <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center'}}>The system has recorded violations ({examCheatCount}/3). Please type <b>RETURN</b> into the box below to unlock your exam.</p>
+                          <input value={unlockKey} onChange={e => setUnlockKey(e.target.value)} placeholder="Type here..." style={{width: 300, background: '#fff', color: '#000', fontSize: 18, textAlign: 'center', marginTop: 20}} />
+                          {unlockKey === "RETURN" && <button onClick={() => { setHardLocked(false); setUnlockKey(""); }} style={{background: '#000', color: '#fff', padding: '15px 30px', fontSize: 18, marginTop: 20}}>UNLOCK</button>}
+                      </div>
+                  )}
+
+                  {gracePeriod !== null && (
+                      <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(215, 58, 73, 0.9)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
+                          <h1 style={{fontSize: 50, fontWeight: 900, margin: 0}}>TIME IS UP!</h1>
+                          <p style={{fontSize: 24}}>The system will auto-submit in:</p>
+                          <div style={{fontSize: 100, fontWeight: 900}}>{gracePeriod}s</div>
+                      </div>
+                  )}
+
+                  {timeAlert && (
+                      <div style={{position: 'fixed', top: 80, left: '50%', transform: 'translateX(-50%)', background: idpC.accent, color: '#fff', padding: '10px 20px', borderRadius: 30, fontWeight: 900, zIndex: 10000, animation: 'pulse 1s infinite'}}>
+                          ⏳ {timeAlert}
+                      </div>
+                  )}
+                  
+                  {isOffline && <div style={{background: C.err, color: '#fff', textAlign: 'center', padding: 8, fontWeight: 900, fontSize: 14, animation: 'pulse 1s infinite'}}><Ico name="siren" size={15} color="#fff" style={{verticalAlign:'-2px', marginRight:8, display:'inline-block'}} />CONNECTION LOST! Local auto-save active.</div>}
+                  {screenshotFlash && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#fff', zIndex: 2147483647, pointerEvents: 'none' }} />}
+
+                  {!isPreview && (
+                      <div style={{
+                          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: 9500, overflow: 'hidden',
+                          userSelect: 'none', WebkitUserSelect: 'none', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '50px', padding: '20px', opacity: 0.02
+                      }}>
+                          {Array.from({ length: 40 }).map((_, i) => (
+                              <div key={i} style={{ transform: 'rotate(-30deg)', fontSize: 15, fontWeight: 900, color: '#000', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                                  CONFIDENTIAL | ID: {students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}
+                              </div>
+                          ))}
+                      </div>
+                  )}
+                  
+                  {/* MODAL OPTIONS IDP */}
+                  {showOptionsModal && (
+                      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: '100%', background: 'rgba(0,0,0,0.4)', zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '15px', boxSizing: 'border-box' }}>
+                          <div style={{ width: 600, maxWidth: '100%', maxHeight: '100%', display: 'flex', flexDirection: 'column', background: '#fff', color: '#000', borderRadius: 6, overflow: 'hidden', boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+                              <div style={{ flex: 'none', padding: '16px 20px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderBottom: '1px solid #eee', position: 'relative' }}>
+                                  {optionsView !== 'main' && (
+                                      <button onClick={() => setOptionsView('main')} style={{ position: 'absolute', left: 20, background: 'none', border: 'none', fontWeight: 'bold', fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, padding: 0 }}>
+                                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg> Options
+                                      </button>
+                                  )}
+                                  <div style={{ fontSize: 18, fontWeight: 500 }}>
+                                      {optionsView === 'main' ? 'Options' : optionsView === 'contrast' ? 'Contrast' : 'Text size'}
+                                  </div>
+                                  <button onClick={() => setShowOptionsModal(false)} style={{ position: 'absolute', right: 20, background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', fontWeight: 'bold', padding: 0, lineHeight: 1 }}>×</button>
+                              </div>
+                              
+                              <div style={{ padding: '24px 30px', overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}>
+                                  {optionsView === 'main' && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                          <div onClick={() => setOptionsView('contrast')} style={{ padding: '16px 20px', border: '1px solid #d1d5db', borderRadius: 4, display: 'flex', justifyContent: 'space-between', cursor: 'pointer', fontSize: 16, alignItems: 'center', transition: '0.15s' }} onMouseOver={e => e.currentTarget.style.background='#f4f5f7'} onMouseOut={e => e.currentTarget.style.background='#fff'}>
+                                              <div style={{display: 'flex', alignItems: 'center', gap: 12}}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M12 2a10 10 0 0 1 0 20z" fill="#666"/></svg> Contrast</div>
+                                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                                          </div>
+                                          <div onClick={() => setOptionsView('textsize')} style={{ padding: '16px 20px', border: '1px solid #d1d5db', borderRadius: 4, display: 'flex', justifyContent: 'space-between', cursor: 'pointer', fontSize: 16, alignItems: 'center', transition: '0.15s' }} onMouseOver={e => e.currentTarget.style.background='#f4f5f7'} onMouseOut={e => e.currentTarget.style.background='#fff'}>
+                                              <div style={{display: 'flex', alignItems: 'center', gap: 12}}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg> Text size</div>
+                                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {optionsView === 'contrast' && (
+                                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                          {[
+                                              { id: 'default', label: 'Black on white', previewBg: '#fff', previewColor: '#000' },
+                                              { id: 'dark', label: 'White on black', previewBg: '#000', previewColor: '#fff' },
+                                              { id: 'yellow', label: 'Yellow on black', previewBg: '#000', previewColor: '#ffcc00' }
+                                          ].map(t => (
+                                              <div key={t.id} onClick={() => setExamTheme(t.id as any)} style={{ padding: '16px 20px', border: '1px solid #d1d5db', borderBottom: t.id !== 'yellow' ? 'none' : '1px solid #d1d5db', display: 'flex', justifyContent: 'space-between', cursor: 'pointer', alignItems: 'center', background: examTheme === t.id ? '#f8f9fa' : '#fff' }}>
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 15, fontWeight: examTheme === t.id ? 'bold' : 'normal' }}>
+                                                      <div style={{ width: 24, display: 'flex', alignItems: 'center' }}>{examTheme === t.id && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}</div>
+                                                      {t.label}
+                                                  </div>
+                                                  <div style={{ background: t.previewBg, color: t.previewColor, padding: '4px 12px', border: '1px solid #ccc', fontSize: 12, fontWeight: 'bold' }}>
+                                                      {t.label}
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  )}
+
+                                  {optionsView === 'textsize' && (
+                                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                          {[
+                                              { id: 'standard', label: 'Standard' },
+                                              { id: 'large', label: 'Large' },
+                                              { id: 'xlarge', label: 'Extra large' }
+                                          ].map((t, idx) => (
+                                              <div key={t.id} onClick={() => setExamTextSize(t.id as any)} style={{ padding: '16px 20px', border: '1px solid #d1d5db', borderBottom: idx !== 2 ? 'none' : '1px solid #d1d5db', display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer', background: examTextSize === t.id ? '#f8f9fa' : '#fff', fontSize: 15, fontWeight: examTextSize === t.id ? 'bold' : 'normal' }}>
+                                                  <div style={{ width: 24, display: 'flex', alignItems: 'center' }}>{examTextSize === t.id && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}</div>
+                                                  {t.label}
+                                              </div>
+                                          ))}
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* MODAL NOTIFICATION BELL IDP */}
+                  {showBellModal && currentUser && (
+                      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)', zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <div style={{ width: 500, maxWidth: '90%', background: '#fff', color: '#000', borderRadius: 4, overflow: 'hidden', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                              <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #eee' }}>
+                                  <div style={{ fontSize: 18, fontWeight: 500 }}>Notifications</div>
+                                  <button onClick={() => {
+                                      setShowBellModal(false);
+                                      if (currentUser) {
+                                          const nx = students.map(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase() ? { ...s, pendingNotifications: [] } : s);
+                                          setStudents(nx); syncData({ students: nx });
+                                      }
+                                  }} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', fontWeight: 'bold', padding: 0, lineHeight: 1 }}>×</button>
+                              </div>
+                              <div style={{ padding: '24px', maxHeight: '60vh', overflowY: 'auto' }}>
+                                  {(() => {
+                                      const meNotifs = currentUser ? students.find(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase())?.pendingNotifications : null;
+                                      return meNotifs && meNotifs.length > 0 ? (
+                                          meNotifs.map((n, i) => (
+                                              <div key={i} style={{ padding: '16px', border: '1px solid #e2e8f0', borderRadius: 8, marginBottom: 12, background: '#f8fafc' }}>
+                                                  <div style={{ fontWeight: 800, marginBottom: 8, color: '#d32f2f', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                      <Ico name="chat" size={17} color="#d32f2f" style={{flexShrink:0}} /> {n.title}
+                                                  </div>
+                                                  <div style={{ fontSize: 15, lineHeight: 1.6, color: '#334155' }}>{n.body}</div>
+                                              </div>
+                                          ))
+                                      ) : (
+                                          <div style={{ textAlign: 'center', color: '#64748b', padding: '30px 0', fontSize: 15 }}>No new notifications</div>
+                                      );
+                                  })()}
+                              </div>
+                              <div style={{ background: '#f8f9fa', padding: '12px 20px', borderTop: '1px solid #eee', textAlign: 'right' }}>
+                                  <button onClick={() => {
+                                      setShowBellModal(false);
+                                      if (currentUser) {
+                                          const nx = students.map(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase() ? { ...s, pendingNotifications: [] } : s);
+                                          setStudents(nx); syncData({ students: nx });
+                                      }
+                                  }} style={{ background: '#24292f', color: '#fff', border: 'none', padding: '8px 24px', borderRadius: 4, fontWeight: 'bold', cursor: 'pointer' }}>Đóng & Đánh dấu đã đọc</button>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* HEADER — Top_Bar chuẩn IDP SẠCH */}
+                  <div style={{ display: 'flex', flex: 'none', background: 'var(--epanel)', padding: "0 24px", borderBottom: `1px solid var(--eborder)`, position: "sticky", top: 0, zIndex: 100, justifyContent: "space-between", alignItems: "center", height: 60, color: 'var(--etext)' }}>
+                      {/* LEFT: Logo + Exam title */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                          <img src={examTheme === 'dark' || examTheme === 'yellow' ? "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts-white.svg" : "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg"} alt="IELTS" style={{ height: 26, userSelect: 'none', flexShrink: 0 }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                              <div style={{ fontWeight: 800, fontSize: 16 }}>{students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                                  {(!isPreview) && (
+                                      <div className={isTimeRunningOut ? 'pulse-fast' : ''} style={{ fontSize: 13, fontWeight: 600, color: isTimeRunningOut ? '#d32f2f' : 'var(--esub)' }}>
+                                          {Math.floor(examTimeLeft / 60)} minutes remaining
+                                      </div>
+                                  )}
+                                  {/* STRICT: chỉ báo tĩnh "Audio is Playing" (không có thanh tua) */}
+                                  {isListening && (activeExam as any).audioMode !== 'practice' && audioStatus === "PLAYING" && (
+                                      <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Audio is Playing
+                                      </div>
+                                  )}
+                                  {/* PRACTICE: chỉ báo nhẹ trên header — player đầy đủ nằm ở thanh dưới (trên nav bar) */}
+                                  {isListening && (activeExam as any).audioMode === 'practice' && audioStatus === "PLAYING" && (
+                                      <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Audio is Playing
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* RIGHT: Controls */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+                          {/* Preview Exit */}
+                          {isPreview && (
+                              <button onClick={() => { setActiveExam(null); setIsPreview(false); if (document.fullscreenElement) document.exitFullscreen().catch(()=>{}); }}
+                                  style={{background: 'var(--etext)', color: 'var(--ebg)', padding: '6px 16px', fontSize: 13, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer'}}>
+                                  {userRole === "STUDENT" ? "EXIT TEST UI" : "EXIT PREVIEW"}
+                              </button>
+                          )}
+
+                          {/* WiFi */}
+                          <div title={isOffline ? "Offline" : "Online"}>
+                              {isOffline ? (
+                                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path><path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>
+                              ) : (
+                                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>
+                              )}
+                          </div>
+
+                          {/* Bell Notification */}
+                          <div style={{ position: 'relative', cursor: 'pointer', display: 'flex', alignItems: 'center' }} onClick={() => setShowBellModal(true)}>
+                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                              {(() => {
+                                  const meInExam = currentUser ? students.find(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase()) : null;
+                                  return (meInExam?.pendingNotifications?.length || 0) > 0 ? (
+                                      <div style={{ position: 'absolute', top: -6, right: -6, background: '#d32f2f', color: '#fff', fontSize: 10, fontWeight: 'bold', borderRadius: '50%', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'pulseFast 1s infinite' }}>
+                                          {meInExam!.pendingNotifications!.length}
+                                      </div>
+                                  ) : null;
+                              })()}
+                          </div>
+
+                          {/* Hamburger Menu */}
+                          <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }} onClick={() => { setShowOptionsModal(true); setOptionsView('main'); }}>
+                              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                          </div>
+
+                          {/* Nút Notes (chuẩn Inspera: ✎ trong ô vuông) — mở panel Notes bên phải */}
+                          <div title="Notes" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }} onClick={() => { setShowNotesPanel(v => !v); setNoteDeleteIdx(null); setNotesTick(t => t + 1); }}>
+                              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          </div>
+                      </div>
+                  </div>
+
+                 {/* Thanh chọn Passage trên đầu đã bỏ (đề thi IDP thật không có) — chuyển passage bằng thanh review dưới chân. */}
+
+          {/* BANNER PASSAGE FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
+          {(!String(activeExam.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (() => {
+              const navG = navGroups[currentSectionIndex];
+              const qStart = navG ? navG.startIndex + 1 : 1;
+              const qEnd = navG ? navG.startIndex + navG.questions.length : qStart;
+              const label = activeExam.type === "Integrated" ? `PART ${currentSectionIndex + 1}` : `READING PASSAGE ${currentSectionIndex + 1}`;
+              return (
+                  <div style={{ flex: 'none', background: 'var(--eboxbg)', padding: '12px 40px', textAlign: 'left', borderBottom: '1px solid var(--eborder)' }}>
+                      <div style={{ fontWeight: 800, fontSize: 'calc(var(--efont) + 1px)', color: 'var(--etext)', letterSpacing: '0.01em' }}>{label}</div>
+                      <div style={{ fontSize: 'var(--efont)', color: 'var(--etext)', marginTop: 2 }}>Read the text and answer questions {qStart}–{qEnd}.</div>
+                  </div>
+              );
+          })()}
+
+          <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
+              
+              {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
+              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (audioStatus === "IDLE" || audioStatus === "LOADING" || ((activeExam as any).audioMode !== 'practice' && audioStatus === "PAUSED")) && (
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
+                      <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <svg width="96" height="96" viewBox="0 0 24 24" fill="#ffffff" style={{ marginBottom: 18 }}><path d="M12 2.5a9 9 0 0 0-9 9v5.2A2.8 2.8 0 0 0 5.8 19.5h.7a1.5 1.5 0 0 0 1.5-1.5v-4.5a1.5 1.5 0 0 0-1.5-1.5h-1.5v-.5a7 7 0 0 1 14 0v.5h-1.5a1.5 1.5 0 0 0-1.5 1.5V18a1.5 1.5 0 0 0 1.5 1.5h.7A2.8 2.8 0 0 0 21 16.7v-5.2a9 9 0 0 0-9-9z"/></svg>
+                          <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
+                              {(activeExam as any).audioMode === 'practice'
+                                  ? 'You will be listening to an audio clip during this test. Practice mode: you may pause, rewind and replay the audio while answering the questions.'
+                                  : 'You will be listening to an audio clip during this test. You will not be permitted to pause or rewind the audio while answering the questions.'}
+                          </div>
+                          <div style={{ fontSize: 15, marginBottom: 22 }}>To continue, click Play.</div>
+                          <button onClick={() => { void requestExamAudioPlayback(); }}
+                              style={{ background: '#fff', color: '#111', border: 'none', padding: '10px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+                              <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
+                              Play
+                          </button>
+                      </div>
+                  </div>
+              )}
+
+              {/* 2. CỘT TRÁI: CHỈ HIỂN THỊ BÀI ĐỌC (PASSAGE) */}
+              {(!String(activeExam.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (
+                  <div className="exam-passage-col" style={{ width: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) ? `${splitRatio}%` : '100%', height: '100%', overflowY: 'auto', padding: "24px 40px 30px", background: 'var(--ebg)' }}>
+                      {(() => {
+                          const passageHtml = activeExam?.sections 
+                              ? activeExam.sections[currentSectionIndex]?.passage 
+                              : (activeExam.passage || "");
+                          if (!passageHtml || passageHtml.trim() === "") return <div style={{ color: 'var(--esub)', textAlign: 'center', padding: 40 }}><i>Reading passage content is not available for this section.</i></div>;
+
+                          // MATCHING HEADINGS: dropzone nam TREN moi doan, nhan A/B/C
+                          const secQs = activeExam?.sections ? (activeExam.sections[currentSectionIndex]?.questions || []) : (activeExam?.questions || []);
+                          const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
+                          const SLOT_RE = /<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>/i;
+                          if (headingQs.length > 0 && SLOT_RE.test(passageHtml)) {
+                              const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>/gi);
+                              const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
+                              const lookupHeading = (roman: string) => {
+                                  const o = hOpts.find((opt: any) => {
+                                      const t = typeof opt === 'string' ? opt : ((opt as any).text || "");
+                                      const m = t.match(/^([ivxlcdmIVXLCDM]+)[.)]\s*/i);
+                                      return m && m[1].toLowerCase() === (roman || "").toLowerCase();
+                                  });
+                                  if (!o) return "";
+                                  const t = typeof o === 'string' ? o : ((o as any).text || "");
+                                  return t.replace(/^[ivxlcdmIVXLCDM]+[.)]\s*/i, '');
+                              };
+                              return (
+                                  <div className="highlightable-content idp-text-content" style={{ lineHeight: 1.8 }}>
+                                      {chunks[0] && chunks[0].trim() && <StaticHtmlBlock className="highlightable-content" dataField="sections" dataQid="" html={renderSafeHTML(chunks[0])} />}
+                                      {headingQs.map((q: any, i: number) => {
+                                          const letter = String.fromCharCode(65 + i);
+                                          const filled = examAnswers[q.id] as string;
+                                          const isFilled = !!filled;
+                                          return (
+                                              <div key={q.id}>
+                                                  <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
+                                                      <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
+                                                      <div
+                                                          onDragOver={(e: any) => e.preventDefault()}
+                                                          onDrop={(e: any) => { e.preventDefault(); const val = e.dataTransfer.getData("text/plain"); if (val) handleAnswerChange(q.id, val, "DRAG_DROP"); }}
+                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); }}
+                                                          title={isFilled ? "Click to clear" : "Drag a heading here"}
+                                                          style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
+                                                          {isFilled ? (
+                                                              <>
+                                                                  <span style={{fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)', flexShrink:0}}>{filled}</span>
+                                                                  <span style={{flex:1, fontSize:12.5, color:'var(--etext)', lineHeight:1.4}} dangerouslySetInnerHTML={{__html: renderSafeHTML(lookupHeading(filled))}} />
+                                                                  <span style={{fontSize:11, color:'var(--esub)', flexShrink:0, opacity:.6}}>&#10005;</span>
+                                                              </>
+                                                          ) : (
+                                                              <span style={{color:'var(--esub)', fontSize:12.5, fontStyle:'italic'}}>Drag heading here</span>
+                                                          )}
+                                                      </div>
+                                                  </div>
+                                                  {chunks[i+1] && chunks[i+1].trim() && <StaticHtmlBlock className="highlightable-content" dataField="sections" dataQid="" html={renderSafeHTML(chunks[i+1])} />}
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
+                              );
+                          }
+                          return <StaticHtmlBlock className="highlightable-content idp-text-content" dataField="sections" dataQid="" html={renderSafeHTML(passageHtml)} style={{ lineHeight: 1.8 }} />;
+                      })()}
+                  </div>
+              )}
+              {/* SPLITTER chuẩn Inspera: rãnh xám mảnh + nút vuông ↔ ở giữa. Vùng bắt chuột RỘNG 28px (đè mép 2 cột) — trỏ gần khe là kéo được. */}
+              {(!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (
+                  <div onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                       onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                       title="Drag to resize"
+                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'col-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                       <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                           <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
+                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
+                           </div>
+                       </div>
+                  </div>
+              )}
+              {/* LỚP PHỦ KHI KÉO: nuốt mọi sự kiện của bảng/text bên dưới -> kéo mượt không bị gò bó */}
+              {isDraggingSplitter && (
+                  <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'col-resize', userSelect: 'none' }}
+                       onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
+                       onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
+                       onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
+                       onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} />
+              )}
+              <div className="exam-question-col" style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--ebg)', position: 'relative' }}>
+                  {/* NÚT CHUYỂN CÂU NỔI (giống realieltsexams) */}
+                  <div className="idp-qnav-fab no-print">
+                      <button className="idp-qnav-btn" title="Câu trước" onClick={() => navigateQuestion(-1)}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                      </button>
+                      <button className="idp-qnav-btn" title="Câu sau" onClick={() => navigateQuestion(1)}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                      </button>
+                  </div>
+                  <div id="question-scroll-area" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: "0 0 84px 0" }}
+                       onFocusCapture={markCurrentFromEvent}
+                       onClickCapture={markCurrentFromEvent}
+                       onInput={(e: any) => {
+                           if (e.target && e.target.classList.contains('inline-blank-input')) {
+                               e.target.setAttribute('data-dirty', 'true');
+                               e.target.classList.toggle('filled', !!e.target.value); // viền xanh ngay khi gõ
+                               const qid = e.target.dataset.qid;
+                               const val = e.target.value;
+                               if ((window as any)[`debounce_${qid}`]) clearTimeout((window as any)[`debounce_${qid}`]);
+                               (window as any)[`debounce_${qid}`] = setTimeout(() => { handleAnswerChange(qid, val, "BLANK"); }, 400);
+                           }
+                       }}
+                       onBlur={(e: any) => {
+                           if (e.target && e.target.classList.contains('inline-blank-input')) {
+                               e.target.removeAttribute('data-dirty');
+                               handleAnswerChange(e.target.dataset.qid, e.target.value, "BLANK");
+                           }
+                       }}
+                       onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
+                       onDragOver={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) e.preventDefault(); }}
+                       onDrop={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) { e.preventDefault(); const qId = e.target.dataset.qid; const val = e.dataTransfer.getData("text/plain"); if (qId && val) { handleAnswerChange(qId, val, "DRAG_DROP"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } } }}
+                       onClick={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone') && e.target.classList.contains('filled')) { const qId = e.target.dataset.qid; if (qId) handleAnswerChange(qId, ""); } }}>
+
+                      <div style={{ maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 860, margin: '0 auto', padding: "12px 22px 20px" }}>
+                                  {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
+                                      <div className="idp-section-header">
+                                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM5 7.5a1.5 1.5 0 013 0v3a1.5 1.5 0 01-3 0v-3zm6 0a1.5 1.5 0 01-3 0v3a1.5 1.5 0 013 0v-3z" fill="#57606a"/></svg>
+                                          {activeExam.type === "Integrated" ? `Part ${currentSectionIndex + 1}` : `Part ${currentSectionIndex + 1}`}
+                                      </div>
+                                  )}
+                                  {/* LỌC & RENDER CU HỎI */}
+                  {(() => {
+                      // ĐàFIX: Gom nhóm câu hỏi trực tiếp từ mảng questions của Tab hiện tại
+                      const currentSectionQuestions = activeExam?.sections 
+                          ? (activeExam.sections[currentSectionIndex]?.questions || [])
+                          : (activeExam?.questions || []);
+                          
+                      const visibleGroups: { context: string; instruction: string; questions: any[] }[] = [];
+                      let tempGroup: { context: string; instruction: string; questions: any[] } | null = null;
+
+                      currentSectionQuestions.forEach((q: any) => {
+                          const ctx = q.groupContext || "";
+                          const ins = q.instruction || "";
+                          // Nếu groupContext có nội dung mới, TÁCH NHÓM MỚI. Nếu rỗng, vẫn gộp vào nhóm cũ để không bị rời rạc
+                          if (!tempGroup || (tempGroup.context !== ctx && ctx !== "") || tempGroup.instruction !== ins) {
+                              if (tempGroup) visibleGroups.push(tempGroup);
+                              tempGroup = { context: ctx, instruction: ins, questions: [q] };
+                          } else {
+                              tempGroup.questions.push(q);
+                          }
+                      });
+                      if (tempGroup) visibleGroups.push(tempGroup);
+                      
+                      return visibleGroups.map((group) => {
+                          // Ô input co giãn theo NHÓM (đáp án DÀI NHẤT + nới thêm) — đồng bộ công thức với App.template.
+                          const _gAns = group.questions.filter((q: any) => q.type === 'BLANK').map((q: any) => String(q.correctAnswer || "")).filter((s: string) => s.length > 0);
+                          const _gVarLen = (s: string) => Math.max(...s.split('/').map((v: string) => v.trim().length), 0);
+                          const _gMaxA = _gAns.length ? Math.max(..._gAns.map(_gVarLen)) : 10;
+                          const groupInputW = Math.max(70, Math.min(320, Math.round(_gMaxA * 9) + 30));
+                          const _gOpts = ((group.questions.find((q: any) => q.options && q.options.length)?.options) || []).map((o: any) => String(o));
+                          const _gAvgO = _gOpts.length ? _gOpts.reduce((a: number, s: string) => a + s.length, 0) / _gOpts.length : 12;
+                          const groupZoneW = Math.max(80, Math.min(300, Math.round(_gAvgO * 7.2) + 34));
+                          const injectedListRaw = group.context ? processedContexts.contexts[group.context]?.injected || [] : [];
+                          const safeHtmlRaw = group.context ? (processedContexts.contexts[group.context]?.html || renderSafeHTML(group.context)) : "";
+                          const safeHtml = (() => {
+                              if (!safeHtmlRaw) return "";
+                              let out = safeHtmlRaw.replace(/\[(\d+)\]/g, (match, num) => {
+                                  const tIdx = parseInt(num, 10) - 1;
+                                  const tQ = activeExam?.questions?.[tIdx];
+                                  if (!tQ) return match;
+                                  // PHẢI giống HỆT input của System1 (App.template) để TRƯỚC == SAU highlight.
+                                  return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" placeholder="${num}" autocomplete="off" style="width:${groupInputW}px" />`;
+                              });
+                              // Flow-chart: biến <div>↓</div> trơ -> mũi tên có style chuẩn IELTS CBT
+                              out = out.replace(/<div[^>]*>\s*(?:↓|⬇|▼|⇩|\|\s*v|->|→)\s*<\/div>/gi, '<div class="idp-flow-arrow">↓</div>');
+                              // CHUẨN HÓA SPACING NOTE/FORM (chống "cực thô"): với whiteSpace:pre-wrap, newline
+                              // NẰM GIỮA 2 THẺ BLOCK bị render thành dòng trống thừa -> khoảng cách to & lệch.
+                              // Gỡ newline giữa các thẻ + gộp newline lặp => spacing do CSS kiểm soát, đều tăm tắp.
+                              out = out.replace(/>\s*\n\s*</g, '><').replace(/[ \t]*\n{2,}[ \t]*/g, '\n');
+                              return out;
+                          })();
+                          // CHỐNG Ô INPUT THỪA (nguồn chân lý): câu nào ĐÃ có ô input thực sự hiện trong
+                          // context html cuối cùng thì TUYỆT ĐỐI không render thêm ô standalone -> không bao giờ nhân đôi.
+                          const injectedList = (() => {
+                              const ids = new Set<string>(injectedListRaw);
+                              const re = /<input\b[^>]*\bclass="[^"]*inline-blank-input[^"]*"[^>]*>/gi;
+                              let m: RegExpExecArray | null;
+                              while ((m = re.exec(safeHtml)) !== null) {
+                                  const qm = m[0].match(/data-qid="([^"]+)"/i);
+                                  if (qm) ids.add(qm[1]);
+                              }
+                              return Array.from(ids);
+                          })();
+                          const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
+                  const isFlowChartGroup = false;
+                  const dragOptions = isDragDropGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  // Nhãn 2 cột kéo-thả: rút các dòng nhãn ngắn trong instruction (vd "Attractions", "Areas of the festival").
+                  const dragLabels = (() => {
+                      // Bóc span highlight/note/temp + thẻ inline TRƯỚC khi tách dòng — nếu không, học sinh highlight
+                      // 1 cụm chữ trong instruction là dòng bị cắt đôi -> nhãn cột nhảy lung tung/biến mất.
+                      const plain = (group.instruction || "")
+                          .replace(/<\/?(?:span|strong|b|em|i|u|mark|sup|sub|a)[^>]*>/gi, "")
+                          .replace(/<[^>]+>/g, "\n");
+                      return plain.split(/\n+/).map(s => s.trim()).filter(Boolean)
+                          .filter(s => s.length <= 28 && /[a-zA-Z]/.test(s) && !/^(questions?|choose|write|complete|match|which|what|who|list of)/i.test(s) && !/\d/.test(s));
+                  })();
+                  const dragBankLabel = dragLabels[0] || "Options";   // cột trái = kho tag
+                  const dragItemsLabel = dragLabels[1] || "";          // cột phải = các mục có ô thả
+                  // ẨN 2 dòng nhãn bằng CSS class, KHÔNG xoá khỏi HTML — nếu xoá, học sinh highlight vào instruction
+                  // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
+                  let dragCleanInstruction = group.instruction || "";
+                  dragLabels.forEach(l => { dragCleanInstruction = dragCleanInstruction.split(`<div>${l}</div>`).join(`<div class="idp-draglabel-hide">${l}</div>`); });
+                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING");
+                  // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
+                  const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
+                  const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
+                  const headingOptions = isDragDropHeadingGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  // WORD-BANK (tóm tắt kéo-thả): nhóm DRAG_DROP có đoạn context + danh sách từ -> render kiểu IELTS Mate
+                  const isWordBankDrag = isDragDropGroup && !!group.context && dragOptions.length > 0;
+                  const wordBankSummaryHtml = isWordBankDrag ? (() => {
+                      let html = renderSafeHTML(group.context);
+                      html = html.replace(/\[(\d+)\]/g, (m: string, num: string) => {
+                          const tIdx = parseInt(num, 10) - 1;
+                          const tQ = (activeExam?.questions || [])[tIdx];
+                          if (!tQ) return m;
+                          const val = examAnswers[tQ.id];
+                          const filled = val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0);
+                          const disp = filled ? String(val) : num;
+                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}" data-qid="${tQ.id}" data-num="${num}" style="min-width:${groupZoneW}px">${disp}</span>`;
+                      });
+                      return html;
+                  })() : "";
+                  
+                  const isHtmlEmpty = (htmlStr: string) => !htmlStr || (!htmlStr.includes('<img') && htmlStr.replace(/<[^>]*>?/gm, '').replace(/ /g, '').trim() === '');
+                  const showInstruction = !isHtmlEmpty(group.instruction);
+
+                  // CHỈ HIỂN THỊ CONTEXT Ở CỘT CU HỎI NẾU:
+                  // 1. Đang ở layout 1 cột (Listening/Part 1) HOẶC
+                  // 2. Form 2 cột nhưng câu hỏi có đoạn văn CONTEXT PHỤ (khác với bài đọc chính đã ở cột trái)
+                  const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+                  const mainPassage = activeExam?.sections ? activeExam.sections[currentSectionIndex]?.passage : (activeExam.passage || visibleGroups[0]?.context || "");
+                  const showContext = !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage);
+
+                  // ĐàFIX: Tự động tính toán Header "Questions X-Y" chuẩn IDP
+                  const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === group.questions[0].id) + 1;
+                  const lastGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === group.questions[group.questions.length - 1].id) + 1;
+                  const groupTitle = firstGlobalIdx === lastGlobalIdx ? `Question ${firstGlobalIdx}` : `Questions ${firstGlobalIdx}–${lastGlobalIdx}`;
+                  
+                  // Kiểm tra xem backend đã parse title vào trong instruction/context chưa, nếu chưa thì render
+                  const hasHeaderInInstruction = (group.instruction || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const hasHeaderInContext = (group.context || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const shouldShowAutoHeader = !hasHeaderInInstruction && !hasHeaderInContext;
+
+                  const renderFlowChart = () => (
+                      <div className="idp-flowchart-panel">
+                          {group.questions.map((q, flowIdx) => {
+                              const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
+                              const rawText = q.text || "";
+                              const blankMatch = rawText.match(/_{2,}|\.{4,}|…|…/);
+                              const beforeText = blankMatch && blankMatch.index !== undefined ? rawText.slice(0, blankMatch.index) : rawText;
+                              const afterText = blankMatch && blankMatch.index !== undefined ? rawText.slice(blankMatch.index + blankMatch[0].length) : "";
+                              const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
+                              return (
+                                  <React.Fragment key={q.id}>
+                                      <div id={`question-${q.id}`} className="idp-flowchart-node">
+                                          <span className="idp-flowchart-number">{qGlobalIdx}</span>
+                                          <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
+                                          <input
+                                              type="text"
+                                              className={`idp-inline-input inline-blank-input ${isAnsweredFlow ? 'filled' : ''}`}
+                                              placeholder={qGlobalIdx.toString()}
+                                              defaultValue={(examAnswers[q.id] as string) || ""}
+                                              onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
+                                              onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
+                                              onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
+                                              style={{ textAlign: 'center', minWidth: 140 }}
+                                          />
+                                          <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
+                                      </div>
+                                      {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
+                                  </React.Fragment>
+                              );
+                          })}
+                      </div>
+                  );
+
+                  return (
+                      <div key={group.questions[0].id} style={{marginBottom: 'var(--q-gap)'}}>
+                          <div className="question-rubric">
+                              {/* Title + Instruction PHẢI là StaticHtmlBlock (memo) — render dangerouslySetInnerHTML thô sẽ bị React
+                                  ghi đè ngay khi popup Note/Highlight mở (re-render) -> vùng quét tạm biến mất, không highlight được. */}
+                              {shouldShowAutoHeader && <StaticHtmlBlock tagName="h3" className="scorableItemHeadline highlightable-content" html={groupTitle} />}
+
+                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML((isDragDropGroup && dragOptions.length > 0) ? dragCleanInstruction : group.instruction)} />}
+                          </div>
+                          
+                          {showContext && !isWordBankDrag && (
+                                      <div className="idp-context-box" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                          <StaticHtmlBlock className="highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} html={safeHtml} />
+                                  </div>
+                          )}
+
+                          {/* WORD-BANK KÉO-THẢ (chuẩn IELTS Mate): lưới từ phía trên + tóm tắt có ô thả inline */}
+                          {isWordBankDrag && (
+                              <div style={{marginBottom: 20}}>
+                                  <div className="idp-wordbank">
+                                      {dragOptions.map((opt: string, idx: number) => {
+                                          const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
+                                          const letter = String.fromCharCode(65 + idx);
+                                          return (
+                                              <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''}`} draggable={!used}
+                                                   onDragStart={(e: any) => { if (!used) e.dataTransfer.setData("text/plain", opt); }}>
+                                                  <span className="idp-wb-letter">{letter}</span>
+                                                  <span>{opt}</span>
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
+                                  <StaticHtmlBlock className="idp-context-box idp-drag-summary highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}} html={wordBankSummaryHtml} />
+                              </div>
+                          )}
+
+                          {isWordBankDrag ? null : isFlowChartGroup ? (
+                              renderFlowChart()
+                          ) : isMatchingGroup && group.questions.length > 0 ? (
+                                                      <div style={{overflowX: 'auto'}}>
+                                                          <table className="idp-matching-table">
+                                                              <thead>
+                                                                  <tr>
+                                                                      <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 200, padding: '8px 12px'}}>Question</th>
+                                                                      {(group.questions[0].options || []).map((_: any, i: any) => <th key={i}>{String.fromCharCode(65 + i)}</th>)}
+                                                                  </tr>
+                                                              </thead>
+                                                              <tbody>
+                                                                  {group.questions.map((q) => {
+                                                                      const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
+                                                                      return (
+                                                                          <tr id={`question-${q.id}`} key={q.id}>
+                                                                              <td style={{ verticalAlign: 'middle' }}>
+                                                                                  <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+                                                                                      <span style={{border: '1px solid #ccc', padding: '2px 6px', fontSize: 12, background: '#fff', borderRadius: 2, flexShrink: 0}}>{qGlobalIdx}</span>
+                                                                                      <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                                                                  </div>
+                                                                              </td>
+                                                                              {(group.questions[0].options || []).map((_: any, i: any) => (
+                                                                                  <td key={i} style={{background: '#fff', textAlign: 'center', verticalAlign: 'middle'}}>
+                                                                                      <input type="radio" checked={examAnswers[q.id] === i} onChange={() => { handleAnswerChange(q.id, i); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} style={{width: 18, height: 18, accentColor: idpC.blueAccent, cursor: 'pointer', margin: '0 auto', display: 'block'}} />
+                                                                                  </td>
+                                                                              ))}
+                                                                          </tr>
+                                                                      );
+                                                                  })}
+                                                              </tbody>
+                                                          </table>
+                                                          {!isInfoMatching && (
+                                                          <div className="idp-matching-legend">
+                                                              {(group.questions[0].options || []).map((opt: string, i: number) => (
+                                                                  <div key={i} className="idp-matching-legend-item">
+                                                                      <span className="idp-matching-legend-key">{String.fromCharCode(65 + i)}</span>
+                                                                      <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={group.questions[0].id} dataOptIndex={String(i)} html={renderSafeHTML(String(opt).replace(/^\s*[A-Za-z][\.\)]\s*/, ''))} />
+                                                                  </div>
+                                                              ))}
+                                                          </div>
+                                                          )}
+                                                      </div>
+                                                  ) : isDragDropHeadingGroup ? (
+                                                      (() => {
+                                                        const usedIds = new Set(group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean));
+                                                        return (
+                                                          <div className="mh-heading-tray" style={{display:'flex', flexDirection:'column', gap:0}}>
+                                                            <div style={{marginBottom:18}}>
+                                                              <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
+                                                              {headingOptions.map((opt: any, oIdx: number) => {
+                                                                const optText = typeof opt === 'string' ? opt : ((opt as any).text || "");
+                                                                const mm = optText.match(/^([ivxlcdmIVXLCDM]+)[.)]\s*(.*)/i);
+                                                                const optId = mm ? mm[1].toLowerCase() : optText.split(' ')[0].toLowerCase();
+                                                                const optContent = mm ? mm[2] : optText;
+                                                                const isUsed = usedIds.has(optId);
+                                                                return (
+                                                                  <div key={oIdx}
+                                                                    draggable={!isUsed}
+                                                                    onDragStart={(e: any) => { if (!isUsed) { e.dataTransfer.setData("text/plain", optId); e.dataTransfer.effectAllowed = "copy"; } }}
+                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)'}}>
+                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+                                                                    <span style={{flexShrink:0, width:28, fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)'}}>{optId}</span>
+                                                                    <span style={{flex:1, fontSize:13, lineHeight:1.45, color:'var(--etext)'}} dangerouslySetInnerHTML={{__html: renderSafeHTML(optContent)}} />
+                                                                  </div>
+                                                                );
+                                                              })}
+                                                            </div>
+                                                            <div style={{fontSize:11.5, color:'var(--esub)', fontStyle:'italic', marginTop:4, lineHeight:1.5}}>Drag each heading to the box above its matching paragraph in the passage.</div>
+                                                          </div>
+                                                        );
+                                                      })()
+                                                  ) : isDragDropGroup && dragOptions.length > 0 ? (
+                                                      (() => {
+                                                          // Tái dùng tag khi số câu > số đáp án (vd 7 câu / 3 theorist) -> kho KHÔNG vơi.
+                                                          const reuseTags = group.questions.length > dragOptions.length;
+                                                          const usedWords = group.questions.map(q => examAnswers[q.id] as string).filter(Boolean);
+                                                          const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
+                                                          return (
+                                                          <div className="idp-match2">
+                                                              {/* CỘT TRÁI: các mục có ô thả (chuẩn hình 2: Fossil categories / Points made) */}
+                                                              <div className="idp-match2-items" style={{gridTemplateColumns: `fit-content(46%) ${groupZoneW}px`}}>
+                                                                  {dragItemsLabel && <div className="idp-match2-h">{dragItemsLabel}</div>}
+                                                                  {group.questions.map((q:any) => {
+                                                                      const gi = (activeExam.questions || []).findIndex((x:any)=>x.id===q.id)+1;
+                                                                      const val = examAnswers[q.id] as string;
+                                                                      return (
+                                                                          <React.Fragment key={q.id}>
+                                                                              <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id}>{val || gi}</span>
+                                                                          </React.Fragment>
+                                                                      );
+                                                                  })}
+                                                              </div>
+                                                              {/* CỘT PHẢI: kho tag (Features / Theorists) */}
+                                                              <div className="idp-match2-bank">
+                                                                  <div className="idp-match2-h">{dragBankLabel}</div>
+                                                                  {bankWords.map((opt: string, idx: number) => (
+                                                                      <div key={idx} className="idp-match2-tag" draggable onDragStart={(e:any) => e.dataTransfer.setData("text/plain", opt)}>{opt}</div>
+                                                                  ))}
+                                                                  {bankWords.length === 0 && <div className="idp-match2-empty">—</div>}
+                                                              </div>
+                                                          </div>
+                                                          );
+                                                      })()
+                                                  ) : (
+                                                      renderQuestionsList(group, injectedList)
+                                                  )}
+                                              </div>
+                                          );
+                                      });
+                                  })()}
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+                 {/* THANH AUDIO (chỉ practice) — nằm ngay TRÊN nav bar: play/pause · thời gian · thanh tua · tốc độ */}
+                 {isListening && (activeExam as any).audioMode === 'practice' && ["PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
+                     const safeCur = Math.min(audioCur, audioDur || 0);
+                     const pct = audioDur ? (safeCur / audioDur) * 100 : 0;
+                     return (
+                         <div className="idp-audio-bar">
+                             <button className="idp-audio-play" title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestExamAudioPlayback(); else a.pause(); }}>
+                                 {audioStatus === 'PLAYING' ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
+                             </button>
+                             <span className="idp-audio-time">{fmtTime(Math.floor(safeCur))}</span>
+                             <input type="range" className="idp-audio-range" min={0} max={audioDur || 0} step={0.1} value={safeCur}
+                                 onChange={(e: any) => { const a = audioRef.current; if (a) { a.currentTime = Number(e.target.value); setAudioCur(Number(e.target.value)); } }}
+                                 style={{ background: `linear-gradient(to right, var(--etext) 0%, var(--etext) ${pct}%, var(--eborder) ${pct}%, var(--eborder) 100%)` }} />
+                             <span className="idp-audio-time">{fmtTime(Math.floor(audioDur))}</span>
+                             <div style={{ display: 'flex', gap: 5, flex: 'none', marginLeft: 4 }}>
+                                 {[1, 1.25, 1.5, 2].map(r => (
+                                     <button key={r} className={`idp-rate-btn ${audioRate === r ? 'on' : ''}`} title={`Speed ${r}x`} onClick={() => { setAudioRate(r); const a = audioRef.current; if (a) a.playbackRate = r; }}>{r}×</button>
+                                 ))}
+                             </div>
+                         </div>
+                     );
+                 })()}
+
+                 {/* FOOTER NAVIGATOR — Bottom_Bar chuẩn IDP */}
+                 <div className="idp-footer-nav">
+                     {/* HÀNG NAVIGATOR: PASSAGE N + ô số (active) / "X of Y" (inactive) */}
+                     <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflowX: 'auto', padding: '0 20px', gap: 20, height: '100%' }}>
+                         {navGroups.map((grp, gIdx) => {
+                             let answered = 0;
+                             grp.questions.forEach(q => { const a = examAnswers[q.id]; if (Array.isArray(a) ? a.length > 0 : (a !== undefined && a !== "")) answered++; });
+                             const isActive = currentSectionIndex === gIdx;
+                             const curId = (examCurrentQId && grp.questions.some(q => q.id === examCurrentQId)) ? examCurrentQId : null;
+                             const allDone = grp.questions.length > 0 && answered === grp.questions.length;
+                             const pct = grp.questions.length ? Math.round((answered / grp.questions.length) * 100) : 0;
+                             return (
+                                 <div key={gIdx} style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4, flexShrink: 0 }}>
+                                         {/* THANH TIẾN TRÌNH trên nhãn Part: track xám, fill đen theo % câu đã làm; đủ 10/10 -> fill xanh lá 100% */}
+                                         <div style={{ height: 3, width: '100%', minWidth: 42, background: '#e5e7eb', borderRadius: 2, overflow: 'hidden' }}>
+                                             <div style={{ height: '100%', width: `${pct}%`, background: allDone ? '#16a34a' : '#111827', transition: 'width .25s ease' }} />
+                                         </div>
+                                         <button className={`idp-pnav-label ${isActive ? 'active' : ''}`} onClick={() => { setCurrentSectionIndex(gIdx); const el = document.getElementById('question-scroll-area'); if (el) el.scrollTop = 0; }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center' }}>
+                                             {/* Dấu tích XANH LÁ đơn giản (chỉ nét check) — CHỈ khi hoàn thành toàn bộ part */}
+                                             {allDone && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}><polyline points="20 6 9 17 4 12"/></svg>}
+                                             <span>{grp.title}</span>
+                                         </button>
+                                     </div>
+                                     {isActive ? (
+                                         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                             {(() => {
+                                                 const mergedNavQs: any[] = [];
+                                                 for (let i = 0; i < grp.questions.length; i++) {
+                                                     const q = grp.questions[i];
+                                                     if (q.type === 'CHOICE_MULTIPLE') {
+                                                         let j = i + 1; const sharedIds = [q.id];
+                                                         while (j < grp.questions.length && grp.questions[j].type === 'CHOICE_MULTIPLE' && JSON.stringify(grp.questions[j].options) === JSON.stringify(q.options)) { sharedIds.push(grp.questions[j].id); j++; }
+                                                         if (sharedIds.length > 1) { mergedNavQs.push({ isMerged: true, mergedIds: sharedIds, startIndex: grp.startIndex + i, endIndex: grp.startIndex + j - 1 }); i = j - 1; continue; }
+                                                     }
+                                                     mergedNavQs.push({ isMerged: false, id: q.id, startIndex: grp.startIndex + i });
+                                                 }
+                                                 return mergedNavQs.map(mq => {
+                                                     const isMerged = mq.isMerged; const qIds = isMerged ? mq.mergedIds : [mq.id];
+                                                     const numberLabel = isMerged ? `${mq.startIndex + 1}-${mq.endIndex + 1}` : `${mq.startIndex + 1}`;
+                                                     const isAns = qIds.some((id: string) => Array.isArray(examAnswers[id]) ? (examAnswers[id] as any[]).length > 0 : (examAnswers[id] !== undefined && examAnswers[id] !== ""));
+                                                     const isFlagged = qIds.some((id: string) => flaggedQuestions?.includes(id));
+                                                     const isCur = qIds.includes(curId);
+                                                     return (
+                                                         <button key={qIds[0]} className={`idp-nav-sq ${isAns ? 'ans' : ''} ${isFlagged ? 'flagged' : ''} ${isCur ? 'cur' : ''}`}
+                                                             onClick={() => {
+                                                                 setExamCurrentQId(qIds[0]);
+                                                                 const el = findQuestionEl(qIds[0]);
+                                                                 if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); flashQuestion(qIds[0]); }
+                                                             }}>
+                                                             {numberLabel}
+                                                         </button>
+                                                     );
+                                                 });
+                                             })()}
+                                         </div>
+                                     ) : (
+                                         <span style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>{answered} of {grp.questions.length}</span>
+                                     )}
+                                 </div>
+                             );
+                         })}
+                     </div>
+
+                     <div style={{ display: 'flex', alignItems: 'stretch', flex: 'none', borderLeft: '1px solid var(--eborder)', background: 'var(--ebg)', padding: 0 }}>
+                         <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}>
+                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                         </button>
+                     </div>
+                 </div>
+
+                 {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
+                 {selectionMenu && (
+                     <div className="idp-popup-menu" style={{ left: selectionMenu!.x, top: selectionMenu!.y }}>
+                         <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }}>
+                             {/* Icon Inspera 16x16: quote kép đặc “ */}
+                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M3.2 3.5h3.6v3.9H4.9c0 1.35.65 2.15 2 2.6l-.65 2.5C3.9 11.9 3.2 10.2 3.2 7.9V3.5zm6 0h3.6v3.9h-1.9c0 1.35.65 2.15 2 2.6l-.65 2.5c-2.35-.6-3.05-2.3-3.05-4.6V3.5z"/></svg>
+                             Note
+                         </button>
+                         <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('HIGHLIGHT'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('HIGHLIGHT'); }}>
+                             {/* Icon Inspera 16x16: con trỏ chữ I + vệt highlight dưới chân */}
+                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M6.9 1.5c.9 0 1.3.3 1.6.7.3-.4.7-.7 1.6-.7v1.2c-.7 0-1 .35-1 1v5.6c0 .65.3 1 1 1v1.2c-.9 0-1.3-.3-1.6-.7-.3.4-.7.7-1.6.7v-1.2c.7 0 1-.35 1-1V3.7c0-.65-.3-1-1-1V1.5z"/><rect x="3" y="13" width="10" height="2.2" rx="0.4"/></svg>
+                             Highlight
+                         </button>
+                     </div>
+                 )}
+
+                 {/* PANEL NOTES BÊN PHẢI (chuẩn Inspera) — đọc từ STATE nên thấy notes của MỌI passage/section */}
+                 {showNotesPanel && (() => {
+                     void notesTick;
+                     type NoteRef = { key: string; secIdx: number; qid: string | null; field: string; optIndex: number | null; occ: number; snippet: string; note: string };
+                     const _tmp = document.createElement('div');
+                     const notes: NoteRef[] = [];
+                     const scanHtml = (html: string, base: { secIdx: number; qid: string | null; field: string; optIndex: number | null; keyBase: string }) => {
+                         if (!html || html.indexOf('student-note-hl') === -1) return;
+                         _tmp.innerHTML = html;
+                         Array.from(_tmp.querySelectorAll('.student-note-hl')).forEach((sp, occ) => {
+                             notes.push({ secIdx: base.secIdx, qid: base.qid, field: base.field, optIndex: base.optIndex, occ, snippet: (sp.textContent || '').trim(), note: sp.getAttribute('data-note') || '', key: `${base.keyBase}#${occ}` });
+                         });
+                     };
+                     const secList = (activeExam?.sections && activeExam.sections.length) ? activeExam.sections : null;
+                     if (secList) secList.forEach((sec: any, si: number) => scanHtml(sec.passage || '', { secIdx: si, qid: null, field: 'passage', optIndex: null, keyBase: `sec${si}` }));
+                     else if (activeExam?.passage) scanHtml(activeExam.passage, { secIdx: 0, qid: null, field: 'passage', optIndex: null, keyBase: 'passage' });
+                     const seenShared = new Set<string>();
+                     (activeExam?.questions || []).forEach((q: any) => {
+                         const si = Math.max(0, navGroups.findIndex(g => g.questions.some((x: any) => x.id === q.id)));
+                         scanHtml(q.text || '', { secIdx: si, qid: q.id, field: 'text', optIndex: null, keyBase: `t${q.id}` });
+                         if (q.instruction && !seenShared.has('i:' + q.instruction)) { seenShared.add('i:' + q.instruction); scanHtml(q.instruction, { secIdx: si, qid: q.id, field: 'instruction', optIndex: null, keyBase: `i${q.id}` }); }
+                         if (q.groupContext && !seenShared.has('c:' + q.groupContext)) { seenShared.add('c:' + q.groupContext); scanHtml(q.groupContext, { secIdx: si, qid: q.id, field: 'groupContext', optIndex: null, keyBase: `c${q.id}` }); }
+                         (q.options || []).forEach((op: any, oi: number) => {
+                             const s = String(op || '');
+                             if (s.indexOf('student-note-hl') !== -1 && !seenShared.has('o:' + s)) { seenShared.add('o:' + s); scanHtml(s, { secIdx: si, qid: q.id, field: 'options', optIndex: oi, keyBase: `o${q.id}_${oi}` }); }
+                         });
+                     });
+                     // LƯỚI AN TOÀN: note đang hiển thị trên DOM nhưng chưa lọt vào state (vd bài đọc) -> vẫn hiện trong panel
+                     const stateKeys = new Set(notes.map(n2 => n2.snippet + '||' + n2.note));
+                     Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')).forEach((el, di) => {
+                         const snippet = (el.textContent || '').trim();
+                         const note = el.getAttribute('data-note') || '';
+                         if (!stateKeys.has(snippet + '||' + note)) notes.push({ key: `dom${di}`, secIdx: currentSectionIndex, qid: null, field: '__dom', optIndex: null, occ: di, snippet, note });
+                     });
+                     const findDomEl = (n: NoteRef): HTMLElement | null => {
+                         const els = Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')) as HTMLElement[];
+                         return els.find(e => (e.textContent || '').trim() === n.snippet && (e.getAttribute('data-note') || '') === n.note) || null;
+                     };
+                     const getRangeLabel = (n: NoteRef): string => {
+                         const qs = activeExam?.questions || [];
+                         const gIdx = qs.findIndex((q: any) => q.id === n.qid);
+                         if (gIdx < 0) return (navGroups[n.secIdx]?.title || `Section ${n.secIdx + 1}`);
+                         const ins = (qs[gIdx] as any).instruction || "";
+                         let s = gIdx, e2 = gIdx;
+                         while (s > 0 && ((qs[s - 1] as any).instruction || "") === ins) s--;
+                         while (e2 < qs.length - 1 && ((qs[e2 + 1] as any).instruction || "") === ins) e2++;
+                         return s === e2 ? `${s + 1}` : `${s + 1}–${e2 + 1}`;
+                     };
+                     // Sửa/xóa note = phẫu thuật TRÊN STATE (không cần DOM đang hiển thị) -> hoạt động liên passage
+                     const mutateNote = (n: NoteRef, newNote: string | null) => {
+                         if (n.field === '__dom') {
+                             // Note chỉ có trong DOM: sửa trực tiếp node + serialize container về state
+                             const el = findDomEl(n); if (!el) return;
+                             const container = el.closest('.highlightable-content') as HTMLElement | null;
+                             if (newNote === null) { const p = el.parentNode; if (p) { while (el.firstChild) p.insertBefore(el.firstChild, el); p.removeChild(el); (p as any).normalize?.(); } }
+                             else el.setAttribute('data-note', newNote);
+                             if (container) {
+                                 const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
+                                 if (field) { const cleanHTML = serializeHighlightHTML(container); setActiveExam(prev => syncHighlightState(prev, field, qId || '', cleanHTML, optIndex)); }
+                             }
+                             window.setTimeout(() => setNotesTick(t => t + 1), 0);
+                             return;
+                         }
+                         const srcQ = (activeExam?.questions || []).find((x: any) => x.id === n.qid);
+                         const src = n.field === 'passage'
+                             ? (secList ? (secList[n.secIdx]?.passage || '') : (activeExam?.passage || ''))
+                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || ''));
+                         if (!src) return;
+                         _tmp.innerHTML = src;
+                         const sp = _tmp.querySelectorAll('.student-note-hl')[n.occ] as HTMLElement | undefined;
+                         if (!sp) return;
+                         if (newNote === null) { const p = sp.parentNode; if (p) { while (sp.firstChild) p.insertBefore(sp.firstChild, sp); p.removeChild(sp); (p as any).normalize?.(); } }
+                         else sp.setAttribute('data-note', newNote);
+                         const clean = _tmp.innerHTML;
+                         if (n.field === 'passage') {
+                             setActiveExam(prev => {
+                                 if (!prev) return prev;
+                                 if (prev.sections && prev.sections.length) {
+                                     const ns = [...prev.sections]; ns[n.secIdx] = { ...ns[n.secIdx], passage: clean };
+                                     return { ...prev, sections: ns, passage: n.secIdx === 0 ? clean : prev.passage };
+                                 }
+                                 return { ...prev, passage: clean };
+                             });
+                         } else {
+                             setActiveExam(prev => syncHighlightState(prev, n.field, n.qid || '', clean, n.field === 'options' ? String(n.optIndex) : null));
+                         }
+                         window.setTimeout(() => setNotesTick(t => t + 1), 0);
+                     };
+                     const jumpTo = (n: NoteRef) => {
+                         const doJump = () => {
+                             const els = Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')) as HTMLElement[];
+                             const el = els.find(e => (e.textContent || '').trim() === n.snippet && (e.getAttribute('data-note') || '') === n.note);
+                             if (!el) return;
+                             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                             el.classList.remove('idp-q-focus-flash'); void el.offsetWidth; el.classList.add('idp-q-focus-flash');
+                             window.setTimeout(() => el.classList.remove('idp-q-focus-flash'), 1700);
+                         };
+                         if (n.secIdx >= 0 && n.secIdx !== currentSectionIndex) { setCurrentSectionIndex(n.secIdx); window.setTimeout(doJump, 550); }
+                         else doJump();
+                     };
+                     return (
+                         <div className="idp-notes-panel">
+                             <div className="idp-notes-panel-head">
+                                 <span>Notes</span>
+                                 <button onClick={() => { setShowNotesPanel(false); setNoteDeleteIdx(null); }} title="Close" style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', lineHeight: 1, color: 'inherit', padding: 0 }}>×</button>
+                             </div>
+                             <div className="idp-notes-panel-body">
+                                 {notes.length === 0 && <div style={{ color: '#6b7280', fontSize: 13, padding: '14px 4px' }}>No notes yet. Select text and choose “Note”.</div>}
+                                 {notes.map((n) => {
+                                     const range = getRangeLabel(n);
+                                     const confirming = noteDeleteIdx === n.key;
+                                     return (
+                                         <div key={n.key} className={`idp-note-item ${confirming ? 'confirm' : ''}`}>
+                                             {(() => {
+                                                 // Chuẩn Inspera: snippet dài -> cắt gọn + nút Show more / Show less
+                                                 const SNIP_LIMIT = 110;
+                                                 const isLong = n.snippet.length > SNIP_LIMIT;
+                                                 const expanded = !!noteExpandKeys[n.key];
+                                                 const shown = isLong && !expanded ? n.snippet.slice(0, SNIP_LIMIT).trimEnd() + '…' : n.snippet;
+                                                 return (
+                                                     <>
+                                                         <button className="idp-note-jump" onClick={() => jumpTo(n)}>
+                                                             <strong>{range}</strong> <em>{shown}</em>
+                                                         </button>
+                                                         {isLong && (
+                                                             <button className="idp-note-link" style={{ display: 'block', padding: '2px 0 6px', fontSize: 12.5 }}
+                                                                 onClick={() => setNoteExpandKeys(p => ({ ...p, [n.key]: !expanded }))}>
+                                                                 {expanded ? 'Show less' : 'Show more'}
+                                                             </button>
+                                                         )}
+                                                     </>
+                                                 );
+                                             })()}
+                                             <input
+                                                 className="idp-note-panel-input"
+                                                 type="text"
+                                                 placeholder="Start typing your note"
+                                                 defaultValue={n.note}
+                                                 onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                 onBlur={(e: any) => { const v = e.currentTarget.value; if (v !== n.note) mutateNote(n, v); }}
+                                             />
+                                             {!confirming ? (
+                                                 <div style={{ textAlign: 'right' }}>
+                                                     <button className="idp-note-link" onClick={() => setNoteDeleteIdx(n.key)}>Delete</button>
+                                                 </div>
+                                             ) : (
+                                                 <>
+                                                     <div style={{ fontSize: 13, margin: '8px 0 10px', lineHeight: 1.45 }}>You are about to delete a note from questions {range}</div>
+                                                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 18 }}>
+                                                         <button className="idp-note-link light" onClick={() => setNoteDeleteIdx(null)}>Cancel</button>
+                                                         <button className="idp-note-link light" onClick={() => { setNoteDeleteIdx(null); mutateNote(n, null); }}>Confirm deleting</button>
+                                                     </div>
+                                                 </>
+                                             )}
+                                         </div>
+                                     );
+                                 })}
+                             </div>
+                         </div>
+                     );
+                 })()}
+
+                 {/* COMPONENT NOTE INPUT THEO HÌNH ẢNH */}
+                 {noteInputMenu && (
+                     <div className="idp-note-input-modal" style={{ left: noteInputMenu!.x, top: noteInputMenu!.y }}>
+                         <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                             <input 
+                                 type="text" 
+                                 autoFocus
+                                 placeholder="Add note..." 
+                                 value={noteInputMenu!.text} 
+                                 onChange={e => setNoteInputMenu(prev => prev ? {...prev, text: e.target.value} : null)}
+                                 style={{ flex: 1, padding: '8px 12px', border: '1px solid #ccc', borderRadius: 4, outline: 'none', fontSize: 13, color: '#000', background: '#fff' }} 
+                                 onKeyDown={(e) => { if (e.key === 'Enter') executeHighlightOrNote('NOTE', noteInputMenu!.text); }}
+                             />
+                             <button 
+                                 onClick={() => executeHighlightOrNote('NOTE', noteInputMenu!.text)}
+                                 style={{ background: noteInputMenu!.text ? '#eab308' : '#d1d5db', color: noteInputMenu!.text ? '#fff' : '#6b7280', border: 'none', padding: '0 16px', borderRadius: 4, fontWeight: 700, cursor: 'pointer', transition: '0.2s' }}
+                             >
+                                 Save
+                             </button>
+                         </div>
+                         
+                         {noteInputMenu!.existingNode && (
+                             <div style={{ display: 'flex', gap: 15, marginTop: 12, paddingTop: 10, borderTop: '1px solid #eee' }}>
+                                 <button onClick={() => executeHighlightOrNote('NOTE', null as any)} style={{ background: 'transparent', border: 'none', color: '#333', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                     Delete
+                                 </button>
+                                 <button onClick={() => executeHighlightOrNote('NOTE', null as any)} style={{ background: 'transparent', border: 'none', color: '#333', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                             Delete All
+                                         </button>
+                                     </div>
+                                 )}
+                             </div>
+                         )}
+                  </div>
+              );
+          }

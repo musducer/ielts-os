@@ -1,0 +1,27 @@
+dropped (chống bịa): 1
+tong items giu lai: 13
+
+=== word (10) ===
+  - native  [B2]  : địa phương, bản địa
+  - commercially  [C1]  : về mặt thương mại
+  - bogs  [B2]  : đất than bùn
+  - glaciers  [B2]  : băng hà
+  - mechanising  [C1]  : cơ giới hóa
+  - buoyant  [C1]  : lơ lửng, nổi
+  - tolerate  [B2]  : chịu đựng
+  - acidic  [B2]  : axit
+  - considerable  [C1]  : đáng kể
+  - antioxidant  [C1]  : chất chống oxy hóa
+
+=== phrasal_verb (0) ===
+
+=== idiom (0) ===
+
+=== collocation (2) ===
+  - have considerable health benefits  [C1]  : có lợi ích sức khỏe đáng kể
+  - owing to  [C1]  : do, vì
+
+=== grammar (1) ===
+  - Not only...but also  [B2]  : không chỉ...mà còn
+
+LEAKED GARBAGE: (none - PASS)

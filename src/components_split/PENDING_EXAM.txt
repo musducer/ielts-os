@@ -1,0 +1,74 @@
+      if (pendingExamState) {
+          const q = pendingExamState.quiz;
+          const isListeningExam = String(q.type).toLowerCase().includes("listen");
+          return (
+              <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
+                  <style>{`
+                      @keyframes idp-spin { to { transform: rotate(360deg); } }
+                      .idp-spinner { width: 48px; height: 48px; border: 4px solid #e0e0e0; border-top-color: #111; border-radius: 50%; animation: idp-spin 0.8s linear infinite; margin: 0 auto 24px; }
+                      .idp-start-btn { background: #111; color: #fff; border: none; border-radius: 3px; padding: 13px 44px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background 0.15s; letter-spacing: 0.3px; }
+                      .idp-start-btn:hover { background: #333; }
+                      .idp-back-btn { background: transparent; color: #57606a; border: 1px solid #d1d5db; border-radius: 3px; padding: 13px 28px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.1s; }
+                      .idp-back-btn:hover { background: #f4f5f7; }
+                  `}</style>
+                  <div style={{ background: '#fff', maxWidth: 720, width: '100%', border: '1px solid #d1d5db', boxShadow: '0 4px 24px rgba(0,0,0,0.10)', display: 'flex', flexDirection: 'column', maxHeight: '92vh' }}>
+                      {/* Header bar — IDP style */}
+                      <div style={{ background: '#24292f', padding: '20px 32px', color: '#fff', display: 'flex', alignItems: 'center', gap: 16 }}>
+                          <img src="https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg" alt="IELTS" style={{ height: 22, userSelect: 'none', flexShrink: 0 }} />
+                          <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.2)', flexShrink: 0 }}></div>
+                          <div>
+                              <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.3 }}>{q.title}</div>
+                              <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{isListeningExam ? 'Listening Test' : 'Academic Reading Test'} · {q.timeLimit} min · {(q.questions || []).length} questions</div>
+                          </div>
+                      </div>
+
+                      {/* Body */}
+                      <div className="instructions-content" style={{ padding: '32px', overflowY: 'auto', flex: 1, fontSize: 15, lineHeight: 1.7, color: '#24292f' }}>
+                      <div style={{ textAlign: 'center', padding: '0 0 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                          {!isOfflineReady ? (
+                              <>
+                                  <div className="idp-spinner"></div>
+                                  <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: '#24292f' }}>{t('pend_loading')}</div>
+                                  <div style={{ fontSize: 14, color: '#57606a' }}>{t('pend_loading_desc')}</div>
+                              </>
+                          ) : (
+                              <>
+                                  <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#2da44e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900, margin: '0 auto 16px' }}><Ico name="check" size={24} /></div>
+                                  <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: '#24292f' }}>{t('pend_loaded')}</div>
+                                  <div style={{ fontSize: 14, color: '#57606a' }}>{t('pend_loaded_desc')}</div>
+                              </>
+                          )}
+                      </div>
+                      <hr style={{ border: 'none', borderTop: '1px solid #d1d5db', margin: '0 0 24px' }} />
+
+                      {(q as any).frontInstructions ? (
+                          <div dangerouslySetInnerHTML={{ __html: formatContent((q as any).frontInstructions) }} />
+                      ) : (
+                          <div style={{ fontSize: 14, color: '#24292f', lineHeight: 1.8 }}>
+                              <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12 }}>Instructions to Candidates</div>
+                              <ul style={{ margin: 0, paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 7, color: '#333' }}>
+                                  <li>Answer <strong>all</strong> the questions.</li>
+                                  <li>You can change your answers at any time during the test.</li>
+                                  {isListeningExam && <li>You will hear the recording <strong>once only</strong>. You cannot pause or rewind the audio.</li>}
+                                  <li><strong>Time allowed:</strong> {q.timeLimit} minutes</li>
+                                  <li>Do <strong>not</strong> refresh or close the browser window during the test.</li>
+                              </ul>
+                          </div>
+                      )}
+                  </div>
+
+                  <div style={{ padding: '18px 32px', background: '#f4f5f7', borderTop: '1px solid #d1d5db', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                      <button className="idp-back-btn" onClick={() => setPendingExamState(null)}>Back</button>
+                      <button className="idp-start-btn" disabled={!isOfflineReady} style={{ opacity: isOfflineReady ? 1 : 0.5, cursor: isOfflineReady ? 'pointer' : 'not-allowed' }} onClick={() => {
+                          if (!isOfflineReady) return;
+                          const { quiz, isPreview, isStudentTestUI } = pendingExamState;
+                          setPendingExamState(null);
+                          confirmStartExam(quiz, isPreview, isStudentTestUI);
+                      }}>
+                          {isListeningExam ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="play" size={14} /> Start Test</span> : 'Start Test'}
+                      </button>
+                  </div>
+                  </div>
+              </div>
+          );
+      }

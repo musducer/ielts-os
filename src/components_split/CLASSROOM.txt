@@ -1,0 +1,65 @@
+        {activeTab === "CLASSROOM" && (
+          <div style={{ display: "grid", gap: 24 }}>
+            <div className="card" style={{ display: "grid", gridTemplateColumns: window.innerWidth > 768 ? "1fr 1fr" : "1fr", gap: 24 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 900, color: C.sub, display: "block", marginBottom: 10 }}>{t('cls_select_student_label')}</label>
+                <select value={selStudent} onChange={(e: any) => setSelStudent(e.target.value)}>
+                  <option value="">{t('cls_select_student_opt')}</option>
+                  {students.map(s => <option key={s.id} value={s.id}>{s.name} ({fmtMoney(s.rate)}/h)</option>)}
+                </select>
+                <div style={{marginTop: 20, fontSize: 13, color: C.sub, fontWeight: 600}}>
+                   <Ico name="user" size={14} /> {t('cls_teacher_incharge')} <span style={{fontWeight: 800, color: C.accent}}>{myTeacherName}</span>
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 900, color: C.sub, display: "block", marginBottom: 12 }}>{t('cls_skills_label')}</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {SKILLS.map(sk => (
+                    <button key={sk} onClick={() => setSelSkills(p => p.includes(sk) ? p.filter(x=>x!==sk) : [...p, sk])} style={{ padding: "8px 12px", fontSize: 12, background: selSkills.includes(sk) ? C.accent : C.bg, color: selSkills.includes(sk) ? "#fff" : C.text, border: `1px solid ${C.border}` }}>
+                      {selSkills.includes(sk) ? "" : "+ "} {sk}
+                    </button>
+                  ))}
+                </div>
+                <div style={{marginTop:20, display:'flex', gap:10}}>
+                  <button onClick={() => {resetTimer();}} style={{flex:1, background: C.accent, color: '#fff', border: `1px solid ${C.accent}`}}>Stopwatch</button>
+                  <button onClick={() => setShowManualTime(!showManualTime)} style={{flex:1, background: showManualTime?C.warn:C.bg, color: showManualTime?'#fff':C.sub, border: `1px solid ${showManualTime?C.warn:C.border}`}}>{t('cls_manual_input')}</button>
+                </div>
+              </div>
+            </div>
+
+            {showManualTime && (
+              <div className="card" style={{ background: `${C.warn}10`, border: `1px solid ${C.warn}50` }}>
+                <h3 style={{marginTop: 0, color: C.warn, fontSize: 14}}>{t('cls_manual_title')}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 600 ? "1fr 1fr auto" : "1fr", gap: 15, alignItems: "end" }}>
+                   <div><label style={{fontSize: 10, fontWeight: 800}}>{t('cls_minutes')}</label><input type="number" placeholder="VD: 90" value={manualMin} onChange={(e: any)=>setManualMin(e.target.value)} style={{background: C.card}} /></div>
+                   <div><label style={{fontSize: 10, fontWeight: 800}}>{t('cls_seconds')}</label><input type="number" placeholder="VD: 30" value={manualSec} onChange={(e: any)=>setManualSec(e.target.value)} style={{background: C.card}} /></div>
+                   <button onClick={saveManualSession} style={{ background: C.warn, color: "#fff", padding: "12px 24px" }}>{t('cls_save_money')}</button>
+                </div>
+              </div>
+            )}
+
+            <div className="card" style={{ textAlign: "center", padding: "80px 20px" }}>
+              <div className="timer-num" style={{ fontSize: window.innerWidth > 600 ? 150 : 80, fontWeight: 900, lineHeight: 1, marginBottom: 20 }}>
+                {fmtTime(elapsed)}
+              </div>
+              <div style={{ marginBottom: 50, fontSize: 14, fontWeight: 900, color: C.sub, letterSpacing: 4 }}>
+                {running ? <span style={{color: C.succ}}> {t('cls_live')}</span> : t('cls_ready')}
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 16 }}>
+                {!running ? (
+                  <button onClick={() => toggleTimer(true)} style={{ padding: "20px 60px", background: C.accent, color: "#fff", fontSize: 18, boxShadow: `0 10px 20px ${C.accent}40` }}>{t('cls_start')}</button>
+                ) : (
+                  <>
+                    <button onClick={() => toggleTimer(false)} style={{ padding: "18px 32px", background: C.warn, color: "#fff" }}>{t('cls_pause')}</button>
+                    <button onClick={handleSaveSession} style={{ padding: "18px 32px", background: C.succ, color: "#fff" }}>{t('cls_save_result')}</button>
+                  </>
+                )}
+                {!running && elapsed > 0 && (
+                  <button onClick={resetTimer} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.text, padding: "0 20px" }}>RESET</button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= EXAM BUILDER (GOOGLE DRIVE STYLE & SPLIT EDITOR) ================= */}

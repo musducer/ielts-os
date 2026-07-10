@@ -1,0 +1,513 @@
+        {activeTab === "STUDENTS" && (() => {
+          const isWide = window.innerWidth > 900;
+          const profile = profileId ? (students.find(s => s && s.id === profileId) || null) : null;
+          const unpaidOf = (sid: string) => history.filter(h => h && h.studentId === sid && !h.isPaid).reduce((sum, h) => sum + (Number(h.earnings) || 0), 0);
+
+          const listStudents = [...students]
+            .filter(s => s && (safeString(s.name).toLowerCase().includes(safeString(searchSt).toLowerCase()) || safeString(s.email).toLowerCase().includes(safeString(searchSt).toLowerCase())))
+            .filter(s => !filterUnpaid || unpaidOf(s!.id) > 0)
+            .sort((a, b) => {
+              if (!a || !b) return 0;
+              if (a.isPinned && !b.isPinned) return -1;
+              if (!a.isPinned && b.isPinned) return 1;
+              if (sortStudentBy === "EXP") return (Number(b.exp) || 0) - (Number(a.exp) || 0);
+              if (sortStudentBy === "DEBT") return unpaidOf(b.id) - unpaidOf(a.id);
+              return safeString(a.name).localeCompare(safeString(b.name));
+            });
+
+          let pResults: QuizResult[] = [], pSessions: Session[] = [], pHours = 0, pUnpaid = 0, pAvg = "—";
+          let pTrend: any = null, pTypes: { label: string; rate: number; total: number }[] = [];
+          if (profile) {
+            pResults = quizResults.filter(r => r && r.studentId === profile.id).sort((a, b) => safeString(b.date).localeCompare(safeString(a.date)));
+            pSessions = history.filter(h => h && h.studentId === profile.id);
+            pHours = pSessions.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600;
+            pUnpaid = unpaidOf(profile.id);
+            const valid = pResults.filter(r => !isNaN(Number(r.band)));
+            pAvg = valid.length ? (valid.reduce((a, c) => a + Number(c.band), 0) / valid.length).toFixed(1) : "—";
+            pTrend = pResults.length >= 2 ? (Number(pResults[0].band) >= Number(pResults[1].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
+            pTypes = errorAnalytics.studentTypes[profile.id] || [];
+          }
+
+          const allHours = history.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600;
+          const allUnpaidTotal = history.filter(h => h && !h.isPaid).reduce((s, h) => s + (Number(h.earnings) || 0), 0);
+          const debtorCount = students.filter(s => s && unpaidOf(s.id) > 0).length;
+          const bandDist: Record<string, number> = {};
+          quizResults.forEach(r => { if (r && r.band && r.band !== "N/A") bandDist[r.band] = (bandDist[r.band] || 0) + 1; });
+
+          const secHead = (text: string) => <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 10 }}>{text}</div>;
+
+          const TabBtn = (key: string, label: string, icon: string, count?: number) => (
+            <button onClick={() => setProfileTab(key as any)} style={{ flex: 1, padding: '11px 4px', fontSize: 12.5, fontWeight: profileTab === key ? 600 : 500, color: profileTab === key ? C.accent : C.sub, background: 'transparent', borderRadius: 0, borderBottom: `2px solid ${profileTab === key ? C.accent : 'transparent'}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Ico name={icon} size={14} /> {label}{count ? <span style={{ fontSize: 10.5, color: C.sub, fontWeight: 500 }}>· {count}</span> : null}</button>
+          );
+
+          const statTile = (label: string, value: any, color?: string) => (
+            <div style={{ background: C.bg, borderRadius: 14, padding: '16px 18px' }}>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.4, textTransform: 'uppercase' }}>{label}</div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 28, fontWeight: 500, color: color || C.text, marginTop: 6, lineHeight: 1 }}>{value}</div>
+            </div>
+          );
+
+          const resultCard = (r: QuizResult) => {
+            const durationStr = r.durationSeconds ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s` : "N/A";
+            const copyText = `Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`;
+            const open = expandedResultId === r.id;
+            return (
+              <div key={r.id} style={{ background: C.bg, borderRadius: 14, borderLeft: `3px solid ${C.accent}`, overflow: 'hidden' }}>
+                {/* HÀNG GỌN — bấm để bung feedback/chi tiết (hết cuộn dài) */}
+                <button onClick={() => setExpandedResultId(open ? null : r.id)} style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.quizTitle}</div>
+                    <div style={{ fontSize: 11, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span>{r.date || r.startTime || "N/A"}</span>
+                      <span><Ico name="clock" size={11} style={{ verticalAlign: -1, marginRight: 3 }} />{durationStr}</span>
+                      {r.cheatCount > 0
+                        ? <span style={{ color: C.err, fontWeight: 600 }}><Ico name="alert" size={11} style={{ verticalAlign: -1, marginRight: 2 }} />{r.cheatCount}</span>
+                        : <span style={{ color: C.succ, fontWeight: 600 }}><Ico name="check" size={11} style={{ verticalAlign: -1 }} /></span>}
+                      {r.teacherFeedback ? <span style={{ color: C.accent, fontWeight: 600 }}><Ico name="sparkles" size={11} style={{ verticalAlign: -1, marginRight: 2 }} />fb</span> : null}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontFamily: 'var(--display)', fontSize: 20, fontWeight: 500, color: C.accent, lineHeight: 1 }}>{r.score}/{r.total}</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, marginTop: 2 }}>{t('band_label')} {r.band}</div>
+                    </div>
+                    <Ico name={open ? 'chevronUp' : 'chevronDown'} size={16} color={C.sub} />
+                  </div>
+                </button>
+                {open && (<div style={{ padding: '0 15px 15px' }}>
+                <div style={{ fontSize: 11.5, color: C.sub, display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginBottom: 12 }}>
+                  <span>{r.startTime || "N/A"}</span>
+                  <span>IP {r.ipAddress || "N/A"}</span>
+                  {r.cheatCount > 0
+                    ? <span style={{ color: C.err, fontWeight: 600 }}>{t('acad_cheat_warn', { n: r.cheatCount })}</span>
+                    : <span style={{ color: C.succ, fontWeight: 600 }}><Ico name="check" size={12} style={{ verticalAlign: -2, marginRight: 3 }} />{t('acad_no_cheat')}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type="text" placeholder={t('acad_feedback_ph')} defaultValue={r.teacherFeedback || ""}
+                    onBlur={(e: any) => { if (e.target.value !== r.teacherFeedback) { const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: e.target.value } : x); setQuizResults(nx); syncData({ quizResults: nx }); } }}
+                    style={{ background: C.card, fontSize: 13, padding: '8px 10px' }} />
+                  <button onClick={() => handleAiFeedback(r)} disabled={aiLoadingId === r.id} title={t('ai_tip')} style={{ background: aiLoadingId === r.id ? C.sub : 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', padding: '0 12px', whiteSpace: 'nowrap', fontWeight: 600, opacity: aiLoadingId === r.id ? 0.7 : 1 }}>{aiLoadingId === r.id ? <Ico name="refresh" size={14} /> : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Ico name="sparkles" size={14} /> AI</span>}</button>
+                  <button onClick={() => handleVoiceFeedback(r.id)} title={t('tip_voice_input')} style={{ background: '#FFE066', color: '#000', padding: '0 11px' }}><Ico name="mic" size={15} /></button>
+                </div>
+                <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                  {[t('acad_fb1'), t('acad_fb2'), t('acad_fb3'), t('acad_fb4')].map(ft => (
+                    <button key={ft} onClick={() => { const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: (x.teacherFeedback ? x.teacherFeedback + " " : "") + ft } : x); setQuizResults(nx); syncData({ quizResults: nx }); }} style={{ fontSize: 10.5, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub, borderRadius: 6 }}>{ft}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${C.border}`, flexWrap: 'wrap' }}>
+                  <button onClick={() => copyToClipboard(copyText)} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="clipboard" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_copy_zalo')}</button>
+                  <button onClick={() => exportDetailedQuizResult(r)} style={{ background: `${C.succ}12`, color: C.succ, fontSize: 11, padding: '6px 11px' }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_export_detail')}</button>
+                  <button onClick={() => { if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) { const nx = [...bannedIps, r.ipAddress]; setBannedIps(nx); syncData({ bannedIps: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px' }}><Ico name="ban" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_ban_ip')}</button>
+                  <button onClick={() => { if (confirm("Xóa bài thi này?")) { const nx = quizResults.filter(x => x.id !== r.id); setQuizResults(nx); syncData({ quizResults: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px', marginLeft: 'auto' }}><Ico name="trash" size={13} /></button>
+                </div>
+                </div>)}
+              </div>
+            );
+          };
+
+          const sessionCard = (h: Session) => {
+            const open = expandedSessionId === h.id;
+            const notePreview = (h.notes || "").replace(/\s+/g, " ").trim();
+            return (
+            <div key={h.id} style={{ background: C.bg, borderRadius: 14, borderLeft: `3px solid ${h.isPaid ? C.succ : C.warn}`, overflow: 'hidden' }}>
+              {/* HÀNG GỌN — bấm để bung ghi chú + thao tác */}
+              <button onClick={() => setExpandedSessionId(open ? null : h.id)} style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{h.date} <span style={{ color: C.sub, fontWeight: 400 }}>· {h.teacher}</span></div>
+                  <div style={{ fontSize: 11, color: C.sub, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>{notePreview || t('hist_notes_ph')}</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 12, background: h.isPaid ? `${C.succ}15` : `${C.warn}15`, color: h.isPaid ? C.succ : C.warn }}>{fmtMoney(h.earnings)}</span>
+                  <Ico name={open ? 'chevronUp' : 'chevronDown'} size={16} color={C.sub} />
+                </div>
+              </button>
+              {open && (<div style={{ padding: '0 15px 15px' }}>
+              <textarea value={h.notes || ""} onChange={(e: any) => { const nx = history.map(x => x && x.id === h.id ? { ...x, notes: e.target.value } : x); setHistory(nx as Session[]); }} onBlur={() => syncData({ history })} placeholder={t('hist_notes_ph')} style={{ height: 60, fontSize: 13, background: C.card, border: `1px solid ${C.border}` }} />
+              <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                {QUICK_NOTES.map((qn: string) => (
+                  <button key={qn} onClick={() => { const nx = history.map(x => x && x.id === h.id ? { ...x, notes: (x.notes ? x.notes + ". " : "") + qn } : x); setHistory(nx as Session[]); syncData({ history: nx }); }} style={{ fontSize: 10, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub }}>{qn}</button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
+                {!h.isPaid ? (
+                  <button onClick={() => {
+                    const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                    const rem = nxHistory.filter(se => se.studentId === h.studentId && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
+                    let nxStudents = students;
+                    if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                    setHistory(nxHistory as Session[]); syncData({ history: nxHistory, students: nxStudents });
+                  }} style={{ background: `${C.warn}18`, color: C.warn, fontSize: 12, padding: '6px 12px', border: `1px solid ${C.warn}55` }}>{t('hist_collect_fast')}<Ico name="coins" size={13} style={{ verticalAlign: -2, marginLeft: 6 }} /></button>
+                ) : (
+                  <button onClick={() => { const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false } : x); setHistory(nx as Session[]); syncData({ history: nx }); }} style={{ background: `${C.succ}18`, color: C.succ, fontSize: 12, padding: '6px 12px', border: `1px solid ${C.succ}55` }}>{t('hist_collected')}</button>
+                )}
+                <button onClick={() => { if (confirm("Xóa buổi học này?")) { const nx = history.filter(x => x && x.id !== h.id); setHistory(nx as Session[]); syncData({ history: nx }); } }} style={{ background: 'none', color: C.err, fontSize: 11 }}><Ico name="trash" size={14} /></button>
+              </div>
+              </div>)}
+            </div>
+            );
+          };
+
+          const headerIconBtn = (icon: string, onClick: any, title: string, danger?: boolean) => (
+            <button onClick={onClick} title={title} style={{ background: danger ? `${C.err}10` : C.bg, color: danger ? C.err : C.sub, border: `1px solid ${C.border}`, padding: '8px 10px', borderRadius: 9 }}><Ico name={icon} size={15} /></button>
+          );
+
+          return (
+            <div style={{ display: 'grid', gridTemplateColumns: isWide ? '300px 1fr' : '1fr', gap: 20, alignItems: 'start' }}>
+
+              {(isWide || !profile) && (
+                <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0 10px' }}>
+                      <Ico name="search" size={15} color={C.sub} />
+                      <input placeholder={t('stu_search_ph')} value={searchSt} onChange={e => setSearchSt(e.target.value)} style={{ border: 'none', background: 'transparent', boxShadow: 'none', padding: '9px 0', fontSize: 13 }} />
+                    </div>
+                    <button onClick={() => { setEditStId(null); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); setShowAddStudent(true); }} title={t('stu_add_new')} style={{ background: C.accent, color: '#fff', width: 40, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center' }}><Ico name="plus" size={18} color="#fff" /></button>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <select value={sortStudentBy} onChange={(e: any) => setSortStudentBy(e.target.value)} style={{ flex: 1, padding: '7px 10px', fontSize: 12.5 }}>
+                      <option value="NAME">{t('stu_sort_name')}</option><option value="EXP">{t('stu_sort_exp')}</option><option value="DEBT">{t('stu_sort_debt')}</option>
+                    </select>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: C.warn, display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={filterUnpaid} onChange={(e) => setFilterUnpaid(e.target.checked)} style={{ width: 'auto', margin: 0 }} />{t('stu_only_debt')}
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+                    <button onClick={() => setProfileId(null)} style={{ fontSize: 11.5, fontWeight: 600, color: !profile ? C.accent : C.sub, background: !profile ? `${C.accent}12` : 'transparent', padding: '5px 10px', borderRadius: 8 }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_overview')}</button>
+                    <span style={{ fontSize: 11, color: C.sub }}>{t('hub_students_count', { n: listStudents.length })}</span>
+                    <button onClick={exportStudentsCSV} title={t('stu_export_csv')} style={{ fontSize: 11, color: C.succ, background: 'transparent' }}><Ico name="arrowDown" size={13} style={{ verticalAlign: -2, marginRight: 3 }} />{t('stu_export_csv')}</button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: isWide ? '60vh' : 'none', overflowY: 'auto' }}>
+                    {listStudents.map(s => { if (!s) return null; const deb = unpaidOf(s.id); const sel = profileId === s.id; return (
+                      <button key={s.id} onClick={() => { if (profileId === s.id) { setProfileId(null); } else { setProfileId(s.id); setProfileTab('results'); } }} style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10, background: sel ? `${C.accent}12` : C.bg, border: `1px solid ${sel ? C.accent : C.border}` }}>
+                        {getAvatar(s.name)}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>{s.isPinned && <Ico name="pin" size={11} color={C.accent} />}{s.name}</div>
+                          <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>Lv.{s.level || 1} · {s.cefr || '—'}→{s.target || '—'}</div>
+                        </div>
+                        {deb > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.err, background: `${C.err}12`, padding: '2px 6px', borderRadius: 6, whiteSpace: 'nowrap' }}>{fmtMoney(deb)}</span>}
+                      </button>
+                    ); })}
+                    {listStudents.length === 0 && <div style={{ textAlign: 'center', color: C.sub, fontSize: 12, padding: 20 }}>—</div>}
+                  </div>
+                </div>
+              )}
+
+              {(isWide || profile) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+                  {!profile && (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+                        {statTile(t('hub_total_students'), students.filter(s => s).length)}
+                        {statTile(t('hub_debtors'), debtorCount, C.warn)}
+                        {statTile(t('hub_total_debt'), fmtMoney(allUnpaidTotal), C.err)}
+                        {statTile(t('hub_total_hours'), allHours.toFixed(1) + 'h', C.accent)}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: isWide ? '1fr 1fr' : '1fr', gap: 20 }}>
+                        <div className="card">
+                          {secHead(t('acad_top_students'))}
+                          <div style={{ display: 'grid', gap: 7 }}>
+                            {[...students].filter(s => s).sort((a, b) => ((b?.exp || 0) - (a?.exp || 0))).slice(0, 5).map((s, i) => s && (
+                              <button key={s.id} onClick={() => { setProfileId(s.id); setProfileTab('overview'); }} style={{ textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: C.bg, borderRadius: 10 }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color: '#fff', background: i === 0 ? '#C9A227' : i === 1 ? '#8E99A3' : i === 2 ? '#B07A48' : C.sub }}>{i + 1}</span>
+                                  <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
+                                </span>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: C.accent }}>{s.exp || 0} EXP</span>
+                              </button>
+                            ))}
+                          </div>
+                          {Object.keys(bandDist).length > 0 && (
+                            <div style={{ marginTop: 16 }}>
+                              {secHead(t('acad_band_dist'))}
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {Object.entries(bandDist).sort((a, b) => Number(b[0]) - Number(a[0])).map(([band, count]) => (
+                                  <span key={band} style={{ fontSize: 11.5, fontWeight: 600, color: C.succ, background: `${C.succ}12`, padding: '4px 10px', borderRadius: 8 }}>Band {band}: {count}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="card">
+                          {secHead(t('ea_title'))}
+                          {errorAnalytics.centerTypes.length === 0 ? <div style={{ color: C.sub, fontSize: 12.5 }}>{t('ea_no_data')}</div> : (<>
+                            <div style={{ display: 'grid', gap: 9 }}>
+                              {errorAnalytics.centerTypes.map(ct => (
+                                <div key={ct.label}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}><span>{ct.label}</span><span style={{ color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>{ct.rate}%</span></div>
+                                  <div style={{ height: 7, background: C.bg, borderRadius: 4, overflow: 'hidden' }}><div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }} /></div>
+                                </div>
+                              ))}
+                            </div>
+                            {errorAnalytics.weakStudents.length > 0 && (
+                              <div style={{ marginTop: 14, display: 'grid', gap: 5 }}>
+                                {errorAnalytics.weakStudents.map((ws, i) => (
+                                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '6px 10px', background: `${C.err}0d`, borderRadius: 8 }}><span style={{ fontWeight: 600 }}>{ws.name}</span><span style={{ color: C.err, fontWeight: 600 }}>{ws.label} ({ws.rate}%)</span></div>
+                                ))}
+                              </div>
+                            )}
+                          </>)}
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {([['calc', t('acad_calc_title'), 'target'], ['push', t('stu_push_title'), 'bell'], ['verify', t('rc_verify_title'), 'lock']] as [string, string, string][]).map(([k, lb, ic]) => (
+                            <button key={k} onClick={() => setOvTool(ovTool === k ? "" : k as any)} style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 14px', borderRadius: 10, border: `1px solid ${ovTool === k ? C.accent : C.border}`, background: ovTool === k ? `${C.accent}12` : C.bg, color: ovTool === k ? C.accent : C.text }}><Ico name={ic} size={14} style={{ verticalAlign: -2, marginRight: 6 }} />{lb}</button>
+                          ))}
+                        </div>
+
+                        {ovTool === 'calc' && (
+                          <div style={{ marginTop: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                              <input type="number" placeholder={t('acad_calc_ph')} value={calcScore === "" ? "" : calcScore} onChange={(e: any) => setCalcScore(e.target.value === "" ? "" : Number(e.target.value))} style={{ width: 120, fontSize: 15 }} />
+                              <span style={{ fontWeight: 600, fontSize: 18, color: C.sub }}>/ 40</span>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 160, background: C.bg, padding: '12px 18px', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase' }}>Band score</span>
+                              <span style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.accent, lineHeight: 1 }}>{calcScore === "" ? "—" : getIeltsBand(Number(calcScore), 40)}</span>
+                            </div>
+                          </div>
+                        )}
+                        {ovTool === 'push' && (
+                          <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: isWide ? '1fr 1fr 1fr auto' : '1fr', gap: 10, alignItems: 'end' }}>
+                            <select value={pushTarget} onChange={e => setPushTarget(e.target.value)}><option value="ALL">{t('stu_push_all')}</option>{students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+                            <input placeholder={t('stu_push_subject_ph')} value={pushTitle} onChange={e => setPushTitle(e.target.value)} />
+                            <input placeholder={t('stu_push_content_ph')} value={pushBody} onChange={e => setPushBody(e.target.value)} />
+                            <button onClick={handleSendPush} style={{ background: C.accent, color: '#fff', padding: '12px 20px', height: 46 }}>{t('stu_push_send')}</button>
+                          </div>
+                        )}
+                        {ovTool === 'verify' && (
+                          <div style={{ marginTop: 16 }}>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <input value={verifyCodeInput} onChange={e => { setVerifyCodeInput(e.target.value); setVerifyResult(null); }} onKeyDown={e => { if (e.key === 'Enter') handleVerifyCode(); }} placeholder="OS-XXXXX-XXXXX" style={{ flex: 1, fontFamily: 'monospace', fontSize: 15, fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase' }} />
+                              <button onClick={handleVerifyCode} style={{ background: C.accent, color: '#fff', padding: '0 20px', fontWeight: 600 }}>{t('rc_verify_btn')}</button>
+                            </div>
+                            {verifyResult && verifyResult.status === "FAKE" && (<div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: `${C.err}12`, color: C.err, fontWeight: 600 }}><Ico name="xcircle" size={15} color={C.err} /> {t('rc_fake')}</div>)}
+                            {verifyResult && (verifyResult.status === "VALID" || verifyResult.status === "USED") && verifyResult.entry && (
+                              <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: verifyResult.status === "VALID" ? `${C.succ}0d` : `${C.warn}12`, border: `1px solid ${verifyResult.status === "VALID" ? C.succ : C.warn}` }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 }}><span style={{ color: C.sub }}>{t('rc_student')}:</span><b>{verifyResult.entry.studentName}</b><span style={{ color: C.sub }}>{t('rc_item')}:</span><b>{verifyResult.entry.item}</b></div>
+                                {verifyResult.status === "VALID"
+                                  ? <button onClick={handleRedeemCode} style={{ marginTop: 12, background: C.succ, color: '#fff', padding: '10px', fontWeight: 600, width: '100%' }}><Ico name="check" size={15} /> {t('rc_redeem_btn')}</button>
+                                  : <div style={{ marginTop: 10, color: C.warn, fontWeight: 600, fontSize: 12.5 }}><Ico name="alert" size={14} color={C.warn} /> {t('rc_used')}</div>}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {profile && (
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                      <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', borderBottom: `1px solid ${C.border}` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                          {!isWide && headerIconBtn('arrowLeft', () => setProfileId(null), 'Back')}
+                          {getAvatar(profile.name)}
+                          <div>
+                            <div style={{ fontSize: 19, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>{profile.name} {pTrend}</div>
+                            <div style={{ fontSize: 12, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span>{getGamificationBadge(profile.level || 1)} Lv.{profile.level || 1}</span>
+                              <span>· {profile.cefr || '—'} → {profile.target || '—'}</span>
+                              {profile.dob && <span>· {getAge(profile.dob)}</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: C.accent, marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
+                              {profile.email || t('stu_no_email')}
+                              {profile.email && <button onClick={() => copyToClipboard(profile.email as string)} style={{ background: 'transparent', color: C.accent, padding: 0 }}><Ico name="copy" size={12} /></button>}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button onClick={() => exportStudentReportPDF(profile)} style={{ background: `${C.accent}15`, color: C.accent, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="fileText" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_export_pdf')}</button>
+                          {headerIconBtn('pin', () => { const nx = students.map(x => x.id === profile.id ? { ...x, isPinned: !x.isPinned } : x); setStudents(nx); syncData({ students: nx }); }, t('tip_pin_student'))}
+                          {headerIconBtn('edit', () => { setEditStId(profile.id); setNewSt({ ...profile }); setShowAddStudent(true); }, t('common_edit'))}
+                          {headerIconBtn('trash', () => { if (confirm(`Xóa học viên ${profile.name}?`)) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                        {TabBtn('overview', t('hub_overview'), 'barChart')}
+                        {TabBtn('results', t('hub_tab_results'), 'pin', pResults.length)}
+                        {TabBtn('sessions', t('hub_tab_sessions'), 'clock', pSessions.length)}
+                        {TabBtn('finance', t('hub_tab_finance'), 'coins')}
+                      </div>
+
+                      <div style={{ padding: 24 }}>
+                        {profileTab === 'overview' && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
+                              {statTile(t('hub_avg_band'), pAvg, C.succ)}
+                              {statTile(t('hub_hours'), pHours.toFixed(1) + 'h')}
+                              {statTile(t('hub_tests'), pResults.length)}
+                              {statTile(t('hub_debt_short'), pUnpaid > 0 ? fmtMoney(pUnpaid) : '—', pUnpaid > 0 ? C.err : C.sub)}
+                            </div>
+                            <div>
+                              {secHead(t('chart_band_title'))}
+                              {bandSeries(pResults).length > 0 ? <BandTrendChart data={bandSeries(pResults)} /> : <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: 20 }}>{t('hub_no_band')}</div>}
+                            </div>
+                            {pTypes.length > 0 && (
+                              <div>
+                                {secHead(t('ea_title'))}
+                                <div style={{ display: 'grid', gap: 8 }}>
+                                  {pTypes.map(ct => (
+                                    <div key={ct.label}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}><span>{ct.label}</span><span style={{ color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>{ct.rate}% <span style={{ color: C.sub, fontWeight: 400 }}>({t('ea_questions_n', { n: ct.total })})</span></span></div>
+                                      <div style={{ height: 7, background: C.bg, borderRadius: 4, overflow: 'hidden' }}><div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }} /></div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            <div>
+                              {secHead(t('hub_evidence_note'))}
+                              <input type="text" placeholder={t('stu_private_ph')} defaultValue={profile.privateMessage || ""} onBlur={(e: any) => { if (e.target.value !== profile.privateMessage) { const nx = students.map(x => x.id === profile.id ? { ...x, privateMessage: e.target.value } : x); setStudents(nx); syncData({ students: nx }); } }} style={{ fontSize: 12.5, background: `${C.warn}0d`, border: `1px solid ${C.warn}40`, color: C.text }} />
+                            </div>
+                          </div>
+                        )}
+
+                        {profileTab === 'results' && (
+                          <div style={{ display: 'grid', gap: 14 }}>
+                            {pResults.length === 0 ? <div style={{ textAlign: 'center', color: C.sub, padding: 30, fontSize: 13 }}>{t('acad_no_results')}</div> : pResults.map(resultCard)}
+                          </div>
+                        )}
+
+                        {profileTab === 'sessions' && (
+                          <div style={{ display: 'grid', gap: 14 }}>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                              <button onClick={exportCSV} style={{ background: `${C.succ}15`, color: C.succ, fontSize: 12, padding: '7px 14px' }}><Ico name="arrowDown" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hist_export_excel')}</button>
+                            </div>
+                            {pSessions.length === 0 ? <div style={{ textAlign: 'center', color: C.sub, padding: 30, fontSize: 13 }}>{t('hist_no_match')}</div> : pSessions.map(sessionCard)}
+                          </div>
+                        )}
+
+                        {profileTab === 'finance' && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                              {statTile(t('hub_total_debt'), pUnpaid > 0 ? fmtMoney(pUnpaid) : '0', pUnpaid > 0 ? C.err : C.succ)}
+                              {statTile(t('hub_coins'), profile.coins || 0, C.warn)}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button onClick={() => { if (confirm(`Tặng 100 OS Coins cho ${profile.name}?`)) { const nx = students.map(x => x.id === profile.id ? { ...x, coins: (x.coins || 0) + 100 } : x); setStudents(nx); syncData({ students: nx }); } }} style={{ background: `${C.succ}15`, color: C.succ, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="gift" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('stu_reward_coins')}</button>
+                              <button onClick={() => setGiftFor(profile.id)} style={{ background: C.accent, color: '#fff', fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="gift" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('gift_manual_btn')}</button>
+                              {pUnpaid > 0 && <>
+                                <button onClick={() => copyToClipboard(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="clipboard" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_copy_sms')}</button>
+                                <button onClick={() => { if (confirm(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`)) { const msg = `Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`; const nx = students.map(x => x.id === profile.id ? { ...x, debtMessage: msg } : x); setStudents(nx); syncData({ students: nx }); alert("Đã gửi cảnh báo đỏ!"); } }} style={{ background: C.err, color: '#fff', fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="siren" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('stu_debt_inapp')}</button>
+                              </>}
+                            </div>
+                            {secHead(t('hub_unpaid_sessions'))}
+                            <div style={{ display: 'grid', gap: 8 }}>
+                              {pSessions.filter(h => !h.isPaid).length === 0 ? <div style={{ color: C.succ, fontSize: 12.5 }}><Ico name="check" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_no_unpaid')}</div> : pSessions.filter(h => !h.isPaid).map(h => (
+                                <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: C.bg, borderRadius: 10 }}>
+                                  <span style={{ fontSize: 12.5 }}>{h.date} · {fmtMoney(h.earnings)}</span>
+                                  <button onClick={() => { const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x); const rem = nxHistory.filter(se => se.studentId === profile.id && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0); let nxStudents = students; if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); } setHistory(nxHistory as Session[]); syncData({ history: nxHistory, students: nxStudents }); }} style={{ background: `${C.warn}18`, color: C.warn, fontSize: 11.5, padding: '5px 11px', border: `1px solid ${C.warn}55` }}>{t('hist_collect_fast')}</button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* MODAL TẶNG QUÀ THỦ CÔNG — GV gửi thẳng vào túi đồ HV, không cần xu/gacha */}
+              {giftFor && (() => {
+                const gst = students.find(s => s.id === giftFor);
+                if (!gst) return null;
+                const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
+                // Cộng vào kho HV rồi đồng bộ (syncData nhánh GV union permanents nên không bao giờ làm giảm quà)
+                const writeInv = (mut: (inv: any) => void, okMsg?: string) => {
+                  const nx = students.map(s => {
+                    if (s.id !== giftFor) return s;
+                    const inv: any = { ...(s.inventory || {}) };
+                    inv.consumables = { ...(s.inventory?.consumables || {}) };
+                    inv.permanents = [...(Array.isArray(s.inventory?.permanents) ? s.inventory!.permanents : [])];
+                    mut(inv);
+                    return { ...s, inventory: inv };
+                  });
+                  setStudents(nx); syncData({ students: nx });
+                  if (okMsg) alert(okMsg);
+                };
+                const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); setStudents(nx); syncData({ students: nx }); alert(`+${amt} OS Coins → ${gst.name}`); };
+                const giveConsumable = (name: string) => { if (!name.trim()) return; writeInv(inv => { inv.consumables[name] = (inv.consumables[name] || 0) + 1; }, `${t('gift_done')} (${name})`); };
+                const givePermanent = (name: string) => { if (owned.includes(name)) return; writeInv(inv => { if (!inv.permanents.includes(name)) inv.permanents.push(name); }, `${t('gift_done')} (${name})`); };
+                const CONSUMABLES = ["Thẻ dời deadline (24h)", "1 Hộp Milo", "1 Ly Trái Chò", "1 Trà sữa Viên Viên"];
+                const TITLES = ["Chiến Thần IELTS", "Kẻ Hủy Diệt Đề", "Học Bá Thượng Đẳng", "Cao Thủ Reading", "Bậc Thầy Từ Vựng", "Vua Tốc Độ", "Huyền Thoại 8.0+", "Mọt Sách Bất Bại", "Thợ Săn Band Điểm", "Ninja Phòng Thi"].map(x => "Danh hiệu: " + x);
+                const THEMES = ["Giao diện: Hoàng Kim", "Giao diện: Nửa Đêm", "Giao diện: Anh Đào", "Giao diện: Rừng Sâu"];
+                const FRAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
+                const PETS = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+                const permChip = (name: string) => {
+                  const has = owned.includes(name);
+                  return <button key={name} disabled={has} onClick={() => givePermanent(name)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{name.split(': ')[1] || name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
+                };
+                const grp = (title: string, items: string[]) => (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{title}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{items.map(permChip)}</div>
+                  </div>
+                );
+                return (
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => { setGiftFor(null); setGiftCustom(""); }}>
+                    <div className="card" style={{ width: 600, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                        <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
+                        <button onClick={() => { setGiftFor(null); setGiftCustom(""); }} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_coins')}</div>
+                          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{[50, 100, 200, 500, 1000].map(a => <button key={a} onClick={() => giveCoins(a)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '8px 14px', fontWeight: 700, borderRadius: 9 }}>+{a} <Ico name="coins" size={12} style={{ verticalAlign: -1 }} /></button>)}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
+                            {CONSUMABLES.map(n => <button key={n} onClick={() => giveConsumable(n)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {n}</button>)}
+                          </div>
+                          <div style={{ display: 'flex', gap: 7, marginTop: 8 }}>
+                            <input value={giftCustom} onChange={(e: any) => setGiftCustom(e.target.value)} placeholder={t('gift_custom_ph')} style={{ flex: 1, fontSize: 12.5 }} />
+                            <button onClick={() => { giveConsumable(giftCustom.trim()); setGiftCustom(""); }} disabled={!giftCustom.trim()} style={{ background: C.accent, color: '#fff', fontSize: 12.5, padding: '8px 16px', fontWeight: 600, opacity: giftCustom.trim() ? 1 : 0.5 }}>{t('gift_grant')}</button>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_permanent')}</div>
+                          {grp('Danh hiệu', TITLES)}
+                          {grp('Giao diện', THEMES)}
+                          {grp('Khung avatar', FRAMES)}
+                          {grp('Linh thú', PETS)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {showAddStudent && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setShowAddStudent(false)}>
+                  <div className="card" style={{ width: 560, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                      <h3 style={{ margin: 0, fontSize: 16 }}>{editStId ? t('stu_edit_title') : t('stu_add_title')}</h3>
+                      <button onClick={() => setShowAddStudent(false)} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_fullname')}</label><input value={newSt.name} onChange={(e: any) => setNewSt({ ...newSt, name: e.target.value })} /></div>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_login_email')}</label><input value={newSt.email} onChange={(e: any) => setNewSt({ ...newSt, email: e.target.value })} placeholder="hs@gmail.com" /></div>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_dob')}</label><input type="date" value={newSt.dob || ""} onChange={(e: any) => setNewSt({ ...newSt, dob: e.target.value })} /></div>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_rate')}</label><input type="number" value={newSt.rate} onChange={(e: any) => setNewSt({ ...newSt, rate: Number(e.target.value) })} /></div>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_cefr_now')}</label><input value={newSt.cefr} onChange={(e: any) => setNewSt({ ...newSt, cefr: e.target.value })} /></div>
+                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_target_band')}</label><input value={newSt.target} onChange={(e: any) => setNewSt({ ...newSt, target: e.target.value })} /></div>
+                      {editStId && (<div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.warn }}>{t('stu_os_coins')}</label><input type="number" value={newSt.coins || 0} onChange={(e: any) => setNewSt({ ...newSt, coins: Number(e.target.value) })} style={{ borderColor: C.warn }} placeholder={t('stu_coins_ph')} /></div>)}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                      <button onClick={() => { handleStudentAction(); setShowAddStudent(false); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "11px" }}>{editStId ? t('stu_update') : t('stu_add_new')}</button>
+                      <button onClick={() => { setEditStId(null); setShowAddStudent(false); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); }} style={{ background: C.bg, color: C.text, padding: "11px 20px" }}>{t('common_cancel')}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
