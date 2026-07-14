@@ -3673,6 +3673,11 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   }, [editingQuiz]);
 
   useEffect(() => {
+      setAudioUploadProgress(null);
+      setAudioUploadMsg("");
+  }, [editingQuiz?.id]);
+
+  useEffect(() => {
       // ĐàFIX: Thuật toán kéo Splitter cũ đã bị vô hiệu hóa để chống xung đột scroll.
       // Chúng ta sẽ dùng Pointer Events hiện đại gắn trực tiếp vào thanh Splitter ở DOM bên dưới.
   }, [isDraggingSplitter]);
@@ -4464,21 +4469,40 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       alert("File này không phải audio hợp lệ.");
       return;
     }
-    const safeName = makeAudioSafeName(file.name);
-    const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
-    const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
-    const task = uploadBytesResumable(storageRef(storage, path), file, {
-      contentType: file.type || "audio/mpeg",
-      customMetadata: { originalName: file.name, quizId },
-    });
     setAudioUploadProgress(0);
     setAudioUploadMsg(t("eb_audio_uploading"));
     try {
+      const safeName = makeAudioSafeName(file.name);
+      const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
+      const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
+      const task = uploadBytesResumable(storageRef(storage, path), file, {
+        contentType: file.type || "audio/mpeg",
+        customMetadata: { originalName: file.name, quizId },
+      });
       await new Promise<void>((resolve, reject) => {
+        let sawBytes = false;
+        const noProgressTimer = window.setTimeout(() => {
+          if (!sawBytes) {
+            task.cancel();
+            reject(new Error("Upload audio bị kẹt ở 0%. Firebase Storage có thể đang bị chặn CORS/permission hoặc chưa bật quyền ghi cho exam-audio/. Hãy dán link audio công khai vào ô Audio Link để dùng tạm."));
+          }
+        }, 20000);
         task.on("state_changed",
-          snap => setAudioUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-          reject,
-          () => resolve()
+          snap => {
+            if (snap.bytesTransferred > 0) {
+              sawBytes = true;
+              window.clearTimeout(noProgressTimer);
+            }
+            setAudioUploadProgress(Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)));
+          },
+          err => {
+            window.clearTimeout(noProgressTimer);
+            reject(err);
+          },
+          () => {
+            window.clearTimeout(noProgressTimer);
+            resolve();
+          }
         );
       });
       const rawUrl = await getDownloadURL(task.snapshot.ref);

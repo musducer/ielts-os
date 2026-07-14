@@ -3673,6 +3673,11 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   }, [editingQuiz]);
 
   useEffect(() => {
+      setAudioUploadProgress(null);
+      setAudioUploadMsg("");
+  }, [editingQuiz?.id]);
+
+  useEffect(() => {
       // ĐàFIX: Thuật toán kéo Splitter cũ đã bị vô hiệu hóa để chống xung đột scroll.
       // Chúng ta sẽ dùng Pointer Events hiện đại gắn trực tiếp vào thanh Splitter ở DOM bên dưới.
   }, [isDraggingSplitter]);
@@ -4464,21 +4469,40 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       alert("File này không phải audio hợp lệ.");
       return;
     }
-    const safeName = makeAudioSafeName(file.name);
-    const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
-    const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
-    const task = uploadBytesResumable(storageRef(storage, path), file, {
-      contentType: file.type || "audio/mpeg",
-      customMetadata: { originalName: file.name, quizId },
-    });
     setAudioUploadProgress(0);
     setAudioUploadMsg(t("eb_audio_uploading"));
     try {
+      const safeName = makeAudioSafeName(file.name);
+      const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
+      const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
+      const task = uploadBytesResumable(storageRef(storage, path), file, {
+        contentType: file.type || "audio/mpeg",
+        customMetadata: { originalName: file.name, quizId },
+      });
       await new Promise<void>((resolve, reject) => {
+        let sawBytes = false;
+        const noProgressTimer = window.setTimeout(() => {
+          if (!sawBytes) {
+            task.cancel();
+            reject(new Error("Upload audio bị kẹt ở 0%. Firebase Storage có thể đang bị chặn CORS/permission hoặc chưa bật quyền ghi cho exam-audio/. Hãy dán link audio công khai vào ô Audio Link để dùng tạm."));
+          }
+        }, 20000);
         task.on("state_changed",
-          snap => setAudioUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-          reject,
-          () => resolve()
+          snap => {
+            if (snap.bytesTransferred > 0) {
+              sawBytes = true;
+              window.clearTimeout(noProgressTimer);
+            }
+            setAudioUploadProgress(Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)));
+          },
+          err => {
+            window.clearTimeout(noProgressTimer);
+            reject(err);
+          },
+          () => {
+            window.clearTimeout(noProgressTimer);
+            resolve();
+          }
         );
       });
       const rawUrl = await getDownloadURL(task.snapshot.ref);
@@ -10836,6 +10860,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <Ico name="cloud" size={14} /> {audioUploadProgress !== null ? `${t('eb_audio_uploading')} ${audioUploadProgress}%` : t('eb_upload_audio')}
                                                             <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
                                                         </label>
+                                                        {audioUploadProgress !== null && <button className="ebx-soft" onClick={() => { setAudioUploadProgress(null); setAudioUploadMsg(""); }} style={{background: EB.sheet, color: C.sub, fontSize: 12, fontWeight: 700, padding: '9px 12px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer'}}>Reset upload</button>}
                                                         <button className="ebx-primary" onClick={handleTranscribe} disabled={transcribeLoading || !editingQuiz.audioUrl} style={{background: transcribeLoading ? C.sub : C.accent, color: '#fff', fontSize: 12, fontWeight: 600, padding: '9px 14px', borderRadius: EB.radiusSm, opacity: (transcribeLoading || !editingQuiz.audioUrl) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}>{transcribeLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {transcribeMsg || t('eb_transcribing')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="headphones" size={14} /> {t('eb_transcribe')}</span>}</button>
                                                         {audioUploadMsg ? <span style={{fontSize: 11, fontWeight: 700, color: audioUploadMsg === t('eb_audio_upload_failed') ? C.err : C.succ}}>{audioUploadMsg}</span> : (editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_audio_hosted_hint')}</span>)}
                                                     </div>
