@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /exam-audio/{quizId}/{fileName} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if request.auth != null
+        && request.resource.size < 200 * 1024 * 1024
+        && request.resource.contentType.matches('audio/.*');
+      allow delete: if request.auth != null;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "origin": [
+      "https://ielts-os-sandy.vercel.app",
+      "https://ielts-os.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:5174"
+    ],
+    "method": ["GET", "POST", "PUT", "HEAD", "OPTIONS"],
+    "responseHeader": [
+      "Authorization",
+      "Content-Type",
+      "x-goog-resumable",
+      "x-goog-upload-command",
+      "x-goog-upload-header-content-length",
+      "x-goog-upload-header-content-type",
+      "x-goog-upload-protocol",
+      "x-goog-upload-url"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
