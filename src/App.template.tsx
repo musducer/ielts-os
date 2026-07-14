@@ -4427,18 +4427,20 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       // FIX: câu thuộc Passage 2/3 phải lấy đúng bài đọc của section đó, KHÔNG dùng fullQuiz.passage
       // (backend chỉ gán passage = sections[0] = Passage 1 -> AI nhận nhầm văn bản, báo "không tìm thấy").
       let qPassage: string = fullQuiz?.passage || "";
+      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       const secs = (fullQuiz as any)?.sections;
       if (Array.isArray(secs) && secs.length) {
-        let si = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
-        if (si < 0 || si >= secs.length) si = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-        if (si >= 0 && secs[si]) qPassage = secs[si].passage || qPassage;
+        if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
+        if (qSectionIndex >= 0 && secs[qSectionIndex]) qPassage = secs[qSectionIndex].passage || qPassage;
       }
+      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
+      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
       const ctxParts = [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", question: stripTags(q.text), options: optStr, correct: correctStr, studentAnswer: stuStr, context, isListening: String(fullQuiz?.type || quiz?.type || "").toLowerCase().includes("listen") })
+        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", question: stripTags(q.text), options: optStr, correct: correctStr, studentAnswer: stuStr, context, isListening: isListeningQuestion })
       });
       const data = await resp.json();
       if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: data.explanation } }));

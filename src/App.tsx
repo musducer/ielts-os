@@ -4427,18 +4427,20 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       // FIX: câu thuộc Passage 2/3 phải lấy đúng bài đọc của section đó, KHÔNG dùng fullQuiz.passage
       // (backend chỉ gán passage = sections[0] = Passage 1 -> AI nhận nhầm văn bản, báo "không tìm thấy").
       let qPassage: string = fullQuiz?.passage || "";
+      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       const secs = (fullQuiz as any)?.sections;
       if (Array.isArray(secs) && secs.length) {
-        let si = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
-        if (si < 0 || si >= secs.length) si = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-        if (si >= 0 && secs[si]) qPassage = secs[si].passage || qPassage;
+        if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
+        if (qSectionIndex >= 0 && secs[qSectionIndex]) qPassage = secs[qSectionIndex].passage || qPassage;
       }
+      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
+      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
       const ctxParts = [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", question: stripTags(q.text), options: optStr, correct: correctStr, studentAnswer: stuStr, context, isListening: String(fullQuiz?.type || quiz?.type || "").toLowerCase().includes("listen") })
+        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", question: stripTags(q.text), options: optStr, correct: correctStr, studentAnswer: stuStr, context, isListening: isListeningQuestion })
       });
       const data = await resp.json();
       if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: data.explanation } }));
@@ -6286,7 +6288,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       rvSections.forEach((sec, i) => (sec.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
       const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
       const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
-      const rvIsListening = reviewQuiz.quiz.type === "Listening";
+      const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
+      const rvIsListeningExam = rvType.includes("listen");
+      const rvIsIntegrated = rvType.includes("integrated");
+      const rvIsListeningPart = (idx: number) => rvIsListeningExam || (rvIsIntegrated && idx === 0);
+      const rvActiveIsListening = rvIsListeningPart(rvActiveIdx);
+      const rvUsePartLabels = rvIsListeningExam || rvIsIntegrated;
       // Timestamp [mm:ss]/[h:mm:ss] trong giải thích AI -> nút bấm tua audio review tới đúng mốc
       const rvSeek = (tstr: string) => {
           const p = tstr.replace(/[\[\]]/g, '').split(':').map(Number);
@@ -6318,14 +6325,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           const isActive = rvActiveIdx === idx;
                           return (
                               <div key={idx} onClick={() => setReviewSectionIdx(idx)} style={{ flexShrink: 0, padding: '12px 22px', cursor: 'pointer', fontWeight: isActive ? 900 : 600, fontSize: 14, color: isActive ? C.accent : C.sub, borderBottom: isActive ? `3px solid ${C.accent}` : '3px solid transparent', transition: '0.15s', whiteSpace: 'nowrap' }}>
-                                  {rvIsListening ? `Part ${idx + 1}` : `Passage ${idx + 1}`}
+                                  {rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`}
                               </div>
                           );
                       })}
                   </div>
               )}
               {/* THANH AUDIO DÍNH TRÊN — sao chép phòng thi: play/pause · thời gian · thanh tua · tốc độ; luôn hiện, khỏi cuộn tìm */}
-              {rvIsListening && reviewQuiz.quiz.audioUrl && (() => {
+              {rvActiveIsListening && reviewQuiz.quiz.audioUrl && (() => {
                   const src = reviewQuiz.quiz.audioUrl;
                   const safeCur = Math.min(rvAudioCur, rvAudioDur || 0);
                   const pct = rvAudioDur ? (safeCur / rvAudioDur) * 100 : 0;
@@ -6367,7 +6374,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               })()}
               {renderMeetAudioNotice()}
               <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                  {reviewQuiz.quiz.type !== "Listening" && (() => {
+                  {!rvActiveIsListening && (() => {
                       const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
                       const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
                       const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
@@ -6386,7 +6393,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       return (
                       <div style={{ width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", borderRight: `1px solid ${C.border}`, lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
                           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
-                              <h2 style={{marginTop: 0, color: C.accent, margin: 0}}>READING PASSAGE</h2>
+                              <h2 style={{marginTop: 0, color: C.accent, margin: 0}}>{rvIsIntegrated ? `PART ${rvActiveIdx + 1}` : 'READING PASSAGE'}</h2>
                           </div>
                           {/* LIST OF HEADINGS — hiện rõ để đối chiếu (review matching headings) */}
                           {hasSlots && headingOpts.length > 0 && (
@@ -6441,7 +6448,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       );
                   })()}
                   {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
-                  {rvIsListening && (() => {
+                  {rvActiveIsListening && (() => {
                       let leftCtx = "";
                       const tr = reviewQuiz.quiz.transcript || "";
                       const downloadTranscript = () => {
