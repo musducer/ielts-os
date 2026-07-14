@@ -5449,9 +5449,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   
   const duplicateQuiz = (q: Quiz) => {
-      const newQuiz = { ...q, id: getTrueTime().toString(), title: q.title + " (Copy)", active: false, isLocked: true };
-      const nx = [newQuiz, ...quizzes];
-      setQuizzes(nx); syncData({ quizzes: nx });
+      const newQuiz = JSON.parse(JSON.stringify({
+          ...q,
+          id: getTrueTime().toString(),
+          title: q.title + " (Copy)",
+          active: false,
+          isLocked: true
+      }));
+      setQuizzes(prev => {
+          const nx = [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)];
+          syncData({ quizzes: nx });
+          return nx;
+      });
       alert("Exam duplicated successfully!");
   };
 
