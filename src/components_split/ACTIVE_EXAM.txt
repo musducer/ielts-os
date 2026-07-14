@@ -1068,7 +1068,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
                                           return (
-                                              <div key={q.id} className="idp-heading-slot-render">
+                                              <React.Fragment key={q.id}>
+                                              <div className="idp-heading-slot-render">
                                                   <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
                                                       <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
                                                       <div
@@ -1088,8 +1089,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           )}
                                                       </div>
                                                   </div>
-                                                  {chunks[i+1] && chunks[i+1].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[i+1])} />}
                                               </div>
+                                              {chunks[i+1] && chunks[i+1].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[i+1])} />}
+                                              </React.Fragment>
                                           );
                                       })}
                                   </div>
