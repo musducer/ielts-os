@@ -5960,7 +5960,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       (activeExam.questions || []).forEach((q: QuizQuestion, index: number) => {
           const ctx = q.groupContext || "";
           const ins = q.instruction || "";
-          if (cur && cur.questions.length > 0 && ins === cur.instruction && (ctx === "" || ctx === cur.context)) {
+          const sameContext = !cur || ctx === "" || cur.context === ctx;
+          const sameInstruction = !cur || ins === cur.instruction || (ins === "" && cur.instruction !== "");
+          if (cur && cur.questions.length > 0 && sameContext && sameInstruction) {
+              if (!cur.instruction && ins) cur.instruction = ins;
               cur.questions.push(q);
           } else {
               if (cur && cur.questions.length > 0) result.push(cur as ExamGroup);

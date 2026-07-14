@@ -5960,7 +5960,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       (activeExam.questions || []).forEach((q: QuizQuestion, index: number) => {
           const ctx = q.groupContext || "";
           const ins = q.instruction || "";
-          if (cur && cur.questions.length > 0 && ins === cur.instruction && (ctx === "" || ctx === cur.context)) {
+          const sameContext = !cur || ctx === "" || cur.context === ctx;
+          const sameInstruction = !cur || ins === cur.instruction || (ins === "" && cur.instruction !== "");
+          if (cur && cur.questions.length > 0 && sameContext && sameInstruction) {
+              if (!cur.instruction && ins) cur.instruction = ins;
               cur.questions.push(q);
           } else {
               if (cur && cur.questions.length > 0) result.push(cur as ExamGroup);
@@ -8064,10 +8067,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const ctx = q.groupContext || "";
                           const ins = q.instruction || "";
                           // Nếu groupContext có nội dung mới, TÁCH NHÓM MỚI. Nếu rỗng, vẫn gộp vào nhóm cũ để không bị rời rạc
-                          if (!tempGroup || (tempGroup.context !== ctx && ctx !== "") || tempGroup.instruction !== ins) {
+                          const sameContext = !tempGroup || ctx === "" || tempGroup.context === ctx;
+                          // Instruction can appear only on the first question of a contiguous group.
+                          // Keep following empty-instruction questions in that group so 29-34 stays together.
+                          const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "");
+                          if (!tempGroup || !sameContext || !sameInstruction) {
                               if (tempGroup) visibleGroups.push(tempGroup);
                               tempGroup = { context: ctx, instruction: ins, questions: [q] };
                           } else {
+                              if (!tempGroup.instruction && ins) tempGroup.instruction = ins;
                               tempGroup.questions.push(q);
                           }
                       });
