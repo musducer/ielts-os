@@ -151,7 +151,23 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
 // PWA: đăng ký service worker để cài app & chạy ổn định khi mạng chập chờn
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+      if (registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      registration.addEventListener('updatefound', () => {
+        const worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+            worker.postMessage({ type: 'SKIP_WAITING' });
+          }
+        });
+      });
       void registration.update();
     }).catch((err) => {
       console.warn('Service worker registration failed:', err);

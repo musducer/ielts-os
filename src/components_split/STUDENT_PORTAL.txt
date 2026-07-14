@@ -235,6 +235,19 @@
     const _nowMs = getTrueTime();  // FIX: dùng cùng đồng hồ với due (đặt bằng getTrueTime) -> thẻ mới luôn vào flashcard
     const dueCards = vocabCards.filter(c => (c.due || 0) <= _nowMs);
     const dueCount = dueCards.length;
+    const pronounceVocab = (text: string) => {
+      const phrase = String(text || '').trim();
+      if (!phrase || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      const utterance = new SpeechSynthesisUtterance(phrase);
+      utterance.lang = 'en-GB';
+      utterance.rate = 0.82;
+      const voices = window.speechSynthesis.getVoices();
+      utterance.voice = voices.find(v => /^en-GB/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang)) || null;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    };
+    const canPronounceVocab = (card: VocabCard) => (card.category || 'word') !== 'grammar' && Boolean(String(card.word || '').trim());
+    const renderPronounceButton = (card: VocabCard, compact = false, stopCardFlip = false) => !canPronounceVocab(card) ? null : <button type="button" title={`${t('vocab_pronounce')}: ${card.word}`} aria-label={`${t('vocab_pronounce')}: ${card.word}`} onClick={(e) => { if (stopCardFlip) e.stopPropagation(); pronounceVocab(card.word); }} style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: compact ? 24 : 27, height: compact ? 24 : 27, padding: 0, borderRadius: compact ? 6 : 7, border: `1px solid ${C.border}`, background: C.card, color: C.accent, cursor: 'pointer', flexShrink: 0}}><Ico name="volume2" size={compact ? 14 : 15} /></button>;
     const activeQuizzes = quizzes.filter(q => {
       if (!q.active) return false;
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
@@ -800,8 +813,8 @@
                                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setStudyFlipped(f => !f); } }}>
                                           {/* MẶT TRƯỚC — từ */}
                                           <div className="fc-face" style={{userSelect: 'none', border: `2px solid ${C.accent}40`, background: C.bg}}>
-                                              <div style={{fontSize: 30, fontWeight: 900, color: C.text, lineHeight: 1.15}}>{dueCards[0].word}</div>
-                                              {dueCards[0].phonetic && <div style={{fontSize: 14, color: C.sub, marginTop: 6}}>{dueCards[0].phonetic}</div>}
+                                              <div style={{fontSize: 30, fontWeight: 900, color: C.text, lineHeight: 1.15, display: 'inline-flex', alignItems: 'center', gap: 7}}><span>{dueCards[0].word}</span>{!dueCards[0].phonetic && renderPronounceButton(dueCards[0], false, true)}</div>
+                                              {dueCards[0].phonetic && <div style={{fontSize: 14, color: C.sub, marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5}}><span>{dueCards[0].phonetic}</span>{renderPronounceButton(dueCards[0], false, true)}</div>}
                                               <div style={{fontSize: 11, color: C.sub, marginTop: 18, textTransform: 'uppercase', letterSpacing: 1}}><Ico name="pointer" size={14} /> {t('vocab_tap_flip')}</div>
                                           </div>
                                           {/* MẶT SAU — nghĩa */}
@@ -843,9 +856,9 @@
                                       <div key={c.id} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, padding: '11px 13px', background: C.bg, borderRadius: 11, border: `1px solid ${C.border}`, borderLeft: `3px solid ${m.color}`}}>
                                           <div style={{flex: 1}}>
                                               <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
-                                                  <b style={{fontSize: 14.5}}>{c.word}</b>
+                                                  <b style={{fontSize: 14.5, display: 'inline-flex', alignItems: 'center', gap: 4}}><span>{c.word}</span>{!c.phonetic && renderPronounceButton(c, true)}</b>
                                                   <span style={{fontSize: 9.5, fontWeight: 800, background: `${m.color}18`, color: m.color, padding: '1px 7px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 4}}><Ico name={m.icon} size={11} /> {t('vocab_cat_' + (c.category || 'word'))}</span>
-                                                  {c.phonetic && <span style={{fontSize: 11, color: C.sub}}>{c.phonetic}</span>}
+                                                  {c.phonetic && <span style={{fontSize: 11, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 4}}><span>{c.phonetic}</span>{renderPronounceButton(c, true)}</span>}
                                                   {c.cefr && <span style={{fontSize: 10, fontWeight: 800, background: `${C.accent}15`, color: C.accent, padding: '1px 6px', borderRadius: 4}}>{c.cefr}</span>}
                                                   <span style={{fontSize: 9, color: C.succ, letterSpacing: 1}} title={`Box ${c.box || 1}/5`}>{'●'.repeat(c.box || 1)}{'○'.repeat(Math.max(0, 5 - (c.box || 1)))}</span>
                                               </div>

@@ -15,7 +15,9 @@
           if (!el) return;
           // Chặn mốc vượt độ dài file (mốc rác) — không tua bậy
           if (el.duration && isFinite(el.duration) && secs > el.duration) return;
-          el.currentTime = secs; el.play();
+          el.currentTime = secs;
+          setRvAudioCur(secs);
+          void requestReviewAudioPlayback();
       };
       const rvRenderExplain = (txt: string) => {
           const parts = String(txt || '').split(/(\[(?:\d{1,2}:)?\d{1,2}:\d{2}\])/g);
@@ -51,12 +53,21 @@
                       <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 24px', background: C.card, borderBottom: `1px solid ${C.border}`, zIndex: 80 }}>
                           <audio id="review-audio" ref={audioRef} preload="auto" playsInline src={src}
                               onContextMenu={(e) => e.preventDefault()}
-                              onLoadedMetadata={(e: any) => setRvAudioDur(e.currentTarget.duration || 0)}
-                              onTimeUpdate={(e: any) => setRvAudioCur(e.currentTarget.currentTime || 0)}
-                              onPlay={() => setRvAudioPlaying(true)} onPause={() => setRvAudioPlaying(false)} onEnded={() => setRvAudioPlaying(false)}
-                              onError={(e: any) => console.warn("Review audio source failed:", e.currentTarget.error)}
-                              style={{ display: 'none' }} />
-                          <button title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) requestReviewAudioPlayback(); else a.pause(); }}
+                              onLoadedMetadata={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioDur(audio.duration || 0); updateExamMediaSessionPosition(audio); }}
+                              onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
+                              onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
+                              onPlaying={handleExamAudioPlaying}
+                              onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
+                              onEnded={handleExamAudioEnded}
+                              onCanPlay={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; recordAudioDiagnostic("canplay", audio); if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio); }}
+                              onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
+                              onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
+                              onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
+                              onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
+                              onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
+                              onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
+                              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
+                          <button title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestReviewAudioPlayback(); else pauseExamAudioPlayback(); }}
                               style={{ width: 32, height: 32, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, color: C.text, cursor: 'pointer', padding: 0 }}>
                               {rvAudioPlaying ? <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
                           </button>
@@ -74,6 +85,7 @@
                       </div>
                   );
               })()}
+              {renderMeetAudioNotice()}
               <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                   {reviewQuiz.quiz.type !== "Listening" && (() => {
                       const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";

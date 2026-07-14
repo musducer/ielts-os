@@ -141,9 +141,11 @@
               return mergedQs.map((q: any) => {
                   const isMerged = q.isMerged;
                   const qIds = isMerged ? q.mergedIds : [q.id];
-                  const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === qIds[0]) + 1;
-                  const lastGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === qIds[qIds.length - 1]) + 1;
-                  const numberLabel = isMerged ? `${firstGlobalIdx}-${lastGlobalIdx}` : `${firstGlobalIdx}`;
+                  const allExamQuestions = activeExam.questions || [];
+                  const firstGlobalIdx = getQuizQuestionNumber(allExamQuestions, qIds[0]);
+                  const lastQForLabel = allExamQuestions.find((x: any) => x.id === qIds[qIds.length - 1]) || q;
+                  const lastGlobalIdx = getQuizQuestionNumber(allExamQuestions, qIds[qIds.length - 1]) + getQuestionPointCount(lastQForLabel) - 1;
+                  const numberLabel = lastGlobalIdx > firstGlobalIdx ? `${firstGlobalIdx}-${lastGlobalIdx}` : `${firstGlobalIdx}`;
                   
                   const isAnswered = isMerged 
                       ? qIds.some((id: string) => { const a = examAnswers[id]; return Array.isArray(a) ? a.length > 0 : (a !== undefined && a !== ""); })
@@ -340,7 +342,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               } else {
                                                   const selectedArr = Array.isArray(examAnswers[q.id]) ? examAnswers[q.id] as number[] : [];
                                                   let newArr = [...selectedArr];
-                                                  if (checked) newArr.push(optIndex); else newArr = newArr.filter(x => x !== optIndex);
+                                                  const maxChoices = getQuestionPointCount(q);
+                                                  if (checked) {
+                                                      if (!newArr.includes(optIndex)) {
+                                                          if (newArr.length >= maxChoices) { alert(`You can only choose ${maxChoices} options.`); return; }
+                                                          newArr.push(optIndex);
+                                                      }
+                                                  } else {
+                                                      newArr = newArr.filter(x => x !== optIndex);
+                                                  }
                                                   handleAnswerChange(q.id, newArr);
                                               }
                                           };
@@ -401,21 +411,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   
                   {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
                       <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""}
-                          onEnded={() => setAudioStatus("ENDED")}
-                          onPlaying={() => setAudioStatus("PLAYING")}
-                          onPause={(e: any) => { if (!e.currentTarget.ended) setAudioStatus("PAUSED"); }}
-                          onError={(e: any) => { audioPlayRequestRef.current = false; console.warn("Exam audio source failed:", e.currentTarget.error); setAudioStatus("IDLE"); }}
+                          onEnded={handleExamAudioEnded}
+                          onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
+                          onPlaying={handleExamAudioPlaying}
+                          onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
+                          onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
+                          onCanPlay={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; recordAudioDiagnostic("canplay", audio); if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio); }}
+                          onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
+                          onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
+                          onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
+                          onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
+                          onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
                           onLoadedMetadata={(e: any) => {
                               const audio = e.currentTarget as HTMLAudioElement;
                               setAudioDur(audio.duration || 0);
+                              updateExamMediaSessionPosition(audio);
                               if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
                                   audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
                                   setAudioCur(audio.currentTime);
+                                  updateExamMediaSessionPosition(audio);
                                   setPendingAudioResume(null);
                               }
                           }}
-                          onTimeUpdate={(e: any) => { if ((activeExam as any).audioMode === 'practice') setAudioCur(e.currentTarget.currentTime || 0); }}
-                          style={{display: 'none'}} />
+                          onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; if ((activeExam as any).audioMode === 'practice') setAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
+                          style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
                   )}
 
                   {globalStyles}
@@ -1003,6 +1022,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   : 'You will be listening to an audio clip during this test. You will not be permitted to pause or rewind the audio while answering the questions.'}
                           </div>
                           <div style={{ fontSize: 15, marginBottom: 22 }}>To continue, click Play.</div>
+                          {renderMeetAudioNotice()}
                           <button onClick={() => { void requestExamAudioPlayback(); }}
                               style={{ background: '#fff', color: '#111', border: 'none', padding: '10px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 9 }}>
                               <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
@@ -1024,9 +1044,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           // MATCHING HEADINGS: dropzone nam TREN moi doan, nhan A/B/C
                           const secQs = activeExam?.sections ? (activeExam.sections[currentSectionIndex]?.questions || []) : (activeExam?.questions || []);
                           const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
-                          const SLOT_RE = /<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>/i;
+                          // Marker từ DOCX có thể bị Word bọc bằng div/p/span/strong/em; nhận cả marker đứng trần.
+                          const headingSlotPattern = String.raw`(?:<(?:div|p)[^>]*>\s*)?(?:<(?:span|strong|b|em|i)[^>]*>\s*)*\[HEADING_SLOT\]\s*(?:<\/(?:span|strong|b|em|i)>\s*)*(?:<\/(?:div|p)>)?`;
+                          const SLOT_RE = new RegExp(headingSlotPattern, "i");
                           if (headingQs.length > 0 && SLOT_RE.test(passageHtml)) {
-                              const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>/gi);
+                              const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
                               const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
                               const lookupHeading = (roman: string) => {
                                   const o = hOpts.find((opt: any) => {
@@ -1453,7 +1475,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      const pct = audioDur ? (safeCur / audioDur) * 100 : 0;
                      return (
                          <div className="idp-audio-bar">
-                             <button className="idp-audio-play" title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestExamAudioPlayback(); else a.pause(); }}>
+                             <button className="idp-audio-play" title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestExamAudioPlayback(); else pauseExamAudioPlayback(); }}>
                                  {audioStatus === 'PLAYING' ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
                              </button>
                              <span className="idp-audio-time">{fmtTime(Math.floor(safeCur))}</span>
@@ -1471,7 +1493,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  })()}
 
                  {/* FOOTER NAVIGATOR — Bottom_Bar chuẩn IDP */}
-                 <div className="idp-footer-nav">
+                {renderMeetAudioNotice()}
+                <div className="idp-footer-nav">
                      {/* HÀNG NAVIGATOR: PASSAGE N + ô số (active) / "X of Y" (inactive) */}
                      <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflowX: 'auto', padding: '0 20px', gap: 20, height: '100%' }}>
                          {navGroups.map((grp, gIdx) => {
@@ -1498,18 +1521,28 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                                              {(() => {
                                                  const mergedNavQs: any[] = [];
+                                                 const allQs = activeExam.questions || [];
                                                  for (let i = 0; i < grp.questions.length; i++) {
                                                      const q = grp.questions[i];
                                                      if (q.type === 'CHOICE_MULTIPLE') {
                                                          let j = i + 1; const sharedIds = [q.id];
                                                          while (j < grp.questions.length && grp.questions[j].type === 'CHOICE_MULTIPLE' && JSON.stringify(grp.questions[j].options) === JSON.stringify(q.options)) { sharedIds.push(grp.questions[j].id); j++; }
-                                                         if (sharedIds.length > 1) { mergedNavQs.push({ isMerged: true, mergedIds: sharedIds, startIndex: grp.startIndex + i, endIndex: grp.startIndex + j - 1 }); i = j - 1; continue; }
+                                                         if (sharedIds.length > 1) {
+                                                             const lastQ = grp.questions[j - 1];
+                                                             const startNo = getQuizQuestionNumber(allQs, q.id);
+                                                             const endNo = getQuizQuestionNumber(allQs, lastQ.id) + getQuestionPointCount(lastQ) - 1;
+                                                             mergedNavQs.push({ isMerged: true, mergedIds: sharedIds, startIndex: startNo - 1, endIndex: endNo - 1 });
+                                                             i = j - 1;
+                                                             continue;
+                                                         }
                                                      }
-                                                     mergedNavQs.push({ isMerged: false, id: q.id, startIndex: grp.startIndex + i });
+                                                     const startNo = getQuizQuestionNumber(allQs, q.id);
+                                                     const endNo = startNo + getQuestionPointCount(q) - 1;
+                                                     mergedNavQs.push({ isMerged: false, id: q.id, startIndex: startNo - 1, endIndex: endNo - 1 });
                                                  }
                                                  return mergedNavQs.map(mq => {
                                                      const isMerged = mq.isMerged; const qIds = isMerged ? mq.mergedIds : [mq.id];
-                                                     const numberLabel = isMerged ? `${mq.startIndex + 1}-${mq.endIndex + 1}` : `${mq.startIndex + 1}`;
+                                                     const numberLabel = mq.endIndex > mq.startIndex ? `${mq.startIndex + 1}-${mq.endIndex + 1}` : `${mq.startIndex + 1}`;
                                                      const isAns = qIds.some((id: string) => Array.isArray(examAnswers[id]) ? (examAnswers[id] as any[]).length > 0 : (examAnswers[id] !== undefined && examAnswers[id] !== ""));
                                                      const isFlagged = qIds.some((id: string) => flaggedQuestions?.includes(id));
                                                      const isCur = qIds.includes(curId);

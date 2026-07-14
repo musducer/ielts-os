@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, onSnapshot, runTransaction, setDoc } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -22,6 +23,7 @@ try {
   db = initializeFirestore(app, {});
 }
 const auth = getAuth(app);
+const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
 const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
@@ -348,6 +350,7 @@ const resources = {
       vocab_list: "List",
       vocab_done_today: "All caught up for today!",
       vocab_tap_flip: "Tap to flip",
+      vocab_pronounce: "Listen to pronunciation",
       vocab_forgot: "Forgot",
       vocab_remember: "Got it",
       vocab_cat_all: "All",
@@ -631,6 +634,11 @@ const resources = {
       eb_max_attempts: "MAX ATTEMPTS",
       eb_audio_link: "AUDIO LINK (MP3)",
       eb_audio_ph: "Enter the audio file URL...",
+      eb_upload_audio: "Upload audio",
+      eb_audio_uploading: "Uploading audio...",
+      eb_audio_ready: "Hosted on your site",
+      eb_audio_upload_failed: "Audio upload failed",
+      eb_audio_hosted_hint: "Upload MP3/M4A/WAV to create a clean site audio link.",
       eb_audio_mode: "AUDIO MODE",
       eb_audio_strict: "Exam (play once)",
       eb_audio_practice: "Practice (replay)",
@@ -916,6 +924,7 @@ const resources = {
       vocab_list: "Danh sách",
       vocab_done_today: "Đã ôn hết từ cho hôm nay!",
       vocab_tap_flip: "Chạm để lật",
+      vocab_pronounce: "Nghe phát âm",
       vocab_forgot: "Chưa nhớ",
       vocab_remember: "Đã nhớ",
       vocab_cat_all: "Tất cả",
@@ -1198,6 +1207,11 @@ const resources = {
       eb_max_attempts: "SỐ LẦN LÀM TỐI ĐA",
       eb_audio_link: "LINK AUDIO (MP3)",
       eb_audio_ph: "Nhập đường dẫn file âm thanh...",
+      eb_upload_audio: "Tải audio lên",
+      eb_audio_uploading: "Đang tải audio...",
+      eb_audio_ready: "Đã lưu trên web của bạn",
+      eb_audio_upload_failed: "Tải audio lỗi",
+      eb_audio_hosted_hint: "Tải MP3/M4A/WAV để tạo link audio sạch của web mình.",
       eb_audio_mode: "CHẾ ĐỘ AUDIO",
       eb_audio_strict: "Thi thật (nghe 1 lần)",
       eb_audio_practice: "Luyện tập (tua/nghe lại)",
@@ -1292,6 +1306,39 @@ interface QuizQuestion { id: string; type: QuestionType; subType?: string; instr
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean;  id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
+
+const getQuestionPointCount = (q: any) =>
+  q?.type === "CHOICE_MULTIPLE" && Array.isArray(q.correctAnswer)
+    ? Math.max(1, q.correctAnswer.length)
+    : 1;
+
+const getQuizPointTotal = (quiz: any) =>
+  (quiz?.questions || []).reduce((sum: number, q: any) => sum + getQuestionPointCount(q), 0);
+
+const getQuizQuestionNumber = (questions: any[] = [], qId: string) => {
+  let n = 1;
+  for (const q of questions) {
+    if (q?.id === qId) return n;
+    n += getQuestionPointCount(q);
+  }
+  const fallbackIdx = questions.findIndex((q: any) => q?.id === qId);
+  return fallbackIdx >= 0 ? fallbackIdx + 1 : 1;
+};
+
+const getQuizQuestionLabel = (questions: any[] = [], q: any) => {
+  const start = getQuizQuestionNumber(questions, q?.id);
+  const end = start + getQuestionPointCount(q) - 1;
+  return end > start ? `${start}-${end}` : `${start}`;
+};
+
+const getChoiceMultipleScore = (q: any, studentAns: any) => {
+  const correctArr = (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]).map(Number);
+  const selectedArr = Array.isArray(studentAns)
+    ? studentAns.map(Number)
+    : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : []);
+  const selected = Array.from(new Set(selectedArr.filter(Number.isFinite)));
+  return selected.filter(x => correctArr.includes(x)).length;
+};
 interface LiveSession { id: string; studentId: string; studentName: string; quizId: string; quizTitle: string; answeredCount: number; totalQ: number; lastUpdate: number; isCheating: boolean; progressPct: number; }
 
 // ==========================================
@@ -1614,6 +1661,7 @@ const Ico = ({ name, size = 18, color = "currentColor", sw = 2, style }: { name:
         sparkles: <><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></>,
         mic: <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></>,
         headphones: <><path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5a9 9 0 0 1 18 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/></>,
+        volume2: <><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></>,
         dot: <><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/></>,
         arrowRight: <><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>,
         arrowUp: <><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></>,
@@ -2685,6 +2733,8 @@ export default function IeltsSupremeOS() {
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
+  const [audioUploadProgress, setAudioUploadProgress] = useState<number | null>(null);
+  const [audioUploadMsg, setAudioUploadMsg] = useState("");
   const [vocabView, setVocabView] = useState<"list" | "study" | "game">("study");
   const [vocabFilter, setVocabFilter] = useState<string>("all");
   const [vocabKinds, setVocabKinds] = useState<string[]>(["word", "phrasal_verb", "idiom", "collocation", "grammar"]);
@@ -2743,6 +2793,9 @@ export default function IeltsSupremeOS() {
   const [audioRate, setAudioRate] = useState(1); // tốc độ phát (practice): 1 / 1.25 / 1.5 / 2
   const [audioDur, setAudioDur] = useState(0);   // tổng thời lượng audio
   const [_audioVolume, _setAudioVolume] = useState<number>(1);
+  const [meetAudioIssue, setMeetAudioIssue] = useState(false);
+  const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
+  const [audioDiagText, setAudioDiagText] = useState("");
   const [_hideTimer, _setHideTimer] = useState(false);
   const [timeAlert, setTimeAlert] = useState("");
   const [_isSepia, _setIsSepia] = useState(false);
@@ -3142,36 +3195,297 @@ export default function IeltsSupremeOS() {
   const [enableTimerBeep, _setEnableTimerBeep] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioPlayRequestRef = useRef(false);
+  const examAudioShouldPlayRef = useRef(false);
+  const examAudioResumeTimerRef = useRef<number | null>(null);
+  const examAudioRecoveryAttemptsRef = useRef(0);
+  const externalPauseTimesRef = useRef<number[]>([]);
+  const meetAudioIssueRef = useRef(false);
+  const androidAudioCtxRef = useRef<AudioContext | null>(null);
   const examTimerRef = useRef<number | null>(null);
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
 
-  const requestExamAudioPlayback = async () => {
-    const audio = audioRef.current;
-    if (!audio || audioPlayRequestRef.current || (!audio.currentSrc && !audio.src)) return;
+  const isListeningExamAudio = () => {
+    if (!activeExam) return false;
+    const type = String(activeExam.type || "").toLowerCase();
+    return type.includes("listen") || activeExam.type === "Integrated";
+  };
 
-    audioPlayRequestRef.current = true;
-    if (audio.ended) audio.currentTime = 0;
-    audio.playbackRate = audioRate;
-    setAudioStatus("LOADING");
-    try {
-      await audio.play();
-    } catch (error) {
-      // Keep the existing Play screen available: browser/network failures must never look like playback started.
-      console.warn("Exam audio could not start:", error);
-      setAudioStatus("IDLE");
-    } finally {
-      audioPlayRequestRef.current = false;
+  const isListeningReviewAudio = () => {
+    if (!reviewQuiz?.quiz?.audioUrl) return false;
+    const type = String(reviewQuiz.quiz.type || "").toLowerCase();
+    return type.includes("listen") || reviewQuiz.quiz.type === "Integrated";
+  };
+
+  const hasListeningAudio = () => isListeningExamAudio() || isListeningReviewAudio();
+
+  const isStrictExamAudio = () => {
+    return isListeningExamAudio() && (activeExam as any).audioMode !== "practice";
+  };
+
+  const clearExamAudioResumeTimer = () => {
+    if (examAudioResumeTimerRef.current !== null) {
+      window.clearTimeout(examAudioResumeTimerRef.current);
+      examAudioResumeTimerRef.current = null;
     }
   };
 
-  const requestReviewAudioPlayback = () => {
+  const setManagedAudioLoading = () => {
+    if (isListeningReviewAudio()) setRvAudioPlaying(false);
+    else setAudioStatus("LOADING");
+  };
+
+  const getAudioModeLabel = () => {
+    if (isListeningReviewAudio()) return "review";
+    if (!activeExam) return "none";
+    return String((activeExam as any).audioMode || "once");
+  };
+
+  const isTouchAudioHost = () => {
+    return Boolean(
+      navigator.maxTouchPoints > 0 ||
+      (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+      /Android|Mobile|Tablet|SamsungBrowser/i.test(navigator.userAgent)
+    );
+  };
+
+  const recordAudioDiagnostic = (event: string, audio?: HTMLAudioElement | null, detail = "") => {
+    const line = JSON.stringify({
+      at: new Date().toISOString(),
+      event,
+      mode: getAudioModeLabel(),
+      t: Number((audio?.currentTime || 0).toFixed(2)),
+      paused: audio?.paused,
+      ended: audio?.ended,
+      readyState: audio?.readyState,
+      networkState: audio?.networkState,
+      error: audio?.error ? `${audio.error.code}:${audio.error.message || ""}` : "",
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      touchHost: isTouchAudioHost(),
+      maxTouchPoints: navigator.maxTouchPoints || 0,
+      attempts: examAudioRecoveryAttemptsRef.current,
+      detail,
+      ua: navigator.userAgent
+    });
+    setAudioDiagLog(prev => [...prev.slice(-79), line]);
+  };
+
+  const warmAndroidAudioPath = async () => {
+    if (!isTouchAudioHost()) return;
+    try {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      const ctx = androidAudioCtxRef.current || new AudioContextCtor();
+      androidAudioCtxRef.current = ctx;
+      if (ctx.state === "suspended") await ctx.resume();
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.00001;
+      source.buffer = buffer;
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(0);
+    } catch (error) {
+      recordAudioDiagnostic("audio-context-warm-failed", audioRef.current, error instanceof Error ? error.name : String(error));
+    }
+  };
+
+  const rememberExternalPause = (audio: HTMLAudioElement) => {
+    const now = Date.now();
+    externalPauseTimesRef.current = [...externalPauseTimesRef.current.filter(t => now - t < 7000), now];
+    if (externalPauseTimesRef.current.length >= 3) {
+      meetAudioIssueRef.current = true;
+      setMeetAudioIssue(true);
+      recordAudioDiagnostic("external-audio-focus-suspected", audio, `${externalPauseTimesRef.current.length} pauses/7s`);
+    }
+  };
+
+  const copyAudioDiagnostic = async () => {
+    const audio = audioRef.current;
+    const snapshot = JSON.stringify({
+      at: new Date().toISOString(),
+      issue: "Android Google Meet audio interruption",
+      mode: getAudioModeLabel(),
+      currentTime: audio?.currentTime || 0,
+      duration: audio?.duration || 0,
+      paused: audio?.paused,
+      readyState: audio?.readyState,
+      networkState: audio?.networkState,
+      src: audio?.currentSrc || audio?.src || "",
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      touchHost: isTouchAudioHost(),
+      maxTouchPoints: navigator.maxTouchPoints || 0,
+      userAgent: navigator.userAgent
+    });
+    const text = [snapshot, ...audioDiagLog].join("\n");
+    setAudioDiagText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Audio diagnostic copied. If paste is empty, use the visible log box.");
+    } catch {
+      window.prompt("Copy audio diagnostic", text);
+    }
+  };
+
+  const renderMeetAudioNotice = () => meetAudioIssue ? (
+    <div style={{ margin: '8px 0', padding: '10px 12px', border: '1px solid #f59e0b', background: '#fffbeb', color: '#78350f', borderRadius: 6, fontSize: 13, lineHeight: 1.35 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <span>Google Meet on Android is interrupting audio focus. Mic on/off may not fix this; use Meet screen share audio if available, or use Zoom/desktop for stable listening.</span>
+        <span style={{ display: 'inline-flex', gap: 8 }}>
+          <button onClick={() => { if (isListeningReviewAudio()) void requestReviewAudioPlayback(); else void requestExamAudioPlayback(); }} style={{ border: '1px solid #92400e', background: '#fff7ed', color: '#78350f', borderRadius: 4, padding: '5px 9px', fontWeight: 800, cursor: 'pointer' }}>Resume</button>
+          <button onClick={copyAudioDiagnostic} style={{ border: '1px solid #92400e', background: '#fff7ed', color: '#78350f', borderRadius: 4, padding: '5px 9px', fontWeight: 800, cursor: 'pointer' }}>Show log</button>
+        </span>
+      </div>
+      {audioDiagText && (
+        <textarea
+          readOnly
+          value={audioDiagText}
+          onFocus={(e) => e.currentTarget.select()}
+          style={{ marginTop: 8, width: '100%', height: 96, boxSizing: 'border-box', border: '1px solid #f59e0b', borderRadius: 4, background: '#fff', color: '#111827', fontFamily: 'Consolas, monospace', fontSize: 11 }}
+        />
+      )}
+    </div>
+  ) : null;
+
+  const recoverInterruptedExamAudio = (audio: HTMLAudioElement) => {
+    if (!hasListeningAudio() || !examAudioShouldPlayRef.current || audio.ended) return;
+    if (meetAudioIssueRef.current) {
+      setManagedAudioLoading();
+      return;
+    }
+    if (examAudioResumeTimerRef.current !== null) return;
+    setManagedAudioLoading();
+    const retryDelay = Math.min(1500, 120 + examAudioRecoveryAttemptsRef.current * 180);
+    examAudioResumeTimerRef.current = window.setTimeout(async () => {
+      examAudioResumeTimerRef.current = null;
+      if (!hasListeningAudio() || !examAudioShouldPlayRef.current || audioRef.current !== audio || !audio.paused || audio.ended) return;
+      if (audioPlayRequestRef.current) {
+        recoverInterruptedExamAudio(audio);
+        return;
+      }
+      audioPlayRequestRef.current = true;
+      try {
+        audio.playbackRate = isListeningReviewAudio() ? playbackRate : audioRate;
+        await warmAndroidAudioPath();
+        recordAudioDiagnostic("auto-resume-attempt", audio);
+        await audio.play();
+      } catch (error) {
+        examAudioRecoveryAttemptsRef.current += 1;
+        recordAudioDiagnostic("auto-resume-failed", audio, error instanceof Error ? `${error.name}:${error.message}` : String(error));
+        console.warn("Exam audio auto-resume failed:", error);
+      } finally {
+        audioPlayRequestRef.current = false;
+        if (examAudioShouldPlayRef.current && audio.paused && !audio.ended) recoverInterruptedExamAudio(audio);
+      }
+    }, retryDelay);
+  };
+
+  const requestManagedAudioPlayback = async (rate: number) => {
     const audio = audioRef.current;
     if (!audio || (!audio.currentSrc && !audio.src)) return;
+
+    clearExamAudioResumeTimer();
+    meetAudioIssueRef.current = false;
+    setMeetAudioIssue(false);
+    externalPauseTimesRef.current = [];
+    examAudioShouldPlayRef.current = true;
+    examAudioRecoveryAttemptsRef.current = 0;
+    if (audioPlayRequestRef.current) return;
+    audioPlayRequestRef.current = true;
     if (audio.ended) audio.currentTime = 0;
-    audio.playbackRate = playbackRate;
-    void audio.play().catch((error) => console.warn("Review audio could not start:", error));
+    audio.playbackRate = rate;
+    setManagedAudioLoading();
+    try {
+      await warmAndroidAudioPath();
+      recordAudioDiagnostic("user-play-attempt", audio);
+      await audio.play();
+    } catch (error) {
+      recordAudioDiagnostic("user-play-failed", audio, error instanceof Error ? `${error.name}:${error.message}` : String(error));
+      console.warn("Exam audio could not start:", error);
+    } finally {
+      audioPlayRequestRef.current = false;
+      if (examAudioShouldPlayRef.current && audio.paused && !audio.ended) recoverInterruptedExamAudio(audio);
+    }
   };
+
+  const requestExamAudioPlayback = () => requestManagedAudioPlayback(audioRate);
+
+  const pauseExamAudioPlayback = () => {
+    examAudioShouldPlayRef.current = false;
+    clearExamAudioResumeTimer();
+    const audio = audioRef.current;
+    if (audio) audio.pause();
+    if (isListeningReviewAudio()) setRvAudioPlaying(false);
+  };
+
+  const handleExamAudioPlaying = () => {
+    clearExamAudioResumeTimer();
+    examAudioShouldPlayRef.current = true;
+    examAudioRecoveryAttemptsRef.current = 0;
+    recordAudioDiagnostic("playing", audioRef.current);
+    if ("mediaSession" in navigator) {
+      try { navigator.mediaSession.playbackState = "playing"; } catch { }
+    }
+    if (isListeningReviewAudio()) setRvAudioPlaying(true);
+    else setAudioStatus("PLAYING");
+  };
+
+  const handleExamAudioPause = (audio: HTMLAudioElement) => {
+    if (audio.ended) return;
+    recordAudioDiagnostic("pause", audio);
+    if (hasListeningAudio() && examAudioShouldPlayRef.current) {
+      rememberExternalPause(audio);
+      recoverInterruptedExamAudio(audio);
+      return;
+    }
+    if ("mediaSession" in navigator) {
+      try { navigator.mediaSession.playbackState = "paused"; } catch { }
+    }
+    if (isListeningReviewAudio()) setRvAudioPlaying(false);
+    else setAudioStatus("PAUSED");
+  };
+
+  const handleExamAudioEnded = () => {
+    examAudioShouldPlayRef.current = false;
+    clearExamAudioResumeTimer();
+    recordAudioDiagnostic("ended", audioRef.current);
+    if ("mediaSession" in navigator) {
+      try { navigator.mediaSession.playbackState = "none"; } catch { }
+    }
+    if (isListeningReviewAudio()) setRvAudioPlaying(false);
+    else setAudioStatus("ENDED");
+  };
+
+  const handleExamAudioError = (error: MediaError | null) => {
+    recordAudioDiagnostic("error", audioRef.current, error ? `${error.code}:${error.message || ""}` : "");
+    if (error?.code === MediaError.MEDIA_ERR_ABORTED && examAudioShouldPlayRef.current && audioRef.current) {
+      recoverInterruptedExamAudio(audioRef.current);
+      return;
+    }
+    examAudioShouldPlayRef.current = false;
+    clearExamAudioResumeTimer();
+    audioPlayRequestRef.current = false;
+    console.warn("Exam audio source failed:", error);
+    if (isListeningReviewAudio()) setRvAudioPlaying(false);
+    else setAudioStatus("IDLE");
+  };
+
+  const updateExamMediaSessionPosition = (audio: HTMLAudioElement) => {
+    const mediaSession = (navigator as any).mediaSession;
+    if (!mediaSession?.setPositionState || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    try {
+      mediaSession.setPositionState({
+        duration: audio.duration,
+        playbackRate: audio.playbackRate || 1,
+        position: Math.min(audio.currentTime || 0, audio.duration)
+      });
+    } catch { }
+  };
+
+  const requestReviewAudioPlayback = () => requestManagedAudioPlayback(playbackRate);
 
   const [resFilterStudent, setResFilterStudent] = useState<string>("");
   const [resFilterQuiz, setResFilterQuiz] = useState<string>("");
@@ -3635,7 +3949,75 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   useEffect(() => { if (audioRef.current) audioRef.current.volume = _audioVolume; }, [_audioVolume]);
 
   useEffect(() => {
+      setMeetAudioIssue(false);
+      meetAudioIssueRef.current = false;
+      setAudioDiagLog([]);
+      setAudioDiagText("");
+      externalPauseTimesRef.current = [];
+      examAudioRecoveryAttemptsRef.current = 0;
+  }, [activeExam?.id, activeExam?.audioUrl, reviewQuiz?.quiz?.id, reviewQuiz?.quiz?.audioUrl]);
+
+  useEffect(() => {
+      const currentAudio = isListeningReviewAudio() ? reviewQuiz?.quiz : activeExam;
+      if (!currentAudio?.audioUrl || !hasListeningAudio() || !("mediaSession" in navigator)) return;
+      if (isTouchAudioHost()) return;
+      try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+              title: currentAudio.title || "IELTS Listening Audio",
+              artist: "IELTS OS",
+              album: "Listening Test"
+          });
+          navigator.mediaSession.setActionHandler("play", () => {
+              if (isListeningReviewAudio()) void requestReviewAudioPlayback();
+              else void requestExamAudioPlayback();
+          });
+          navigator.mediaSession.setActionHandler("pause", () => {
+              const audio = audioRef.current;
+              if (audio && examAudioShouldPlayRef.current) recoverInterruptedExamAudio(audio);
+          });
+          navigator.mediaSession.setActionHandler("seekbackward", (details: MediaSessionActionDetails) => {
+              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              const audio = audioRef.current;
+              if (!audio) return;
+              audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
+              if (isListeningReviewAudio()) setRvAudioCur(audio.currentTime || 0);
+              else setAudioCur(audio.currentTime || 0);
+              updateExamMediaSessionPosition(audio);
+          });
+          navigator.mediaSession.setActionHandler("seekforward", (details: MediaSessionActionDetails) => {
+              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              const audio = audioRef.current;
+              if (!audio) return;
+              audio.currentTime = Math.min(audio.duration || Number.MAX_SAFE_INTEGER, audio.currentTime + (details.seekOffset || 10));
+              if (isListeningReviewAudio()) setRvAudioCur(audio.currentTime || 0);
+              else setAudioCur(audio.currentTime || 0);
+              updateExamMediaSessionPosition(audio);
+          });
+      } catch { }
+      return () => {
+          try {
+              navigator.mediaSession.setActionHandler("play", null);
+              navigator.mediaSession.setActionHandler("pause", null);
+              navigator.mediaSession.setActionHandler("seekbackward", null);
+              navigator.mediaSession.setActionHandler("seekforward", null);
+              navigator.mediaSession.playbackState = "none";
+          } catch { }
+      };
+  }, [activeExam?.id, activeExam?.audioUrl, (activeExam as any)?.audioMode, reviewQuiz?.quiz?.id, reviewQuiz?.quiz?.audioUrl, audioRate, playbackRate]);
+
+  useEffect(() => {
+      if (!hasListeningAudio()) return;
+      const watchdog = window.setInterval(() => {
+          const audio = audioRef.current;
+          if (audio && examAudioShouldPlayRef.current && audio.paused && !audio.ended) recoverInterruptedExamAudio(audio);
+      }, 500);
+      return () => window.clearInterval(watchdog);
+  }, [activeExam?.id, (activeExam as any)?.audioMode, reviewQuiz?.quiz?.id, audioRate, playbackRate, meetAudioIssue]);
+
+  useEffect(() => {
       if (!activeExam) {
+          examAudioShouldPlayRef.current = false;
+          clearExamAudioResumeTimer();
           if (audioRef.current) {
               audioRef.current.pause();
               audioRef.current.currentTime = 0;
@@ -4059,6 +4441,60 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   };
 
   // Listening: AI nghe audio (1 file lớn) -> upload 1 lần + chép lời theo từng cửa sổ 8 phút rồi ghép -> lưu vào đề
+  const makeAudioSafeName = (name: string) => {
+    const ext = (name.match(/\.[a-z0-9]+$/i)?.[0] || ".mp3").toLowerCase();
+    const base = name.replace(/\.[a-z0-9]+$/i, "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "audio";
+    return `${base}${ext}`;
+  };
+
+  const base64UrlEncode = (value: string) =>
+    btoa(unescape(encodeURIComponent(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+  const buildHostedAudioUrl = (storagePath: string, token: string, fileName: string) => {
+    const host = getApiBase() || window.location.origin;
+    const key = base64UrlEncode(`${storagePath}|${token}`);
+    return `${host}/api/audio/${key}/${encodeURIComponent(fileName)}`;
+  };
+
+  const handleAudioFileUpload = async (file: File) => {
+    const quiz = editingQuizRef.current || editingQuiz;
+    if (!quiz) return;
+    if (!file.type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|aac)$/i.test(file.name)) {
+      alert("File này không phải audio hợp lệ.");
+      return;
+    }
+    const safeName = makeAudioSafeName(file.name);
+    const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
+    const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
+    const task = uploadBytesResumable(storageRef(storage, path), file, {
+      contentType: file.type || "audio/mpeg",
+      customMetadata: { originalName: file.name, quizId },
+    });
+    setAudioUploadProgress(0);
+    setAudioUploadMsg(t("eb_audio_uploading"));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        task.on("state_changed",
+          snap => setAudioUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+          reject,
+          () => resolve()
+        );
+      });
+      const rawUrl = await getDownloadURL(task.snapshot.ref);
+      const token = new URL(rawUrl).searchParams.get("token") || "";
+      const hostedUrl = buildHostedAudioUrl(path, token, safeName);
+      setEditingQuiz((prev: any) => prev ? { ...prev, audioUrl: hostedUrl } : prev);
+      setAudioUploadMsg(t("eb_audio_ready"));
+    } catch (e: any) {
+      console.error("Audio upload failed:", e);
+      setAudioUploadMsg(t("eb_audio_upload_failed"));
+      alert((e?.message || String(e)) + "\n\nNếu lỗi permission, cần bật Firebase Storage và cho teacher được ghi vào exam-audio/.");
+    } finally {
+      setTimeout(() => setAudioUploadProgress(null), 1600);
+    }
+  };
+
   const handleTranscribe = async () => {
     const quiz = editingQuiz;
     if (!quiz || transcribeLoading) return;
@@ -5125,8 +5561,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       if (studentAns === q.correctAnswer) newScore++; 
                   } 
                   else if (q.type === "CHOICE_MULTIPLE") {
-                      const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-                      if (studentAns !== undefined && studentAns !== "" && correctArr.includes(Number(studentAns))) newScore++;
+                      newScore += getChoiceMultipleScore(q, studentAns);
                   }
                   else {
                       if (studentAns !== undefined && studentAns !== null) {
@@ -5136,7 +5571,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       }
                   }
           });
-          return {...r, score: newScore, band: getIeltsBand(newScore, qz.questions.length, qz.type)};
+          const totalPoints = getQuizPointTotal(qz);
+          return {...r, score: newScore, total: totalPoints, band: getIeltsBand(newScore, totalPoints, qz.type)};
       });
       setQuizResults(nxResults); syncData({quizResults: nxResults});
       alert("Successfully recalculated all past attempts!");
@@ -5160,15 +5596,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (!state.activeExam) return;
 
       let score = 0;
-      const totalQ = state.activeExam.questions.length;
+      const totalQ = getQuizPointTotal(state.activeExam);
       state.activeExam.questions.forEach((q) => {
           const studentAns = state.examAnswers[q.id];
           if (q.type === "CHOICE" || q.type === "MATCHING") { 
                   if (studentAns === q.correctAnswer) score++; 
               } 
               else if (q.type === "CHOICE_MULTIPLE") {
-                  const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-                  if (studentAns !== undefined && studentAns !== "" && correctArr.includes(Number(studentAns))) score++;
+                  score += getChoiceMultipleScore(q, studentAns);
               }
               else {
                   if (studentAns !== undefined && studentAns !== null) {

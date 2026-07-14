@@ -3,8 +3,11 @@ import io
 import os
 import time
 import traceback
+import base64
+import urllib.parse
 from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -12,6 +15,8 @@ from typing import List, Dict, Any
 
 app = FastAPI(docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
 VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER"]
 
@@ -370,6 +375,31 @@ async def upload_docx(file: UploadFile = File(...)):
     except Exception as e:
         return {"success": False, "error": f"Lỗi xử lý file: {str(e)}\n{traceback.format_exc()}"}
 
+def _decode_audio_key(audio_key: str):
+    raw = audio_key.replace("-", "+").replace("_", "/")
+    raw += "=" * (-len(raw) % 4)
+    decoded = base64.b64decode(raw.encode("ascii")).decode("utf-8")
+    storage_path, token = decoded.split("|", 1)
+    if not storage_path.startswith("exam-audio/") or not token:
+        raise ValueError("invalid audio key")
+    return storage_path, token
+
+@app.get("/api/audio/{audio_key}/{filename}")
+async def hosted_audio(audio_key: str, filename: str):
+    try:
+        storage_path, token = _decode_audio_key(audio_key)
+        target = (
+            "https://firebasestorage.googleapis.com/v0/b/"
+            + urllib.parse.quote(FIREBASE_STORAGE_BUCKET, safe="")
+            + "/o/"
+            + urllib.parse.quote(storage_path, safe="")
+            + "?alt=media&token="
+            + urllib.parse.quote(token, safe="")
+        )
+        return RedirectResponse(target, status_code=302)
+    except Exception:
+        return {"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."}
+
 def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
     import json as _json
@@ -401,6 +431,57 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
         detail = ""
         try:
             detail = e.read().decode("utf-8")[:200]
+        except Exception:
+            pass
+        if e.code == 429:
+            return "", "RATE_LIMIT"
+        if e.code in (401, 403):
+            return "", "AUTH"
+        return "", f"{model} -> {e.code}: {detail}"
+    except Exception as e:
+        return "", f"{model} -> {str(e)}"
+
+
+def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, reasoning_effort, json_mode=False):
+    """OpenAI Responses API for higher-precision vocab extraction/classification."""
+    import json as _json
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    body = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_output_tokens": max_tokens,
+        "store": False,
+    }
+    if json_mode:
+        body["text"] = {"format": {"type": "json_object"}}
+    if reasoning_effort and reasoning_effort != "none":
+        body["reasoning"] = {"effort": reasoning_effort}
+    try:
+        req = _urlreq.Request(
+            "https://api.openai.com/v1/responses",
+            data=_json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                     "Accept": "application/json", "User-Agent": "IELTS-OS/1.0"},
+        )
+        with _urlreq.urlopen(req, timeout=90) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        text = (data.get("output_text") or "").strip()
+        if not text:
+            chunks = []
+            for out in data.get("output") or []:
+                for part in out.get("content") or []:
+                    if part.get("type") in ("output_text", "text") and part.get("text"):
+                        chunks.append(part.get("text"))
+            text = "\n".join(chunks).strip()
+        return (text, "") if text else ("", f"{model}: rỗng")
+    except _urlerr.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8")[:300]
         except Exception:
             pass
         if e.code == 429:
@@ -522,6 +603,24 @@ def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temper
 # Tương thích ngược: các nơi cũ gọi _gemini_generate -> chuyển sang Groq (bỏ tham số đa phương thức/Gemini).
 def _gemini_generate(sys_prompt, user_prompt, max_tokens=2048, response_mime=None, extra_parts=None, temperature=0.7, timeout_s=45):
     return _groq_chat(sys_prompt, user_prompt, max_tokens=max_tokens, temperature=temperature, json_mode=bool(response_mime))
+
+
+def _vocab_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 4096, json_mode: bool = False,
+                model: str = None, reasoning_effort: str = "medium"):
+    """Vocab-only model router. Prefer OpenAI if configured; keep legacy free providers as fallback."""
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        requested_openai_model = model if model and str(model).startswith("gpt-") else None
+        openai_model = os.environ.get("OPENAI_VOCAB_MODEL") or os.environ.get("OPENAI_MODEL") or requested_openai_model or "gpt-5.6-terra"
+        openai_effort = os.environ.get("OPENAI_VOCAB_REASONING", reasoning_effort or "medium")
+        text, err = _openai_responses_once(openai_key, openai_model, sys_prompt, user_prompt, max_tokens, openai_effort, json_mode=json_mode)
+        if text:
+            return text, ""
+        # Bad OpenAI config should not break class. Fall back to existing providers if present.
+        if err not in ("AUTH", "RATE_LIMIT"):
+            print("OpenAI vocab model failed; falling back:", err)
+    return _groq_chat(sys_prompt, user_prompt, max_tokens=max_tokens, temperature=0.2,
+                      json_mode=json_mode, model=model, reasoning_effort=reasoning_effort)
 
 
 def _friendly_err(err: str, lang: str) -> str:
@@ -704,8 +803,9 @@ _VOCAB_CLASSIFY_SYS = (
     "Also 'look at'/'listen to'/'wait for' (basic verb + prep) are worthless => keep:false.\n"
     "4) ESTABLISHED idiom — a FIXED, dictionary-attested FIGURATIVE expression ('a blessing in disguise', 'break new ground', "
     "'the tip of the iceberg'). A metaphor invented in the text is NOT an idiom. "
-    "HARD RULE: a verb-led phrase that ENDS IN A PREPOSITION/PARTICLE ('look forward to', 'get to', 'make a note of', "
-    "'keep an eye on', 'come up with') is NOT an idiom — it is a phrasal_verb or collocation. Real idioms end in a CONTENT word.\n"
+    "HARD RULE: most verb-led phrases that END IN A PREPOSITION/PARTICLE ('look forward to', 'get to', 'make a note of', "
+    "'come up with') are NOT idioms — they are phrasal_verb or collocation. EXCEPTION: dictionary-attested figurative idioms "
+    "such as 'keep an eye on' and 'turn a blind eye to' remain idiom.\n"
     "5) OTHERWISE a multi-word LITERAL collocation / linking phrase / prepositional verb ('in terms of', 'as a result of', "
     "'pose a threat', 'play a vital role', 'heavily reliant on', 'depend on', 'consist of') => \"collocation\".\n"
     "WORKED EXAMPLES (word -> category, keep): meticulous->word,true | formative->word,true | hothouse->word,true | "
@@ -822,9 +922,9 @@ def _classify_vocab_items(items, lang="vi"):
         "or literal (collocation). Items:\n" + "\n".join(lines) +
         "\n\nReturn the JSON array now, one object per item, in the SAME order."
     )
-    model = os.environ.get("GROQ_REASON_MODEL", "openai/gpt-oss-120b")
-    text, err = _groq_chat(_VOCAB_CLASSIFY_SYS, user_p, max_tokens=4096, temperature=0.3, json_mode=False,
-                           model=model, reasoning_effort="high")
+    model = os.environ.get("VOCAB_CLASSIFY_MODEL") or os.environ.get("GROQ_REASON_MODEL", "openai/gpt-oss-120b")
+    text, err = _vocab_chat(_VOCAB_CLASSIFY_SYS, user_p, max_tokens=4096, json_mode=False,
+                            model=model, reasoning_effort=os.environ.get("VOCAB_CLASSIFY_REASONING", "high"))
     if err or not text:
         return items
     arr = _parse_ai_items(text)
@@ -882,6 +982,17 @@ _TRANSPARENT_CONNECTORS = {
     "as opposed to", "due to", "owing to", "prior to", "regardless of", "apart from",
     "in comparison with", "in comparison to", "with the aim of", "for the purpose of",
     "on behalf of", "in the absence of", "in the event of", "by virtue of",
+}
+_TRUE_PHRASAL_VERBS = {
+    "bring about", "carry out", "come across", "come up with", "find out", "give up", "go into",
+    "go through", "look into", "look forward to", "make up for", "point out", "put off",
+    "put up with", "run into", "set off", "set up", "take on", "take over", "turn into",
+    "turn out", "work out", "break down", "stumble upon",
+}
+_IDIOM_WHITELIST = {
+    "a blessing in disguise", "a double-edged sword", "a drop in the ocean", "a piece of cake",
+    "break new ground", "bear fruit", "keep an eye on", "the tip of the iceberg",
+    "turn a blind eye to", "under the weather", "when it comes to",
 }
 # Giới từ TRƠN (gần như không bao giờ là particle phrasal verb).
 _TRIVIAL_PREPS = {"at", "to", "for", "of", "from"}
@@ -947,9 +1058,13 @@ def _normalize_vocab_items(items):
         c = c if c in _VALID_CATS else _CAT_ALIAS.get(c.replace("_", " "), _CAT_ALIAS.get(c, "word"))
         w = re.sub(r"\s+", " ", str(it.get("word", "") or "").strip().lower())
         # KHOÁ prepositional verb -> collocation TRƯỚC mọi luật particle (nếu không 'depend on' sẽ bị lật thành phrasal).
-        _prep_locked = w in _PREP_VERBS or (w.startswith("to ") and w[3:] in _PREP_VERBS)
+        _prep_locked = (w in _PREP_VERBS or (w.startswith("to ") and w[3:] in _PREP_VERBS)) and w not in _TRUE_PHRASAL_VERBS
         if _prep_locked:
             c = "collocation"
+        elif w in _IDIOM_WHITELIST:
+            c = "idiom"
+        elif w in _TRUE_PHRASAL_VERBS:
+            c = "phrasal_verb"
         elif w in _TRANSPARENT_CONNECTORS:
             c = "collocation"
         elif w and " " not in w and c in ("idiom", "collocation"):
@@ -975,7 +1090,9 @@ def _normalize_vocab_items(items):
             _idt = w.split()
             _last = _idt[-1] if _idt else ""
             _first = _idt[0] if _idt else ""
-            if len(_idt) == 2 and _first not in ("the", "a", "an", "in", "on", "at", "by") and _last in _PARTICLES:
+            if w in _IDIOM_WHITELIST:
+                c = "idiom"
+            elif len(_idt) == 2 and _first not in ("the", "a", "an", "in", "on", "at", "by") and _last in _PARTICLES:
                 c = "phrasal_verb"
             elif (len(_idt) >= 2
                   and (_last in _PARTICLES or _last in _PREP_NOT_PARTICLE or _last in _TRIVIAL_PREPS)):
@@ -998,7 +1115,9 @@ def _normalize_vocab_items(items):
             # Bỏ 'to ' đầu ('to carry out' -> 'carry out')
             if _wt and _wt[0] == "to" and len(_wt) >= 3:
                 _wt = _wt[1:]; w = " ".join(_wt); it["word"] = w
-            if (_wt and _wt[0] in ("being", "been", "be", "is", "are", "was", "were")) or len(_wt) < 2:
+            if w in _TRUE_PHRASAL_VERBS:
+                c = "phrasal_verb"
+            elif (_wt and _wt[0] in ("being", "been", "be", "is", "are", "was", "were")) or len(_wt) < 2:
                 c = "__drop__"
             elif not any(p in _PARTICLES for p in _wt[1:]):
                 # 'deal with', 'adhere to', 'rely upon'... = prepositional verb: KHÔNG vứt, chuyển collocation.
@@ -1101,7 +1220,8 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
     count = int(payload.get("count", 0) or 0)
     target_count = max(count, min_count, 15)
     target = payload.get("target", "")
-    source = (payload.get("source", "") or "")[:18000]     # ĐỌC nhiều đề gần nhất (cân bằng với hạn mức token Groq)
+    source_limit = int(os.environ.get("VOCAB_SOURCE_CHARS") or (60000 if os.environ.get("OPENAI_API_KEY") else 18000))
+    source = (payload.get("source", "") or "")[:max(8000, min(source_limit, 120000))]
     wrong = (payload.get("wrongContext", "") or "")[:1500]  # vùng liên quan câu sai
     # Từ đã có trong sổ — yêu cầu AI TRÁNH để mỗi lần ra từ MỚI (không cạn dần).
     _excl_in = payload.get("exclude") or []
@@ -1169,6 +1289,9 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
             "  (b) It is a true PHRASAL VERB only if the particle is ADVERBIAL — it changes/completes the meaning idiomatically "
             "('give up' != give, 'carry out', 'put off', 'bring about') OR the particle can move after a noun object "
             "('carry out the plan' = 'carry the plan out'). Then category = phrasal_verb.\n"
+            "IDIOM vs PHRASAL/COLLOCATION — classify as idiom only when the whole expression is figurative and dictionary-attested. "
+            "Examples: 'keep an eye on', 'turn a blind eye to', 'break new ground', 'the tip of the iceberg'. "
+            "Do NOT call normal verb+preposition chunks idioms.\n"
             "Verb + plain preposition ('refer to', 'belong to', 'look at') is NOT a phrasal verb — it is a collocation (or, if a "
             "basic A1/A2 verb like 'look at'/'listen to', drop it as worthless).\n"
             "GRAMMAR — ACTIVELY look for notable structures (inversion after a negative adverbial, passive reporting "
@@ -1205,7 +1328,7 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
             f"AREAS LINKED TO MISTAKES:\n{wrong or '(none)'}\n{_excl_clause}\n"
             f"Return the JSON object now with AT LEAST {n_target} items, all quotable verbatim from the MATERIAL above."
         )
-        txt, e = _groq_chat(sysp, userp, 4096, temperature=0.2, json_mode=True, model=_ext_model, reasoning_effort="high")
+        txt, e = _vocab_chat(sysp, userp, 4096, json_mode=True, model=_ext_model, reasoning_effort="high")
         if e:
             _err_holder[0] = e
             return None
@@ -1214,9 +1337,8 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
         arr = _parse_ai_items(txt)
         if not isinstance(arr, list):
             return []
-        # Pass classify riêng = thêm 1 call LLM/lượt -> đốt rate-limit. MẶC ĐỊNH TẮT (luật tất định đã đủ mạnh).
-        # Bật lại bằng env VOCAB_CLASSIFY_PASS=1 nếu cần precision idiom/collocation cao hơn.
-        if os.environ.get("VOCAB_CLASSIFY_PASS"):
+        # Pass classify riêng tăng precision phrasal/collocation/idiom. Tắt bằng VOCAB_CLASSIFY_PASS=0 nếu cần tiết kiệm.
+        if os.environ.get("VOCAB_CLASSIFY_PASS", "1").strip().lower() not in ("0", "false", "off", "no"):
             arr = _classify_vocab_items(arr, lang)
         return _normalize_vocab_items(arr)
 
@@ -1231,7 +1353,8 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
             if gk: provs.append(f"groq×{gk}")
             if os.environ.get("CEREBRAS_API_KEY"): provs.append("cerebras")
             if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"): provs.append("gemini")
-            msg += f"  ·  providers loaded: {', '.join(provs) if provs else 'CHỈ groq (chưa thấy cerebras/gemini — kiểm tra env + redeploy)'}"
+            if os.environ.get("OPENAI_API_KEY"): provs.insert(0, "openai")
+            msg += f"  ·  providers loaded: {', '.join(provs) if provs else 'chưa thấy provider key — kiểm tra env + redeploy'}"
         return {"success": False, "error": msg}
 
     def _wkey(it):

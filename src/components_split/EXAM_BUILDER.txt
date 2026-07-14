@@ -53,6 +53,20 @@
             };
 
             const builderGroups = getBuilderGroups();
+            const getBuilderSectionCount = () => {
+                if (!editingQuiz) return 0;
+                const fromSections = editingQuiz.sections?.length || 0;
+                const fromQuestions = Math.max(
+                    0,
+                    ...((editingQuiz.questions || [])
+                        .map((q: any) => typeof q.passageIndex === 'number' ? q.passageIndex + 1 : 0))
+                );
+                const fromActiveTab = (editingQuiz._activePassageTab || 0) + 1;
+                const defaultCount = editingQuiz.type === "Integrated"
+                    ? 4
+                    : (String(editingQuiz.type).toLowerCase().includes('listen') ? 4 : 3);
+                return Math.max(fromSections, fromQuestions, fromActiveTab, defaultCount);
+            };
 
             // CHỮA BỆNH STALE CLOSURE: Hàm LƯU BẤT TỬ
             const handleForceSave = () => {
@@ -200,8 +214,11 @@
                                 {builderGroups.length === 0 && <div style={{fontSize: 12, color: EB.sub, fontStyle: 'italic', padding: 16, textAlign: 'center'}}>{t('eb_no_questions')}</div>}
                                 {builderGroups.map((grp: any) => {
                                     const qIndex = grp.startIndex;
-                                    const lastIdx = qIndex + grp.questions.length - 1;
-                                    const navTitle = grp.isMerged ? `${qIndex + 1}–${lastIdx + 1}` : `${qIndex + 1}`;
+                                    const firstQ = grp.questions[0];
+                                    const lastQ = grp.questions[grp.questions.length - 1];
+                                    const firstNo = getQuizQuestionNumber(editingQuiz.questions || [], firstQ?.id);
+                                    const lastNo = getQuizQuestionNumber(editingQuiz.questions || [], lastQ?.id) + getQuestionPointCount(lastQ) - 1;
+                                    const navTitle = lastNo > firstNo ? `${firstNo}–${lastNo}` : `${firstNo}`;
                                     const typeIcon = grp.groupType === 'BLANK' ? <Ico name="edit" size={14} /> : grp.groupType === 'MATCHING' ? <Ico name="link" size={14} /> : grp.groupType === 'DRAG_DROP' ? <Ico name="pointer" size={14} /> : grp.groupType === 'CHOICE_MULTIPLE' ? <Ico name="checkSquare" size={14} /> : <Ico name="radio" size={14} />;
                                     const typeLabel = grp.groupType === 'BLANK' ? t('eb_type_blank') : grp.groupType === 'MATCHING' ? t('eb_type_match') : grp.groupType === 'DRAG_DROP' ? t('eb_type_drag') : grp.groupType === 'CHOICE_MULTIPLE' ? t('eb_type_multi') : t('eb_type_choice');
                                     return (
@@ -248,13 +265,17 @@
                             <div className="no-print ebx-block" style={{ marginBottom: 38 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
                                     <div style={ebEyebrow}><Ico name="book" size={13} />{t('eb_passage_title')}</div>
-                                    <div style={{ display: 'flex', gap: 2, background: EB.wash, padding: 4, borderRadius: EB.radiusSm }}>
-                                        {[0, 1, 2].map((idx) => {
+                                    <div style={{ display: 'flex', gap: 2, background: EB.wash, padding: 4, borderRadius: EB.radiusSm, overflowX: 'auto', maxWidth: '100%' }}>
+                                        {(() => {
+                                            const sectionCount = getBuilderSectionCount();
+                                            return Array.from({ length: sectionCount }, (_: any, idx: number) => {
                                             const isActive = (editingQuiz._activePassageTab || 0) === idx;
-                                            const label = String(editingQuiz.type).toLowerCase().includes('listen') ? `Section ${idx + 1}` : `Passage ${idx + 1}`;
+                                            const label = editingQuiz.type === "Integrated"
+                                                ? `Part ${idx + 1}`
+                                                : (String(editingQuiz.type).toLowerCase().includes('listen') ? `Section ${idx + 1}` : `Passage ${idx + 1}`);
                                             return (
                                             <button key={idx} className="ebx-tab" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _activePassageTab: idx} : prev)} style={{ padding: '6px 15px', fontSize: 12, borderRadius: 7, background: isActive ? EB.sheet : 'transparent', color: isActive ? EB.ink : EB.sub, boxShadow: isActive ? '0 1px 3px rgba(26,23,38,0.10)' : 'none', fontWeight: isActive ? 700 : 500, border: 'none', cursor: 'pointer' }}>{label}</button>
-                                        )})}
+                                        )})})()}
                                     </div>
                                 </div>
                                 <div style={{ border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', background: EB.sheet }}>
@@ -288,7 +309,11 @@
                                     const qIndex = grp.startIndex;
                                     const isMerged = grp.isMerged;
                                     const lastIdx = qIndex + grp.questions.length - 1;
-                                    const titleStr = isMerged ? `${t('eb_q')} ${qIndex + 1} - ${lastIdx + 1}` : `${t('eb_q')} ${qIndex + 1}`;
+                                    const firstQ = grp.questions[0];
+                                    const lastQ = grp.questions[grp.questions.length - 1];
+                                    const firstNo = getQuizQuestionNumber(editingQuiz.questions || [], firstQ?.id);
+                                    const lastNo = getQuizQuestionNumber(editingQuiz.questions || [], lastQ?.id) + getQuestionPointCount(lastQ) - 1;
+                                    const titleStr = lastNo > firstNo ? `${t('eb_q')} ${firstNo} - ${lastNo}` : `${t('eb_q')} ${firstNo}`;
 
                                     // CẬP NHẬT TRỰC TIẾP LÊN STATE GỐC ĐỂ TRÁNH MẤT DỮ LIỆU
                                     const updateGroup = (updater: (qItem: any, offset: number) => any) => {
@@ -591,8 +616,12 @@
                                                     <label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_audio_link')}</label>
                                                     <input className="idp-input" value={editingQuiz.audioUrl || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, audioUrl:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}} placeholder={t('eb_audio_ph')}/>
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap'}}>
+                                                        <label className="ebx-soft" style={{background: EB.sheet, color: EB.ink, fontSize: 12, fontWeight: 700, padding: '9px 14px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: audioUploadProgress !== null ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: audioUploadProgress !== null ? 0.72 : 1}}>
+                                                            <Ico name="cloud" size={14} /> {audioUploadProgress !== null ? `${t('eb_audio_uploading')} ${audioUploadProgress}%` : t('eb_upload_audio')}
+                                                            <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
+                                                        </label>
                                                         <button className="ebx-primary" onClick={handleTranscribe} disabled={transcribeLoading || !editingQuiz.audioUrl} style={{background: transcribeLoading ? C.sub : C.accent, color: '#fff', fontSize: 12, fontWeight: 600, padding: '9px 14px', borderRadius: EB.radiusSm, opacity: (transcribeLoading || !editingQuiz.audioUrl) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}>{transcribeLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {transcribeMsg || t('eb_transcribing')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="headphones" size={14} /> {t('eb_transcribe')}</span>}</button>
-                                                        {editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_transcript_hint')}</span>}
+                                                        {audioUploadMsg ? <span style={{fontSize: 11, fontWeight: 700, color: audioUploadMsg === t('eb_audio_upload_failed') ? C.err : C.succ}}>{audioUploadMsg}</span> : (editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_audio_hosted_hint')}</span>)}
                                                     </div>
                                                     {/* CHẾ ĐỘ AUDIO: thi thật (1 lần) | luyện tập (tua) */}
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap'}}>

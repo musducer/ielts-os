@@ -1,9 +1,13 @@
 // IELTS OS service worker — app-shell offline + runtime caching
-const CACHE = "ielts-os-v3";
+const CACHE = "ielts-os-v10";
 const APP_SHELL = ["/", "/index.html", "/favicon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {
