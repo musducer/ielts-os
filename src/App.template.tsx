@@ -1432,6 +1432,9 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         const num = el.getAttribute('data-num');
         el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
     });
+    clone.querySelectorAll('.idp-heading-slot-render').forEach((el) => {
+        el.replaceWith(document.createTextNode('[HEADING_SLOT]'));
+    });
     // Gỡ lớp vùng-chọn-tạm nếu còn sót, giữ nguyên text bên trong.
     clone.querySelectorAll('.idp-temp-selection').forEach((el) => {
         const parent = el.parentNode; if (!parent) return;

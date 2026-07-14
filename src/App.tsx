@@ -1432,6 +1432,9 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         const num = el.getAttribute('data-num');
         el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
     });
+    clone.querySelectorAll('.idp-heading-slot-render').forEach((el) => {
+        el.replaceWith(document.createTextNode('[HEADING_SLOT]'));
+    });
     // Gỡ lớp vùng-chọn-tạm nếu còn sót, giữ nguyên text bên trong.
     clone.querySelectorAll('.idp-temp-selection').forEach((el) => {
         const parent = el.parentNode; if (!parent) return;
@@ -7977,14 +7980,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   return t.replace(/^[ivxlcdmIVXLCDM]+[.)]\s*/i, '');
                               };
                               return (
-                                  <div className="highlightable-content idp-text-content" style={{ lineHeight: 1.8 }}>
-                                      {chunks[0] && chunks[0].trim() && <StaticHtmlBlock className="highlightable-content" dataField="sections" dataQid="" html={renderSafeHTML(chunks[0])} />}
+                                  <div className="highlightable-content idp-text-content" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
+                                      {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
                                       {headingQs.map((q: any, i: number) => {
                                           const letter = String.fromCharCode(65 + i);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
                                           return (
-                                              <div key={q.id}>
+                                              <div key={q.id} className="idp-heading-slot-render">
                                                   <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
                                                       <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
                                                       <div
@@ -8004,7 +8007,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           )}
                                                       </div>
                                                   </div>
-                                                  {chunks[i+1] && chunks[i+1].trim() && <StaticHtmlBlock className="highlightable-content" dataField="sections" dataQid="" html={renderSafeHTML(chunks[i+1])} />}
+                                                  {chunks[i+1] && chunks[i+1].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[i+1])} />}
                                               </div>
                                           );
                                       })}
