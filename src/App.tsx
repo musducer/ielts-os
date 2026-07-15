@@ -87,6 +87,25 @@ const fetchWithTimeout = async (url: string, init: RequestInit = {}, timeoutMs =
     }
 };
 
+// Serverless gateways may return a plain-text/HTML error page on a function timeout.
+// Never feed that directly to response.json(), or students see a meaningless JSON parser error.
+const readApiJson = async (response: Response) => {
+    const raw = await response.text();
+    let data: any = null;
+    try {
+        data = raw ? JSON.parse(raw) : {};
+    } catch {
+        const isServerFailure = response.status >= 500 || /an error occurred|function invocation|timeout/i.test(raw);
+        throw new Error(isServerFailure
+            ? "Máy chủ AI mất quá lâu khi xử lý yêu cầu. Vui lòng thử lại sau ít phút."
+            : `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).`);
+    }
+    if (!response.ok) {
+        throw new Error(String(data?.error || `Máy chủ AI báo lỗi (HTTP ${response.status}).`));
+    }
+    return data;
+};
+
 const syncTimeNetwork = async (): Promise<boolean> => {
     try {
         // Tuyệt chiêu: Lấy giờ từ chính server Host web thông qua HTTP Header (Bỏ qua API, không thể bị chặn)
@@ -4611,7 +4630,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", studentName: r.studentName, quizTitle: r.quizTitle, type: quiz?.type || "", score: r.score, total: r.total, band: r.band, weakness: weak, wrongCount, details })
       });
-      const data = await resp.json();
+      const data = await readApiJson(resp);
       if (data.success && data.feedback) {
         const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: data.feedback } : x);
         setQuizResults(nx); syncData({ quizResults: nx });
@@ -4869,7 +4888,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", count: requestedCount, minCount: requestedCount, target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
       });
-      const data = await resp.json();
+      const data = await readApiJson(resp);
       if (!data.success || !Array.isArray(data.items)) { alert("" + (data.error || "Lỗi tạo từ vựng")); return; }
       const now = getTrueTime();
       const returnedKeys = new Set<string>();

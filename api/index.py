@@ -5,9 +5,9 @@ import time
 import traceback
 import base64
 import urllib.parse
-from fastapi import FastAPI, UploadFile, File, Body
+from fastapi import FastAPI, UploadFile, File, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -15,6 +15,17 @@ from typing import List, Dict, Any
 
 app = FastAPI(docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.exception_handler(Exception)
+async def unexpected_api_error(request: Request, exc: Exception):
+    """Keep API failures JSON-shaped so the client can show a useful recovery message."""
+    print(f"Unhandled API error for {request.url.path}: {exc}")
+    traceback.print_exc()
+    return JSONResponse(status_code=500, content={
+        "success": False,
+        "error": "Máy chủ AI gặp lỗi khi xử lý yêu cầu. Vui lòng thử lại sau ít phút.",
+    })
 
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
@@ -442,7 +453,8 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
         return "", f"{model} -> {str(e)}"
 
 
-def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, reasoning_effort, json_mode=False):
+def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, reasoning_effort,
+                           json_mode=False, timeout_s=30):
     """OpenAI Responses API for higher-precision vocab extraction/classification."""
     import json as _json
     import urllib.request as _urlreq
@@ -467,7 +479,7 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                      "Accept": "application/json", "User-Agent": "IELTS-OS/1.0"},
         )
-        with _urlreq.urlopen(req, timeout=90) as resp:
+        with _urlreq.urlopen(req, timeout=timeout_s) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         text = (data.get("output_text") or "").strip()
         if not text:
@@ -613,9 +625,17 @@ def _vocab_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 4096, json_
         requested_openai_model = model if model and str(model).startswith("gpt-") else None
         openai_model = os.environ.get("OPENAI_VOCAB_MODEL") or os.environ.get("OPENAI_MODEL") or requested_openai_model or "gpt-5.6-terra"
         openai_effort = os.environ.get("OPENAI_VOCAB_REASONING", reasoning_effort or "medium")
-        text, err = _openai_responses_once(openai_key, openai_model, sys_prompt, user_prompt, max_tokens, openai_effort, json_mode=json_mode)
+        provider_timeout = max(15, min(40, int(os.environ.get("VOCAB_PROVIDER_TIMEOUT", "30") or 30)))
+        text, err = _openai_responses_once(
+            openai_key, openai_model, sys_prompt, user_prompt, max_tokens, openai_effort,
+            json_mode=json_mode, timeout_s=provider_timeout,
+        )
         if text:
             return text, ""
+        # Do not burn the entire serverless invocation on a second provider after a timeout.
+        # The route can return a normal JSON error and the student can retry instead.
+        if "timed out" in str(err).lower() or "timeout" in str(err).lower():
+            return "", "AI service timed out while generating vocabulary."
         # Bad OpenAI config should not break class. Fall back to existing providers if present.
         if err not in ("AUTH", "RATE_LIMIT"):
             print("OpenAI vocab model failed; falling back:", err)
@@ -952,8 +972,8 @@ def _classify_vocab_items(items, lang="vi"):
         "\n\nReturn the JSON array now, one object per item, in the SAME order."
     )
     model = os.environ.get("VOCAB_CLASSIFY_MODEL") or os.environ.get("GROQ_REASON_MODEL", "openai/gpt-oss-120b")
-    text, err = _vocab_chat(_VOCAB_CLASSIFY_SYS, user_p, max_tokens=4096, json_mode=False,
-                            model=model, reasoning_effort=os.environ.get("VOCAB_CLASSIFY_REASONING", "high"))
+    text, err = _vocab_chat(_VOCAB_CLASSIFY_SYS, user_p, max_tokens=3072, json_mode=False,
+                            model=model, reasoning_effort=os.environ.get("VOCAB_CLASSIFY_REASONING", "medium"))
     if err or not text:
         return items
     arr = _parse_ai_items(text)
@@ -1348,7 +1368,7 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
     _ext_model = os.environ.get("GROQ_EXTRACT_MODEL", "openai/gpt-oss-120b")
     _err_holder = [""]   # giữ lỗi Groq thật để báo cho HV (RATE_LIMIT, key sai, v.v.)
 
-    def _extract(kinds_list, n_target, extra_exclude=None):
+    def _extract(kinds_list, n_target, extra_exclude=None, classify=True):
         """Một lượt trích (giai đoạn A) -> classify -> normalize. Trả list item đã chuẩn hóa (chưa ground).
         None = lỗi Groq (xem _err_holder[0]); [] = chạy được nhưng rỗng."""
         sysp = _build_sys(kinds_list, n_target)
@@ -1367,8 +1387,13 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
             f"AREAS LINKED TO MISTAKES:\n{wrong or '(none)'}\n{_excl_clause}{dynamic_clause}\n"
             f"Return the JSON object now with AT LEAST {n_target} items, all quotable verbatim from the MATERIAL above."
         )
-        max_tokens = max(8192, min(14000, int(n_target) * 320))
-        txt, e = _vocab_chat(sysp, userp, max_tokens, json_mode=True, model=_ext_model, reasoning_effort="high")
+        # A large chain of high-reasoning calls exceeds the 60-second serverless window.
+        # One focused extraction still has enough room for every requested flashcard.
+        max_tokens = max(4096, min(7000, int(n_target) * 220))
+        txt, e = _vocab_chat(
+            sysp, userp, max_tokens, json_mode=True, model=_ext_model,
+            reasoning_effort=os.environ.get("VOCAB_EXTRACT_REASONING", "medium"),
+        )
         if e:
             _err_holder[0] = e
             return None
@@ -1378,11 +1403,12 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
         if not isinstance(arr, list):
             return []
         # Pass classify riêng tăng precision phrasal/collocation/idiom. Tắt bằng VOCAB_CLASSIFY_PASS=0 nếu cần tiết kiệm.
-        if os.environ.get("VOCAB_CLASSIFY_PASS", "1").strip().lower() not in ("0", "false", "off", "no"):
+        if classify and os.environ.get("VOCAB_CLASSIFY_PASS", "1").strip().lower() not in ("0", "false", "off", "no"):
             arr = _classify_vocab_items(arr, lang)
         return _normalize_vocab_items(arr)
 
     # ===== PASS CHÍNH =====
+    started_at = time.monotonic()
     items = _extract(kinds, target_count)
     if items is None:
         msg = _friendly_err(_err_holder[0] or "AI service error", lang)
@@ -1426,7 +1452,7 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
     _need = {"phrasal_verb": 2, "collocation": 2, "idiom": 1}
     _cnt = _Counter(it.get("category") for it in items if isinstance(it, dict))
     under = [k for k, m in _need.items() if k in kinds and _cnt.get(k, 0) < m]
-    if under:
+    if under and os.environ.get("VOCAB_CATEGORY_REFILL", "0").strip().lower() in ("1", "true", "on", "yes"):
         extra = _extract(under, max(6, len(under) * 4)) or []
         seen = {_wkey(it) for it in items}
         for it in extra:
@@ -1458,11 +1484,15 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
     # loại trừ động để không trả 1 item khi học viên yêu cầu 25, nhưng vẫn không bịa ngoài đề.
     verified, dropped = _ground_unique(items)
     items = verified
-    for _attempt in range(3):
+    max_refill_attempts = max(0, min(2, int(os.environ.get("VOCAB_MAX_REFILL_ATTEMPTS", "1") or 1)))
+    for _attempt in range(max_refill_attempts):
         if len(items) >= target_count:
             break
+        # Leave time for FastAPI/Vercel to serialize a proper response instead of hard timing out.
+        if time.monotonic() - started_at > 28:
+            break
         deficit = target_count - len(items)
-        refill = _extract(kinds, max(6, deficit + 6), extra_exclude=[_wkey(it) for it in items])
+        refill = _extract(kinds, max(6, deficit + 6), extra_exclude=[_wkey(it) for it in items], classify=False)
         if not refill:
             break
         refill, refill_dropped = _ground_unique(refill)
