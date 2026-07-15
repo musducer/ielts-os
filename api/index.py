@@ -692,6 +692,10 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     student_ans = payload.get("studentAnswer", "")
     context = (payload.get("context", "") or "")[:24000]
     has_ctx = bool(context.strip())
+    question_type = str(payload.get("questionType", "") or "")
+    question_subtype = str(payload.get("questionSubType", "") or "")
+    integrated_part = int(payload.get("integratedPart", 0) or 0)
+    is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
     is_listening = bool(payload.get("isListening")) and bool(_TS_MARKER_RE.search(context))
     ts_rule_en = (
@@ -709,37 +713,61 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         "Transcript không có mốc thì bỏ hẳn timestamp."
     ) if is_listening else ""
 
+    integrated_rule_en = (
+        " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
+        "Do NOT force a reading-comprehension template onto it. First identify the actual task family and teach its decision logic: "
+        "for main-idea/title/inference items, test scope, central claim and degree of certainty; for gap-fill items, test grammar "
+        "(word class, tense, clause structure, agreement, preposition) before meaning, then collocation and register; for dialogue/sentence "
+        "ordering, establish the opening, response links, pronoun/reference chains, discourse markers and a coherent ending; for vocabulary, "
+        "use the surrounding syntax and the precise sense, not a loose synonym. Explain the exam trap each wrong option represents."
+    ) % integrated_part if is_vietnamese_high_school_integrated else ""
+    integrated_rule_vi = (
+        " Đây là Integrated Part %d, theo tư duy đề thi tiếng Anh tốt nghiệp THPT Việt Nam. "
+        "KHÔNG được máy móc áp khuôn đọc đoạn văn rồi trích dẫn. Trước hết phải nhận diện đúng dạng và dạy cách ra quyết định: "
+        "với ý chính/tiêu đề/suy luận, xét phạm vi, luận điểm trung tâm và mức độ khẳng định; với điền từ, xét ngữ pháp "
+        "(từ loại, thì, cấu trúc mệnh đề, hòa hợp, giới từ) trước, rồi nghĩa, collocation và sắc thái; với sắp xếp hội thoại/câu, "
+        "xác định câu mở, quan hệ đáp lời, đại từ thay thế, từ nối và câu kết mạch lạc; với từ vựng, dựa vào cú pháp xung quanh "
+        "và nghĩa chính xác, không chọn từ đồng nghĩa chung chung. Chỉ rõ bẫy mà từng phương án sai đang tạo ra."
+    ) % integrated_part if is_vietnamese_high_school_integrated else ""
+
     if lang == "en":
         sys_prompt = (
-            "You are an IELTS tutor. You are given the SOURCE TEXT (a reading passage or the audio transcript of a "
-            "listening test) plus one question, its options, the correct answer and the student's answer. "
-            "The correct answer DOES appear in the source text — search the WHOLE text carefully and FIND the exact "
-            "sentence that contains it. In 2-4 sentences: quote (in quotation marks) the relevant phrase from the source "
-            "that proves the correct answer, then explain why the student's answer is wrong (e.g. a paraphrase, distractor "
-            "or keyword they missed). Never say the answer is 'not in the passage' if a source text is provided — keep "
-            "looking. Be clear and encouraging. Plain text, no markdown." + ts_rule_en
+            "You are an expert English-test tutor. Give a clear, precise and genuinely teachable explanation for one reviewed item. "
+            "First identify what the question is testing; do not pretend every item is a locate-and-quote reading question. "
+            "Use this teaching sequence: explain the key decision, prove why the correct answer fits, then account for EVERY remaining "
+            "option when options are provided. For each wrong option, name its specific flaw: wrong grammar/collocation, wrong reference, "
+            "too broad/narrow/absolute, only a true detail rather than the main point, reversed logic, unsupported inference, or incoherent "
+            "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
+            "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
+            "appear word-for-word in the source. If the student was correct, still explain why the other options lose. End with one short, "
+            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en
         )
         user_prompt = (
             f"SOURCE TEXT (read it fully):\n{context if has_ctx else '(no source text was provided for this item)'}\n\n"
+            f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
             f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English."
         )
     else:
         sys_prompt = (
-            "Bạn là gia sư IELTS. Bạn được cung cấp VĂN BẢN NGUỒN (đoạn đọc hoặc transcript lời thoại bài nghe) cùng một "
-            "câu hỏi, các lựa chọn, đáp án đúng và câu trả lời của học viên. Đáp án đúng CHẮC CHẮN có trong văn bản nguồn "
-            "— hãy đọc kỹ TOÀN BỘ và TÌM đúng câu chứa nó. Trong 2-4 câu: TRÍCH DẪN (đặt trong ngoặc kép) cụm từ liên quan "
-            "trong văn bản nguồn chứng minh đáp án đúng, rồi giải thích vì sao câu trả lời của học viên sai (paraphrase, "
-            "phương án gây nhiễu, hoặc từ khóa bị bỏ sót). TUYỆT ĐỐI không nói 'không có trong đoạn văn' khi đã có văn bản "
-            "nguồn — hãy tìm tiếp. Rõ ràng, khích lệ. Văn xuôi thuần, không markdown." + ts_rule_vi
+            "Bạn là gia sư luyện thi tiếng Anh giàu kinh nghiệm. Hãy giải thích một câu trong phần Review theo cách dễ hiểu, chính xác "
+            "và thực sự giúp học viên tự làm được lần sau. Trước tiên nhận diện câu hỏi đang kiểm tra gì; không được giả vờ mọi dạng đều "
+            "là tìm câu trong bài rồi trích dẫn. Đi theo trình tự dạy học: nêu điểm mấu chốt để ra quyết định, chứng minh vì sao đáp án đúng "
+            "phù hợp, rồi phân tích TẤT CẢ phương án còn lại nếu có lựa chọn. Mỗi phương án sai phải nêu lỗi RIÊNG: sai ngữ pháp/collocation, "
+            "sai đối tượng tham chiếu, quá rộng/quá hẹp/quá tuyệt đối, chỉ đúng một chi tiết nhưng không phải ý chính, đảo quan hệ nguyên nhân-kết quả, "
+            "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
+            "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
+            "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
+            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi
         )
         user_prompt = (
             f"VĂN BẢN NGUỒN (đọc hết):\n{context if has_ctx else '(không có văn bản nguồn cho câu này)'}\n\n"
+            f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
         )
 
-    text, err = _gemini_generate(sys_prompt, user_prompt, 800)
+    text, err = _gemini_generate(sys_prompt, user_prompt, 1200)
     if err:
         return {"success": False, "error": _friendly_err(err, lang)}
     # HẬU KIỂM: xóa mọi [mm:ss] không khớp mốc thật trong transcript (chống AI bịa/ước lượng).

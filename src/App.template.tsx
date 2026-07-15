@@ -4499,7 +4499,19 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", question: stripTags(q.text), options: optStr, correct: correctStr, studentAnswer: stuStr, context, isListening: isListeningQuestion })
+        body: JSON.stringify({
+          lang: i18n.language === "vi" ? "vi" : "en",
+          question: stripTags(q.text),
+          options: optStr,
+          correct: correctStr,
+          studentAnswer: stuStr,
+          context,
+          isListening: isListeningQuestion,
+          questionType: q.type,
+          questionSubType: q.subType || "",
+          integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
+          isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
+        })
       });
       const data = await resp.json();
       if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: data.explanation } }));
