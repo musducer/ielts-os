@@ -1348,16 +1348,27 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
     _ext_model = os.environ.get("GROQ_EXTRACT_MODEL", "openai/gpt-oss-120b")
     _err_holder = [""]   # giữ lỗi Groq thật để báo cho HV (RATE_LIMIT, key sai, v.v.)
 
-    def _extract(kinds_list, n_target):
+    def _extract(kinds_list, n_target, extra_exclude=None):
         """Một lượt trích (giai đoạn A) -> classify -> normalize. Trả list item đã chuẩn hóa (chưa ground).
         None = lỗi Groq (xem _err_holder[0]); [] = chạy được nhưng rỗng."""
         sysp = _build_sys(kinds_list, n_target)
+        dynamic_exclude = []
+        for value in [*(exclude or []), *(extra_exclude or [])]:
+            normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+            if normalized and normalized not in dynamic_exclude:
+                dynamic_exclude.append(normalized)
+        dynamic_clause = ""
+        if dynamic_exclude:
+            dynamic_clause = ("\nDO NOT REPEAT ANY ITEM ALREADY RETURNED OR ALREADY IN THE NOTEBOOK. "
+                              "Treat the following normalized forms as unavailable:\n"
+                              + ", ".join(dynamic_exclude[:500]) + "\n")
         userp = (
             f"Target band: {target}\n\nMATERIAL THE STUDENT STUDIED (your ONLY allowed source):\n\"\"\"\n{source}\n\"\"\"\n\n"
-            f"AREAS LINKED TO MISTAKES:\n{wrong or '(none)'}\n{_excl_clause}\n"
+            f"AREAS LINKED TO MISTAKES:\n{wrong or '(none)'}\n{_excl_clause}{dynamic_clause}\n"
             f"Return the JSON object now with AT LEAST {n_target} items, all quotable verbatim from the MATERIAL above."
         )
-        txt, e = _vocab_chat(sysp, userp, 4096, json_mode=True, model=_ext_model, reasoning_effort="high")
+        max_tokens = max(8192, min(14000, int(n_target) * 320))
+        txt, e = _vocab_chat(sysp, userp, max_tokens, json_mode=True, model=_ext_model, reasoning_effort="high")
         if e:
             _err_holder[0] = e
             return None
@@ -1387,7 +1398,27 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
         return {"success": False, "error": msg}
 
     def _wkey(it):
-        return re.sub(r"\s+", " ", str(it.get("word", "") or "").strip().lower())
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", str(it.get("word", "") or "").strip().lower())).strip()
+
+    def _dedupe(items):
+        unique = []
+        seen = set()
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            key = _wkey(item)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique
+
+    def _ground_unique(items):
+        grounded, rejected = _ground_vocab_items(items, source)
+        unique = _dedupe(grounded)
+        return unique, rejected + max(0, len(grounded) - len(unique))
+
+    items = _dedupe(items)
 
     # ===== PASS BÙ PHỦ LOẠI: đẩy mạnh phrasal/collocation/idiom (hay bị lép so với từ đơn) =====
     # Bù khi loại được yêu cầu mà còn DƯỚI ngưỡng — không chỉ khi = 0.
@@ -1422,9 +1453,34 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
                 _existing_keys.add(g.pop("_grammar_key", None))
                 items.append(g)
 
-    # ===== CHỐNG BỊA: CHÍNH cụm từ phải nằm trong material =====
-    verified, dropped = _ground_vocab_items(items, source)
-    return {"success": True, "items": verified, "dropped": dropped}
+    # ===== CHỐNG BỊA + BÙ ĐỦ SỐ LƯỢNG =====
+    # Grounding/classification có thể loại nhiều candidate. Gọi thêm vài lượt với danh sách
+    # loại trừ động để không trả 1 item khi học viên yêu cầu 25, nhưng vẫn không bịa ngoài đề.
+    verified, dropped = _ground_unique(items)
+    items = verified
+    for _attempt in range(3):
+        if len(items) >= target_count:
+            break
+        deficit = target_count - len(items)
+        refill = _extract(kinds, max(6, deficit + 6), extra_exclude=[_wkey(it) for it in items])
+        if not refill:
+            break
+        refill, refill_dropped = _ground_unique(refill)
+        dropped += refill_dropped
+        existing_keys = {_wkey(it) for it in items}
+        additions = [it for it in refill if _wkey(it) not in existing_keys]
+        if not additions:
+            break
+        items.extend(additions)
+
+    return {
+        "success": True,
+        "items": items[:target_count],
+        "requested": target_count,
+        "returned": min(len(items), target_count),
+        "shortfall": max(0, target_count - len(items)),
+        "dropped": dropped,
+    }
 
 def _normalize_audio_url(url: str) -> str:
     """Chuyển link Google Drive 'xem' thành link tải trực tiếp."""

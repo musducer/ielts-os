@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, onSnapshot, runTransaction, setDoc } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 // ==========================================
@@ -27,6 +27,32 @@ const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
 const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
+const VOCAB_ROOT_COLLECTION = "ielts_vocab";
+const vocabStudentKey = (email: string) => encodeURIComponent(String(email || "").trim().toLowerCase());
+const vocabCardsRef = (email: string) => collection(db, VOCAB_ROOT_COLLECTION, vocabStudentKey(email), "cards");
+const persistVocabCards = async (email: string, notebook: VocabCard[], tombstones: string[] = []) => {
+  const cards = new Map<string, any>();
+  (Array.isArray(notebook) ? notebook : []).forEach(card => {
+    if (card?.id) cards.set(String(card.id), { ...card, id: String(card.id), deleted: false });
+  });
+  (Array.isArray(tombstones) ? tombstones : []).forEach(id => {
+    if (id) cards.set(String(id), { id: String(id), deleted: true });
+  });
+
+  const entries = Array.from(cards.values());
+  for (let offset = 0; offset < entries.length; offset += 400) {
+    const batch = writeBatch(db);
+    entries.slice(offset, offset + 400).forEach(card => {
+      const cleanCard = JSON.parse(JSON.stringify({
+        ...card,
+        ownerEmail: String(email || "").trim().toLowerCase(),
+        updatedAt: Date.now(),
+      }));
+      batch.set(doc(vocabCardsRef(email), String(card.id)), cleanCard, { merge: true });
+    });
+    await batch.commit();
+  }
+};
 
 // ==========================================
 // HÀNG ĐỢI NỘP BÀI OFFLINE (lưu nhiều kết quả, đồng bộ khi có mạng)
@@ -2631,6 +2657,11 @@ export default function IeltsSupremeOS() {
   const getRealTime = () => getTrueTime() + timeOffset;
 
   const [students, setStudents] = useState<Student[]>([]);
+  const studentsRef = useRef<Student[]>([]);
+  const vocabStoreReadyRef = useRef<Record<string, boolean>>({});
+  const vocabPersistInFlightRef = useRef<Record<string, boolean>>({});
+  const vocabMigrationAttemptedRef = useRef<Record<string, boolean>>({});
+  useEffect(() => { studentsRef.current = students; }, [students]);
   const [history, setHistory] = useState<Session[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -3099,6 +3130,36 @@ export default function IeltsSupremeOS() {
   };
   const clearPendingQuizWrite = () => {
     try { localStorage.removeItem(pendingQuizWriteKey()); } catch (e) {}
+  };
+  // Sổ từ là dữ liệu do học sinh tạo. Giữ bản ghi local cho tới khi transaction xác nhận,
+  // để refresh/đóng tab ngay sau khi thêm từ cũng không thể làm mất dữ liệu.
+  const pendingVocabWriteKey = () => `ielts_pending_vocab_write_${String(currentUser?.email || "student").toLowerCase()}`;
+  const readPendingVocabWrite = () => {
+    try {
+      const raw = localStorage.getItem(pendingVocabWriteKey());
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && Array.isArray(parsed.notebook) ? parsed : null;
+    } catch (e) { return null; }
+  };
+  const writePendingVocabWrite = (notebook: any[], tombstones: any[] = []) => {
+    try { localStorage.setItem(pendingVocabWriteKey(), JSON.stringify({ notebook, tombstones })); } catch (e) {}
+  };
+  const clearPendingVocabWrite = () => {
+    try { localStorage.removeItem(pendingVocabWriteKey()); } catch (e) {}
+  };
+  const mergeVocabNotebook = (serverNotebook: any, localNotebook: any, serverTombstones: any, localTombstones: any) => {
+    const tombstones = Array.from(new Set([
+      ...(Array.isArray(serverTombstones) ? serverTombstones : []),
+      ...(Array.isArray(localTombstones) ? localTombstones : []),
+    ].map(String))).slice(-800);
+    const cards = new Map<string, any>();
+    (Array.isArray(serverNotebook) ? serverNotebook : []).forEach((card: any) => {
+      if (card?.id) cards.set(String(card.id), card);
+    });
+    (Array.isArray(localNotebook) ? localNotebook : []).forEach((card: any) => {
+      if (card?.id) cards.set(String(card.id), { ...cards.get(String(card.id)), ...card });
+    });
+    return { notebook: Array.from(cards.values()).filter((card: any) => !tombstones.includes(String(card.id))), tombstones };
   };
   const mergeQuizCatalog = (serverQuizzes: any[], localQuizzes: any[], deletedIds: string[] = []) => {
     const deleted = new Set((deletedIds || []).map(String));
@@ -3632,10 +3693,9 @@ useEffect(() => {
 const clean = (arr: any) => Array.isArray(arr) ? arr.filter(item => item !== null && item !== undefined) : [];
 
 // ===== LỚP CHỐNG MẤT QUÀ Ở PHÍA ĐỌC =====
-// permanents là APPEND-ONLY. onSnapshot có thể trả snapshot CŨ từ cache (persistentMultipleTabManager)
-// hoặc server chưa kịp có quà (write đang chờ/lỗi) -> quà biến mất trước mắt. Khắc phục: permanents của
-// CHÍNH user hiện tại = hợp(snapshot ∪ state local trước đó ∪ backup localStorage). Backup sống qua reload;
-// lần ghi kế tiếp (union trong syncData) sẽ đẩy ngược lên server -> tự lành cả khi write gacha từng lỗi.
+// permanents và vocabNotebook đều là dữ liệu do học sinh tạo. onSnapshot có thể trả snapshot CŨ từ cache
+// hoặc server chưa kịp có write -> dữ liệu vừa thêm biến mất trước mắt. Với vocab, merge theo ID + tombstone
+// và chỉ xóa retry record khi snapshot server xác nhận đã có đủ dữ liệu đó.
 const mergeMyPermanents = (prev: any, incoming: any[]) => {
   try {
     const email = String((window as any).__ielts_user_id || "").toLowerCase();
@@ -3646,12 +3706,37 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
     const prevArr = Array.isArray(prev) ? prev : [];
     const prevMe = prevArr.find((s: any) => String(s?.email || "").toLowerCase() === email);
     const prevPerms = Array.isArray(prevMe?.inventory?.permanents) ? prevMe.inventory.permanents : [];
+    const pendingVocab = readPendingVocabWrite();
     return incoming.map((s: any) => {
       if (String(s?.email || "").toLowerCase() !== email) return s;
       const inPerms = Array.isArray(s?.inventory?.permanents) ? s.inventory.permanents : [];
       const union = Array.from(new Set([...(Array.isArray(backup) ? backup : []), ...prevPerms, ...inPerms]));
+      const dedicatedReady = vocabStoreReadyRef.current[email];
+      const mergedVocab = dedicatedReady
+        ? {
+            notebook: Array.isArray(prevMe?.vocabNotebook) ? prevMe.vocabNotebook : [],
+            tombstones: Array.isArray(prevMe?.vocabTombstones) ? prevMe.vocabTombstones : [],
+          }
+        : mergeVocabNotebook(
+            s.vocabNotebook,
+            [...(Array.isArray(prevMe?.vocabNotebook) ? prevMe.vocabNotebook : []), ...(pendingVocab?.notebook || [])],
+            s.vocabTombstones,
+            [...(Array.isArray(prevMe?.vocabTombstones) ? prevMe.vocabTombstones : []), ...(pendingVocab?.tombstones || [])]
+          );
+      if (pendingVocab) {
+        const serverIds = new Set((Array.isArray(s.vocabNotebook) ? s.vocabNotebook : []).map((card: any) => String(card?.id || "")));
+        const serverTombs = new Set((Array.isArray(s.vocabTombstones) ? s.vocabTombstones : []).map(String));
+        const confirmedCards = pendingVocab.notebook.every((card: any) => !card?.id || serverIds.has(String(card.id)));
+        const confirmedDeletes = (pendingVocab.tombstones || []).every((id: any) => serverTombs.has(String(id)));
+        if (confirmedCards && confirmedDeletes) clearPendingVocabWrite();
+      }
       try { localStorage.setItem(bkKey, JSON.stringify(union)); } catch (e) {}
-      return { ...s, inventory: { consumables: {}, ...(s.inventory || {}), permanents: union } };
+      return {
+        ...s,
+        inventory: { consumables: {}, ...(s.inventory || {}), permanents: union },
+        vocabNotebook: mergedVocab.notebook,
+        vocabTombstones: mergedVocab.tombstones,
+      };
     });
   } catch (e) { return incoming; }
 };
@@ -3697,6 +3782,65 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
 
     return () => { unsub(); unsubLive(); clearInterval(timeSyncInterval); };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!loaded || userRole !== "STUDENT" || !currentUser?.email) return;
+    const vocabEmail = String(currentUser.email).trim().toLowerCase();
+    const unsubVocab = onSnapshot(vocabCardsRef(vocabEmail), (snap) => {
+      const snapshotNotebook: VocabCard[] = [];
+      const snapshotTombstones: string[] = [];
+      snap.docs.forEach(cardSnap => {
+        const value: any = cardSnap.data() || {};
+        const id = String(value.id || cardSnap.id);
+        if (value.deleted) snapshotTombstones.push(id);
+        else snapshotNotebook.push({ ...value, id } as VocabCard);
+      });
+
+      const pending = readPendingVocabWrite();
+      const me = studentsRef.current.find(s => String(s.email || "").trim().toLowerCase() === vocabEmail);
+      const legacyNotebook = Array.isArray(me?.vocabNotebook) ? me.vocabNotebook : [];
+      const legacyTombstones = Array.isArray(me?.vocabTombstones) ? me.vocabTombstones : [];
+      let notebook = snapshotNotebook;
+      let tombstones = snapshotTombstones;
+      const shouldMigrateLegacy = snap.empty && !vocabMigrationAttemptedRef.current[vocabEmail]
+        && (legacyNotebook.length > 0 || legacyTombstones.length > 0);
+
+      if (shouldMigrateLegacy) vocabMigrationAttemptedRef.current[vocabEmail] = true;
+      if (shouldMigrateLegacy || pending) {
+        const merged = mergeVocabNotebook(
+          snapshotNotebook,
+          [...legacyNotebook, ...(pending?.notebook || [])],
+          snapshotTombstones,
+          [...legacyTombstones, ...(pending?.tombstones || [])]
+        );
+        notebook = merged.notebook;
+        tombstones = merged.tombstones;
+        if (!vocabPersistInFlightRef.current[vocabEmail]) {
+          vocabPersistInFlightRef.current[vocabEmail] = true;
+          void persistVocabCards(vocabEmail, notebook, tombstones)
+            .catch(error => console.error("Dedicated vocab write failed; Firebase offline queue will retry:", error))
+            .finally(() => { vocabPersistInFlightRef.current[vocabEmail] = false; });
+        }
+      }
+
+      if (snap.size > 0) vocabStoreReadyRef.current[vocabEmail] = true;
+      if (pending) {
+        const serverIds = new Set(snapshotNotebook.map(card => String(card.id)));
+        const serverTombs = new Set(snapshotTombstones.map(String));
+        const confirmedCards = pending.notebook.every((card: any) => !card?.id || serverIds.has(String(card.id)));
+        const confirmedDeletes = (pending.tombstones || []).every((id: any) => serverTombs.has(String(id)));
+        if (confirmedCards && confirmedDeletes) clearPendingVocabWrite();
+      }
+      setStudents(prev => prev.map(student =>
+        String(student.email || "").trim().toLowerCase() === vocabEmail
+          ? { ...student, vocabNotebook: notebook, vocabTombstones: tombstones }
+          : student
+      ));
+    }, error => {
+      console.error("Dedicated vocab listener failed:", error);
+    });
+    return () => unsubVocab();
+  }, [currentUser, loaded, userRole]);
 
   useEffect(() => {
       latestExamState.current = { activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep };
@@ -4112,8 +4256,13 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     // CHỐNG "GIẬT" KHI XÓA: đánh dấu đang có ghi của chính mình. onSnapshot sẽ KHÔNG đè state
     // local trong lúc transaction đang bay (snapshot CŨ còn trong đường truyền sẽ làm data xóa hiện lại).
     const quizDeleteIds = Array.isArray(newData.__quizDeletedIds) ? newData.__quizDeletedIds.map(String) : [];
+    const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
+      ? newData.__vocabPending : null;
     if (Array.isArray(newData.quizzes) && userRole === "TEACHER") {
       writePendingQuizWrite(newData.quizzes, quizDeleteIds);
+    }
+    if (pendingVocab && userRole === "STUDENT") {
+      writePendingVocabWrite(pendingVocab.notebook, pendingVocab.tombstones || []);
     }
     writeInFlightRef.current++;
     try {
@@ -4122,6 +4271,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         if (!sfDoc.exists()) {
           const initialData = { ...newData };
           delete initialData.__quizDeletedIds;
+          delete initialData.__vocabPending;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
             initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
             initialData.quizTombstones = quizDeleteIds.slice(-1000);
@@ -4135,6 +4285,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
 
         Object.keys(newData).forEach((key) => {
           if (key === "__quizDeletedIds") return;
+          if (key === "__vocabPending") return;
           const localVal = newData[key];
           const serverVal = serverData[key];
 
@@ -4239,21 +4390,18 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
                     };
                     // CHỐNG BAY SỔ TỪ VỰNG: hợp (union) server ∪ local theo id — ghi bằng state cũ KHÔNG làm mất từ.
                     // Xóa chủ động dùng "bia mộ" (vocabTombstones, append-only) để không bị hồi sinh sau merge.
-                    const _svNb = Array.isArray(serverItem.vocabNotebook) ? serverItem.vocabNotebook : [];
-                    const _lcNb = Array.isArray(myLocalInfo.vocabNotebook) ? myLocalInfo.vocabNotebook : [];
-                    const _tomb: string[] = _uniq(serverItem.vocabTombstones, myLocalInfo.vocabTombstones).slice(-800);
-                    const _nbMap = new Map<string, any>();
-                    _svNb.forEach((c: any) => { if (c && c.id) _nbMap.set(c.id, c); });
-                    _lcNb.forEach((c: any) => { if (c && c.id) _nbMap.set(c.id, { ..._nbMap.get(c.id), ...c }); });
-                    const mergedNotebook = Array.from(_nbMap.values()).filter((c: any) => !_tomb.includes(c.id));
+                    const mergedVocab = mergeVocabNotebook(
+                      serverItem.vocabNotebook, myLocalInfo.vocabNotebook,
+                      serverItem.vocabTombstones, myLocalInfo.vocabTombstones
+                    );
                     return {
                       ...serverItem,
                       ...myLocalInfo,
                       // exp/level chỉ tăng -> MAX chống mất XP kể cả khi state HV bị cũ (đa thiết bị / suppress window).
                       exp: Math.max(Number(serverItem.exp) || 0, Number(myLocalInfo.exp) || 0),
                       level: Math.max(Number(serverItem.level) || 1, Number(myLocalInfo.level) || 1),
-                      vocabNotebook: mergedNotebook,
-                      vocabTombstones: _tomb,
+                      vocabNotebook: mergedVocab.notebook,
+                      vocabTombstones: mergedVocab.tombstones,
                       inventory: mergedInventory,
                       name: serverItem.name,
                       phone: serverItem.phone,
@@ -4285,10 +4433,25 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
           }
         });
 
+        // Vocab đã chuyển sang collection riêng. Khi collection đã có dữ liệu xác nhận,
+        // bỏ bản mirror cũ khỏi document tổng để nó không thể phình quá giới hạn hoặc bị ghi đè.
+        const ownEmail = String(currentUser?.email || "").trim().toLowerCase();
+        if (userRole === "STUDENT" && ownEmail && vocabStoreReadyRef.current[ownEmail]
+            && Array.isArray(finalUpdate.students)) {
+          finalUpdate.students = finalUpdate.students.map((student: any) => {
+            if (String(student?.email || "").trim().toLowerCase() !== ownEmail) return student;
+            const cleanStudent = { ...student };
+            delete cleanStudent.vocabNotebook;
+            delete cleanStudent.vocabTombstones;
+            return cleanStudent;
+          });
+        }
         const cleanUpdate = JSON.parse(JSON.stringify(finalUpdate));
         transaction.update(DB_DOC_REF, cleanUpdate);
       });
       if (Array.isArray(newData.quizzes) && userRole === "TEACHER") clearPendingQuizWrite();
+      // Không xóa retry record tại đây. onSnapshot chỉ xóa sau khi chính snapshot server
+      // đã chứa đủ thẻ/tombstone, tránh snapshot cache cũ đè mất thẻ sau khoảng 1 giây.
       return true;
     } catch (error: any) {
       console.error("Critical Sync Blocked:", error);
@@ -4633,6 +4796,21 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   // #3: Sổ tay từ vựng thông minh (AI trích từ đề HV đã làm) + lặp lại ngắt quãng (Leitner)
   const SRS_DAYS = [0, 1, 3, 7, 16, 35]; // theo box 1..5
   const findMe = () => students.find(s => (s.email || "").toLowerCase() === (currentUser?.email || "").toLowerCase());
+  const vocabItemKey = (value: any) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  const saveMyVocabNotebook = (notebook: VocabCard[], tombstones: string[] = []) => {
+    const me = findMe();
+    if (!me) return;
+    const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: notebook, vocabTombstones: tombstones } : s);
+    setStudents(nx);
+    const email = String(currentUser?.email || "").trim().toLowerCase();
+    if (!email) return;
+    // LocalStorage chỉ là retry buffer cho thao tác chưa được Firestore xác nhận.
+    // Nguồn chính là collection ielts_vocab/{student}/cards; Firebase IndexedDB tự xếp hàng offline.
+    writePendingVocabWrite(notebook, tombstones);
+    void persistVocabCards(email, notebook, tombstones)
+      .catch(error => console.error("Dedicated vocab write failed; retry buffer retained:", error));
+  };
 
   const handleGenerateVocab = async () => {
     const me = findMe();
@@ -4669,33 +4847,39 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         });
       }
       // Transcript trước (giàu phrasal verb, không bị cắt mất), rồi bài đọc, rồi câu hỏi.
-      let source = (transcripts + " " + passages + " " + qtext).replace(/\s+/g, " ").trim().slice(0, 30000);
+      let source = (transcripts + " " + passages + " " + qtext).replace(/\s+/g, " ").trim().slice(0, 60000);
       wrongCtx = wrongCtx.replace(/\s+/g, " ").trim().slice(0, 2000);
-      const existing = new Set((me.vocabNotebook || []).map(c => (c.word || "").toLowerCase()));
-      const excludeWords = Array.from(existing).slice(0, 600);
+      const existing = new Set((me.vocabNotebook || []).map(c => vocabItemKey(c.word)).filter(Boolean));
+      const requestedCount = Math.max(5, Math.min(40, vocabCount || 15));
+      const excludeWords = (me.vocabNotebook || []).map(c => String(c.word || "").trim()).filter(Boolean).slice(0, 800);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_vocab`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", minCount: Math.max(5, Math.min(40, vocabCount || 15)), target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
+        body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", count: requestedCount, minCount: requestedCount, target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
       });
       const data = await resp.json();
       if (!data.success || !Array.isArray(data.items)) { alert("" + (data.error || "Lỗi tạo từ vựng")); return; }
       const now = getTrueTime();
+      const returnedKeys = new Set<string>();
       const newCards: VocabCard[] = data.items
-        .filter((it: any) => it && it.word && !existing.has(String(it.word).toLowerCase()))
+        .filter((it: any) => {
+          const key = vocabItemKey(it?.word);
+          if (!it || !it.word || !key || existing.has(key) || returnedKeys.has(key)) return false;
+          returnedKeys.add(key);
+          return true;
+        })
         .map((it: any, i: number) => ({
-          id: (now + i).toString(), word: String(it.word), phonetic: it.phonetic || "", pos: it.pos || "",
+          id: `vocab_${now}_${Math.random().toString(36).slice(2, 8)}_${i}`, word: String(it.word), phonetic: it.phonetic || "", pos: it.pos || "",
           meaning: it.meaning_en || it.meaning_vi || it.meaning || "", example: it.example || "", cefr: it.cefr || "",
           category: String(it.category || "word"), evidence: it.source_sentence || it.evidence || "",
           box: 1, due: now, createdAt: now,
         }));
       if (newCards.length === 0) { alert("Không có từ mới (có thể đã có sẵn trong sổ)."); return; }
       const nxNotebook = [...newCards, ...(me.vocabNotebook || [])];
-      const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: nxNotebook } : s);
-      setStudents(nx); syncData({ students: nx });
+      saveMyVocabNotebook(nxNotebook, me.vocabTombstones || []);
       setVocabView("study"); setStudyFlipped(false);
       const droppedN = Number(data.dropped) || 0;
-      alert(`Đã thêm ${newCards.length} mục vào sổ tay!` + (droppedN > 0 ? `\n AI đã tự loại ${droppedN} mục không khớp nguyên văn trong đề (chống bịa).` : ""));
+      alert(`Đã thêm ${newCards.length}/${requestedCount} mục mới vào sổ tay!` + (droppedN > 0 ? `\nAI đã tự loại ${droppedN} mục không khớp nguyên văn trong đề.` : "") + (newCards.length < requestedCount ? "\nNguồn đề hiện không còn đủ mục mới, đã tránh trùng và không bịa thêm." : ""));
     } catch (e: any) {
       alert("" + (e?.message || String(e)));
     } finally {
@@ -4713,8 +4897,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       const due = remembered ? now + SRS_DAYS[box] * 86400000 : now + 10 * 60000;
       return { ...c, box, due };
     });
-    const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: nxNotebook } : s);
-    setStudents(nx); syncData({ students: nx });
+    saveMyVocabNotebook(nxNotebook, me.vocabTombstones || []);
   };
 
   const deleteVocabCard = (cardId: string) => {
@@ -4723,8 +4906,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     const nxNotebook = (me.vocabNotebook || []).filter(c => c.id !== cardId);
     // Ghi "bia mộ" để merge chống-mất-từ không hồi sinh thẻ đã chủ động xóa
     const nxTomb = Array.from(new Set([...(me.vocabTombstones || []), cardId])).slice(-800);
-    const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: nxNotebook, vocabTombstones: nxTomb } : s);
-    setStudents(nx); syncData({ students: nx });
+    saveMyVocabNotebook(nxNotebook, nxTomb);
   };
 
   const getGamificationBadge = (lvl: number) => { if (lvl >= 10) return "Master"; if (lvl >= 5) return "Elite"; return "Novice"; };
