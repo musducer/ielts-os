@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 // ==========================================
@@ -52,6 +52,19 @@ const persistVocabCards = async (email: string, notebook: VocabCard[], tombstone
     });
     await batch.commit();
   }
+};
+
+const readVocabCardsFromServer = async (email: string) => {
+  const snap = await getDocsFromServer(vocabCardsRef(email));
+  const notebook: VocabCard[] = [];
+  const tombstones: string[] = [];
+  snap.docs.forEach(cardSnap => {
+    const value: any = cardSnap.data() || {};
+    const id = String(value.id || cardSnap.id);
+    if (value.deleted) tombstones.push(id);
+    else notebook.push({ ...value, id } as VocabCard);
+  });
+  return { notebook, tombstones };
 };
 
 // ==========================================
@@ -2680,6 +2693,7 @@ export default function IeltsSupremeOS() {
   const vocabStoreReadyRef = useRef<Record<string, boolean>>({});
   const vocabPersistInFlightRef = useRef<Record<string, boolean>>({});
   const vocabMigrationAttemptedRef = useRef<Record<string, boolean>>({});
+  const vocabPendingRetryAttemptedRef = useRef<Record<string, boolean>>({});
   useEffect(() => { studentsRef.current = students; }, [students]);
   const [history, setHistory] = useState<Session[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -3712,9 +3726,8 @@ useEffect(() => {
 const clean = (arr: any) => Array.isArray(arr) ? arr.filter(item => item !== null && item !== undefined) : [];
 
 // ===== LỚP CHỐNG MẤT QUÀ Ở PHÍA ĐỌC =====
-// permanents và vocabNotebook đều là dữ liệu do học sinh tạo. onSnapshot có thể trả snapshot CŨ từ cache
-// hoặc server chưa kịp có write -> dữ liệu vừa thêm biến mất trước mắt. Với vocab, merge theo ID + tombstone
-// và chỉ xóa retry record khi snapshot server xác nhận đã có đủ dữ liệu đó.
+// permanents và vocabNotebook đều là dữ liệu do học sinh tạo. Với vocab, collection riêng là
+// nguồn chuẩn; document tổng chỉ giữ bản legacy. Tuyệt đối không render retry buffer từ document tổng.
 const mergeMyPermanents = (prev: any, incoming: any[]) => {
   try {
     const email = String((window as any).__ielts_user_id || "").toLowerCase();
@@ -3725,7 +3738,6 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
     const prevArr = Array.isArray(prev) ? prev : [];
     const prevMe = prevArr.find((s: any) => String(s?.email || "").toLowerCase() === email);
     const prevPerms = Array.isArray(prevMe?.inventory?.permanents) ? prevMe.inventory.permanents : [];
-    const pendingVocab = readPendingVocabWrite();
     return incoming.map((s: any) => {
       if (String(s?.email || "").toLowerCase() !== email) return s;
       const inPerms = Array.isArray(s?.inventory?.permanents) ? s.inventory.permanents : [];
@@ -3738,17 +3750,10 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
           }
         : mergeVocabNotebook(
             s.vocabNotebook,
-            [...(Array.isArray(prevMe?.vocabNotebook) ? prevMe.vocabNotebook : []), ...(pendingVocab?.notebook || [])],
+            Array.isArray(prevMe?.vocabNotebook) ? prevMe.vocabNotebook : [],
             s.vocabTombstones,
-            [...(Array.isArray(prevMe?.vocabTombstones) ? prevMe.vocabTombstones : []), ...(pendingVocab?.tombstones || [])]
+            Array.isArray(prevMe?.vocabTombstones) ? prevMe.vocabTombstones : []
           );
-      if (pendingVocab) {
-        const serverIds = new Set((Array.isArray(s.vocabNotebook) ? s.vocabNotebook : []).map((card: any) => String(card?.id || "")));
-        const serverTombs = new Set((Array.isArray(s.vocabTombstones) ? s.vocabTombstones : []).map(String));
-        const confirmedCards = pendingVocab.notebook.every((card: any) => !card?.id || serverIds.has(String(card.id)));
-        const confirmedDeletes = (pendingVocab.tombstones || []).every((id: any) => serverTombs.has(String(id)));
-        if (confirmedCards && confirmedDeletes) clearPendingVocabWrite();
-      }
       try { localStorage.setItem(bkKey, JSON.stringify(union)); } catch (e) {}
       return {
         ...s,
@@ -3806,6 +3811,9 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     if (!loaded || userRole !== "STUDENT" || !currentUser?.email) return;
     const vocabEmail = String(currentUser.email).trim().toLowerCase();
     const unsubVocab = onSnapshot(vocabCardsRef(vocabEmail), (snap) => {
+      // A local Firestore echo is not a durable write. Do not let it alter the visible
+      // notebook or clear the retry record; wait for the server-confirmed snapshot.
+      if (snap.metadata.hasPendingWrites) return;
       const snapshotNotebook: VocabCard[] = [];
       const snapshotTombstones: string[] = [];
       snap.docs.forEach(cardSnap => {
@@ -3825,12 +3833,12 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         && (legacyNotebook.length > 0 || legacyTombstones.length > 0);
 
       if (shouldMigrateLegacy) vocabMigrationAttemptedRef.current[vocabEmail] = true;
-      if (shouldMigrateLegacy || pending) {
+      if (shouldMigrateLegacy) {
         const merged = mergeVocabNotebook(
           snapshotNotebook,
-          [...legacyNotebook, ...(pending?.notebook || [])],
+          legacyNotebook,
           snapshotTombstones,
-          [...legacyTombstones, ...(pending?.tombstones || [])]
+          legacyTombstones
         );
         notebook = merged.notebook;
         tombstones = merged.tombstones;
@@ -3848,7 +3856,19 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         const serverTombs = new Set(snapshotTombstones.map(String));
         const confirmedCards = pending.notebook.every((card: any) => !card?.id || serverIds.has(String(card.id)));
         const confirmedDeletes = (pending.tombstones || []).every((id: any) => serverTombs.has(String(id)));
-        if (confirmedCards && confirmedDeletes) clearPendingVocabWrite();
+        if (confirmedCards && confirmedDeletes) {
+          clearPendingVocabWrite();
+          vocabPendingRetryAttemptedRef.current[vocabEmail] = false;
+        } else if (!vocabPersistInFlightRef.current[vocabEmail]
+                   && !vocabPendingRetryAttemptedRef.current[vocabEmail]) {
+          // A prior tab may have closed before Firestore acknowledged its write. Retry once,
+          // but keep the server-confirmed list visible until this retry is actually confirmed.
+          vocabPendingRetryAttemptedRef.current[vocabEmail] = true;
+          vocabPersistInFlightRef.current[vocabEmail] = true;
+          void persistVocabCards(vocabEmail, pending.notebook, pending.tombstones || [])
+            .catch(error => console.error("Dedicated vocab retry failed:", error))
+            .finally(() => { vocabPersistInFlightRef.current[vocabEmail] = false; });
+        }
       }
       setStudents(prev => prev.map(student =>
         String(student.email || "").trim().toLowerCase() === vocabEmail
@@ -4820,24 +4840,36 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   const saveMyVocabNotebook = async (notebook: VocabCard[], tombstones: string[] = []) => {
     const me = findMe();
     if (!me) return false;
-    const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: notebook, vocabTombstones: tombstones } : s);
-    setStudents(nx);
     const email = String(currentUser?.email || "").trim().toLowerCase();
     if (!email) return false;
-    // LocalStorage chỉ là retry buffer cho thao tác chưa được Firestore xác nhận.
-    // Nguồn chính là collection ielts_vocab/{student}/cards; Firebase IndexedDB tự xếp hàng offline.
+    // Do not raise the visible count optimistically. The collection is the canonical source;
+    // the retry record survives a closed tab, but a card appears only after a server read-back.
     writePendingVocabWrite(notebook, tombstones);
     vocabPersistInFlightRef.current[email] = true;
     try {
       await persistVocabCards(email, notebook, tombstones);
+      const confirmed = await readVocabCardsFromServer(email);
+      const confirmedIds = new Set(confirmed.notebook.map(card => String(card.id)));
+      const confirmedTombstones = new Set(confirmed.tombstones.map(String));
+      const missingCard = notebook.some(card => card?.id && !confirmedIds.has(String(card.id)));
+      const missingTombstone = tombstones.some(id => !confirmedTombstones.has(String(id)));
+      if (missingCard || missingTombstone) {
+        throw new Error("Vocabulary write was not confirmed by Firestore.");
+      }
+      vocabStoreReadyRef.current[email] = true;
+      clearPendingVocabWrite();
+      vocabPendingRetryAttemptedRef.current[email] = false;
+      setStudents(prev => prev.map(student => student.id === me.id
+        ? { ...student, vocabNotebook: confirmed.notebook, vocabTombstones: confirmed.tombstones }
+        : student
+      ));
       return true;
     } catch (error) {
-      // Collection riêng có thể chưa được mở trong Firestore Rules. Đừng báo "đã thêm"
-      // rồi để thẻ biến mất: dùng document cũ làm đường tương thích cho tới khi Rules được mở.
-      console.error("Dedicated vocab write failed; using compatibility mirror:", error);
-      vocabStoreReadyRef.current[email] = false;
-      const mirrored = await syncData({ students: nx, __vocabPending: { notebook, tombstones } });
-      return mirrored === true;
+      // Never fall back to the old workspace document after this collection exists: the two
+      // stores race and were the source of the phantom "added" count. Pending data is retained
+      // for one controlled retry by the listener, while the UI remains on confirmed cards.
+      console.error("Vocabulary write was not confirmed; retry record retained:", error);
+      return false;
     } finally {
       vocabPersistInFlightRef.current[email] = false;
     }
