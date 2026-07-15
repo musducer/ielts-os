@@ -3085,6 +3085,28 @@ export default function IeltsSupremeOS() {
   const writeInFlightRef = useRef(0);
   const suppressSnapshotUntilRef = useRef(0);
 
+  // Keep an on-device retry record until Firestore confirms a quiz transaction.
+  const pendingQuizWriteKey = () => `ielts_pending_quiz_write_${String(currentUser?.email || "teacher").toLowerCase()}`;
+  const readPendingQuizWrite = () => {
+    try {
+      const raw = localStorage.getItem(pendingQuizWriteKey());
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && Array.isArray(parsed.quizzes) ? parsed : null;
+    } catch (e) { return null; }
+  };
+  const writePendingQuizWrite = (quizzesToSave: any[], deletedIds: string[] = []) => {
+    try { localStorage.setItem(pendingQuizWriteKey(), JSON.stringify({ quizzes: quizzesToSave, deletedIds })); } catch (e) {}
+  };
+  const clearPendingQuizWrite = () => {
+    try { localStorage.removeItem(pendingQuizWriteKey()); } catch (e) {}
+  };
+  const mergeQuizCatalog = (serverQuizzes: any[], localQuizzes: any[], deletedIds: string[] = []) => {
+    const deleted = new Set((deletedIds || []).map(String));
+    const local = (Array.isArray(localQuizzes) ? localQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)));
+    const localIds = new Set(local.map(q => String(q.id)));
+    return [...local, ...(Array.isArray(serverQuizzes) ? serverQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)) && !localIds.has(String(q.id)))];
+  };
+
   useEffect(() => {
       if (!loaded || !currentUser) return;
       const meLocal = students.find(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase());
@@ -3579,7 +3601,7 @@ useEffect(() => {
     if (e === "trung@ielts.os") return "Truong Thanh Trung";
     if (e === "linh@ielts.os") return "Vi Thi Khanh Linh";
     return e.split("@")[0] || "Teacher";
-  }, [currentUser]);
+  }, [currentUser, userRole]);
 
   const greetingText = useMemo(() => {
       const hour = new Date().getHours();
@@ -3646,7 +3668,17 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     setTransactions(clean(d.transactions)); 
     setSchedules(clean(d.schedules));
     setSharedLinks(clean(d.sharedLinks)); 
-    setQuizzes(clean(d.quizzes));
+    const serverQuizzes = clean(d.quizzes);
+    const pendingQuizWrite = userRole === "TEACHER" ? readPendingQuizWrite() : null;
+    if (pendingQuizWrite) {
+      const recoveredQuizzes = mergeQuizCatalog(serverQuizzes, pendingQuizWrite.quizzes, pendingQuizWrite.deletedIds);
+      setQuizzes(recoveredQuizzes);
+      // The prior browser session ended before Firestore acknowledged its write. Retry
+      // after this snapshot has settled; syncData clears the record only on success.
+      window.setTimeout(() => { void syncData({ quizzes: recoveredQuizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
+    } else {
+      setQuizzes(serverQuizzes);
+    }
     setQuizResults(clean(d.quizResults)); 
     setBannedIps(clean(d.bannedIps));
     setAnnouncement(d.announcement || "");
@@ -4079,12 +4111,22 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   const syncData = async (newData: any) => {
     // CHỐNG "GIẬT" KHI XÓA: đánh dấu đang có ghi của chính mình. onSnapshot sẽ KHÔNG đè state
     // local trong lúc transaction đang bay (snapshot CŨ còn trong đường truyền sẽ làm data xóa hiện lại).
+    const quizDeleteIds = Array.isArray(newData.__quizDeletedIds) ? newData.__quizDeletedIds.map(String) : [];
+    if (Array.isArray(newData.quizzes) && userRole === "TEACHER") {
+      writePendingQuizWrite(newData.quizzes, quizDeleteIds);
+    }
     writeInFlightRef.current++;
     try {
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
         if (!sfDoc.exists()) {
-          transaction.set(DB_DOC_REF, JSON.parse(JSON.stringify(newData)));
+          const initialData = { ...newData };
+          delete initialData.__quizDeletedIds;
+          if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
+            initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
+            initialData.quizTombstones = quizDeleteIds.slice(-1000);
+          }
+          transaction.set(DB_DOC_REF, JSON.parse(JSON.stringify(initialData)));
           return;
         }
         
@@ -4092,6 +4134,7 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         const finalUpdate: any = {};
 
         Object.keys(newData).forEach((key) => {
+          if (key === "__quizDeletedIds") return;
           const localVal = newData[key];
           const serverVal = serverData[key];
 
@@ -4111,6 +4154,19 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
               else mergedArr[idx] = { ...mergedArr[idx], ...localItem };
             });
             finalUpdate[key] = mergedArr;
+            return;
+          }
+
+          // Quiz catalog is a shared collection, not a replaceable blob. Merge by ID so
+          // a stale full-list payload cannot delete a quiz created by a newer write.
+          // Explicit deletes carry tombstones, preventing a stale tab from restoring them.
+          if (key === "quizzes" && userRole === "TEACHER") {
+            const tombstones = Array.from(new Set([
+              ...(Array.isArray(serverData.quizTombstones) ? serverData.quizTombstones : []),
+              ...quizDeleteIds,
+            ].map(String))).slice(-1000);
+            finalUpdate.quizzes = mergeQuizCatalog(serverArr, localVal, tombstones);
+            if (quizDeleteIds.length) finalUpdate.quizTombstones = tombstones;
             return;
           }
 
@@ -4232,11 +4288,14 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         const cleanUpdate = JSON.parse(JSON.stringify(finalUpdate));
         transaction.update(DB_DOC_REF, cleanUpdate);
       });
+      if (Array.isArray(newData.quizzes) && userRole === "TEACHER") clearPendingQuizWrite();
+      return true;
     } catch (error: any) {
       console.error("Critical Sync Blocked:", error);
       if (typeof logErrorToSystem === "function") {
         logErrorToSystem("CRITICAL_SYNC_FAIL", error.message || String(error), { user: currentUser?.email });
       }
+      return false;
     } finally {
       // Hết ghi: giữ thêm 1 khoảng ngắn để hứng nốt snapshot CŨ còn sót trên đường truyền,
       // tránh data vừa xóa nhấp nháy hiện lại. State local lúc này đã là nguồn đúng.
@@ -5451,17 +5510,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const duplicateQuiz = (q: Quiz) => {
       const newQuiz = JSON.parse(JSON.stringify({
           ...q,
-          id: getTrueTime().toString(),
+          id: typeof crypto !== "undefined" && crypto.randomUUID
+              ? `quiz_${crypto.randomUUID()}`
+              : `quiz_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           title: q.title + " (Copy)",
           active: false,
           isLocked: true
       }));
-      setQuizzes(prev => {
-          const nx = [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)];
-          syncData({ quizzes: nx });
-          return nx;
+      setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
+      void syncData({ quizzes: [newQuiz] }).then(saved => {
+          alert(saved ? "Exam duplicated successfully!" : "The copy is saved on this device and will retry automatically when the connection returns.");
       });
-      alert("Exam duplicated successfully!");
   };
 
   const handleBulkLock = (locked: boolean) => {
@@ -5745,7 +5804,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleBulkDeleteQuizzes = () => {
       if(!confirm(`Delete ${selectedQuizzes.length} selected exams?`)) return;
       const nx = quizzes.filter(q => !selectedQuizzes.includes(q.id));
-      setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
+      setQuizzes(nx); syncData({ quizzes: nx, __quizDeletedIds: selectedQuizzes }); setSelectedQuizzes([]);
   };
 
   // ==========================================
