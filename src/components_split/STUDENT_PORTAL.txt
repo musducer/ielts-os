@@ -221,7 +221,9 @@
 
     const myHistory = history.filter(h => h.studentId === me.id);
     const myQuizResults = quizResults.filter(r => r.studentId === me.id);
-    const vocabCards = Array.isArray(me.vocabNotebook) ? me.vocabNotebook : [];
+    // Final UI guard: newest cards stay at the top even if a legacy/server snapshot arrives
+    // in Firestore document-ID order (oldest first).
+    const vocabCards = newestVocabFirst(Array.isArray(me.vocabNotebook) ? me.vocabNotebook : []);
     // Phân loại từ vựng: từ lẻ / cụm động từ / thành ngữ / kết hợp từ / cấu trúc ngữ pháp
     const VOCAB_CATS = [
       { key: 'word', icon: 'book', color: C.accent },

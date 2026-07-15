@@ -30,6 +30,21 @@ const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
 const VOCAB_ROOT_COLLECTION = "ielts_vocab";
 const vocabStudentKey = (email: string) => encodeURIComponent(String(email || "").trim().toLowerCase());
 const vocabCardsRef = (email: string) => collection(db, VOCAB_ROOT_COLLECTION, vocabStudentKey(email), "cards");
+const vocabCreatedAt = (card: any) => {
+  const explicit = Number(card?.createdAt);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const match = String(card?.id || "").match(/^vocab_(\d{10,})/);
+  return match ? Number(match[1]) : 0;
+};
+const newestVocabFirst = (cards: VocabCard[]) => [...cards].sort((a, b) =>
+  vocabCreatedAt(b) - vocabCreatedAt(a) || String(b.id).localeCompare(String(a.id))
+);
+const vocabCardSignature = (card: any) => JSON.stringify([
+  String(card?.id || ""), String(card?.word || ""), String(card?.phonetic || ""),
+  String(card?.pos || ""), String(card?.meaning || ""), String(card?.example || ""),
+  String(card?.cefr || ""), String(card?.category || ""), String(card?.evidence || ""),
+  Number(card?.box || 1), Number(card?.due || 0), Number(card?.createdAt || 0),
+]);
 const persistVocabCards = async (email: string, notebook: VocabCard[], tombstones: string[] = []) => {
   const cards = new Map<string, any>();
   (Array.isArray(notebook) ? notebook : []).forEach(card => {
@@ -64,7 +79,7 @@ const readVocabCardsFromServer = async (email: string) => {
     if (value.deleted) tombstones.push(id);
     else notebook.push({ ...value, id } as VocabCard);
   });
-  return { notebook, tombstones };
+  return { notebook: newestVocabFirst(notebook), tombstones };
 };
 
 // ==========================================
@@ -3192,7 +3207,10 @@ export default function IeltsSupremeOS() {
     (Array.isArray(localNotebook) ? localNotebook : []).forEach((card: any) => {
       if (card?.id) cards.set(String(card.id), { ...cards.get(String(card.id)), ...card });
     });
-    return { notebook: Array.from(cards.values()).filter((card: any) => !tombstones.includes(String(card.id))), tombstones };
+    return {
+      notebook: newestVocabFirst(Array.from(cards.values()).filter((card: any) => !tombstones.includes(String(card.id)))),
+      tombstones,
+    };
   };
   const mergeQuizCatalog = (serverQuizzes: any[], localQuizzes: any[], deletedIds: string[] = []) => {
     const deleted = new Set((deletedIds || []).map(String));
@@ -3822,6 +3840,9 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         if (value.deleted) snapshotTombstones.push(id);
         else snapshotNotebook.push({ ...value, id } as VocabCard);
       });
+      snapshotNotebook.sort((a, b) =>
+        vocabCreatedAt(b) - vocabCreatedAt(a) || String(b.id).localeCompare(String(a.id))
+      );
 
       const pending = readPendingVocabWrite();
       const me = studentsRef.current.find(s => String(s.email || "").trim().toLowerCase() === vocabEmail);
@@ -3852,9 +3873,13 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
 
       if (snap.size > 0) vocabStoreReadyRef.current[vocabEmail] = true;
       if (pending) {
-        const serverIds = new Set(snapshotNotebook.map(card => String(card.id)));
+        const serverCards = new Map(snapshotNotebook.map(card => [String(card.id), card]));
         const serverTombs = new Set(snapshotTombstones.map(String));
-        const confirmedCards = pending.notebook.every((card: any) => !card?.id || serverIds.has(String(card.id)));
+        const confirmedCards = pending.notebook.every((card: any) => {
+          if (!card?.id) return true;
+          const serverCard = serverCards.get(String(card.id));
+          return serverCard && vocabCardSignature(serverCard) === vocabCardSignature(card);
+        });
         const confirmedDeletes = (pending.tombstones || []).every((id: any) => serverTombs.has(String(id)));
         if (confirmedCards && confirmedDeletes) {
           clearPendingVocabWrite();
@@ -4847,11 +4872,27 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     writePendingVocabWrite(notebook, tombstones);
     vocabPersistInFlightRef.current[email] = true;
     try {
-      await persistVocabCards(email, notebook, tombstones);
+      const previousCards = new Map((me.vocabNotebook || []).map(card => [String(card.id), card]));
+      const previousTombstones = new Set((me.vocabTombstones || []).map(String));
+      const mustSeedCollection = !vocabStoreReadyRef.current[email];
+      const changedCards = mustSeedCollection
+        ? notebook
+        : notebook.filter(card => {
+            const previous = previousCards.get(String(card.id));
+            return !previous || vocabCardSignature(previous) !== vocabCardSignature(card);
+          });
+      const changedTombstones = mustSeedCollection
+        ? tombstones
+        : tombstones.filter(id => !previousTombstones.has(String(id)));
+      await persistVocabCards(email, changedCards, changedTombstones);
       const confirmed = await readVocabCardsFromServer(email);
-      const confirmedIds = new Set(confirmed.notebook.map(card => String(card.id)));
+      const confirmedCards = new Map(confirmed.notebook.map(card => [String(card.id), card]));
       const confirmedTombstones = new Set(confirmed.tombstones.map(String));
-      const missingCard = notebook.some(card => card?.id && !confirmedIds.has(String(card.id)));
+      const missingCard = notebook.some(card => {
+        if (!card?.id) return false;
+        const serverCard = confirmedCards.get(String(card.id));
+        return !serverCard || vocabCardSignature(serverCard) !== vocabCardSignature(card);
+      });
       const missingTombstone = tombstones.some(id => !confirmedTombstones.has(String(id)));
       if (missingCard || missingTombstone) {
         throw new Error("Vocabulary write was not confirmed by Firestore.");
@@ -4944,7 +4985,9 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         alert("Chưa thể lưu các mục mới vào sổ. Hệ thống đã giữ bản chờ để tự thử lại, nhưng chưa tính là thêm thành công.");
         return;
       }
-      setVocabView("study"); setStudyFlipped(false);
+      // Show the confirmed additions immediately. Firestore's default document order puts
+      // newer timestamp IDs at the bottom, which previously made the list look unchanged.
+      setVocabFilter("all"); setVocabView("list"); setStudyFlipped(false);
       const droppedN = Number(data.dropped) || 0;
       alert(`Đã thêm ${newCards.length}/${requestedCount} mục mới vào sổ tay!` + (droppedN > 0 ? `\nAI đã tự loại ${droppedN} mục không khớp nguyên văn trong đề.` : "") + (newCards.length < requestedCount ? "\nNguồn đề hiện không còn đủ mục mới, đã tránh trùng và không bịa thêm." : ""));
     } catch (e: any) {
@@ -9285,7 +9328,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
     const myHistory = history.filter(h => h.studentId === me.id);
     const myQuizResults = quizResults.filter(r => r.studentId === me.id);
-    const vocabCards = Array.isArray(me.vocabNotebook) ? me.vocabNotebook : [];
+    // Final UI guard: newest cards stay at the top even if a legacy/server snapshot arrives
+    // in Firestore document-ID order (oldest first).
+    const vocabCards = newestVocabFirst(Array.isArray(me.vocabNotebook) ? me.vocabNotebook : []);
     // Phân loại từ vựng: từ lẻ / cụm động từ / thành ngữ / kết hợp từ / cấu trúc ngữ pháp
     const VOCAB_CATS = [
       { key: 'word', icon: 'book', color: C.accent },
