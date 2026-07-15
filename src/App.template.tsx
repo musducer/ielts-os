@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 // ==========================================
@@ -3163,6 +3163,10 @@ export default function IeltsSupremeOS() {
   // CHỐNG "GIẬT" KHI XÓA DATA: số ghi của chính mình đang chạy + thời điểm hết chặn snapshot.
   const writeInFlightRef = useRef(0);
   const suppressSnapshotUntilRef = useRef(0);
+  // Phones commonly freeze a background tab and leave its Firestore listener stale until
+  // the next network heartbeat. Coalesce lifecycle-triggered server refreshes on resume.
+  const cloudRefreshInFlightRef = useRef(false);
+  const lastCloudRefreshAtRef = useRef(0);
 
   // Keep an on-device retry record until Firestore confirms a quiz transaction.
   const pendingQuizWriteKey = () => `ielts_pending_quiz_write_${String(currentUser?.email || "teacher").toLowerCase()}`;
@@ -3783,7 +3787,7 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
   } catch (e) { return incoming; }
 };
 
-const unsub = onSnapshot(DB_DOC_REF, (snap) => {
+const applyWorkspaceSnapshot = (snap: any) => {
   // CHỐNG "GIẬT": bỏ qua snapshot từ server khi ĐANG có ghi của chính mình hoặc vừa ghi xong (cửa sổ ngắn).
   // Lúc này state local đã là nguồn đúng; nếu để snapshot CŨ đè vào thì data vừa xóa sẽ nhấp nháy hiện lại.
   if (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current) return;
@@ -3813,7 +3817,39 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
     setRewardCodes(clean(d.rewardCodes));
   }
   setLoaded(true);
-});
+};
+
+    let disposed = false;
+    const refreshCloudAfterForeground = async () => {
+      if (disposed || !currentUser || !navigator.onLine || document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (cloudRefreshInFlightRef.current || now - lastCloudRefreshAtRef.current < 2500) return;
+
+      cloudRefreshInFlightRef.current = true;
+      lastCloudRefreshAtRef.current = now;
+      try {
+        // A server-only read wakes Firestore immediately after iOS/Android has frozen a tab.
+        // The normal listeners remain the long-lived sync mechanism; this is a resume nudge.
+        const [workspaceResult, liveResult] = await Promise.allSettled([
+          getDocFromServer(DB_DOC_REF),
+          getDocFromServer(LIVE_DOC_REF),
+        ]);
+        if (disposed) return;
+        if (workspaceResult.status === "fulfilled") applyWorkspaceSnapshot(workspaceResult.value);
+        else console.debug("Foreground workspace refresh deferred:", workspaceResult.reason);
+        if (liveResult.status === "fulfilled" && liveResult.value.exists()) {
+          setLiveSessions(liveResult.value.data().sessions || []);
+        }
+      } finally {
+        cloudRefreshInFlightRef.current = false;
+      }
+    };
+    const handleForeground = () => { void refreshCloudAfterForeground(); };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") handleForeground();
+    };
+
+    const unsub = onSnapshot(DB_DOC_REF, applyWorkspaceSnapshot);
 
     const unsubLive = onSnapshot(LIVE_DOC_REF, (snap) => {
         if (snap.exists()) {
@@ -3822,8 +3858,23 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         }
     });
 
-    return () => { unsub(); unsubLive(); clearInterval(timeSyncInterval); };
-  }, [currentUser]);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handleForeground);
+    window.addEventListener("focus", handleForeground);
+    window.addEventListener("online", handleForeground);
+    void refreshCloudAfterForeground();
+
+    return () => {
+      disposed = true;
+      unsub();
+      unsubLive();
+      clearInterval(timeSyncInterval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handleForeground);
+      window.removeEventListener("focus", handleForeground);
+      window.removeEventListener("online", handleForeground);
+    };
+  }, [currentUser, userRole]);
 
   useEffect(() => {
     if (!loaded || userRole !== "STUDENT" || !currentUser?.email) return;
