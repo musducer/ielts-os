@@ -4798,18 +4798,30 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
   const findMe = () => students.find(s => (s.email || "").toLowerCase() === (currentUser?.email || "").toLowerCase());
   const vocabItemKey = (value: any) => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
-  const saveMyVocabNotebook = (notebook: VocabCard[], tombstones: string[] = []) => {
+  const saveMyVocabNotebook = async (notebook: VocabCard[], tombstones: string[] = []) => {
     const me = findMe();
-    if (!me) return;
+    if (!me) return false;
     const nx = students.map(s => s.id === me.id ? { ...s, vocabNotebook: notebook, vocabTombstones: tombstones } : s);
     setStudents(nx);
     const email = String(currentUser?.email || "").trim().toLowerCase();
-    if (!email) return;
+    if (!email) return false;
     // LocalStorage chỉ là retry buffer cho thao tác chưa được Firestore xác nhận.
     // Nguồn chính là collection ielts_vocab/{student}/cards; Firebase IndexedDB tự xếp hàng offline.
     writePendingVocabWrite(notebook, tombstones);
-    void persistVocabCards(email, notebook, tombstones)
-      .catch(error => console.error("Dedicated vocab write failed; retry buffer retained:", error));
+    vocabPersistInFlightRef.current[email] = true;
+    try {
+      await persistVocabCards(email, notebook, tombstones);
+      return true;
+    } catch (error) {
+      // Collection riêng có thể chưa được mở trong Firestore Rules. Đừng báo "đã thêm"
+      // rồi để thẻ biến mất: dùng document cũ làm đường tương thích cho tới khi Rules được mở.
+      console.error("Dedicated vocab write failed; using compatibility mirror:", error);
+      vocabStoreReadyRef.current[email] = false;
+      const mirrored = await syncData({ students: nx, __vocabPending: { notebook, tombstones } });
+      return mirrored === true;
+    } finally {
+      vocabPersistInFlightRef.current[email] = false;
+    }
   };
 
   const handleGenerateVocab = async () => {
@@ -4876,7 +4888,11 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
         }));
       if (newCards.length === 0) { alert("Không có từ mới (có thể đã có sẵn trong sổ)."); return; }
       const nxNotebook = [...newCards, ...(me.vocabNotebook || [])];
-      saveMyVocabNotebook(nxNotebook, me.vocabTombstones || []);
+      const saved = await saveMyVocabNotebook(nxNotebook, me.vocabTombstones || []);
+      if (!saved) {
+        alert("Chưa thể lưu các mục mới vào sổ. Hệ thống đã giữ bản chờ để tự thử lại, nhưng chưa tính là thêm thành công.");
+        return;
+      }
       setVocabView("study"); setStudyFlipped(false);
       const droppedN = Number(data.dropped) || 0;
       alert(`Đã thêm ${newCards.length}/${requestedCount} mục mới vào sổ tay!` + (droppedN > 0 ? `\nAI đã tự loại ${droppedN} mục không khớp nguyên văn trong đề.` : "") + (newCards.length < requestedCount ? "\nNguồn đề hiện không còn đủ mục mới, đã tránh trùng và không bịa thêm." : ""));
