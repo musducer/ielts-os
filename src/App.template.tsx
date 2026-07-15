@@ -4494,7 +4494,10 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       }
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
-      const ctxParts = [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
+      // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
+      const ctxParts = isListeningQuestion
+        ? [stripTags(fullQuiz?.transcript), stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
+        : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {

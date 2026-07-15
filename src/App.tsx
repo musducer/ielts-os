@@ -4494,7 +4494,10 @@ const unsub = onSnapshot(DB_DOC_REF, (snap) => {
       }
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
-      const ctxParts = [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
+      // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
+      const ctxParts = isListeningQuestion
+        ? [stripTags(fullQuiz?.transcript), stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
+        : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
@@ -6374,9 +6377,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvIsListeningPart = (idx: number) => rvIsListeningExam || (rvIsIntegrated && idx === 0);
       const rvActiveIsListening = rvIsListeningPart(rvActiveIdx);
       const rvUsePartLabels = rvIsListeningExam || rvIsIntegrated;
-      // Timestamp [mm:ss]/[h:mm:ss] trong giải thích AI -> nút bấm tua audio review tới đúng mốc
+      // Timestamp trong giải thích AI -> nút bấm tua audio review tới đúng mốc bắt đầu.
       const rvSeek = (tstr: string) => {
-          const p = tstr.replace(/[\[\]]/g, '').split(':').map(Number);
+          const time = String(tstr).match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0];
+          if (!time) return;
+          const p = time.split(':').map(Number);
           const secs = p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
           const el = document.getElementById('review-audio') as HTMLAudioElement | null;
           if (!el) return;
@@ -6387,9 +6392,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           void requestReviewAudioPlayback();
       };
       const rvRenderExplain = (txt: string) => {
-          const parts = String(txt || '').split(/(\[(?:\d{1,2}:)?\d{1,2}:\d{2}\])/g);
-          return parts.map((p, pi) => /^\[(?:\d{1,2}:)?\d{1,2}:\d{2}\]$/.test(p)
-              ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
+          const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
+          const parts = String(txt || '').split(new RegExp(`(${token.source})`, 'g'));
+          return parts.map((p, pi) => token.test(p)
+              ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" aria-label={`Nghe lại từ ${p.match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0] || 'mốc này'}`} style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
               : <React.Fragment key={pi}>{p}</React.Fragment>);
       };
       return (

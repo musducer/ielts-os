@@ -700,17 +700,18 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     is_listening = bool(payload.get("isListening")) and bool(_TS_MARKER_RE.search(context))
     ts_rule_en = (
         " TIMESTAMP RULE: the transcript contains time markers like \"(0:21 - 0:33)\" placed BEFORE each block of speech. "
-        "Step 1: locate the exact sentence you quoted inside the transcript. Step 2: scan UPWARD from that sentence and take "
-        "the NEAREST marker above it. Step 3: copy that marker's START time DIGIT-FOR-DIGIT (never estimate, never average, "
-        "never use a marker that comes after the quote) and write it right after the quote as [mm:ss] or [h:mm:ss] "
-        "(e.g. marker \"(3:02 - 3:27)\" -> [3:02]). If the transcript has no markers, omit the timestamp entirely."
+        "This is an exact evidence task, not a rough location: first find the correct-answer word or phrase in the transcript, "
+        "then scan UPWARD from that exact occurrence and take the NEAREST marker above it. Never choose a later related sentence, "
+        "estimate, average, or use a marker after the answer-bearing words. Include exactly ONE standalone seek marker in the whole "
+        "explanation, formatted only as [mm:ss] or [h:mm:ss] (e.g. marker \"(3:02 - 3:27)\" -> [3:02]); never output a time range. "
+        "If the transcript has no markers, omit the timestamp entirely."
     ) if is_listening else ""
     ts_rule_vi = (
         " LUẬT MỐC THỜI GIAN: transcript có mốc dạng \"(0:21 - 0:33)\" đặt TRƯỚC mỗi khối lời thoại. "
-        "Bước 1: xác định đúng câu bạn vừa trích trong transcript. Bước 2: dò NGƯỢC LÊN từ câu đó và lấy mốc GẦN NHẤT phía trên. "
-        "Bước 3: chép Y NGUYÊN từng chữ số thời gian BẮT ĐẦU của mốc đó (không ước lượng, không lấy mốc nằm SAU câu trích) "
-        "và ghi ngay sau trích dẫn dạng [mm:ss] hoặc [h:mm:ss] (vd mốc \"(3:02 - 3:27)\" -> [3:02]). "
-        "Transcript không có mốc thì bỏ hẳn timestamp."
+        "Đây là việc đối chiếu CHÍNH XÁC, không phải chọn vị trí gần đúng: trước hết tìm đúng từ/cụm từ của đáp án trong transcript, "
+        "sau đó dò NGƯỢC LÊN từ đúng chỗ xuất hiện đó và lấy mốc GẦN NHẤT phía trên. Tuyệt đối không lấy một câu liên quan ở phía SAU, "
+        "không ước lượng, không lấy trung bình. Toàn bộ giải thích phải có đúng MỘT mốc để bấm nghe lại, chỉ ở dạng [mm:ss] hoặc "
+        "[h:mm:ss] (vd mốc \"(3:02 - 3:27)\" -> [3:02]); không bao giờ ghi một khoảng thời gian. Transcript không có mốc thì bỏ hẳn timestamp."
     ) if is_listening else ""
 
     integrated_rule_en = (
@@ -771,7 +772,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     if err:
         return {"success": False, "error": _friendly_err(err, lang)}
     # HẬU KIỂM: xóa mọi [mm:ss] không khớp mốc thật trong transcript (chống AI bịa/ước lượng).
-    text = _filter_fake_timestamps(text, context)
+    text = _filter_fake_timestamps(text, context, correct if is_listening else "", lang)
     return {"success": True, "explanation": text}
 
 
@@ -1458,7 +1459,7 @@ def _fmt_ts(sec: float) -> str:
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
 
 
-def _segments_to_marked_transcript(segments, block_sec: float = 22.0) -> str:
+def _segments_to_marked_transcript(segments, block_sec: float = 8.0) -> str:
     """Ghép segment Whisper (verbose_json) thành transcript CÓ MỐC THỜI GIAN TUYỆT ĐỐI:
     (m:ss - m:ss)\\ntext... — mốc lấy thẳng từ máy, không phải AI đoán."""
     blocks = []
@@ -1486,22 +1487,69 @@ def _segments_to_marked_transcript(segments, block_sec: float = 22.0) -> str:
 
 _TS_MARKER_RE = re.compile(r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)")
 _TS_CITE_RE = re.compile(r"\s*\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]")
+_TS_RANGE_RE = re.compile(
+    r"[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]")
+_TS_PAREN_CITE_RE = re.compile(r"\((\d{1,2}:\d{2}(?::\d{2})?)\)")
+_TS_BLOCK_RE = re.compile(
+    r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)\s*\n?([\s\S]*?)(?=\n\s*\(\d{1,2}:\d{2}(?::\d{2})?\s*-|\Z)")
 
 
 def _ts_to_sec(a: str, b: str, c) -> int:
     return (int(a) * 3600 + int(b) * 60 + int(c)) if c else (int(a) * 60 + int(b))
 
 
-def _filter_fake_timestamps(answer: str, context: str) -> str:
-    """HẬU KIỂM chống bịa: mọi [mm:ss] trong câu trả lời phải khớp mốc BẮT ĐẦU có thật trong transcript
-    (dung sai ±2s do làm tròn). Không khớp -> xóa timestamp khỏi câu trả lời."""
+def _normalized_timestamp_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _answer_anchor_seconds(context: str, correct: str):
+    """Return the transcript block for a unique, answer-bearing phrase; ambiguous answers stay AI-selected."""
+    blocks = []
+    for match in _TS_BLOCK_RE.finditer(context or ""):
+        blocks.append((_ts_to_sec(match.group(1), match.group(2), match.group(3)), _normalized_timestamp_text(match.group(4))))
+    if not blocks:
+        return None
+
+    candidates = {
+        _normalized_timestamp_text(part)
+        for part in re.split(r"\s*(?:/|;|\||\bor\b)\s*", str(correct or ""), flags=re.I)
+    }
+    candidates = {candidate for candidate in candidates if len(candidate) >= 3 and not candidate.isdigit()}
+    for candidate in sorted(candidates, key=len, reverse=True):
+        matches = [sec for sec, block in blocks if re.search(r"(?:^|\s)" + re.escape(candidate) + r"(?:\s|$)", block)]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi") -> str:
+    """Keep only real seek markers and prefer a unique answer-bearing transcript block when available."""
+    answer = _TS_RANGE_RE.sub(lambda m: "[" + m.group(1) + "]", answer or "")
+    answer = _TS_PAREN_CITE_RE.sub(lambda m: "[" + m.group(1) + "]", answer)
     allowed = {_ts_to_sec(m.group(1), m.group(2), m.group(3)) for m in _TS_MARKER_RE.finditer(context or "")}
     if not allowed:
-        return _TS_CITE_RE.sub("", answer or "")
+        return _TS_CITE_RE.sub("", answer)
+
+    answer_anchor = _answer_anchor_seconds(context, correct)
+    if answer_anchor is not None:
+        anchor = "[" + _fmt_ts(answer_anchor) + "]"
+        if _TS_CITE_RE.search(answer):
+            used_anchor = False
+            def _replace_with_anchor(m):
+                nonlocal used_anchor
+                if used_anchor:
+                    return ""
+                used_anchor = True
+                token = m.group(0)
+                leading_space = token[:len(token) - len(token.lstrip())]
+                return leading_space + anchor
+            return _TS_CITE_RE.sub(_replace_with_anchor, answer)
+        return answer.rstrip() + ("\n\nListen again: " if lang == "en" else "\n\nNghe lại: ") + anchor
+
     def _keep(m):
         sec = _ts_to_sec(m.group(1), m.group(2), m.group(3))
         return m.group(0) if any(abs(sec - a) <= 2 for a in allowed) else ""
-    return _TS_CITE_RE.sub(_keep, answer or "")
+    return _TS_CITE_RE.sub(_keep, answer)
 
 
 @app.post("/api/ai_transcribe")
