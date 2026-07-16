@@ -555,8 +555,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-progress-bg { position: absolute; top: 0; left: 10%; right: 10%; height: 3px; background: var(--eborder); border-radius: 3px; overflow: hidden; }
                       .idp-progress-fill { height: 100%; background: var(--etext); transition: width 0.3s ease; }
                       
-                      .student-note-hl { background-color: var(--notebg, #2563eb) !important; color: var(--notefg, #fff) !important; cursor: pointer; position: relative; padding-right: 18px; border-radius: 2px; }
-                      .student-note-hl::after { content: ''; position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2Z"/></svg>') no-repeat center; background-size: contain; }
+                      .student-note-hl { background-color: var(--notebg, #2563eb) !important; color: var(--notefg, #fff) !important; cursor: pointer; border-radius: 2px; }
                       
                       /* ĐàFIX: Đồng bộ màu quét chuột nguyên bản với màu FAKE của hệ thống */
                       .exam-content-block ::selection { background-color: #b3d4fc !important; color: inherit !important; }
@@ -1600,14 +1599,21 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  {/* PANEL NOTES BÊN PHẢI (chuẩn Inspera) — đọc từ STATE nên thấy notes của MỌI passage/section */}
                  {showNotesPanel && (() => {
                      void notesTick;
-                     type NoteRef = { key: string; secIdx: number; qid: string | null; field: string; optIndex: number | null; occ: number; snippet: string; note: string };
+                     type NoteRef = { key: string; secIdx: number; qid: string | null; field: string; optIndex: number | null; occ: number; snippet: string; note: string; noteId: string | null };
                      const _tmp = document.createElement('div');
                      const notes: NoteRef[] = [];
                      const scanHtml = (html: string, base: { secIdx: number; qid: string | null; field: string; optIndex: number | null; keyBase: string }) => {
                          if (!html || html.indexOf('student-note-hl') === -1) return;
                          _tmp.innerHTML = html;
                          Array.from(_tmp.querySelectorAll('.student-note-hl')).forEach((sp, occ) => {
-                             notes.push({ secIdx: base.secIdx, qid: base.qid, field: base.field, optIndex: base.optIndex, occ, snippet: (sp.textContent || '').trim(), note: sp.getAttribute('data-note') || '', key: `${base.keyBase}#${occ}` });
+                             const noteId = sp.getAttribute('data-note-id');
+                             const snippet = (sp.textContent || '').trim();
+                             const grouped = noteId ? notes.find(n => n.noteId === noteId) : null;
+                             if (grouped) {
+                                 grouped.snippet += (grouped.snippet && snippet ? '\n' : '') + snippet;
+                             } else {
+                                 notes.push({ secIdx: base.secIdx, qid: base.qid, field: base.field, optIndex: base.optIndex, occ, snippet, note: sp.getAttribute('data-note') || '', noteId, key: noteId ? `note:${noteId}` : `${base.keyBase}#${occ}` });
+                             }
                          });
                      };
                      const secList = (activeExam?.sections && activeExam.sections.length) ? activeExam.sections : null;
@@ -1625,15 +1631,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          });
                      });
                      // LƯỚI AN TOÀN: note đang hiển thị trên DOM nhưng chưa lọt vào state (vd bài đọc) -> vẫn hiện trong panel
-                     const stateKeys = new Set(notes.map(n2 => n2.snippet + '||' + n2.note));
+                     const stateKeys = new Set(notes.map(n2 => n2.noteId ? `id:${n2.noteId}` : `legacy:${n2.snippet}||${n2.note}`));
                      Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')).forEach((el, di) => {
                          const snippet = (el.textContent || '').trim();
                          const note = el.getAttribute('data-note') || '';
-                         if (!stateKeys.has(snippet + '||' + note)) notes.push({ key: `dom${di}`, secIdx: currentSectionIndex, qid: null, field: '__dom', optIndex: null, occ: di, snippet, note });
+                         const noteId = el.getAttribute('data-note-id');
+                         const stateKey = noteId ? `id:${noteId}` : `legacy:${snippet}||${note}`;
+                         if (stateKeys.has(stateKey)) return;
+                         const grouped = noteId ? notes.find(n => n.noteId === noteId) : null;
+                         if (grouped) {
+                             grouped.snippet += (grouped.snippet && snippet ? '\n' : '') + snippet;
+                         } else {
+                             notes.push({ key: noteId ? `dom:${noteId}` : `dom${di}`, secIdx: currentSectionIndex, qid: null, field: '__dom', optIndex: null, occ: di, snippet, note, noteId });
+                         }
                      });
-                     const findDomEl = (n: NoteRef): HTMLElement | null => {
+                     const findDomEls = (n: NoteRef): HTMLElement[] => {
                          const els = Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')) as HTMLElement[];
-                         return els.find(e => (e.textContent || '').trim() === n.snippet && (e.getAttribute('data-note') || '') === n.note) || null;
+                         return n.noteId
+                             ? els.filter(e => e.getAttribute('data-note-id') === n.noteId)
+                             : els.filter(e => (e.textContent || '').trim() === n.snippet && (e.getAttribute('data-note') || '') === n.note);
                      };
                      const getRangeLabel = (n: NoteRef): string => {
                          const qs = activeExam?.questions || [];
@@ -1649,14 +1665,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      const mutateNote = (n: NoteRef, newNote: string | null) => {
                          if (n.field === '__dom') {
                              // Note chỉ có trong DOM: sửa trực tiếp node + serialize container về state
-                             const el = findDomEl(n); if (!el) return;
-                             const container = el.closest('.highlightable-content') as HTMLElement | null;
-                             if (newNote === null) { const p = el.parentNode; if (p) { while (el.firstChild) p.insertBefore(el.firstChild, el); p.removeChild(el); (p as any).normalize?.(); } }
-                             else el.setAttribute('data-note', newNote);
-                             if (container) {
+                             const els = findDomEls(n); if (!els.length) return;
+                             const containers = new Set<HTMLElement>();
+                             const parents = new Set<ParentNode>();
+                             els.forEach(el => {
+                                 const container = el.closest('.highlightable-content') as HTMLElement | null;
+                                 if (container) containers.add(container);
+                                 if (newNote === null) {
+                                     const p = el.parentNode;
+                                     if (p) { while (el.firstChild) p.insertBefore(el.firstChild, el); p.removeChild(el); parents.add(p); }
+                                 } else el.setAttribute('data-note', newNote);
+                             });
+                             parents.forEach(p => (p as any).normalize?.());
+                             containers.forEach(container => {
                                  const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
                                  if (field) { const cleanHTML = serializeHighlightHTML(container); setActiveExam(prev => syncHighlightState(prev, field, qId || '', cleanHTML, optIndex)); }
-                             }
+                             });
                              window.setTimeout(() => setNotesTick(t => t + 1), 0);
                              return;
                          }
@@ -1666,10 +1690,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || ''));
                          if (!src) return;
                          _tmp.innerHTML = src;
-                         const sp = _tmp.querySelectorAll('.student-note-hl')[n.occ] as HTMLElement | undefined;
-                         if (!sp) return;
-                         if (newNote === null) { const p = sp.parentNode; if (p) { while (sp.firstChild) p.insertBefore(sp.firstChild, sp); p.removeChild(sp); (p as any).normalize?.(); } }
-                         else sp.setAttribute('data-note', newNote);
+                         const spans = n.noteId
+                             ? Array.from(_tmp.querySelectorAll('.student-note-hl')).filter(sp => sp.getAttribute('data-note-id') === n.noteId) as HTMLElement[]
+                             : [_tmp.querySelectorAll('.student-note-hl')[n.occ] as HTMLElement | undefined].filter(Boolean) as HTMLElement[];
+                         if (!spans.length) return;
+                         const parents = new Set<ParentNode>();
+                         spans.forEach(sp => {
+                             if (newNote === null) {
+                                 const p = sp.parentNode;
+                                 if (p) { while (sp.firstChild) p.insertBefore(sp.firstChild, sp); p.removeChild(sp); parents.add(p); }
+                             } else sp.setAttribute('data-note', newNote);
+                         });
+                         parents.forEach(p => (p as any).normalize?.());
                          const clean = _tmp.innerHTML;
                          if (n.field === 'passage') {
                              setActiveExam(prev => {
@@ -1687,8 +1719,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      };
                      const jumpTo = (n: NoteRef) => {
                          const doJump = () => {
-                             const els = Array.from(document.querySelectorAll('.exam-content-block .student-note-hl')) as HTMLElement[];
-                             const el = els.find(e => (e.textContent || '').trim() === n.snippet && (e.getAttribute('data-note') || '') === n.note);
+                             const el = findDomEls(n)[0];
                              if (!el) return;
                              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                              el.classList.remove('idp-q-focus-flash'); void el.offsetWidth; el.classList.add('idp-q-focus-flash');

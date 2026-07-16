@@ -1425,7 +1425,7 @@ const sanitizeRichHtml = (html: string) => DOMPurify.sanitize(html, {
         "strong", "sub", "sup", "table", "tbody", "td", "th", "thead", "tr", "u", "ul"
     ],
     ALLOWED_ATTR: [
-        "align", "alt", "class", "colspan", "data-field", "data-note", "data-optindex", "data-qid", "dir", "height", "href", "lang",
+        "align", "alt", "class", "colspan", "data-field", "data-note", "data-note-id", "data-optindex", "data-qid", "dir", "height", "href", "lang",
         "rel", "rowspan", "src", "style", "target", "title", "width"
     ],
     ALLOW_DATA_ATTR: true,
@@ -5378,10 +5378,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       const temps = container.querySelectorAll('.idp-temp-selection');
       if (temps.length > 0) {
+          const noteId = type === 'NOTE' ? `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : '';
           temps.forEach(target => {
               target.className = type === 'HIGHLIGHT' ? "student-highlight" : "student-note-hl";
-              if (type === 'NOTE' && noteText) {
-                  target.setAttribute('data-note', noteText);
+              if (type === 'NOTE') {
+                  target.setAttribute('data-note', noteText ?? '');
+                  target.setAttribute('data-note-id', noteId);
               }
           });
 
