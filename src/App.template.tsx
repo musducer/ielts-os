@@ -1373,6 +1373,34 @@ interface SharedLink { id: string; title: string; url: string; date: string; aud
 interface Transaction { id: string; title: string; amount: number; date: string; type: "INCOME" | "EXPENSE"; }
 interface SystemLog { id: string; errorType: string; message: string; context?: string; timestamp: string; email?: string; }
 interface RewardCode { code: string; studentId: string; studentName: string; item: string; createdAt: number; redeemed: boolean; redeemedAt?: number; redeemedBy?: string; }
+interface CoinOperation {
+  id: string;
+  studentId: string;
+  delta: number;
+  kind: string;
+  createdAt: number;
+  consumableName?: string;
+  permanentName?: string;
+}
+
+const applyCoinOperation = (students: any[], operation: CoinOperation) => {
+  if (!Array.isArray(students) || !operation?.studentId) return students;
+  return students.map(student => {
+    if (String(student?.id || "") !== String(operation.studentId)) return student;
+    const inventory = student.inventory || {};
+    const consumables = { ...(inventory.consumables || {}) };
+    const permanents = Array.isArray(inventory.permanents) ? [...inventory.permanents] : [];
+    if (operation.consumableName) {
+      consumables[operation.consumableName] = (Number(consumables[operation.consumableName]) || 0) + 1;
+    }
+    if (operation.permanentName && !permanents.includes(operation.permanentName)) permanents.push(operation.permanentName);
+    return {
+      ...student,
+      coins: Math.max(0, (Number(student.coins) || 0) + Number(operation.delta || 0)),
+      inventory: { ...inventory, consumables, permanents },
+    };
+  });
+};
 
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
@@ -3199,6 +3227,24 @@ export default function IeltsSupremeOS() {
   const clearPendingVocabWrite = () => {
     try { localStorage.removeItem(pendingVocabWriteKey()); } catch (e) {}
   };
+  const pendingCoinOperationKey = () => `ielts_pending_coin_operation_${String(currentUser?.email || "user").toLowerCase()}`;
+  const readPendingCoinOperation = (): CoinOperation | null => {
+    try {
+      const raw = localStorage.getItem(pendingCoinOperationKey());
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed?.id && parsed?.studentId ? parsed as CoinOperation : null;
+    } catch (e) { return null; }
+  };
+  const writePendingCoinOperation = (operation: CoinOperation) => {
+    try { localStorage.setItem(pendingCoinOperationKey(), JSON.stringify(operation)); } catch (e) {}
+  };
+  const clearPendingCoinOperation = () => {
+    try { localStorage.removeItem(pendingCoinOperationKey()); } catch (e) {}
+  };
+  const makeCoinOperation = (studentId: string, delta: number, kind: string, extra: Partial<CoinOperation> = {}): CoinOperation => ({
+    id: `coin_${studentId}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    studentId, delta, kind, createdAt: Date.now(), ...extra,
+  });
   const mergeVocabNotebook = (serverNotebook: any, localNotebook: any, serverTombstones: any, localTombstones: any) => {
     const tombstones = Array.from(new Set([
       ...(Array.isArray(serverTombstones) ? serverTombstones : []),
@@ -3274,6 +3320,7 @@ export default function IeltsSupremeOS() {
       let newStreak = meLocal.currentStreak || 0;
       let newCoins = meLocal.coins || 0;
       let newActiveExamId = meLocal.activeExamId;
+      let dailyCoinOperation: CoinOperation | null = null;
 
       if (meLocal.activeExamId && meLocal.currentSessionId === localSessionId && !activeExam) {
           newActiveExamId = undefined;
@@ -3301,12 +3348,14 @@ export default function IeltsSupremeOS() {
               msg += `\n 7-DAY STREAK BONUS: +300 Coins!`;
           }
           newCoins += bonusCoins;
+          dailyCoinOperation = makeCoinOperation(meLocal.id, bonusCoins, "DAILY_ATTENDANCE");
           alert(msg);
       }
 
       if (shouldUpdate) {
           const nx = students.map(s => s.id === meLocal.id ? { ...s, coins: newCoins, lastLoginDate: today, currentStreak: newStreak, currentSessionId: localSessionId || undefined, sessionClaimedAt: newSessionClaimedAt, activeExamId: newActiveExamId } : s);
-          setStudents(nx); syncData({ students: nx });
+          syncData({ students: nx, ...(dailyCoinOperation ? { __coinOperation: dailyCoinOperation } : {}) });
+          setStudents(nx);
       }
   }, [students, currentUser, loaded, activeExam, hasClaimedDaily, showDebtWarning]);
 
@@ -3698,7 +3747,8 @@ useEffect(() => {
         const ids = new Set(prev.map(r => r.id));
         return [...q.filter((r: any) => !ids.has(r.id)), ...prev];
       });
-      await syncData({ quizResults: q }); // transaction tự gộp theo id, không ghi đè bài cũ
+      const pendingCoinOperation = readPendingCoinOperation();
+      await syncData({ quizResults: q, ...(pendingCoinOperation ? { __coinOperation: pendingCoinOperation } : {}) });
       writeOfflineQueue(email, []);
       alert(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`);
     } catch (e) {
@@ -3793,8 +3843,35 @@ const applyWorkspaceSnapshot = (snap: any) => {
   if (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current) return;
   if (snap.exists()) {
     const d = snap.data();
+    const pendingCoinOperation = readPendingCoinOperation();
+    const serverCoinTransactions = Array.isArray(d.coinTransactions) ? d.coinTransactions : [];
+    const pendingCoinConfirmed = !!pendingCoinOperation && serverCoinTransactions.some(
+      (entry: any) => String(entry?.id || "") === String(pendingCoinOperation.id)
+    );
+    if (pendingCoinConfirmed) clearPendingCoinOperation();
     // Bọc toàn bộ dữ liệu qua hàm clean() để triệt tiêu null/undefined
-    setStudents((prev: any) => mergeMyPermanents(prev, clean(d.students)));
+    const incomingStudents = clean(d.students);
+    if (pendingCoinOperation && !pendingCoinConfirmed && Array.isArray(incomingStudents)) {
+      // A delayed/mobile snapshot may still be the pre-purchase balance. Project the
+      // pending operation onto that snapshot, while retaining the already optimistic
+      // local balance if the snapshot was actually committed but its ledger is late.
+      const projectedStudents = applyCoinOperation(incomingStudents, pendingCoinOperation);
+      setStudents((prev: any[]) => {
+        const previousStudent = prev.find((student: any) => String(student?.id || "") === String(pendingCoinOperation.studentId));
+        const projectedStudent = projectedStudents.find((student: any) => String(student?.id || "") === String(pendingCoinOperation.studentId));
+        if (!previousStudent || !projectedStudent || Number(previousStudent.coins) === Number(projectedStudent.coins)) {
+          return mergeMyPermanents(prev, projectedStudents);
+        }
+        const preservedStudents = projectedStudents.map((student: any) =>
+          String(student?.id || "") === String(pendingCoinOperation.studentId)
+            ? { ...student, coins: previousStudent.coins, inventory: previousStudent.inventory || student.inventory }
+            : student
+        );
+        return mergeMyPermanents(prev, preservedStudents);
+      });
+    } else {
+      setStudents((prev: any) => mergeMyPermanents(prev, incomingStudents));
+    }
     setHistory(clean(d.history));
     setTransactions(clean(d.transactions)); 
     setSchedules(clean(d.schedules));
@@ -3809,6 +3886,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
       window.setTimeout(() => { void syncData({ quizzes: recoveredQuizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
     } else {
       setQuizzes(serverQuizzes);
+    }
+    if (pendingCoinOperation) {
+      // Retry a purchase/award that may have been interrupted by a backgrounded tab.
+      // The transaction ledger makes this safe even if the server already applied it.
+      window.setTimeout(() => { void syncData({ __coinOperation: pendingCoinOperation }); }, 0);
     }
     setQuizResults(clean(d.quizResults)); 
     setBannedIps(clean(d.bannedIps));
@@ -4371,6 +4453,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     // CHỐNG "GIẬT" KHI XÓA: đánh dấu đang có ghi của chính mình. onSnapshot sẽ KHÔNG đè state
     // local trong lúc transaction đang bay (snapshot CŨ còn trong đường truyền sẽ làm data xóa hiện lại).
     const quizDeleteIds = Array.isArray(newData.__quizDeletedIds) ? newData.__quizDeletedIds.map(String) : [];
+    const coinOperation = newData.__coinOperation?.id && newData.__coinOperation?.studentId
+      ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
     if (Array.isArray(newData.quizzes) && userRole === "TEACHER") {
@@ -4379,6 +4463,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (pendingVocab && userRole === "STUDENT") {
       writePendingVocabWrite(pendingVocab.notebook, pendingVocab.tombstones || []);
     }
+    if (coinOperation) writePendingCoinOperation(coinOperation);
     writeInFlightRef.current++;
     try {
       await runTransaction(db, async (transaction) => {
@@ -4387,9 +4472,18 @@ const applyWorkspaceSnapshot = (snap: any) => {
           const initialData = { ...newData };
           delete initialData.__quizDeletedIds;
           delete initialData.__vocabPending;
+          delete initialData.__coinOperation;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
             initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
             initialData.quizTombstones = quizDeleteIds.slice(-1000);
+          }
+          if (coinOperation) {
+            // Most optimistic writes already carry the updated balance. A retry-only
+            // operation has no students payload and must be applied here once.
+            if (!Array.isArray(newData.students)) {
+              initialData.students = applyCoinOperation(Array.isArray(initialData.students) ? initialData.students : [], coinOperation);
+            }
+            initialData.coinTransactions = [coinOperation];
           }
           transaction.set(DB_DOC_REF, JSON.parse(JSON.stringify(initialData)));
           return;
@@ -4397,12 +4491,22 @@ const applyWorkspaceSnapshot = (snap: any) => {
         
         const serverData = sfDoc.data() || {};
         const finalUpdate: any = {};
+        const serverCoinTransactions = Array.isArray(serverData.coinTransactions) ? serverData.coinTransactions : [];
+        const coinAlreadyApplied = !!coinOperation && serverCoinTransactions.some((entry: any) => String(entry?.id || "") === String(coinOperation.id));
+        const serverStudents = coinOperation && !coinAlreadyApplied
+          ? applyCoinOperation(Array.isArray(serverData.students) ? serverData.students : [], coinOperation)
+          : (Array.isArray(serverData.students) ? serverData.students : []);
+        const coinLedger = coinOperation && !coinAlreadyApplied
+          ? [...serverCoinTransactions, coinOperation]
+          : serverCoinTransactions;
+        const hasCoinLedgerFor = (studentId: string) => coinLedger.some((entry: any) => String(entry?.studentId || "") === String(studentId));
 
         Object.keys(newData).forEach((key) => {
           if (key === "__quizDeletedIds") return;
           if (key === "__vocabPending") return;
+          if (key === "__coinOperation") return;
           const localVal = newData[key];
-          const serverVal = serverData[key];
+          const serverVal = key === "students" ? serverStudents : serverData[key];
 
           if (!Array.isArray(localVal)) {
             finalUpdate[key] = localVal;
@@ -4462,10 +4566,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
                     // GV ghi bằng state cũ (thấp hơn) KHÔNG bao giờ kéo tụt XP. Cùng lớp bug với vocab/inventory.
                     exp: Math.max(Number(serverItem.exp) || 0, Number(localItem.exp) || 0),
                     level: Math.max(Number(serverItem.level) || 1, Number(localItem.level) || 1),
-                    // Coins: GV ghi generic (sửa tên/rate…) KHÔNG được kéo tụt số xu HV vừa kiếm -> chặn bằng MAX.
-                    // (Hệ quả: GV muốn TRỪ xu phải dùng luồng riêng — xem ghi chú SESSION_HANDOFF.)
-                    coins: Math.max(Number(serverItem.coins) || 0, Number(localItem.coins) || 0),
-                    inventory: mergedInv,
+                    // A ledger-backed balance is authoritative. A stale teacher snapshot must
+                    // never resurrect coins already spent by the student.
+                    coins: hasCoinLedgerFor(String(serverItem.id || ""))
+                      ? (Number(serverItem.coins) || 0)
+                      : Math.max(Number(serverItem.coins) || 0, Number(localItem.coins) || 0),
+                    inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
+                      ? (serverItem.inventory || mergedInv)
+                      : mergedInv,
                     // CHỐNG BAY SỔ TỪ VỰNG: HV là chủ sổ — GV ghi (kể cả bằng state cũ) KHÔNG bao giờ được đè vocabNotebook.
                     vocabNotebook: serverItem.vocabNotebook !== undefined ? serverItem.vocabNotebook : (localItem.vocabNotebook || []),
                     vocabTombstones: serverItem.vocabTombstones !== undefined ? serverItem.vocabTombstones : (localItem.vocabTombstones || []),
@@ -4514,10 +4622,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       ...myLocalInfo,
                       // exp/level chỉ tăng -> MAX chống mất XP kể cả khi state HV bị cũ (đa thiết bị / suppress window).
                       exp: Math.max(Number(serverItem.exp) || 0, Number(myLocalInfo.exp) || 0),
+                      coins: hasCoinLedgerFor(String(serverItem.id || ""))
+                        ? (Number(serverItem.coins) || 0)
+                        : Math.max(Number(serverItem.coins) || 0, Number(myLocalInfo.coins) || 0),
                       level: Math.max(Number(serverItem.level) || 1, Number(myLocalInfo.level) || 1),
                       vocabNotebook: mergedVocab.notebook,
                       vocabTombstones: mergedVocab.tombstones,
-                      inventory: mergedInventory,
+                      inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
+                        ? (serverItem.inventory || mergedInventory)
+                        : mergedInventory,
                       name: serverItem.name,
                       phone: serverItem.phone,
                       rate: serverItem.rate,
@@ -4561,10 +4674,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
             return cleanStudent;
           });
         }
+        if (coinOperation && !coinAlreadyApplied) {
+          finalUpdate.coinTransactions = coinLedger.slice(-2000);
+        }
+        if (!Object.keys(finalUpdate).length) return;
         const cleanUpdate = JSON.parse(JSON.stringify(finalUpdate));
         transaction.update(DB_DOC_REF, cleanUpdate);
       });
       if (Array.isArray(newData.quizzes) && userRole === "TEACHER") clearPendingQuizWrite();
+      // Keep the operation until an onSnapshot payload contains its ledger entry.
+      // This closes the mobile/background race where a successful transaction is
+      // followed by an older cached snapshot that still has the pre-purchase balance.
       // Không xóa retry record tại đây. onSnapshot chỉ xóa sau khi chính snapshot server
       // đã chứa đủ thẻ/tombstone, tránh snapshot cache cũ đè mất thẻ sau khoảng 1 giây.
       return true;
@@ -4777,6 +4897,26 @@ const applyWorkspaceSnapshot = (snap: any) => {
         ? [stripTags(fullQuiz?.transcript), stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
         : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
+      const answerTextForTimestamp = (question: any) => {
+        if (!question) return "";
+        if (question.type === "CHOICE" || question.type === "MATCHING") {
+          return stripTags(question.options?.[Number(question.correctAnswer)] ?? question.correctAnswer);
+        }
+        if (question.type === "CHOICE_MULTIPLE") {
+          const answers = Array.isArray(question.correctAnswer) ? question.correctAnswer : [question.correctAnswer];
+          return answers.map((idx: any) => stripTags(question.options?.[Number(idx)] ?? idx)).join(" / ");
+        }
+        return stripTags(question.correctAnswer);
+      };
+      const timestampQuestions = isListeningQuestion
+        ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
+        : [];
+      const timestampQuestionIndex = isListeningQuestion
+        ? timestampQuestions.findIndex((question: any) => question?.id === q.id)
+        : -1;
+      const answerSequence = isListeningQuestion
+        ? timestampQuestions.map(answerTextForTimestamp)
+        : undefined;
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -4792,6 +4932,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
           questionSubType: q.subType || "",
           integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
+          answerSequence,
+          questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
         })
       });
       const data = await resp.json();
@@ -5484,7 +5626,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setHistory(nxHistory); 
     
     // Đẩy trực tiếp lên Firestore thông qua transaction an toàn
-    syncData({ students: nxStudents, history: nxHistory });
+    const coinOperation = earnedCoinsByTime > 0 ? makeCoinOperation(st.id, earnedCoinsByTime, "MANUAL_LESSON") : null;
+    syncData({ students: nxStudents, history: nxHistory, ...(coinOperation ? { __coinOperation: coinOperation } : {}) });
 
     setShowManualTime(false); 
     setManualMin(""); 
@@ -5538,7 +5681,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setStudents(nxStudents); 
     setHistory(nxHistory); 
     
-    syncData({ students: nxStudents, history: nxHistory });
+    const coinOperation = earnedCoinsByTime > 0 ? makeCoinOperation(st.id, earnedCoinsByTime, "TIMED_LESSON") : null;
+    syncData({ students: nxStudents, history: nxHistory, ...(coinOperation ? { __coinOperation: coinOperation } : {}) });
     resetTimer(); 
     setSelSkills([]);
     alert("Live lesson session and feedback synchronized successfully!");
@@ -5548,9 +5692,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (!newSt.name) return;
     const nameCap = newSt.name.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     let nx: Student[];
-    if (editStId) { nx = students.map(s => s.id === editStId ? { ...s, ...newSt, name: nameCap } as Student : s); setEditStId(null); } 
+    let coinOperation: CoinOperation | null = null;
+    if (editStId) {
+      const existing = students.find(s => s.id === editStId);
+      nx = students.map(s => s.id === editStId ? { ...s, ...newSt, name: nameCap } as Student : s);
+      if (existing && newSt.coins !== undefined && Number(newSt.coins) !== Number(existing.coins || 0)) {
+        coinOperation = makeCoinOperation(editStId, Number(newSt.coins) - Number(existing.coins || 0), "TEACHER_ADJUST");
+      }
+      setEditStId(null);
+    }
     else { nx = [{ id: getTrueTime().toString(), name: nameCap, phone: "", rate: newSt.rate || 300000, target: newSt.target || "6.5", cefr: newSt.cefr || "B2", exp: 0, level: 1, email: newSt.email, dob: newSt.dob, isPinned: false, privateMessage: "" }, ...students]; }
-    setStudents(nx); syncData({ students: nx }); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", dob: "", privateMessage: "" });
+    setStudents(nx); syncData({ students: nx, ...(coinOperation ? { __coinOperation: coinOperation } : {}) }); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", dob: "", privateMessage: "" });
   };
 
   const handleAddSchedule = () => {
@@ -5589,7 +5741,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const nxHistory = [session, ...history];
     const nxSched = schedules.map(x => x.id === sched.id ? { ...x, status: "DONE" as const, billed: true } : x);
     setStudents(nxStudents); setHistory(nxHistory); setSchedules(nxSched);
-    syncData({ students: nxStudents, history: nxHistory, schedules: nxSched });
+    const coinOperation = earnedCoins > 0 ? makeCoinOperation(st.id, earnedCoins, "ATTENDANCE_REWARD") : null;
+    syncData({ students: nxStudents, history: nxHistory, schedules: nxSched, ...(coinOperation ? { __coinOperation: coinOperation } : {}) });
     alert(t('att_billed'));
   };
 
@@ -6102,16 +6255,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (diffHour >= 24) earnedCoins += 150; 
           else if (diffHour >= 12) earnedCoins += 100; 
       }
-      const nxStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
+          const nxStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
+          const coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
       setStudents(nxStudents);
 
       if (isOffline || !navigator.onLine) {
           pushOfflineResult(currentUser?.email, result);
+          writePendingCoinOperation(coinOperation);
           setQuizResults(prev => [result, ...prev]);
           alert("NETWORK ERROR! The exam has been saved locally and queued. Please do not clear your browser cache; it will auto-sync when the connection is restored.");
       } else {
           const nx = [result, ...quizResults];
-          setQuizResults(nx); syncData({ quizResults: nx, students: nxStudents });
+          setQuizResults(nx); syncData({ quizResults: nx, students: nxStudents, __coinOperation: coinOperation });
       }
 
       if (!state.isPreview) {

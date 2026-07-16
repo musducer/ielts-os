@@ -278,7 +278,8 @@
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
             const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + 20, inventory: newInv } : s);
-            setStudents(nx); syncData({ students: nx });
+            const coinOperation = makeCoinOperation(me.id, 20, "REVIEW_REWARD");
+            setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert("CHIẾN THẦN REVIEW: +20 Xu vì đã xem lại lỗi sai trong bài thi!");
         }
     };
@@ -294,7 +295,8 @@
                 consumables: { ...currentCons, [itemName]: (currentCons[itemName] || 0) + 1 } 
             };
             const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) - price, inventory: newInv } : s);
-            setStudents(nx); syncData({ students: nx });
+            const coinOperation = makeCoinOperation(me.id, -price, "STORE_PURCHASE", { consumableName: itemName });
+            setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
             setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
         }
@@ -346,6 +348,7 @@
             let newCoins = (me.coins || 0) - 500;
             const currentCons = { ...(me.inventory?.consumables || {}) };
             let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
+            let addedPermanentName = "";
             let msg = `BẠN QUAY TRÚNG: ${reward.name}`;
 
             if (reward.type === "PERMANENT") {
@@ -354,6 +357,7 @@
                     msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +200 Xu đền bù!`;
                 } else {
                     currentPerms = [...currentPerms, reward.name];
+                    addedPermanentName = reward.name;
                     msg += `\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`;
                 }
             } else if (reward.type === "CONSUMABLE") {
@@ -365,7 +369,11 @@
             // Seed backup chống mất quà NGAY khi trúng (sống qua reload; mergeMyPermanents sẽ union lại kể cả khi sync lỗi).
             try { localStorage.setItem("ielts_os_perms_" + String(me.email || "").toLowerCase(), JSON.stringify(currentPerms)); } catch (e) {}
             const nx = students.map(s => s.id === me.id ? { ...s, coins: newCoins, inventory: newInv } : s);
-            setStudents(nx); syncData({ students: nx });
+            const coinOperation = makeCoinOperation(me.id, newCoins - (me.coins || 0), "GACHA_SPIN", {
+              ...(reward.type === "CONSUMABLE" ? { consumableName: reward.name } : {}),
+              ...(addedPermanentName ? { permanentName: addedPermanentName } : {}),
+            });
+            setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert(msg);
             if (reward.type !== "NONE") { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000); }
         }
@@ -792,7 +800,8 @@
                                   if ((rec.count || 0) >= 3 || n <= 0) return; // hết lượt thưởng/ngày
                                   const newRec = { date: gd, count: (rec.count || 0) + 1 };
                                   const nx = students.map((s: any) => s.id === me.id ? ({ ...s, coins: (s.coins || 0) + n, vocabGameDaily: newRec }) : s);
-                                  setStudents(nx as any); syncData({ students: nx });
+                                  const coinOperation = makeCoinOperation(me.id, n, "VOCAB_GAME_REWARD");
+                                  setStudents(nx as any); syncData({ students: nx, __coinOperation: coinOperation });
                               }} />
                           );
                       })() : vocabView === 'study' ? (

@@ -712,6 +712,12 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     student_ans = payload.get("studentAnswer", "")
     context = (payload.get("context", "") or "")[:24000]
     has_ctx = bool(context.strip())
+    answer_sequence = payload.get("answerSequence")
+    question_index_raw = payload.get("questionIndex")
+    try:
+        question_index = int(question_index_raw) if question_index_raw is not None else None
+    except (TypeError, ValueError):
+        question_index = None
     question_type = str(payload.get("questionType", "") or "")
     question_subtype = str(payload.get("questionSubType", "") or "")
     integrated_part = int(payload.get("integratedPart", 0) or 0)
@@ -792,7 +798,14 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     if err:
         return {"success": False, "error": _friendly_err(err, lang)}
     # HẬU KIỂM: xóa mọi [mm:ss] không khớp mốc thật trong transcript (chống AI bịa/ước lượng).
-    text = _filter_fake_timestamps(text, context, correct if is_listening else "", lang)
+    text = _filter_fake_timestamps(
+        text,
+        context,
+        correct if is_listening else "",
+        lang,
+        answer_sequence if is_listening else None,
+        question_index if is_listening else None,
+    )
     return {"success": True, "explanation": text}
 
 
@@ -1680,8 +1693,8 @@ def _normalized_timestamp_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
-def _answer_anchor_seconds(context: str, correct: str):
-    """Return the transcript block for a unique, answer-bearing phrase; ambiguous answers stay AI-selected."""
+def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, question_index=None):
+    """Return only a transcript block that can be tied to the answer text and its listening order."""
     blocks = []
     for match in _TS_BLOCK_RE.finditer(context or ""):
         blocks.append((_ts_to_sec(match.group(1), match.group(2), match.group(3)), _normalized_timestamp_text(match.group(4))))
@@ -1697,10 +1710,31 @@ def _answer_anchor_seconds(context: str, correct: str):
         matches = [sec for sec, block in blocks if re.search(r"(?:^|\s)" + re.escape(candidate) + r"(?:\s|$)", block)]
         if len(matches) == 1:
             return matches[0]
+
+    # When the same answer occurs more than once, use the ordered answer list from
+    # the current listening part to select the first monotonic match for this item.
+    # This prevents the model from choosing a later repeated occurrence.
+    if isinstance(answer_sequence, list) and isinstance(question_index, int) and 0 <= question_index < len(answer_sequence):
+        cursor = -1
+        for idx, sequence_answer in enumerate(answer_sequence[:question_index + 1]):
+            sequence_candidates = {
+                _normalized_timestamp_text(part)
+                for part in re.split(r"\s*(?:/|;|\||\bor\b)\s*", str(sequence_answer or ""), flags=re.I)
+            }
+            sequence_candidates = {candidate for candidate in sequence_candidates if len(candidate) >= 3 and not candidate.isdigit()}
+            occurrences = [block_idx for block_idx, (_, block) in enumerate(blocks)
+                           if any(re.search(r"(?:^|\s)" + re.escape(candidate) + r"(?:\s|$)", block)
+                                  for candidate in sorted(sequence_candidates, key=len, reverse=True))]
+            occurrences = [block_idx for block_idx in occurrences if block_idx > cursor]
+            if not occurrences:
+                continue
+            cursor = occurrences[0]
+            if idx == question_index:
+                return blocks[cursor][0]
     return None
 
 
-def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi") -> str:
+def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi", answer_sequence=None, question_index=None) -> str:
     """Keep only real seek markers and prefer a unique answer-bearing transcript block when available."""
     answer = _TS_RANGE_RE.sub(lambda m: "[" + m.group(1) + "]", answer or "")
     answer = _TS_PAREN_CITE_RE.sub(lambda m: "[" + m.group(1) + "]", answer)
@@ -1708,7 +1742,7 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
     if not allowed:
         return _TS_CITE_RE.sub("", answer)
 
-    answer_anchor = _answer_anchor_seconds(context, correct)
+    answer_anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
     if answer_anchor is not None:
         anchor = "[" + _fmt_ts(answer_anchor) + "]"
         if _TS_CITE_RE.search(answer):
@@ -1724,10 +1758,9 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
             return _TS_CITE_RE.sub(_replace_with_anchor, answer)
         return answer.rstrip() + ("\n\nListen again: " if lang == "en" else "\n\nNghe lại: ") + anchor
 
-    def _keep(m):
-        sec = _ts_to_sec(m.group(1), m.group(2), m.group(3))
-        return m.group(0) if any(abs(sec - a) <= 2 for a in allowed) else ""
-    return _TS_CITE_RE.sub(_keep, answer)
+    # A marker that is merely a valid transcript boundary is not evidence that it
+    # contains this answer. A missing marker is safer than a confidently wrong one.
+    return _TS_CITE_RE.sub("", answer)
 
 
 @app.post("/api/ai_transcribe")
