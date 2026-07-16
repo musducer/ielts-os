@@ -6127,6 +6127,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
         alert(`EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
+        setReviewSectionIdx(0);
+        setReviewQuiz({ quiz: state.activeExam, result });
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
   forceSubmitExamRef.current = forceSubmitExam;

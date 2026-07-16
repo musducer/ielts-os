@@ -827,8 +827,8 @@ def _parse_ai_items(text: str):
 
 # GIAI ĐOẠN B — cây quyết định + few-shot cho model reasoning phân loại CHÍNH XÁC.
 _VOCAB_CLASSIFY_SYS = (
-    "You are an expert IELTS lexicographer. For EACH item decide TWO things: (a) keep — is it a genuine, "
-    "dictionary-attested vocabulary item worth a flashcard? and (b) category. Reason silently, output ONLY the JSON.\n"
+    "You are an expert IELTS lexicographer. Analyze EACH candidate into observable lexical FEATURES. "
+    "Do not jump straight to a category. Reason silently, output ONLY the JSON.\n"
     "STEP 1 — THE KEEP TEST. Set keep=false (DROP) if the item is ANY of:\n"
     "- an AD-HOC word combination that is NOT an established expression found in a dictionary/coursebook — just words that "
     "happen to sit next to each other, e.g. 'carved deep', 'retreating glaciers', 'kettle ponds', 'low-lying areas'.\n"
@@ -864,8 +864,14 @@ _VOCAB_CLASSIFY_SYS = (
     "in terms of->collocation,true | pose a threat->collocation,true | break new ground->idiom,true | "
     "not only ... but also->grammar,true | carved deep->(any),false | formative hothouse->(any),false | "
     "retreating glaciers->(any),false | have been grown->(any),false | are generally cultivated->(any),false\n"
-    "OUTPUT: a JSON array, one object per input item IN THE SAME ORDER, EXACTLY: "
-    "[{\"word\": \"<verbatim item>\", \"category\": \"<word|phrasal_verb|idiom|collocation|grammar>\", \"keep\": true|false}]. "
+    "OUTPUT: a JSON array, one object per input item IN THE SAME ORDER. I parse it programmatically. "
+    "Use EXACTLY these keys: word, keep, established, lexical_type, canonical_form, figurative, confidence. "
+    "lexical_type MUST be one of single_word|grammar_template|phrasal_verb|prepositional_verb|collocation|idiom|not_lexical. "
+    "canonical_form is the dictionary head form (e.g. input 'burn off excess energy' => 'burn off'; "
+    "input 'you're in luck' => 'be in luck'). figurative is true ONLY when the WHOLE expression has a conventional "
+    "non-literal meaning. confidence MUST be high|medium|low. Example: "
+    "[{\"word\":\"up to date\",\"keep\":true,\"established\":true,\"lexical_type\":\"collocation\","
+    "\"canonical_form\":\"up to date\",\"figurative\":false,\"confidence\":\"high\"}]. "
     "Output the JSON array and nothing after it."
 )
 
@@ -979,33 +985,88 @@ def _classify_vocab_items(items, lang="vi"):
     arr = _parse_ai_items(text)
     if not isinstance(arr, list) or not arr:
         return items
-    _valid = {"word", "phrasal_verb", "idiom", "collocation", "grammar"}
-    def _norm_cat(x):
-        c = str(x or "").strip().lower().replace("-", "_").replace(" ", "_")
-        return c if c in _valid else None
-    def _norm_keep(x):
-        return False if x in (False, "false", "False", 0, "0", "no", "No") else True
+    valid_types = {
+        "single_word", "grammar_template", "phrasal_verb", "prepositional_verb",
+        "collocation", "idiom", "not_lexical",
+    }
+
+    def _norm_bool(value, default=None):
+        if isinstance(value, bool):
+            return value
+        normalized = str(value or "").strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+        return default
+
+    def _norm_type(value):
+        normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "word": "single_word", "grammar": "grammar_template", "fixed_phrase": "collocation",
+            "prepositional_phrase": "collocation", "expression": "collocation", "drop": "not_lexical",
+        }
+        normalized = aliases.get(normalized, normalized)
+        return normalized if normalized in valid_types else None
+
+    def _norm_form(value):
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    def _form_is_grounded(form, item):
+        if not form or len(form.split()) < 2 or len(form.split()) > 5:
+            return False
+        context = _norm_form(item.get("source_sentence") or item.get("example") or "")
+        context = re.sub(r"[^a-z0-9' ]", " ", context)
+        context = re.sub(r"\s+", " ", context).strip()
+        return bool(context and re.search(rf"(?<![a-z0-9]){re.escape(form)}(?![a-z0-9])", context))
+
     by_word = {}
     for o in arr:
         if isinstance(o, dict):
             w = re.sub(r"\s+", " ", str(o.get("word", "")).strip().lower())
             if w:
-                by_word[w] = (_norm_cat(o.get("category")), _norm_keep(o.get("keep", True)))
+                by_word[w] = o
     ordered = [o for o in arr if isinstance(o, dict)]
     use_order = (len(ordered) == len(cand))
     for idx, it in enumerate(cand):
         w = re.sub(r"\s+", " ", str(it.get("word", "")).strip().lower())
         entry = by_word.get(w)
         if entry is None and use_order:
-            oo = ordered[idx]
-            entry = (_norm_cat(oo.get("category")), _norm_keep(oo.get("keep", True)))
+            entry = ordered[idx]
         if entry is None:
             continue
-        cat, keep = entry
-        if not keep:
-            it["category"] = "__drop__"     # validation: loại item rác (combo tự chế, ẩn dụ bịa...)
-        elif cat:
-            it["category"] = cat
+        keep = _norm_bool(entry.get("keep"), True)
+        established = _norm_bool(entry.get("established"), None)
+        figurative = _norm_bool(entry.get("figurative"), None)
+        lexical_type = _norm_type(entry.get("lexical_type") or entry.get("category"))
+        confidence = str(entry.get("confidence") or "medium").strip().lower()
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "medium"
+
+        if not keep or established is False or lexical_type == "not_lexical":
+            it["category"] = "__drop__"
+            continue
+
+        category_by_type = {
+            "single_word": "word", "grammar_template": "grammar", "phrasal_verb": "phrasal_verb",
+            "prepositional_verb": "collocation", "collocation": "collocation", "idiom": "idiom",
+        }
+        category = category_by_type.get(lexical_type)
+        if category:
+            # An idiom requires positive figurative evidence. Literal fixed phrases are collocations.
+            if category == "idiom" and figurative is not True:
+                category = "collocation"
+            # Low-confidence particle analysis falls back to the broader literal bucket.
+            if category == "phrasal_verb" and confidence == "low":
+                category = "collocation"
+            it["category"] = category
+
+        canonical = _norm_form(entry.get("canonical_form"))
+        if lexical_type == "phrasal_verb" and _form_is_grounded(canonical, it):
+            it["word"] = canonical
+        it["_classifier_figurative"] = figurative
+        it["_classifier_established"] = established
+        it["_classifier_confidence"] = confidence
     return items
 
 
@@ -1033,15 +1094,18 @@ _TRANSPARENT_CONNECTORS = {
     "on behalf of", "in the absence of", "in the event of", "by virtue of",
 }
 _TRUE_PHRASAL_VERBS = {
-    "bring about", "carry out", "come across", "come up with", "find out", "give up", "go into",
-    "go through", "look into", "look forward to", "make up for", "point out", "put off",
-    "put up with", "run into", "set off", "set up", "take on", "take over", "turn into",
-    "turn out", "work out", "break down", "stumble upon",
+    "break down", "bring about", "burn off", "carry out", "come across", "come up with",
+    "cut down on", "find out", "get away with", "give up", "go into", "go through", "look into",
+    "look forward to", "make up for", "point out", "put off", "put up with", "run into", "set off",
+    "set up", "take on", "take over", "turn into", "turn out", "work out", "stumble upon",
 }
 _IDIOM_WHITELIST = {
     "a blessing in disguise", "a double-edged sword", "a drop in the ocean", "a piece of cake",
-    "break new ground", "bear fruit", "keep an eye on", "the tip of the iceberg",
-    "turn a blind eye to", "under the weather", "when it comes to",
+    "be in luck", "break new ground", "bear fruit", "in luck", "keep an eye on", "the tip of the iceberg",
+    "turn a blind eye to", "under the weather", "when it comes to", "you are in luck", "you're in luck",
+}
+_LITERAL_FIXED_PHRASES = {
+    "come close to doing", "make a note of", "up to date",
 }
 # Giới từ TRƠN (gần như không bao giờ là particle phrasal verb).
 _TRIVIAL_PREPS = {"at", "to", "for", "of", "from"}
@@ -1104,11 +1168,28 @@ def _normalize_vocab_items(items):
         if not isinstance(it, dict):
             continue
         c = str(it.get("category", "") or "").strip().lower().replace("-", "_")
-        c = c if c in _VALID_CATS else _CAT_ALIAS.get(c.replace("_", " "), _CAT_ALIAS.get(c, "word"))
+        if c != "__drop__":
+            c = c if c in _VALID_CATS else _CAT_ALIAS.get(c.replace("_", " "), _CAT_ALIAS.get(c, "word"))
         w = re.sub(r"\s+", " ", str(it.get("word", "") or "").strip().lower())
+        classifier_figurative = it.pop("_classifier_figurative", None)
+        classifier_established = it.pop("_classifier_established", None)
+        classifier_confidence = str(it.pop("_classifier_confidence", "") or "").lower()
+        if c == "__drop__":
+            it["category"] = c
+            continue
+        # Canonicalise a phrasal verb that the extraction pass returned together with its object.
+        phrasal_head = next((pv for pv in sorted(_TRUE_PHRASAL_VERBS, key=len, reverse=True)
+                             if w == pv or w.startswith(pv + " ")), None)
+        if phrasal_head:
+            c = "phrasal_verb"
+            if w != phrasal_head:
+                w = phrasal_head
+                it["word"] = phrasal_head
         # KHOÁ prepositional verb -> collocation TRƯỚC mọi luật particle (nếu không 'depend on' sẽ bị lật thành phrasal).
         _prep_locked = (w in _PREP_VERBS or (w.startswith("to ") and w[3:] in _PREP_VERBS)) and w not in _TRUE_PHRASAL_VERBS
         if _prep_locked:
+            c = "collocation"
+        elif w in _LITERAL_FIXED_PHRASES:
             c = "collocation"
         elif w in _IDIOM_WHITELIST:
             c = "idiom"
@@ -1141,11 +1222,17 @@ def _normalize_vocab_items(items):
             _first = _idt[0] if _idt else ""
             if w in _IDIOM_WHITELIST:
                 c = "idiom"
+            elif (classifier_figurative is True and classifier_established is not False
+                  and classifier_confidence != "low"):
+                c = "idiom"
             elif len(_idt) == 2 and _first not in ("the", "a", "an", "in", "on", "at", "by") and _last in _PARTICLES:
                 c = "phrasal_verb"
             elif (len(_idt) >= 2
                   and (_last in _PARTICLES or _last in _PREP_NOT_PARTICLE or _last in _TRIVIAL_PREPS)):
                 # Kết thúc bằng giới từ/particle => KHÔNG phải idiom.
+                c = "collocation"
+            else:
+                # If the specialist pass is unavailable, never promote an unverified literal phrase to idiom.
                 c = "collocation"
         # 'look at', 'listen to', 'wait for'... = prepositional verb cơ bản, KHÔNG phải collocation -> loại.
         # _prep_locked (depend on, rely on...) = prepositional verb hợp lệ -> GIỮ collocation, KHÔNG lật thành phrasal.
@@ -1459,11 +1546,10 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
             if isinstance(it, dict) and it.get("category") in under and _wkey(it) and _wkey(it) not in seen:
                 seen.add(_wkey(it)); items.append(it)
 
-    # Nếu HV chọn 1 nhóm con: chỉ giữ item đúng nhóm (nếu lọc xong rỗng thì giữ nguyên, đỡ trả 0).
+    # Nếu HV chọn nhóm con: tuyệt đối không trả lẫn nhóm khác. Thiếu thì báo shortfall trung thực.
     if len(kinds) < 5:
         _kept = [it for it in items if isinstance(it, dict) and it.get("category") in set(kinds)]
-        if _kept:
-            items = _kept
+        items = _kept
 
     # ===== BỘ DÒ NGỮ PHÁP TẤT ĐỊNH (định nghĩa English) =====
     if "grammar" in kinds and source:
@@ -1492,7 +1578,9 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
         if time.monotonic() - started_at > 28:
             break
         deficit = target_count - len(items)
-        refill = _extract(kinds, max(6, deficit + 6), extra_exclude=[_wkey(it) for it in items], classify=False)
+        # Never let refill candidates bypass the specialist classifier. If that provider fails,
+        # _normalize_vocab_items still applies the conservative deterministic fallback.
+        refill = _extract(kinds, max(6, deficit + 6), extra_exclude=[_wkey(it) for it in items], classify=True)
         if not refill:
             break
         refill, refill_dropped = _ground_unique(refill)
@@ -1502,6 +1590,10 @@ async def ai_vocab(payload: Dict[str, Any] = Body(...)):
         if not additions:
             break
         items.extend(additions)
+
+    # Refill cũng phải qua đúng bộ lọc nhóm; không để candidate bị phân loại lại lọt sang tab khác.
+    if len(kinds) < 5:
+        items = [it for it in items if isinstance(it, dict) and it.get("category") in set(kinds)]
 
     return {
         "success": True,
