@@ -6546,7 +6546,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       .idp-context-box { background: var(--einput, #fff); border: 1px solid var(--eborder, #e0e0e0); border-radius: 10px; padding: 18px 24px; line-height: 2.0; }
       .idp-context-box > div, .idp-context-box [data-field="groupContext"] > div { margin: 2px 0; }
       .idp-context-box [style*="list-item"] { margin-left: 22px; }
-      .idp-flow-arrow { display: block; width: 28px; height: 36px; object-fit: contain; margin: 10px auto; }
+      .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
       .idp-inline-input { transition: border-color .15s, box-shadow .15s; }
       .idp-inline-input:focus { outline: none; border-color: var(--eblue, #0969da) !important; box-shadow: 0 0 0 2px rgba(9,105,218,0.18); }
       .idp-matching-table tbody tr:hover { background: rgba(9,105,218,0.05); }
