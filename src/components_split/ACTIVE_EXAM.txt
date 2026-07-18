@@ -1210,8 +1210,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   // PHẢI giống HỆT input của System1 (App.template) để TRƯỚC == SAU highlight.
                                   return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" placeholder="${num}" autocomplete="off" style="width:${groupInputW}px" />`;
                               });
-                              // Flow-chart: biến <div>↓</div> trơ -> mũi tên có style chuẩn IELTS CBT
-                              out = out.replace(/<div[^>]*>\s*(?:↓|⬇|▼|⇩|\|\s*v|->|→)\s*<\/div>/gi, '<div class="idp-flow-arrow">⬇</div>');
+                              // Flow-chart markers may be sanitized to -&gt; before this point; normalize every standalone marker.
+                              const flowArrowHtml = '<div class="idp-flow-arrow">&#11015;</div>';
+                              const flowArrowToken = '(?:↓|⬇|▼|⇩|\\|\\s*v|->|-&gt;|→|&rarr;|&darr;)';
+                              out = out.replace(new RegExp('<div[^>]*>\\s*' + flowArrowToken + '\\s*<\\/div>', 'gi'), flowArrowHtml);
+                              out = out.replace(new RegExp('(?:^|<br\\s*\\/?>|\\n)\\s*' + flowArrowToken + '\\s*(?=<br\\s*\\/?>|\\n|<|$)', 'gi'), flowArrowHtml);
                               // CHUẨN HÓA SPACING NOTE/FORM (chống "cực thô"): với whiteSpace:pre-wrap, newline
                               // NẰM GIỮA 2 THẺ BLOCK bị render thành dòng trống thừa -> khoảng cách to & lệch.
                               // Gỡ newline giữa các thẻ + gộp newline lặp => spacing do CSS kiểm soát, đều tăm tắp.
