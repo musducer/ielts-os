@@ -6546,7 +6546,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       .idp-context-box { background: var(--einput, #fff); border: 1px solid var(--eborder, #e0e0e0); border-radius: 10px; padding: 18px 24px; line-height: 2.0; }
       .idp-context-box > div, .idp-context-box [data-field="groupContext"] > div { margin: 2px 0; }
       .idp-context-box [style*="list-item"] { margin-left: 22px; }
-      .idp-flow-arrow { text-align: center; color: var(--eblue, #0969da); font-size: 22px; line-height: 1; margin: 8px auto; font-weight: 800; }
+      .idp-flow-arrow { text-align: center; color: #111; font-family: "Segoe UI Symbol", "Arial Unicode MS", sans-serif; font-size: 27px; line-height: .9; margin: 10px auto; font-weight: 900; }
       .idp-inline-input { transition: border-color .15s, box-shadow .15s; }
       .idp-inline-input:focus { outline: none; border-color: var(--eblue, #0969da) !important; box-shadow: 0 0 0 2px rgba(9,105,218,0.18); }
       .idp-matching-table tbody tr:hover { background: rgba(9,105,218,0.05); }
@@ -8142,7 +8142,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
                       .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
-                      .idp-flow-arrow { text-align: center; font-size: 20px; font-weight: 800; line-height: 1; margin: 8px 0; color: var(--etext); }
+                      .idp-flow-arrow { text-align: center; color: #111; font-family: "Segoe UI Symbol", "Arial Unicode MS", sans-serif; font-size: 27px; font-weight: 900; line-height: .9; margin: 10px 0; }
                       
                       /* ĐàFIX: Ép văn bản câu hỏi thành Inline, Line spacing khít khịt theo yêu cầu */
                       .idp-q-text-inline p, .idp-q-text-inline div { margin: 0; padding: 0; }
@@ -8725,7 +8725,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" placeholder="${num}" autocomplete="off" style="width:${groupInputW}px" />`;
                               });
                               // Flow-chart: biến <div>↓</div> trơ -> mũi tên có style chuẩn IELTS CBT
-                              out = out.replace(/<div[^>]*>\s*(?:↓|⬇|▼|⇩|\|\s*v|->|→)\s*<\/div>/gi, '<div class="idp-flow-arrow">↓</div>');
+                              out = out.replace(/<div[^>]*>\s*(?:↓|⬇|▼|⇩|\|\s*v|->|→)\s*<\/div>/gi, '<div class="idp-flow-arrow">⬇</div>');
                               // CHUẨN HÓA SPACING NOTE/FORM (chống "cực thô"): với whiteSpace:pre-wrap, newline
                               // NẰM GIỮA 2 THẺ BLOCK bị render thành dòng trống thừa -> khoảng cách to & lệch.
                               // Gỡ newline giữa các thẻ + gộp newline lặp => spacing do CSS kiểm soát, đều tăm tắp.
