@@ -184,7 +184,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     shared_options = []
     for q in questions_in_block:
         if q["options"]: shared_options = q["options"]
-        elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING"]:
+        elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG"]:
             q["options"] = shared_options.copy()
     
     for q in questions_in_block:
