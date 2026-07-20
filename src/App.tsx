@@ -27,6 +27,9 @@ const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
 const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
+// A full exam can exceed Firestore's 1 MiB document limit. Keep every exam in its
+// own document so a successful local edit is always deliverable to every device.
+const QUIZZES_COLLECTION_REF = collection(DB_DOC_REF, "quizzes");
 const VOCAB_ROOT_COLLECTION = "ielts_vocab";
 const vocabStudentKey = (email: string) => encodeURIComponent(String(email || "").trim().toLowerCase());
 const vocabCardsRef = (email: string) => collection(db, VOCAB_ROOT_COLLECTION, vocabStudentKey(email), "cards");
@@ -1405,7 +1408,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean;  id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
 
 const getQuestionPointCount = (q: any) =>
@@ -2743,6 +2746,7 @@ export default function IeltsSupremeOS() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [sharedLinks, setSharedLinks] = useState<SharedLink[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const quizzesRef = useRef<Quiz[]>([]);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
@@ -3195,6 +3199,14 @@ export default function IeltsSupremeOS() {
   // the next network heartbeat. Coalesce lifecycle-triggered server refreshes on resume.
   const cloudRefreshInFlightRef = useRef(false);
   const lastCloudRefreshAtRef = useRef(0);
+  // The old workspace blob remains readable during migration only. Once the
+  // dedicated collection is confirmed, it is the sole quiz source on all devices.
+  const legacyQuizzesRef = useRef<Quiz[]>([]);
+  const quizCatalogReadyRef = useRef(false);
+  const quizCatalogMigratedRef = useRef(false);
+  const quizCatalogMigrationInFlightRef = useRef(false);
+
+  useEffect(() => { quizzesRef.current = quizzes; }, [quizzes]);
 
   // Keep an on-device retry record until Firestore confirms a quiz transaction.
   const pendingQuizWriteKey = () => `ielts_pending_quiz_write_${String(currentUser?.email || "teacher").toLowerCase()}`;
@@ -3267,6 +3279,65 @@ export default function IeltsSupremeOS() {
     const local = (Array.isArray(localQuizzes) ? localQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)));
     const localIds = new Set(local.map(q => String(q.id)));
     return [...local, ...(Array.isArray(serverQuizzes) ? serverQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)) && !localIds.has(String(q.id)))];
+  };
+  const setQuizCatalogState = (catalog: Quiz[]) => {
+    const cleanCatalog = (Array.isArray(catalog) ? catalog : []).filter((quiz: any) => quiz && quiz.id) as Quiz[];
+    quizzesRef.current = cleanCatalog;
+    setQuizzes(cleanCatalog);
+  };
+  const quizForStorage = (quiz: any) => {
+    const { _activePassageTab, _showSettings, ...persisted } = quiz || {};
+    return JSON.parse(JSON.stringify({ ...persisted, updatedAt: Date.now() }));
+  };
+  const persistQuizCatalog = async (catalog: Quiz[], deletedIds: string[] = []) => {
+    const writes = (Array.isArray(catalog) ? catalog : []).filter((quiz: any) => quiz?.id);
+    const deletes = Array.from(new Set((deletedIds || []).map(String)));
+    const operations = [
+      ...writes.map((quiz: any) => ({ kind: "set" as const, id: String(quiz.id), quiz })),
+      ...deletes.map(id => ({ kind: "delete" as const, id })),
+    ];
+    for (let offset = 0; offset < operations.length; offset += 400) {
+      const batch = writeBatch(db);
+      operations.slice(offset, offset + 400).forEach((operation) => {
+        const target = doc(QUIZZES_COLLECTION_REF, operation.id);
+        if (operation.kind === "delete") batch.delete(target);
+        else batch.set(target, quizForStorage(operation.quiz));
+      });
+      await batch.commit();
+    }
+  };
+  const applyQuizCatalogSnapshot = (snap: any) => {
+    // Cache-only empty snapshots are common on resumed phones. They must never erase
+    // the visible catalog before Firestore has returned the server copy.
+    const remoteQuizzes = snap.docs
+      .map((item: any) => ({ ...item.data(), id: String(item.id) }))
+      .filter((quiz: any) => quiz && quiz.id) as Quiz[];
+    if (snap.metadata?.fromCache && remoteQuizzes.length === 0) return;
+    if (snap.metadata?.hasPendingWrites) return;
+
+    quizCatalogReadyRef.current = !snap.metadata?.fromCache;
+    const hasDedicatedCatalog = quizCatalogMigratedRef.current || remoteQuizzes.length > 0;
+    const baseCatalog = hasDedicatedCatalog
+      ? remoteQuizzes
+      : mergeQuizCatalog(legacyQuizzesRef.current, remoteQuizzes);
+    const pending = userRole === "TEACHER" ? readPendingQuizWrite() : null;
+    const recoveredCatalog = pending
+      ? mergeQuizCatalog(baseCatalog, pending.quizzes, pending.deletedIds || [])
+      : baseCatalog;
+    setQuizCatalogState(recoveredCatalog);
+  };
+  const migrateLegacyQuizCatalog = async (legacyCatalog: Quiz[]) => {
+    if (userRole !== "TEACHER" || quizCatalogMigratedRef.current || quizCatalogMigrationInFlightRef.current) return;
+    quizCatalogMigrationInFlightRef.current = true;
+    try {
+      if (legacyCatalog.length) await persistQuizCatalog(legacyCatalog);
+      await setDoc(DB_DOC_REF, { quizCatalogMigrated: true, quizzes: [] }, { merge: true });
+      quizCatalogMigratedRef.current = true;
+    } catch (error) {
+      console.error("Quiz catalog migration failed:", error);
+    } finally {
+      quizCatalogMigrationInFlightRef.current = false;
+    }
   };
 
   useEffect(() => {
@@ -3876,16 +3947,26 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setTransactions(clean(d.transactions)); 
     setSchedules(clean(d.schedules));
     setSharedLinks(clean(d.sharedLinks)); 
-    const serverQuizzes = clean(d.quizzes);
+    const serverQuizzes = clean(d.quizzes) as Quiz[];
+    legacyQuizzesRef.current = serverQuizzes;
+    quizCatalogMigratedRef.current = d.quizCatalogMigrated === true;
     const pendingQuizWrite = userRole === "TEACHER" ? readPendingQuizWrite() : null;
+    // Until the one-time migration has completed, retain legacy exams as a read-only
+    // fallback. Once the collection is confirmed, never let this old blob overwrite it.
+    const fallbackQuizzes = quizCatalogMigratedRef.current ? [] : serverQuizzes;
+    const recoveredQuizzes = pendingQuizWrite
+        ? mergeQuizCatalog(fallbackQuizzes, pendingQuizWrite.quizzes, pendingQuizWrite.deletedIds)
+        : fallbackQuizzes;
+    if (!quizCatalogReadyRef.current) {
+      setQuizCatalogState(recoveredQuizzes);
+    }
     if (pendingQuizWrite) {
-      const recoveredQuizzes = mergeQuizCatalog(serverQuizzes, pendingQuizWrite.quizzes, pendingQuizWrite.deletedIds);
-      setQuizzes(recoveredQuizzes);
       // The prior browser session ended before Firestore acknowledged its write. Retry
       // after this snapshot has settled; syncData clears the record only on success.
       window.setTimeout(() => { void syncData({ quizzes: recoveredQuizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
-    } else {
-      setQuizzes(serverQuizzes);
+    }
+    if (!quizCatalogMigratedRef.current && userRole === "TEACHER") {
+      void migrateLegacyQuizCatalog(serverQuizzes);
     }
     if (pendingCoinOperation) {
       // Retry a purchase/award that may have been interrupted by a backgrounded tab.
@@ -3912,9 +3993,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
       try {
         // A server-only read wakes Firestore immediately after iOS/Android has frozen a tab.
         // The normal listeners remain the long-lived sync mechanism; this is a resume nudge.
-        const [workspaceResult, liveResult] = await Promise.allSettled([
+        const [workspaceResult, liveResult, quizCatalogResult] = await Promise.allSettled([
           getDocFromServer(DB_DOC_REF),
           getDocFromServer(LIVE_DOC_REF),
+          getDocsFromServer(QUIZZES_COLLECTION_REF),
         ]);
         if (disposed) return;
         if (workspaceResult.status === "fulfilled") applyWorkspaceSnapshot(workspaceResult.value);
@@ -3922,6 +4004,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
         if (liveResult.status === "fulfilled" && liveResult.value.exists()) {
           setLiveSessions(liveResult.value.data().sessions || []);
         }
+        if (quizCatalogResult.status === "fulfilled") applyQuizCatalogSnapshot(quizCatalogResult.value);
+        else console.debug("Foreground quiz catalog refresh deferred:", quizCatalogResult.reason);
       } finally {
         cloudRefreshInFlightRef.current = false;
       }
@@ -3932,6 +4016,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     };
 
     const unsub = onSnapshot(DB_DOC_REF, applyWorkspaceSnapshot);
+
+    const unsubQuizzes = onSnapshot(QUIZZES_COLLECTION_REF, applyQuizCatalogSnapshot);
 
     const unsubLive = onSnapshot(LIVE_DOC_REF, (snap) => {
         if (snap.exists()) {
@@ -3949,6 +4035,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     return () => {
       disposed = true;
       unsub();
+      unsubQuizzes();
       unsubLive();
       clearInterval(timeSyncInterval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -4457,7 +4544,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
-    if (Array.isArray(newData.quizzes) && userRole === "TEACHER") {
+    const hasQuizCatalogWrite = Array.isArray(newData.quizzes) && userRole === "TEACHER";
+    if (hasQuizCatalogWrite) {
       writePendingQuizWrite(newData.quizzes, quizDeleteIds);
     }
     if (pendingVocab && userRole === "STUDENT") {
@@ -4466,6 +4554,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (coinOperation) writePendingCoinOperation(coinOperation);
     writeInFlightRef.current++;
     try {
+      if (hasQuizCatalogWrite) {
+        // Exams are deliberately written outside the workspace document. A large DOCX
+        // import must not be rejected because unrelated workspace data fills that blob.
+        await persistQuizCatalog(newData.quizzes, quizDeleteIds);
+        clearPendingQuizWrite();
+      }
+      // Do not mirror the catalog back into the old single Firestore document.
+      newData = { ...newData };
+      delete newData.quizzes;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
         if (!sfDoc.exists()) {
@@ -4681,7 +4778,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const cleanUpdate = JSON.parse(JSON.stringify(finalUpdate));
         transaction.update(DB_DOC_REF, cleanUpdate);
       });
-      if (Array.isArray(newData.quizzes) && userRole === "TEACHER") clearPendingQuizWrite();
       // Keep the operation until an onSnapshot payload contains its ledger entry.
       // This closes the mobile/background race where a successful transaction is
       // followed by an older cached snapshot that still has the pre-purchase balance.
@@ -5953,10 +6049,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const data = await response.json();
       if (data.success && data.quiz) {
         const newQuiz: Quiz = { ...data.quiz, audience: "ALL", targetStudentIds: [], maxAttempts: 1, isLocked: false, folder: builderFolder }; 
-        saveQuiz(newQuiz);
-        const updatedQuizzes = [newQuiz, ...quizzes];
-        setQuizzes(updatedQuizzes); syncData({ quizzes: updatedQuizzes });
-        alert(`SUCCESS! Test extracted: ${newQuiz.title}`);
+        await saveQuiz(newQuiz);
       } else {
           logErrorToSystem("UPLOAD_DOCX_FAIL", data.error || "Backend unknown error", { fileName: file.name });
           alert("Backend error: " + (data.error || "Unknown error."));
@@ -5967,7 +6060,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
-  const saveQuiz = (quizToSave?: any) => {
+  const saveQuiz = async (quizToSave?: any): Promise<boolean> => {
       const isEvent = quizToSave && typeof quizToSave.preventDefault === 'function';
       const targetQuiz = isEvent ? undefined : quizToSave;
 
@@ -5977,25 +6070,28 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
           }));
-          setQuizzes(prev => {
-              const existingIndex = prev.findIndex(q => q.id === qz.id);
-              const updated = [...prev];
-              if (existingIndex !== -1) updated[existingIndex] = qz;
-              else updated.unshift(qz);
-              syncData({ quizzes: updated });
-              return updated;
-          });
-          alert(`Đã lưu đề "${qz.title}" thành công!`);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
+          const updated = [...quizzesRef.current];
+          if (existingIndex !== -1) updated[existingIndex] = qz;
+          else updated.unshift(qz);
+          setQuizCatalogState(updated);
+          const saved = await syncData({ quizzes: updated });
+          if (!saved) {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
+              return false;
+          }
+          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          return true;
       } else {
           // Branch B: gọi từ nút "LƯU ĐỀ THI" (không có argument)
           // FIX ROOT CAUSE: Lấy snapshot qua ref thay vì updater lồng nhau.
           // Gọi setQuizzes lồng trong setEditingQuiz updater khiến React batch
           // dùng snapshot quizzes cũ từ closure  quiz mới không được commit.
           const currentSnapshot = editingQuizRef.current;
-          if (!currentSnapshot) return;
+          if (!currentSnapshot) return false;
           if (!currentSnapshot.title) {
               alert("Vui lòng nhập tên đề thi!");
-              return;
+              return false;
           }
 
           const qz = JSON.parse(JSON.stringify({
@@ -6007,16 +6103,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
 
-          setQuizzes(prev => {
-              const existingIndex = prev.findIndex(q => q.id === qz.id);
-              const updated = [...prev];
-              if (existingIndex !== -1) updated[existingIndex] = qz;
-              else updated.unshift(qz);
-              syncData({ quizzes: updated });
-              return updated;
-          });
-
-          setTimeout(() => alert(`Đã lưu đề "${qz.title}" thành công!`), 0);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
+          const updated = [...quizzesRef.current];
+          if (existingIndex !== -1) updated[existingIndex] = qz;
+          else updated.unshift(qz);
+          setQuizCatalogState(updated);
+          const saved = await syncData({ quizzes: updated });
+          if (!saved) {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
+              return false;
+          }
+          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          return true;
       }
   };
   
@@ -10954,21 +11052,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             };
 
             // CHỮA BỆNH STALE CLOSURE: Hàm LƯU BẤT TỬ
-            const handleForceSave = () => {
-                setEditingQuiz((currentLatestQuiz: any) => {
-                    if (!currentLatestQuiz) return currentLatestQuiz;
-                    setQuizzes((prevList: any[]) => {
-                        const idx = prevList.findIndex(q => q.id === currentLatestQuiz.id);
-                        const nx = [...prevList];
-                        if (idx > -1) nx[idx] = currentLatestQuiz;
-                        else nx.unshift(currentLatestQuiz);
-                        // Cập nhật Firebase ngay lập tức
-                        if (typeof syncData === 'function') setTimeout(() => syncData({quizzes: nx}), 50);
-                        return nx;
-                    });
-                    alert("Đã lưu mọi nội dung, định dạng và cài đặt thành công!");
-                    return currentLatestQuiz;
-                });
+            const handleForceSave = async () => {
+                const currentLatestQuiz: any = editingQuizRef.current;
+                if (!currentLatestQuiz) return;
+                const idx = quizzesRef.current.findIndex((q: any) => q.id === currentLatestQuiz.id);
+                const nx = [...quizzesRef.current];
+                if (idx > -1) nx[idx] = currentLatestQuiz;
+                else nx.unshift(currentLatestQuiz);
+                setQuizCatalogState(nx);
+                const saved = await syncData({ quizzes: nx });
+                alert(saved
+                    ? "Đã lưu và đồng bộ đề trên mọi thiết bị."
+                    : "Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại và sẽ tự thử lại khi có mạng.");
             };
 
             // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====

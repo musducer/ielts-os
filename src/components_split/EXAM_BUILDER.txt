@@ -69,21 +69,18 @@
             };
 
             // CHỮA BỆNH STALE CLOSURE: Hàm LƯU BẤT TỬ
-            const handleForceSave = () => {
-                setEditingQuiz((currentLatestQuiz: any) => {
-                    if (!currentLatestQuiz) return currentLatestQuiz;
-                    setQuizzes((prevList: any[]) => {
-                        const idx = prevList.findIndex(q => q.id === currentLatestQuiz.id);
-                        const nx = [...prevList];
-                        if (idx > -1) nx[idx] = currentLatestQuiz;
-                        else nx.unshift(currentLatestQuiz);
-                        // Cập nhật Firebase ngay lập tức
-                        if (typeof syncData === 'function') setTimeout(() => syncData({quizzes: nx}), 50);
-                        return nx;
-                    });
-                    alert("Đã lưu mọi nội dung, định dạng và cài đặt thành công!");
-                    return currentLatestQuiz;
-                });
+            const handleForceSave = async () => {
+                const currentLatestQuiz: any = editingQuizRef.current;
+                if (!currentLatestQuiz) return;
+                const idx = quizzesRef.current.findIndex((q: any) => q.id === currentLatestQuiz.id);
+                const nx = [...quizzesRef.current];
+                if (idx > -1) nx[idx] = currentLatestQuiz;
+                else nx.unshift(currentLatestQuiz);
+                setQuizCatalogState(nx);
+                const saved = await syncData({ quizzes: nx });
+                alert(saved
+                    ? "Đã lưu và đồng bộ đề trên mọi thiết bị."
+                    : "Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại và sẽ tự thử lại khi có mạng.");
             };
 
             // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====
