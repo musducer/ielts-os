@@ -1,0 +1,9 @@
+tmp/
+node_modules/
+dist/
+dist-ssr/
+.git/
+.vercel/
+__pycache__/
+*.pyc
+*.pyo

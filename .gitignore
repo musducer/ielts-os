@@ -38,6 +38,7 @@ skills/
 skills-lock.json
 
 # Backups/temp files
+tmp/
 .emoji_backup/
 *.backup
 *.bak_*
