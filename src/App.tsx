@@ -2707,6 +2707,7 @@ export default function IeltsSupremeOS() {
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("DASHBOARD");
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.innerWidth < 640);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
@@ -3854,6 +3855,7 @@ useEffect(() => {
           (window as any).__ielts_user_id = user.email;
           setUserRole(user.email?.includes("@ielts.os") || user.email === "trung@ielts.os" ? "TEACHER" : "STUDENT");
           localStorage.setItem('ielts_last_login', new Date(getRealTime()).toLocaleString('vi-VN'));
+          setLoginLoading(false);
       } else { setUserRole(null); }
       setAuthChecking(false);
     });
@@ -4819,9 +4821,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setVerifyResult({ status: "USED", entry: updated });
   };
   const handleLogin = async (e: any) => {
-    e.preventDefault(); setLoginError("");
-    try { await signInWithEmailAndPassword(auth, email, password); } 
-    catch (error) { setLoginError("Wrong email or password!"); }
+    e.preventDefault();
+    if (loginLoading) return;
+    setLoginError("");
+    setLoginLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+    } catch (error) {
+      setLoginError("Wrong email or password!");
+      setLoginLoading(false);
+    }
   };
   const handleLogout = () => {
     sessionConfirmedRef.current = false;   // quên quyền sở hữu phiên -> lần đăng nhập sau sẽ claim lại sạch
@@ -6841,6 +6850,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           @keyframes lxAurora1{ 0%{ transform:translate(-8%,-6%) scale(1);} 50%{ transform:translate(10%,8%) scale(1.25);} 100%{ transform:translate(-8%,-6%) scale(1);} }
           @keyframes lxAurora2{ 0%{ transform:translate(6%,8%) scale(1.1);} 50%{ transform:translate(-9%,-7%) scale(1.32);} 100%{ transform:translate(6%,8%) scale(1.1);} }
           @keyframes lxShimmer{ 0%{ background-position:-160% 0;} 100%{ background-position:260% 0;} }
+          @keyframes lxVerifySpin{ to{ transform:rotate(360deg); } }
+          @keyframes lxVerifyPulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
           .lx-rise{ opacity:0; animation:lxRise .9s cubic-bezier(.22,.61,.36,1) forwards; }
           .lx-card{ transform:perspective(1200px) rotateX(var(--ry,0deg)) rotateY(var(--rx,0deg)); transition:transform .18s ease-out; transform-style:preserve-3d; }
           .lx-input{ width:100%; padding:14px 16px; font-size:15px; border:1px solid rgba(231,196,112,0.18); border-radius:13px; background:rgba(255,255,255,0.03); outline:none; color:${CREAM}; transition:border-color .2s, box-shadow .2s, background .2s; box-sizing:border-box; font-family:var(--heading); letter-spacing:.3px; }
@@ -6853,8 +6864,21 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .lx-submit:hover{ transform:translateY(-2px); box-shadow:0 18px 42px rgba(231,196,112,0.32) !important; }
           .lx-submit > span{ position:relative; z-index:2; }
           .lx-submit::after{ content:""; position:absolute; inset:0; z-index:1; background:linear-gradient(110deg, transparent 25%, rgba(255,255,255,0.5) 50%, transparent 75%); background-size:200% 100%; animation:lxShimmer 4s ease-in-out infinite; }
+          .lx-submit:disabled{ cursor:wait !important; opacity:.7; transform:none !important; }
           .lx-eye:hover{ color:${GOLD} !important; }
         `}</style>
+
+        {loginLoading && <div role="status" aria-live="assertive" aria-label="Đang xác thực thông tin đăng nhập" style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+          <div style={{ width: "min(360px, 100%)", textAlign: "center", color: CREAM }}>
+            <div style={{ width: 82, height: 82, margin: "0 auto 28px", display: "grid", placeItems: "center", border: `1px solid ${GOLD}55`, borderRadius: "50%", boxShadow: `0 0 0 12px ${GOLD}0d, 0 20px 54px ${GOLD}22` }}>
+              <BrandLogo size={38} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} />
+            </div>
+            <div style={{ width: 36, height: 36, margin: "0 auto 24px", border: `3px solid ${GOLD}2e`, borderTopColor: GOLD_BRIGHT, borderRadius: "50%", animation: "lxVerifySpin .8s linear infinite" }} />
+            <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 2.4, color: GOLD, marginBottom: 12 }}>VERIFYING ACCESS</div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>Đang xác thực đăng nhập</div>
+            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>Vui lòng chờ trong giây lát.</div>
+          </div>
+        </div>}
 
         {/* WOW #2: aurora vàng trôi chậm sau lớp tối */}
         <div aria-hidden style={{ position: "absolute", inset: "-20%", zIndex: 0, pointerEvents: "none" }}>
@@ -6922,13 +6946,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                         <div style={{ display: "grid", gap: 18 }}>
                             <div>
                                 <label style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: CREAM_DIM, marginBottom: 9, display: "block" }}>{t('email_label')}</label>
-                                <input className="lx-input" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} required placeholder="name@example.com" />
+                                <input className="lx-input" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} disabled={loginLoading} required placeholder="name@example.com" />
                             </div>
                             <div>
                                 <label style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: CREAM_DIM, marginBottom: 9, display: "block" }}>{t('pwd_label')}</label>
                                 <div style={{ position: "relative" }}>
-                                    <input className="lx-input" type={showPwd ? "text" : "password"} value={password} onChange={(e: any) => setPassword(e.target.value)} required placeholder="••••••••" style={{ paddingRight: 46 }} />
-                                    <button type="button" className="lx-eye" onClick={() => setShowPwd(!showPwd)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 6, color: CREAM_DIM, display: "flex", transition: "color .2s" }} title={t('show_hide_pwd')}>
+                                    <input className="lx-input" type={showPwd ? "text" : "password"} value={password} onChange={(e: any) => setPassword(e.target.value)} disabled={loginLoading} required placeholder="••••••••" style={{ paddingRight: 46 }} />
+                                    <button type="button" className="lx-eye" onClick={() => setShowPwd(!showPwd)} disabled={loginLoading} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: loginLoading ? "wait" : "pointer", padding: 6, color: CREAM_DIM, display: "flex", transition: "color .2s" }} title={t('show_hide_pwd')}>
                                         {showPwd
                                             ? <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                                             : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -6936,7 +6960,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                     </button>
                                 </div>
                             </div>
-                            <button type="submit" className="lx-submit" style={{ background: `linear-gradient(180deg, ${GOLD_BRIGHT}, ${GOLD})`, color: INK, padding: "15px", marginTop: 8, fontSize: 15, fontWeight: 800, borderRadius: 13, border: "none", cursor: "pointer", boxShadow: `0 12px 32px ${GOLD}3d`, transition: "transform .15s, box-shadow .15s", letterSpacing: 0.5, fontFamily: "var(--heading)" }}><span>{t('login_btn')}</span></button>
+                            <button type="submit" className="lx-submit" disabled={loginLoading} style={{ background: `linear-gradient(180deg, ${GOLD_BRIGHT}, ${GOLD})`, color: INK, padding: "15px", marginTop: 8, fontSize: 15, fontWeight: 800, borderRadius: 13, border: "none", cursor: loginLoading ? "wait" : "pointer", boxShadow: `0 12px 32px ${GOLD}3d`, transition: "transform .15s, box-shadow .15s", letterSpacing: 0.5, fontFamily: "var(--heading)" }}><span>{loginLoading ? "VERIFYING..." : t('login_btn')}</span></button>
                         </div>
                     </form>
                 </div>
