@@ -711,6 +711,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     correct = payload.get("correct", "")
     student_ans = payload.get("studentAnswer", "")
     context = (payload.get("context", "") or "")[:24000]
+    reading_passage = (payload.get("readingPassage", "") or "")[:24000]
     has_ctx = bool(context.strip())
     answer_sequence = payload.get("answerSequence")
     question_index_raw = payload.get("questionIndex")
@@ -724,6 +725,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
     is_listening = bool(payload.get("isListening")) and bool(_TS_MARKER_RE.search(context))
+    is_reading_evidence = bool(reading_passage.strip()) and not bool(payload.get("isListening"))
     ts_rule_en = (
         " TIMESTAMP RULE: the transcript contains time markers like \"(0:21 - 0:33)\" placed BEFORE each block of speech. "
         "This is an exact evidence task, not a rough location: first find the correct-answer word or phrase in the transcript, "
@@ -739,6 +741,18 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         "không ước lượng, không lấy trung bình. Toàn bộ giải thích phải có đúng MỘT mốc để bấm nghe lại, chỉ ở dạng [mm:ss] hoặc "
         "[h:mm:ss] (vd mốc \"(3:02 - 3:27)\" -> [3:02]); không bao giờ ghi một khoảng thời gian. Transcript không có mốc thì bỏ hẳn timestamp."
     ) if is_listening else ""
+
+    evidence_rule_en = (
+        " READING EVIDENCE RULE: when you use evidence from the reading passage, include one to three short, continuous, "
+        "word-for-word excerpts from the READING PASSAGE only. Wrap EVERY such excerpt exactly as "
+        "[[EVIDENCE: exact excerpt]]. Do not place the marker around paraphrases, question wording, options, or invented text. "
+        "Each marked excerpt must be the smallest useful proof and must appear exactly in the passage."
+    ) if is_reading_evidence else ""
+    evidence_rule_vi = (
+        " LUAT DAN CHUNG READING: khi dung dan chung tu bai doc, phai dua mot den ba trich doan ngan, lien tuc va dung tung chu "
+        "tu RIENG BAI DOC. Boc MOI trich doan dung cu phap [[EVIDENCE: doan trich chinh xac]]. Khong dung marker cho dien giai, "
+        "loi cau hoi, lua chon hay noi dung tu bia. Moi doan trich phai la bang chung ngan nhat nhung du nghia va xuat hien nguyen van trong bai."
+    ) if is_reading_evidence else ""
 
     integrated_rule_en = (
         " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
@@ -767,7 +781,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
             "appear word-for-word in the source. If the student was correct, still explain why the other options lose. End with one short, "
-            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en
+            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + evidence_rule_en
         )
         user_prompt = (
             f"SOURCE TEXT (read it fully):\n{context if has_ctx else '(no source text was provided for this item)'}\n\n"
@@ -785,7 +799,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi
+            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + evidence_rule_vi
         )
         user_prompt = (
             f"VĂN BẢN NGUỒN (đọc hết):\n{context if has_ctx else '(không có văn bản nguồn cho câu này)'}\n\n"
@@ -806,6 +820,20 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         answer_sequence if is_listening else None,
         question_index if is_listening else None,
     )
+    if is_reading_evidence:
+        def _norm_evidence(value: str) -> str:
+            return re.sub(r"\s+", " ", str(value or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
+
+        passage_norm = _norm_evidence(reading_passage)
+
+        def _keep_real_evidence(match: re.Match) -> str:
+            quote = match.group(1).strip()
+            quote_norm = _norm_evidence(quote)
+            if 4 <= len(quote_norm) <= 300 and quote_norm in passage_norm:
+                return f"[[EVIDENCE: {quote}]]"
+            return f'"{quote}"'
+
+        text = re.sub(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", _keep_real_evidence, text, flags=re.IGNORECASE)
     return {"success": True, "explanation": text}
 
 

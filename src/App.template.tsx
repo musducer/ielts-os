@@ -5032,6 +5032,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           correct: correctStr,
           studentAnswer: stuStr,
           context,
+          readingPassage: isListeningQuestion ? "" : stripTags(qPassage).slice(0, 24000),
           isListening: isListeningQuestion,
           questionType: q.type,
           questionSubType: q.subType || "",

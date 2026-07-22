@@ -26,7 +26,69 @@
           setRvAudioCur(secs);
           void requestReviewAudioPlayback();
       };
+      const rvJumpToEvidence = (quote: string) => {
+          const root = document.getElementById('ielts-passage-content');
+          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
+          if (!root || needle.length < 4) return;
+
+          root.querySelectorAll<HTMLElement>('.rv-evidence-hit').forEach((mark) => {
+              const parent = mark.parentNode;
+              if (!parent) return;
+              while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+              parent.removeChild(mark);
+              parent.normalize();
+          });
+
+          const nodes: Array<{ node: Text; start: number; end: number }> = [];
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          let text = '', current: Node | null;
+          while ((current = walker.nextNode())) {
+              const node = current as Text;
+              const start = text.length;
+              text += node.data;
+              nodes.push({ node, start, end: text.length });
+          }
+          let matchIndex = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+          let matchedText = needle;
+          if (matchIndex < 0) {
+              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+              const loose = new RegExp(escaped, 'i').exec(text);
+              if (!loose || loose.index == null) return;
+              matchIndex = loose.index;
+              matchedText = loose[0];
+          }
+          const endIndex = matchIndex + matchedText.length;
+          const startNode = nodes.find((item) => matchIndex >= item.start && matchIndex < item.end);
+          const endNode = nodes.find((item) => endIndex > item.start && endIndex <= item.end);
+          if (!startNode || !endNode) return;
+
+          const range = document.createRange();
+          range.setStart(startNode.node, matchIndex - startNode.start);
+          range.setEnd(endNode.node, endIndex - endNode.start);
+          const mark = document.createElement('mark');
+          mark.className = 'rv-evidence-hit';
+          mark.tabIndex = -1;
+          mark.style.cssText = 'background:#fde68a;color:inherit;border-radius:3px;padding:0 2px;box-shadow:0 0 0 2px rgba(245,158,11,.28);transition:background .25s ease;';
+          try {
+              range.surroundContents(mark);
+          } catch {
+              const content = range.extractContents();
+              mark.appendChild(content);
+              range.insertNode(mark);
+          }
+          mark.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          window.setTimeout(() => { mark.style.background = '#fef3c7'; }, 1800);
+      };
       const rvRenderExplain = (txt: string) => {
+          const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
+          if (evidenceParts.length > 1) {
+              return evidenceParts.map((part, pi) => {
+                  const match = part.match(/^\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]$/i);
+                  if (!match) return <React.Fragment key={pi}>{rvRenderExplain(part)}</React.Fragment>;
+                  const quote = match[1].trim();
+                  return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Open evidence in the reading passage" aria-label={`Open evidence: ${quote}`} style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 4, padding: '1px 5px', color: '#92400e', fontWeight: 700, cursor: 'pointer', textDecoration: 'none', fontSize: 'inherit', fontFamily: 'inherit', lineHeight: 'inherit' }}>&quot;{quote}&quot;</button>;
+              });
+          }
           const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
           const parts = String(txt || '').split(new RegExp(`(${token.source})`, 'g'));
           return parts.map((p, pi) => token.test(p)
