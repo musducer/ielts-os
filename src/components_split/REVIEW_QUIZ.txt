@@ -28,9 +28,7 @@
       };
       const rvJumpToEvidence = (quote: string) => {
           const root = document.getElementById('ielts-passage-content');
-          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
-          if (!root || needle.length < 4) return;
-
+          if (!root) return;
           root.querySelectorAll<HTMLElement>('.rv-evidence-hit').forEach((mark) => {
               const parent = mark.parentNode;
               if (!parent) return;
@@ -39,45 +37,60 @@
               parent.normalize();
           });
 
-          const nodes: Array<{ node: Text; start: number; end: number }> = [];
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-          let text = '', current: Node | null;
-          while ((current = walker.nextNode())) {
-              const node = current as Text;
-              const start = text.length;
-              text += node.data;
-              nodes.push({ node, start, end: text.length });
-          }
-          let matchIndex = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
-          let matchedText = needle;
-          if (matchIndex < 0) {
-              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-              const loose = new RegExp(escaped, 'i').exec(text);
-              if (!loose || loose.index == null) return;
-              matchIndex = loose.index;
-              matchedText = loose[0];
-          }
-          const endIndex = matchIndex + matchedText.length;
-          const startNode = nodes.find((item) => matchIndex >= item.start && matchIndex < item.end);
-          const endNode = nodes.find((item) => endIndex > item.start && endIndex <= item.end);
-          if (!startNode || !endNode) return;
+          const markFragment = (raw: string) => {
+              const needle = String(raw || '').replace(/\s+/g, ' ').trim();
+              if (needle.length < 4) return null;
+              const nodes: Array<{ node: Text; start: number; end: number }> = [];
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let text = '', current: Node | null;
+              while ((current = walker.nextNode())) {
+                  const node = current as Text;
+                  const start = text.length;
+                  text += node.data;
+                  nodes.push({ node, start, end: text.length });
+              }
+              let matchIndex = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+              let matchedText = needle;
+              if (matchIndex < 0) {
+                  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+                  const loose = new RegExp(escaped, 'i').exec(text);
+                  if (!loose || loose.index == null) return null;
+                  matchIndex = loose.index;
+                  matchedText = loose[0];
+              }
+              const endIndex = matchIndex + matchedText.length;
+              const startNode = nodes.find((item) => matchIndex >= item.start && matchIndex < item.end);
+              const endNode = nodes.find((item) => endIndex > item.start && endIndex <= item.end);
+              if (!startNode || !endNode) return null;
+              const range = document.createRange();
+              range.setStart(startNode.node, matchIndex - startNode.start);
+              range.setEnd(endNode.node, endIndex - endNode.start);
+              const mark = document.createElement('mark');
+              mark.className = 'rv-evidence-hit';
+              mark.tabIndex = -1;
+              mark.style.cssText = 'background:#fde68a;color:inherit;border-radius:3px;padding:0 2px;box-shadow:0 0 0 2px rgba(245,158,11,.28);transition:background .25s ease;';
+              try {
+                  range.surroundContents(mark);
+              } catch {
+                  const content = range.extractContents();
+                  mark.appendChild(content);
+                  range.insertNode(mark);
+              }
+              return mark;
+          };
 
-          const range = document.createRange();
-          range.setStart(startNode.node, matchIndex - startNode.start);
-          range.setEnd(endNode.node, endIndex - endNode.start);
-          const mark = document.createElement('mark');
-          mark.className = 'rv-evidence-hit';
-          mark.tabIndex = -1;
-          mark.style.cssText = 'background:#fde68a;color:inherit;border-radius:3px;padding:0 2px;box-shadow:0 0 0 2px rgba(245,158,11,.28);transition:background .25s ease;';
-          try {
-              range.surroundContents(mark);
-          } catch {
-              const content = range.extractContents();
-              mark.appendChild(content);
-              range.insertNode(mark);
+          // Never wrap one <mark> across paragraphs: each sentence is located and
+          // highlighted independently, so multi-paragraph evidence remains valid HTML.
+          const fragments = String(quote || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [quote];
+          const marks = fragments.map(markFragment).filter((mark): mark is HTMLElement => !!mark);
+          if (!marks.length && fragments.length > 1) {
+              const single = markFragment(quote);
+              if (single) marks.push(single);
           }
-          mark.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-          window.setTimeout(() => { mark.style.background = '#fef3c7'; }, 1800);
+          const first = marks[0];
+          if (!first) return;
+          first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          window.setTimeout(() => marks.forEach((mark) => { mark.style.background = '#fef3c7'; }), 1800);
       };
       // Older explanations used normal quotation marks instead of the evidence marker.
       // Treat an exact passage quote as evidence too, so stored reviews stay useful.

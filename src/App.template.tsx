@@ -4970,7 +4970,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (explainMap[q.id]?.loading) return;
     setExplainMap(prev => ({ ...prev, [q.id]: { loading: true, text: "" } }));
     try {
-      const stripTags = (s: any) => String(s ?? "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+      // Keep paragraph boundaries for reading evidence. Removing tags without a
+      // separator makes two separate paragraphs look like one AI quotation.
+      const stripTags = (s: any) => String(s ?? "")
+        .replace(/<(?:br)\s*\/?\s*>/gi, "\n")
+        .replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, "\n")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/[^\S\r\n]+/g, " ")
+        .replace(/\n{2,}/g, "\n")
+        .trim();
       const optStr = (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null;
