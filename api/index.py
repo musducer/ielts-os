@@ -785,6 +785,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         )
         user_prompt = (
             f"SOURCE TEXT (read it fully):\n{context if has_ctx else '(no source text was provided for this item)'}\n\n"
+            f"READING PASSAGE FOR CLICKABLE EVIDENCE:\n{reading_passage if is_reading_evidence else '(not applicable)'}\n\n"
             f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
             f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English."
@@ -803,6 +804,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         )
         user_prompt = (
             f"VĂN BẢN NGUỒN (đọc hết):\n{context if has_ctx else '(không có văn bản nguồn cho câu này)'}\n\n"
+            f"BÀI ĐỌC DÙNG LÀM DẪN CHỨNG CLICKABLE:\n{reading_passage if is_reading_evidence else '(không áp dụng)'}\n\n"
             f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
@@ -834,6 +836,42 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             return f'"{quote}"'
 
         text = re.sub(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", _keep_real_evidence, text, flags=re.IGNORECASE)
+        # The model occasionally explains correctly but omits the required marker.
+        # Select an exact, relevant sentence from the passage instead of letting the
+        # client render an explanation with no clickable proof.
+        valid_evidence = re.findall(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", text, flags=re.IGNORECASE)
+        if not valid_evidence:
+            def _evidence_words(value: str) -> set:
+                return {
+                    word for word in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(value or "").lower())
+                    if word not in {
+                        "the", "and", "for", "with", "that", "this", "from", "which", "what", "when", "where",
+                        "does", "were", "was", "are", "has", "have", "had", "into", "than", "then", "only",
+                        "answer", "correct", "question", "option", "student", "read", "reading", "passage",
+                    }
+                }
+
+            query_words = _evidence_words(question) | _evidence_words(correct)
+            candidates = [
+                re.sub(r"\s+", " ", sentence).strip(" -\t\r\n")
+                for sentence in re.split(r"(?<=[.!?])\s+|\n+", reading_passage)
+            ]
+            candidates = [sentence for sentence in candidates if len(_norm_evidence(sentence)) >= 4]
+            if candidates:
+                correct_norm = _norm_evidence(correct)
+
+                def _score_evidence(sentence: str) -> tuple:
+                    words = _evidence_words(sentence)
+                    overlap = len(words & query_words)
+                    exact_answer = int(bool(correct_norm and len(correct_norm) > 2 and correct_norm in _norm_evidence(sentence)))
+                    # Prefer a concise, answer-bearing passage sentence, then lexical relevance.
+                    return (exact_answer, overlap, -abs(len(sentence) - 150))
+
+                fallback = max(candidates, key=_score_evidence)
+                if len(fallback) > 300:
+                    fallback = fallback[:300].rsplit(" ", 1)[0].strip()
+                if len(_norm_evidence(fallback)) >= 4:
+                    text = text.rstrip() + f"\n\n[[EVIDENCE: {fallback}]]"
     return {"success": True, "explanation": text}
 
 

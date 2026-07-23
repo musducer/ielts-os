@@ -79,6 +79,17 @@
           mark.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
           window.setTimeout(() => { mark.style.background = '#fef3c7'; }, 1800);
       };
+      // Older explanations used normal quotation marks instead of the evidence marker.
+      // Treat an exact passage quote as evidence too, so stored reviews stay useful.
+      const rvCanJumpToEvidence = (quote: string) => {
+          const root = document.getElementById('ielts-passage-content');
+          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
+          if (!root || needle.length < 4) return false;
+          const text = root.textContent || '';
+          if (text.toLocaleLowerCase().includes(needle.toLocaleLowerCase())) return true;
+          const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+          return new RegExp(escaped, 'i').test(text);
+      };
       const rvRenderExplain = (txt: string) => {
           const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
           if (evidenceParts.length > 1) {
@@ -90,6 +101,22 @@
               });
           }
           const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
+          // Backward compatibility: explanations stored before evidence markers used
+          // plain quotation marks. Convert only quotes that really occur in this passage.
+          const quoteParts = String(txt || '').split(/("[^\n"]{4,300}")/g);
+          if (quoteParts.length > 1) {
+              return quoteParts.map((part, pi) => {
+                  const quoted = part.match(/^"([^\n"]{4,300})"$/);
+                  if (quoted) {
+                      const quote = quoted[1].trim();
+                      if (rvCanJumpToEvidence(quote)) {
+                          return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Open evidence in the reading passage" aria-label={`Open evidence: ${quote}`} style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 4, padding: '1px 5px', color: '#92400e', fontWeight: 700, cursor: 'pointer', textDecoration: 'none', fontSize: 'inherit', fontFamily: 'inherit', lineHeight: 'inherit' }}>&quot;{quote}&quot;</button>;
+                      }
+                      return <React.Fragment key={pi}>{part}</React.Fragment>;
+                  }
+                  return <React.Fragment key={pi}>{rvRenderExplain(part)}</React.Fragment>;
+              });
+          }
           const parts = String(txt || '').split(new RegExp(`(${token.source})`, 'g'));
           return parts.map((p, pi) => token.test(p)
               ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" aria-label={`Nghe lại từ ${p.match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0] || 'mốc này'}`} style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
