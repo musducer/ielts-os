@@ -714,18 +714,25 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     reading_passage = (payload.get("readingPassage", "") or "")[:24000]
     has_ctx = bool(context.strip())
     answer_sequence = payload.get("answerSequence")
+    timestamp_hints = str(payload.get("timestampHints", "") or "")[:8000]
     question_index_raw = payload.get("questionIndex")
     try:
         question_index = int(question_index_raw) if question_index_raw is not None else None
     except (TypeError, ValueError):
         question_index = None
+    try:
+        question_count = int(payload.get("questionCount")) if payload.get("questionCount") is not None else None
+    except (TypeError, ValueError):
+        question_count = None
     question_type = str(payload.get("questionType", "") or "")
     question_subtype = str(payload.get("questionSubType", "") or "")
     integrated_part = int(payload.get("integratedPart", 0) or 0)
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
-    is_listening = bool(payload.get("isListening")) and bool(_TS_MARKER_RE.search(context))
-    is_reading_evidence = bool(reading_passage.strip()) and not bool(payload.get("isListening"))
+    is_listening_item = bool(payload.get("isListening"))
+    # Timestamp rules only apply when Whisper's real segment markers are available.
+    is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
+    is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
     ts_rule_en = (
         " TIMESTAMP RULE: the transcript contains time markers like \"(0:21 - 0:33)\" placed BEFORE each block of speech. "
         "This is an exact evidence task, not a rough location: first find the correct-answer word or phrase in the transcript, "
@@ -741,6 +748,15 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         "không ước lượng, không lấy trung bình. Toàn bộ giải thích phải có đúng MỘT mốc để bấm nghe lại, chỉ ở dạng [mm:ss] hoặc "
         "[h:mm:ss] (vd mốc \"(3:02 - 3:27)\" -> [3:02]); không bao giờ ghi một khoảng thời gian. Transcript không có mốc thì bỏ hẳn timestamp."
     ) if is_listening else ""
+
+    listening_language_en = (
+        " LISTENING TERMINOLOGY RULE: this is an audio task. Refer to evidence as the audio, recording, conversation, speaker, "
+        "or transcript. Never call it a passage, reading, the text, or source text."
+    ) if is_listening_item else ""
+    listening_language_vi = (
+        " QUY TẮC GỌI NGUỒN LISTENING: đây là bài nghe. Hãy gọi dẫn chứng là bài nghe, audio, bản ghi âm, lời thoại, người nói "
+        "hoặc transcript; tuyệt đối không gọi là bài đọc, đoạn văn, văn bản hay nguồn văn bản."
+    ) if is_listening_item else ""
 
     evidence_rule_en = (
         " READING EVIDENCE RULE: when you use evidence from the reading passage, include one to three short, continuous, "
@@ -781,10 +797,12 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
             "appear word-for-word in the source. If the student was correct, still explain why the other options lose. End with one short, "
-            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + evidence_rule_en
+            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en
         )
+        source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
+        source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
         user_prompt = (
-            f"SOURCE TEXT (read it fully):\n{context if has_ctx else '(no source text was provided for this item)'}\n\n"
+            f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
             f"READING PASSAGE FOR CLICKABLE EVIDENCE:\n{reading_passage if is_reading_evidence else '(not applicable)'}\n\n"
             f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
@@ -800,10 +818,12 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + evidence_rule_vi
+            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi
         )
+        source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
+        source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
         user_prompt = (
-            f"VĂN BẢN NGUỒN (đọc hết):\n{context if has_ctx else '(không có văn bản nguồn cho câu này)'}\n\n"
+            f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
             f"BÀI ĐỌC DÙNG LÀM DẪN CHỨNG CLICKABLE:\n{reading_passage if is_reading_evidence else '(không áp dụng)'}\n\n"
             f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
@@ -817,11 +837,20 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
     text = _filter_fake_timestamps(
         text,
         context,
-        correct if is_listening else "",
+        correct if is_listening_item else "",
         lang,
-        answer_sequence if is_listening else None,
-        question_index if is_listening else None,
+        answer_sequence if is_listening_item else None,
+        question_index if is_listening_item else None,
+        timestamp_hints if is_listening_item else "",
+        question_count if is_listening_item else None,
     )
+    if is_listening_item:
+        # Keep the wording honest even if a model falls back to generic reading language.
+        text = re.sub(r"\bsource text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
+        text = re.sub(r"\bthe passage\b", "the recording" if lang == "en" else "bài nghe", text, flags=re.I)
+        text = re.sub(r"\bthe text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
+        if lang == "vi":
+            text = re.sub(r"\bbài đọc\b|\bđoạn văn\b|\bvăn bản\b", "bài nghe", text, flags=re.I)
     if is_reading_evidence:
         def _norm_evidence(value: str) -> str:
             return re.sub(r"\s+", " ", str(value or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
@@ -1800,8 +1829,37 @@ def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, que
     return None
 
 
-def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi", answer_sequence=None, question_index=None) -> str:
-    """Keep only real seek markers and prefer a unique answer-bearing transcript block when available."""
+def _hint_anchor_seconds(context: str, hints: str = "", question_index=None, question_count=None):
+    """Find the most relevant real transcript block for non-literal answers such as MCQ/matching."""
+    blocks = []
+    for match in _TS_BLOCK_RE.finditer(context or ""):
+        blocks.append((_ts_to_sec(match.group(1), match.group(2), match.group(3)), _normalized_timestamp_text(match.group(4))))
+    if not blocks:
+        return None
+
+    stop_words = {
+        "about", "answer", "choose", "correct", "each", "following", "from", "have", "into", "most", "more", "option",
+        "question", "that", "the", "their", "these", "this", "what", "which", "with", "would", "your"
+    }
+    hint_words = [word for word in re.findall(r"[a-z][a-z'-]{2,}", _normalized_timestamp_text(hints)) if word not in stop_words]
+    if hint_words:
+        scores = [(sum(1 for word in hint_words if re.search(r"(?:^|\s)" + re.escape(word) + r"(?:\s|$)", block)), sec)
+                  for sec, block in blocks]
+        best_score, best_sec = max(scores, key=lambda item: item[0])
+        if best_score:
+            return best_sec
+
+    # Last-resort ordering is still a real audio boundary and beats a missing or invented timestamp.
+    if isinstance(question_index, int) and question_index >= 0:
+        total = question_count if isinstance(question_count, int) and question_count > 0 else len(blocks)
+        fraction = min(1, max(0, (question_index + 0.5) / total))
+        return blocks[min(len(blocks) - 1, int(fraction * len(blocks)))][0]
+    return blocks[0][0]
+
+
+def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi", answer_sequence=None,
+                            question_index=None, timestamp_hints: str = "", question_count=None) -> str:
+    """Keep one real seek marker, including non-literal listening items such as MCQ and matching."""
     answer = _TS_RANGE_RE.sub(lambda m: "[" + m.group(1) + "]", answer or "")
     answer = _TS_PAREN_CITE_RE.sub(lambda m: "[" + m.group(1) + "]", answer)
     allowed = {_ts_to_sec(m.group(1), m.group(2), m.group(3)) for m in _TS_MARKER_RE.finditer(context or "")}
@@ -1809,24 +1867,27 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
         return _TS_CITE_RE.sub("", answer)
 
     answer_anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
-    if answer_anchor is not None:
-        anchor = "[" + _fmt_ts(answer_anchor) + "]"
-        if _TS_CITE_RE.search(answer):
-            used_anchor = False
-            def _replace_with_anchor(m):
-                nonlocal used_anchor
-                if used_anchor:
-                    return ""
-                used_anchor = True
-                token = m.group(0)
-                leading_space = token[:len(token) - len(token.lstrip())]
-                return leading_space + anchor
-            return _TS_CITE_RE.sub(_replace_with_anchor, answer)
-        return answer.rstrip() + ("\n\nListen again: " if lang == "en" else "\n\nNghe lại: ") + anchor
+    if answer_anchor is None:
+        # Keep the model's chosen location when it is close to a real Whisper boundary.
+        cited = [_ts_to_sec(m.group(1), m.group(2), m.group(3)) for m in _TS_CITE_RE.finditer(answer)]
+        if cited:
+            answer_anchor = min(allowed, key=lambda sec: abs(sec - cited[0]))
+    if answer_anchor is None:
+        answer_anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
 
-    # A marker that is merely a valid transcript boundary is not evidence that it
-    # contains this answer. A missing marker is safer than a confidently wrong one.
-    return _TS_CITE_RE.sub("", answer)
+    anchor = "[" + _fmt_ts(answer_anchor) + "]"
+    if _TS_CITE_RE.search(answer):
+        used_anchor = False
+        def _replace_with_anchor(m):
+            nonlocal used_anchor
+            if used_anchor:
+                return ""
+            used_anchor = True
+            token = m.group(0)
+            leading_space = token[:len(token) - len(token.lstrip())]
+            return leading_space + anchor
+        return _TS_CITE_RE.sub(_replace_with_anchor, answer)
+    return answer.rstrip() + ("\n\nListen again: " if lang == "en" else "\n\nNghe lại: ") + anchor
 
 
 @app.post("/api/ai_transcribe")

@@ -5006,9 +5006,34 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
+      const timestampQuestions = isListeningQuestion
+        ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
+        : [];
+      const timestampQuestionIndex = isListeningQuestion
+        ? timestampQuestions.findIndex((question: any) => question?.id === q.id)
+        : -1;
+      // A full 30-minute transcript can exceed the model context. Keep the slice
+      // belonging to this part/question, rather than always truncating at Part 1.
+      const fullTranscript = stripTags(fullQuiz?.transcript);
+      const transcriptForQuestion = (() => {
+        const limit = 23000;
+        if (!isListeningQuestion || fullTranscript.length <= limit) return fullTranscript;
+        const partCount = Array.isArray(secs) && secs.length ? secs.length : 1;
+        const partIndex = qSectionIndex >= 0 ? qSectionIndex : 0;
+        const withinPart = timestampQuestionIndex >= 0 && timestampQuestions.length
+          ? (timestampQuestionIndex + 0.5) / timestampQuestions.length
+          : 0.5;
+        const center = Math.round(((partIndex + withinPart) / partCount) * fullTranscript.length);
+        let start = Math.max(0, Math.min(fullTranscript.length - limit, center - Math.floor(limit / 2)));
+        if (start > 0) {
+          const markerStart = fullTranscript.indexOf('(', start);
+          if (markerStart >= 0 && markerStart < start + 500) start = markerStart;
+        }
+        return fullTranscript.slice(start, start + limit);
+      })();
       // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
       const ctxParts = isListeningQuestion
-        ? [stripTags(fullQuiz?.transcript), stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
+        ? [transcriptForQuestion, stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
         : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const answerTextForTimestamp = (question: any) => {
@@ -5022,12 +5047,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
         }
         return stripTags(question.correctAnswer);
       };
-      const timestampQuestions = isListeningQuestion
-        ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
-        : [];
-      const timestampQuestionIndex = isListeningQuestion
-        ? timestampQuestions.findIndex((question: any) => question?.id === q.id)
-        : -1;
       const answerSequence = isListeningQuestion
         ? timestampQuestions.map(answerTextForTimestamp)
         : undefined;
@@ -5049,6 +5068,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
           answerSequence,
           questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
+          questionCount: timestampQuestions.length || undefined,
+          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), optStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
