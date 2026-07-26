@@ -1384,6 +1384,7 @@ interface CoinOperation {
   createdAt: number;
   consumableName?: string;
   permanentName?: string;
+  reviewedQuizId?: string;
 }
 
 const applyCoinOperation = (students: any[], operation: CoinOperation) => {
@@ -1397,10 +1398,12 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
       consumables[operation.consumableName] = (Number(consumables[operation.consumableName]) || 0) + 1;
     }
     if (operation.permanentName && !permanents.includes(operation.permanentName)) permanents.push(operation.permanentName);
+    const reviewedQuizzes = Array.isArray(inventory.reviewedQuizzes) ? [...inventory.reviewedQuizzes] : [];
+    if (operation.reviewedQuizId && !reviewedQuizzes.includes(operation.reviewedQuizId)) reviewedQuizzes.push(operation.reviewedQuizId);
     return {
       ...student,
       coins: Math.max(0, (Number(student.coins) || 0) + Number(operation.delta || 0)),
-      inventory: { ...inventory, consumables, permanents },
+      inventory: { ...inventory, consumables, permanents, reviewedQuizzes },
     };
   });
 };
@@ -4592,10 +4595,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const finalUpdate: any = {};
         const serverCoinTransactions = Array.isArray(serverData.coinTransactions) ? serverData.coinTransactions : [];
         const coinAlreadyApplied = !!coinOperation && serverCoinTransactions.some((entry: any) => String(entry?.id || "") === String(coinOperation.id));
-        const serverStudents = coinOperation && !coinAlreadyApplied
+        const reviewAlreadyClaimed = !!coinOperation && coinOperation.kind === "REVIEW_REWARD" && !!coinOperation.reviewedQuizId
+          && (Array.isArray(serverData.students) ? serverData.students : []).some((student: any) =>
+            String(student?.id || "") === String(coinOperation.studentId || "")
+            && Array.isArray(student?.inventory?.reviewedQuizzes)
+            && student.inventory.reviewedQuizzes.includes(coinOperation.reviewedQuizId)
+          );
+        const shouldApplyCoinOperation = !!coinOperation && !coinAlreadyApplied && !reviewAlreadyClaimed;
+        const serverStudents = shouldApplyCoinOperation
           ? applyCoinOperation(Array.isArray(serverData.students) ? serverData.students : [], coinOperation)
           : (Array.isArray(serverData.students) ? serverData.students : []);
-        const coinLedger = coinOperation && !coinAlreadyApplied
+        const coinLedger = shouldApplyCoinOperation
           ? [...serverCoinTransactions, coinOperation]
           : serverCoinTransactions;
         const hasCoinLedgerFor = (studentId: string) => coinLedger.some((entry: any) => String(entry?.studentId || "") === String(studentId));
@@ -4773,7 +4783,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
             return cleanStudent;
           });
         }
-        if (coinOperation && !coinAlreadyApplied) {
+        if (shouldApplyCoinOperation) {
           finalUpdate.coinTransactions = coinLedger.slice(-2000);
         }
         if (!Object.keys(finalUpdate).length) return;
@@ -5009,9 +5019,23 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const timestampQuestions = isListeningQuestion
         ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
         : [];
-      const timestampQuestionIndex = isListeningQuestion
-        ? timestampQuestions.findIndex((question: any) => question?.id === q.id)
+      const questionFingerprint = (question: any) => `${stripTags(question?.text).toLowerCase()}|${stripTags(question?.correctAnswer).toLowerCase()}`;
+      let timestampQuestionIndex = isListeningQuestion
+        ? timestampQuestions.findIndex((question: any) => String(question?.id || "") === String(q.id || ""))
         : -1;
+      // Review data can be an older snapshot whose question IDs differ from the current
+      // catalog. Match the actual item before falling back to audio order.
+      if (isListeningQuestion && timestampQuestionIndex < 0) {
+        const fingerprint = questionFingerprint(q);
+        timestampQuestionIndex = timestampQuestions.findIndex((question: any) => questionFingerprint(question) === fingerprint);
+      }
+      if (isListeningQuestion && timestampQuestionIndex < 0) {
+        const qNumber = Number((String(q.id || "").match(/\d+(?!.*\d)/) || [])[0]);
+        const sectionNumbers = timestampQuestions.map((question: any) => Number((String(question?.id || "").match(/\d+(?!.*\d)/) || [])[0]));
+        if (Number.isFinite(qNumber) && sectionNumbers.some(Number.isFinite)) {
+          timestampQuestionIndex = sectionNumbers.findIndex((number: number) => number === qNumber);
+        }
+      }
       // A full 30-minute transcript can exceed the model context. Keep the slice
       // belonging to this part/question, rather than always truncating at Part 1.
       const fullTranscript = stripTags(fullQuiz?.transcript);

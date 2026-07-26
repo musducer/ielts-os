@@ -1800,6 +1800,7 @@ def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, que
         _normalized_timestamp_text(part)
         for part in re.split(r"\s*(?:/|;|\||\bor\b)\s*", str(correct or ""), flags=re.I)
     }
+    candidates |= {re.sub(r"^(?:a|an|the)\s+", "", candidate) for candidate in candidates}
     candidates = {candidate for candidate in candidates if len(candidate) >= 3 and not candidate.isdigit()}
     for candidate in sorted(candidates, key=len, reverse=True):
         matches = [sec for sec, block in blocks if re.search(r"(?:^|\s)" + re.escape(candidate) + r"(?:\s|$)", block)]
@@ -1854,7 +1855,7 @@ def _hint_anchor_seconds(context: str, hints: str = "", question_index=None, que
         total = question_count if isinstance(question_count, int) and question_count > 0 else len(blocks)
         fraction = min(1, max(0, (question_index + 0.5) / total))
         return blocks[min(len(blocks) - 1, int(fraction * len(blocks)))][0]
-    return blocks[0][0]
+    return None
 
 
 def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi", answer_sequence=None,
@@ -1868,12 +1869,17 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
 
     answer_anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
     if answer_anchor is None:
+        # For MCQ/matching, question wording/options usually identify the spoken block
+        # better than a generic model guess such as [0:00].
+        answer_anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
+    if answer_anchor is None:
         # Keep the model's chosen location when it is close to a real Whisper boundary.
         cited = [_ts_to_sec(m.group(1), m.group(2), m.group(3)) for m in _TS_CITE_RE.finditer(answer)]
-        if cited:
+        if cited and (cited[0] > min(allowed) or question_index == 0):
             answer_anchor = min(allowed, key=lambda sec: abs(sec - cited[0]))
     if answer_anchor is None:
-        answer_anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
+        # A fabricated 0:00 is worse than no timestamp at all.
+        return _TS_CITE_RE.sub("", answer)
 
     anchor = "[" + _fmt_ts(answer_anchor) + "]"
     if _TS_CITE_RE.search(answer):

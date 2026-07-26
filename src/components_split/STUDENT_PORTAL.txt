@@ -278,7 +278,12 @@
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
             const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + 20, inventory: newInv } : s);
-            const coinOperation = makeCoinOperation(me.id, 20, "REVIEW_REWARD");
+            // One immutable claim per submitted result. The transaction also checks
+            // reviewedQuizzes, so stale tabs/devices cannot mint the reward again.
+            const coinOperation = makeCoinOperation(me.id, 20, "REVIEW_REWARD", {
+                id: `review_reward_${me.id}_${r.id}`,
+                reviewedQuizId: r.id,
+            });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert("CHIẾN THẦN REVIEW: +20 Xu vì đã xem lại lỗi sai trong bài thi!");
         }
