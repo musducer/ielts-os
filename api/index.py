@@ -2187,5 +2187,5 @@ async def ai_transcribe(
 
 
 @app.get("/api/health")
-async def health_check(_teacher: Dict[str, Any] = Depends(require_teacher)):
+async def health_check():
     return {"status": "ok", "timestamp": time.time()}

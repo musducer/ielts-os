@@ -4589,7 +4589,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (userRole !== "TEACHER") return;
     const checkHealth = async () => {
       try {
-        const res = await fetch(`${getApiBase()}/api/health`, { headers: await getApiAuthHeaders() });
+        const res = await fetch(`${getApiBase()}/api/health`);
         if (res.ok) setServerStatus("OK");
         else setServerStatus("DOWN");
       } catch (e) {
@@ -4599,7 +4599,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     checkHealth();
     const timer = setInterval(checkHealth, 10000);
     return () => clearInterval(timer);
-  }, [userRole, currentUser]);
+  }, [userRole]);
 
   const logErrorToSystem = (errorType: string, message: string, contextObj?: any) => {
     const newLog: SystemLog = {
