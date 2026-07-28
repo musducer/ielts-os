@@ -608,6 +608,13 @@
                                                 <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_time_minutes')}</label><input type="number" className="idp-input" value={editingQuiz.timeLimit} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, timeLimit:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                                 <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_max_attempts')}</label><input type="number" className="idp-input" value={editingQuiz.maxAttempts || 1} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, maxAttempts:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                             </div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                                <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_test_mode')}</span>
+                                                {[{k: false, l: t('eb_mode_strict')}, {k: true, l: t('eb_mode_practice')}].map(o => {
+                                                    const on = isPracticeQuiz(editingQuiz) === o.k;
+                                                    return <button key={String(o.k)} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, practiceMode: o.k, audioMode: !o.k && /listen|integrated/i.test(String(prev.type || '')) ? 'strict' : prev.audioMode, isSEBRequired: o.k ? false : prev.isSEBRequired} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                })}
+                                            </div>
                                             {(editingQuiz.type === "Listening" || editingQuiz.type === "Integrated") && (
                                                 <div>
                                                     <label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_audio_link')}</label>
@@ -626,7 +633,7 @@
                                                         <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_audio_mode')}</span>
                                                         {[{k: 'strict', l: t('eb_audio_strict')}, {k: 'practice', l: t('eb_audio_practice')}].map(o => {
                                                             const on = (editingQuiz.audioMode || 'strict') === o.k;
-                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k, practiceMode: o.k === 'practice'} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
                                                         })}
                                                     </div>
                                                 </div>

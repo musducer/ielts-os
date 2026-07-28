@@ -716,6 +716,9 @@ const resources = {
       eb_audio_upload_failed: "Audio upload failed",
       eb_audio_hosted_hint: "Upload MP3/M4A/WAV to create a clean site audio link.",
       eb_audio_mode: "AUDIO MODE",
+      eb_test_mode: "TEST MODE",
+      eb_mode_strict: "Exam (anti-cheat on)",
+      eb_mode_practice: "Practice (relaxed)",
       eb_audio_strict: "Exam (play once)",
       eb_audio_practice: "Practice (replay)",
       eb_security_sched: "SECURITY & SCHEDULE",
@@ -1289,6 +1292,9 @@ const resources = {
       eb_audio_upload_failed: "Tải audio lỗi",
       eb_audio_hosted_hint: "Tải MP3/M4A/WAV để tạo link audio sạch của web mình.",
       eb_audio_mode: "CHẾ ĐỘ AUDIO",
+      eb_test_mode: "CHẾ ĐỘ LÀM BÀI",
+      eb_mode_strict: "Thi thật (bật chống gian lận)",
+      eb_mode_practice: "Luyện tập (thoải mái)",
       eb_audio_strict: "Thi thật (nghe 1 lần)",
       eb_audio_practice: "Luyện tập (tua/nghe lại)",
       eb_security_sched: "BẢO MẬT & LỊCH THI",
@@ -1411,7 +1417,14 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+
+const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
+  if (!quiz) return false;
+  if (quiz.practiceMode === true) return true;
+  // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
+  return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
+};
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
 
 const getQuestionPointCount = (q: any) =>
@@ -4164,17 +4177,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
                   const elapsedSecs = Math.floor((now - saved.startTime) / 1000);
                   const timeLeft = (saved.quiz.timeLimit * 60) - elapsedSecs;
                   if (timeLeft > 0) {
-                      if (saved.quiz.isSEBRequired && !navigator.userAgent.includes("SEB")) {
+                      if (!isPracticeQuiz(saved.quiz) && saved.quiz.isSEBRequired && !navigator.userAgent.includes("SEB")) {
                           setSebGuideQuiz(saved.quiz);
                           return;
                       }
 
-                      // ĐàFIX: Bắt quả tang hành vi Tải lại trang (Reload) hoặc Thoát App (Kill App)
-                      let restoredCheatCount = (saved.cheatCount || 0) + 1;
+                      // Practice survives a refresh/resume without a proctoring penalty.
+                      let restoredCheatCount = isPracticeQuiz(saved.quiz) ? (saved.cheatCount || 0) : (saved.cheatCount || 0) + 1;
                       setExamCheatCount(restoredCheatCount);
-                      if (restoredCheatCount >= 3) {
+                      if (!isPracticeQuiz(saved.quiz) && restoredCheatCount >= 3) {
                           setGracePeriod(0); // Cưỡng chế nộp bài ngay lập tức nếu quá 3 lần
-                      } else {
+                      } else if (!isPracticeQuiz(saved.quiz)) {
                           setHardLocked(true); // Khóa màn hình bắt gõ chữ RETURN
                       }
 
@@ -4210,7 +4223,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [userRole, loaded, activeExam, bannedIps, currentUser, studentIp]);
   
   useEffect(() => {
-    if (activeExam && userRole === "STUDENT" && !isPreview && gracePeriod === null && !hardLocked) {
+    if (activeExam && userRole === "STUDENT" && !isPreview && !isPracticeQuiz(activeExam) && gracePeriod === null && !hardLocked) {
       const triggerCheatPenalty = (reason: string) => {
           setExamCheatCount(prev => {
             const newCount = prev + 1;
@@ -4261,7 +4274,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // LƯU Ý: Không thể chặn được 100% từ thiết bị ngoài (điện thoại chụp màn hình).
   // Watermark định danh bên dưới là lớp bảo vệ bổ sung cho trường hợp đó.
   useEffect(() => {
-    if (!activeExam || userRole !== "STUDENT") return;
+    if (!activeExam || userRole !== "STUDENT" || isPracticeQuiz(activeExam)) return;
 
     const triggerFlash = () => {
         setScreenshotFlash(true);
@@ -6239,7 +6252,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
           if (quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
-          if (quiz.isSEBRequired) {
+          if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
               if (!isSEB) {
                   // Hiển thị màn hình hướng dẫn thay vì dùng alert()
@@ -6312,7 +6325,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setActiveExam(quizToLoad);
       setCurrentSectionIndex(0); // Reset Tab khi mở đề mới
       
-      if (document.documentElement.requestFullscreen && !isPreviewMode) {
+      if (document.documentElement.requestFullscreen && !isPreviewMode && !isPracticeQuiz(quizToLoad)) {
           document.documentElement.requestFullscreen().catch(e => console.log(e));
       }
   };
@@ -7719,6 +7732,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (pendingExamState) {
           const q = pendingExamState.quiz;
           const isListeningExam = String(q.type).toLowerCase().includes("listen");
+          const isPractice = isPracticeQuiz(q);
           return (
               <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
                   <style>{`
@@ -7759,6 +7773,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       </div>
                       <hr style={{ border: 'none', borderTop: '1px solid #d1d5db', margin: '0 0 24px' }} />
 
+                      {isPractice && <div style={{ margin: '0 0 20px', padding: '12px 14px', background: '#e8f5e9', borderLeft: '4px solid #2da44e', color: '#1a5f2b', fontSize: 14, fontWeight: 600 }}>Practice mode is on. Fullscreen, tab-switching and screenshot checks are disabled for this attempt.</div>}
+
                       {(q as any).frontInstructions ? (
                           <div dangerouslySetInnerHTML={{ __html: formatContent((q as any).frontInstructions) }} />
                       ) : (
@@ -7767,9 +7783,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               <ul style={{ margin: 0, paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 7, color: '#333' }}>
                                   <li>Answer <strong>all</strong> the questions.</li>
                                   <li>You can change your answers at any time during the test.</li>
-                                  {isListeningExam && <li>You will hear the recording <strong>once only</strong>. You cannot pause or rewind the audio.</li>}
+                                  {isListeningExam && !isPractice && <li>You will hear the recording <strong>once only</strong>. You cannot pause or rewind the audio.</li>}
+                                  {isPractice && <li><strong>Practice mode:</strong> fullscreen and tab-switching checks are off, so you can work at your own pace.</li>}
                                   <li><strong>Time allowed:</strong> {q.timeLimit} minutes</li>
-                                  <li>Do <strong>not</strong> refresh or close the browser window during the test.</li>
+                                  {!isPractice && <li>Do <strong>not</strong> refresh or close the browser window during the test.</li>}
                               </ul>
                           </div>
                       )}
@@ -7783,7 +7800,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           setPendingExamState(null);
                           confirmStartExam(quiz, isPreview, isStudentTestUI);
                       }}>
-                          {isListeningExam ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="play" size={14} /> Start Test</span> : 'Start Test'}
+                          {isListeningExam ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="play" size={14} /> {isPractice ? 'Start Practice' : 'Start Test'}</span> : (isPractice ? 'Start Practice' : 'Start Test')}
                       </button>
                   </div>
                   </div>
@@ -7793,6 +7810,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       if (activeExam) {
           const isIntegrated = activeExam.type === "Integrated";
+          const isPractice = isPracticeQuiz(activeExam);
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
@@ -8185,12 +8203,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           };
 
           return (
-              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }} 
-                   onCopy={_e => {_e.preventDefault(); alert("WARNING: Copy function disabled!"); }} 
-                   onCut={_e => { _e.preventDefault(); alert("WARNING: Cut function disabled!"); }} 
-                   onPaste={_e => { _e.preventDefault(); alert("WARNING: Paste function disabled!"); }} 
+              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
+                   onCopy={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Copy function disabled!"); } }}
+                   onCut={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Cut function disabled!"); } }}
+                   onPaste={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Paste function disabled!"); } }}
                    
                    onContextMenu={(e: any) => {
+                       if (isPractice) return;
                        if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
                            e.preventDefault();
                            const target = e.target as HTMLElement;
@@ -8562,7 +8581,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )}
 
-                  {!isFullScreen && userRole === "STUDENT" && !isPreview && (
+                  {!isFullScreen && userRole === "STUDENT" && !isPreview && !isPractice && (
                       <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#000', zIndex: 9999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                           <h1 style={{fontSize: 40, fontWeight: 900, textAlign: 'center', color: C.err}}><Ico name="alert" size={34} color={C.err} style={{verticalAlign:'-4px', marginRight:12, display:'inline-block'}} />FULLSCREEN REQUIRED</h1>
                           <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center', marginTop: 10, lineHeight: 1.5}}>The system requires fullscreen mode to ensure the best experience and fairness. Please click the button below to return to your test.</p>
@@ -8570,7 +8589,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )}
 
-                  {hardLocked && !isPreview && (
+                  {hardLocked && !isPreview && !isPractice && (
                       <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(215, 58, 73, 0.95)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                           <h1 style={{fontSize: 40, fontWeight: 900, margin: 0, textAlign: 'center'}}>YOU HAVE LEFT THE EXAM SCREEN!</h1>
                           <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center'}}>The system has recorded violations ({examCheatCount}/3). Please type <b>RETURN</b> into the box below to unlock your exam.</p>
@@ -8596,7 +8615,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   {isOffline && <div style={{background: C.err, color: '#fff', textAlign: 'center', padding: 8, fontWeight: 900, fontSize: 14, animation: 'pulse 1s infinite'}}><Ico name="siren" size={15} color="#fff" style={{verticalAlign:'-2px', marginRight:8, display:'inline-block'}} />CONNECTION LOST! Local auto-save active.</div>}
                   {screenshotFlash && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#fff', zIndex: 2147483647, pointerEvents: 'none' }} />}
 
-                  {!isPreview && (
+                  {!isPreview && !isPractice && (
                       <div style={{
                           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: 9500, overflow: 'hidden',
                           userSelect: 'none', WebkitUserSelect: 'none', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '50px', padding: '20px', opacity: 0.02
@@ -11788,6 +11807,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_time_minutes')}</label><input type="number" className="idp-input" value={editingQuiz.timeLimit} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, timeLimit:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                                 <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_max_attempts')}</label><input type="number" className="idp-input" value={editingQuiz.maxAttempts || 1} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, maxAttempts:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                             </div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                                <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_test_mode')}</span>
+                                                {[{k: false, l: t('eb_mode_strict')}, {k: true, l: t('eb_mode_practice')}].map(o => {
+                                                    const on = isPracticeQuiz(editingQuiz) === o.k;
+                                                    return <button key={String(o.k)} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, practiceMode: o.k, audioMode: !o.k && /listen|integrated/i.test(String(prev.type || '')) ? 'strict' : prev.audioMode, isSEBRequired: o.k ? false : prev.isSEBRequired} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                })}
+                                            </div>
                                             {(editingQuiz.type === "Listening" || editingQuiz.type === "Integrated") && (
                                                 <div>
                                                     <label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_audio_link')}</label>
@@ -11806,7 +11832,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_audio_mode')}</span>
                                                         {[{k: 'strict', l: t('eb_audio_strict')}, {k: 'practice', l: t('eb_audio_practice')}].map(o => {
                                                             const on = (editingQuiz.audioMode || 'strict') === o.k;
-                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k, practiceMode: o.k === 'practice'} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
                                                         })}
                                                     </div>
                                                 </div>

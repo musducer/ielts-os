@@ -716,6 +716,9 @@ const resources = {
       eb_audio_upload_failed: "Audio upload failed",
       eb_audio_hosted_hint: "Upload MP3/M4A/WAV to create a clean site audio link.",
       eb_audio_mode: "AUDIO MODE",
+      eb_test_mode: "TEST MODE",
+      eb_mode_strict: "Exam (anti-cheat on)",
+      eb_mode_practice: "Practice (relaxed)",
       eb_audio_strict: "Exam (play once)",
       eb_audio_practice: "Practice (replay)",
       eb_security_sched: "SECURITY & SCHEDULE",
@@ -1289,6 +1292,9 @@ const resources = {
       eb_audio_upload_failed: "Tải audio lỗi",
       eb_audio_hosted_hint: "Tải MP3/M4A/WAV để tạo link audio sạch của web mình.",
       eb_audio_mode: "CHẾ ĐỘ AUDIO",
+      eb_test_mode: "CHẾ ĐỘ LÀM BÀI",
+      eb_mode_strict: "Thi thật (bật chống gian lận)",
+      eb_mode_practice: "Luyện tập (thoải mái)",
       eb_audio_strict: "Thi thật (nghe 1 lần)",
       eb_audio_practice: "Luyện tập (tua/nghe lại)",
       eb_security_sched: "BẢO MẬT & LỊCH THI",
@@ -1411,7 +1417,14 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+
+const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
+  if (!quiz) return false;
+  if (quiz.practiceMode === true) return true;
+  // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
+  return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
+};
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
 
 const getQuestionPointCount = (q: any) =>
@@ -4164,17 +4177,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
                   const elapsedSecs = Math.floor((now - saved.startTime) / 1000);
                   const timeLeft = (saved.quiz.timeLimit * 60) - elapsedSecs;
                   if (timeLeft > 0) {
-                      if (saved.quiz.isSEBRequired && !navigator.userAgent.includes("SEB")) {
+                      if (!isPracticeQuiz(saved.quiz) && saved.quiz.isSEBRequired && !navigator.userAgent.includes("SEB")) {
                           setSebGuideQuiz(saved.quiz);
                           return;
                       }
 
-                      // ĐàFIX: Bắt quả tang hành vi Tải lại trang (Reload) hoặc Thoát App (Kill App)
-                      let restoredCheatCount = (saved.cheatCount || 0) + 1;
+                      // Practice survives a refresh/resume without a proctoring penalty.
+                      let restoredCheatCount = isPracticeQuiz(saved.quiz) ? (saved.cheatCount || 0) : (saved.cheatCount || 0) + 1;
                       setExamCheatCount(restoredCheatCount);
-                      if (restoredCheatCount >= 3) {
+                      if (!isPracticeQuiz(saved.quiz) && restoredCheatCount >= 3) {
                           setGracePeriod(0); // Cưỡng chế nộp bài ngay lập tức nếu quá 3 lần
-                      } else {
+                      } else if (!isPracticeQuiz(saved.quiz)) {
                           setHardLocked(true); // Khóa màn hình bắt gõ chữ RETURN
                       }
 
@@ -4210,7 +4223,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [userRole, loaded, activeExam, bannedIps, currentUser, studentIp]);
   
   useEffect(() => {
-    if (activeExam && userRole === "STUDENT" && !isPreview && gracePeriod === null && !hardLocked) {
+    if (activeExam && userRole === "STUDENT" && !isPreview && !isPracticeQuiz(activeExam) && gracePeriod === null && !hardLocked) {
       const triggerCheatPenalty = (reason: string) => {
           setExamCheatCount(prev => {
             const newCount = prev + 1;
@@ -4261,7 +4274,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // LƯU Ý: Không thể chặn được 100% từ thiết bị ngoài (điện thoại chụp màn hình).
   // Watermark định danh bên dưới là lớp bảo vệ bổ sung cho trường hợp đó.
   useEffect(() => {
-    if (!activeExam || userRole !== "STUDENT") return;
+    if (!activeExam || userRole !== "STUDENT" || isPracticeQuiz(activeExam)) return;
 
     const triggerFlash = () => {
         setScreenshotFlash(true);
@@ -6239,7 +6252,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
           if (quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
-          if (quiz.isSEBRequired) {
+          if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
               if (!isSEB) {
                   // Hiển thị màn hình hướng dẫn thay vì dùng alert()
@@ -6312,7 +6325,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setActiveExam(quizToLoad);
       setCurrentSectionIndex(0); // Reset Tab khi mở đề mới
       
-      if (document.documentElement.requestFullscreen && !isPreviewMode) {
+      if (document.documentElement.requestFullscreen && !isPreviewMode && !isPracticeQuiz(quizToLoad)) {
           document.documentElement.requestFullscreen().catch(e => console.log(e));
       }
   };

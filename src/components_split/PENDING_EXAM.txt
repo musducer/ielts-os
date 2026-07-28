@@ -1,6 +1,7 @@
       if (pendingExamState) {
           const q = pendingExamState.quiz;
           const isListeningExam = String(q.type).toLowerCase().includes("listen");
+          const isPractice = isPracticeQuiz(q);
           return (
               <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
                   <style>{`
@@ -41,6 +42,8 @@
                       </div>
                       <hr style={{ border: 'none', borderTop: '1px solid #d1d5db', margin: '0 0 24px' }} />
 
+                      {isPractice && <div style={{ margin: '0 0 20px', padding: '12px 14px', background: '#e8f5e9', borderLeft: '4px solid #2da44e', color: '#1a5f2b', fontSize: 14, fontWeight: 600 }}>Practice mode is on. Fullscreen, tab-switching and screenshot checks are disabled for this attempt.</div>}
+
                       {(q as any).frontInstructions ? (
                           <div dangerouslySetInnerHTML={{ __html: formatContent((q as any).frontInstructions) }} />
                       ) : (
@@ -49,9 +52,10 @@
                               <ul style={{ margin: 0, paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 7, color: '#333' }}>
                                   <li>Answer <strong>all</strong> the questions.</li>
                                   <li>You can change your answers at any time during the test.</li>
-                                  {isListeningExam && <li>You will hear the recording <strong>once only</strong>. You cannot pause or rewind the audio.</li>}
+                                  {isListeningExam && !isPractice && <li>You will hear the recording <strong>once only</strong>. You cannot pause or rewind the audio.</li>}
+                                  {isPractice && <li><strong>Practice mode:</strong> fullscreen and tab-switching checks are off, so you can work at your own pace.</li>}
                                   <li><strong>Time allowed:</strong> {q.timeLimit} minutes</li>
-                                  <li>Do <strong>not</strong> refresh or close the browser window during the test.</li>
+                                  {!isPractice && <li>Do <strong>not</strong> refresh or close the browser window during the test.</li>}
                               </ul>
                           </div>
                       )}
@@ -65,7 +69,7 @@
                           setPendingExamState(null);
                           confirmStartExam(quiz, isPreview, isStudentTestUI);
                       }}>
-                          {isListeningExam ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="play" size={14} /> Start Test</span> : 'Start Test'}
+                          {isListeningExam ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="play" size={14} /> {isPractice ? 'Start Practice' : 'Start Test'}</span> : (isPractice ? 'Start Practice' : 'Start Test')}
                       </button>
                   </div>
                   </div>

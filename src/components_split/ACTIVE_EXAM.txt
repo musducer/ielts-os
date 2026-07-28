@@ -1,5 +1,6 @@
       if (activeExam) {
           const isIntegrated = activeExam.type === "Integrated";
+          const isPractice = isPracticeQuiz(activeExam);
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
@@ -392,12 +393,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           };
 
           return (
-              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }} 
-                   onCopy={_e => {_e.preventDefault(); alert("WARNING: Copy function disabled!"); }} 
-                   onCut={_e => { _e.preventDefault(); alert("WARNING: Cut function disabled!"); }} 
-                   onPaste={_e => { _e.preventDefault(); alert("WARNING: Paste function disabled!"); }} 
+              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
+                   onCopy={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Copy function disabled!"); } }}
+                   onCut={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Cut function disabled!"); } }}
+                   onPaste={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Paste function disabled!"); } }}
                    
                    onContextMenu={(e: any) => {
+                       if (isPractice) return;
                        if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
                            e.preventDefault();
                            const target = e.target as HTMLElement;
@@ -769,7 +771,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )}
 
-                  {!isFullScreen && userRole === "STUDENT" && !isPreview && (
+                  {!isFullScreen && userRole === "STUDENT" && !isPreview && !isPractice && (
                       <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#000', zIndex: 9999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                           <h1 style={{fontSize: 40, fontWeight: 900, textAlign: 'center', color: C.err}}><Ico name="alert" size={34} color={C.err} style={{verticalAlign:'-4px', marginRight:12, display:'inline-block'}} />FULLSCREEN REQUIRED</h1>
                           <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center', marginTop: 10, lineHeight: 1.5}}>The system requires fullscreen mode to ensure the best experience and fairness. Please click the button below to return to your test.</p>
@@ -777,7 +779,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )}
 
-                  {hardLocked && !isPreview && (
+                  {hardLocked && !isPreview && !isPractice && (
                       <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(215, 58, 73, 0.95)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                           <h1 style={{fontSize: 40, fontWeight: 900, margin: 0, textAlign: 'center'}}>YOU HAVE LEFT THE EXAM SCREEN!</h1>
                           <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center'}}>The system has recorded violations ({examCheatCount}/3). Please type <b>RETURN</b> into the box below to unlock your exam.</p>
@@ -803,7 +805,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   {isOffline && <div style={{background: C.err, color: '#fff', textAlign: 'center', padding: 8, fontWeight: 900, fontSize: 14, animation: 'pulse 1s infinite'}}><Ico name="siren" size={15} color="#fff" style={{verticalAlign:'-2px', marginRight:8, display:'inline-block'}} />CONNECTION LOST! Local auto-save active.</div>}
                   {screenshotFlash && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: '#fff', zIndex: 2147483647, pointerEvents: 'none' }} />}
 
-                  {!isPreview && (
+                  {!isPreview && !isPractice && (
                       <div style={{
                           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: 9500, overflow: 'hidden',
                           userSelect: 'none', WebkitUserSelect: 'none', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '50px', padding: '20px', opacity: 0.02
