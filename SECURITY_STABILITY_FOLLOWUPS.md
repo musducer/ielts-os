@@ -2,6 +2,10 @@
 
 This file records work intentionally deferred after the 2026-07-28 hardening pass.
 
+## API access compatibility (2026-07-29)
+
+Per the product owner's instruction, the Firebase-token gate and per-instance rate limiter were removed from the AI and DOCX endpoints after they blocked normal teacher/student use. These endpoints are intentionally public again. Do not reintroduce API authentication or rate limits without a complete production smoke test of AI feedback, explanations, vocabulary extraction, transcription, and DOCX upload.
+
 ## Firestore authorization redesign (highest priority)
 
 The app still stores most shared state in `ielts_workspace/trung_linh_data` and writes it directly from clients. A Firestore rule cannot safely prove that a student changed only their own nested record inside this large document. Do not lock this document down piecemeal: that would break student sync while still leaving integrity gaps.
@@ -16,14 +20,14 @@ Required migration:
 
 ## Production controls
 
-- Set `TEACHER_EMAILS` in Vercel to an explicit comma-separated allowlist. The safe compatibility fallback currently accepts managed `@ielts.os` accounts.
+- If API authentication is reintroduced later, use an explicit `TEACHER_EMAILS` allowlist rather than relying on a domain suffix.
 - Set `APP_ALLOWED_ORIGINS` if a custom production domain is introduced.
 - Enable `API_DOCS_ENABLED=true` only on a protected development environment; public API docs are disabled by default.
 - Deploy `storage.rules` with Firebase CLI after confirming every teacher uses a managed `@ielts.os` address. The 2026-07-28 deploy attempt was blocked because Firebase reports that Storage has not been initialized for project `ielts-os`; initialize it in Firebase Console first, then deploy the committed rule file.
 
 ## Rate-limit durability
 
-The API now has a per-instance in-memory limiter for expensive AI routes. For cross-instance enforcement, add Vercel KV/Upstash or an equivalent shared limiter before opening the app to a large public user base.
+There is currently no API rate limiter, by product decision. If abuse becomes a problem, use a shared Vercel KV/Upstash limiter only after confirming it does not block normal classroom AI use.
 
 ## Dependency maintenance
 

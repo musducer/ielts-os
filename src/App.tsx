@@ -4580,11 +4580,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
   }, [activeExam]);
 
-  const getApiAuthHeaders = async (headers: Record<string, string> = {}) => {
-    const token = currentUser ? await currentUser.getIdToken() : "";
-    return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
-  };
-
   useEffect(() => {
     if (userRole !== "TEACHER") return;
     const checkHealth = async () => {
@@ -5044,7 +5039,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_feedback`, {
-        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", studentName: r.studentName, quizTitle: r.quizTitle, type: quiz?.type || "", score: r.score, total: r.total, band: r.band, weakness: weak, wrongCount, details })
       });
       const data = await readApiJson(resp);
@@ -5185,7 +5180,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         : undefined;
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
-        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
           question: stripTags(q.text),
@@ -5301,7 +5296,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setTranscribeMsg(t('eb_transcribing'));
     try {
       const resp = await fetch(`${API_BASE}/api/ai_transcribe`, {
-        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lang, audioUrl: quiz.audioUrl })
       });
       const data = await resp.json();
@@ -5423,7 +5418,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const excludeWords = (me.vocabNotebook || []).map(c => String(c.word || "").trim()).filter(Boolean).slice(0, 800);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_vocab`, {
-        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", count: requestedCount, minCount: requestedCount, target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
       });
       const data = await readApiJson(resp);
@@ -6223,7 +6218,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       alert("Sending file to FastAPI backend for processing...");
       const response = await fetch(`${getApiBase()}/api/upload_docx`, {
         method: "POST",
-        headers: await getApiAuthHeaders(),
         body: formData,
       });
       const data = await response.json();

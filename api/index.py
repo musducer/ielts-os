@@ -6,20 +6,15 @@ import traceback
 import base64
 import urllib.parse
 import html
-import threading
 import zipfile
-from collections import defaultdict, deque
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, Body, status
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token
 import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from typing import List, Dict, Any
 
-FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "ielts-os")
 _DEFAULT_ALLOWED_ORIGINS = (
     "https://ielts-os-sandy.vercel.app,https://ielts-os.vercel.app,"
     "http://localhost:3000,http://localhost:5173,http://localhost:5174"
@@ -33,8 +28,6 @@ ENABLE_API_DOCS = os.environ.get("API_DOCS_ENABLED", "").strip().lower() in {"1"
 MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
 MAX_DOCX_ZIP_MEMBERS = 2500
-_RATE_BUCKETS: Dict[str, deque] = defaultdict(deque)
-_RATE_LIMIT_LOCK = threading.Lock()
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -48,67 +41,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-
-def _configured_teacher_emails() -> set[str]:
-    return {
-        email.strip().lower()
-        for email in os.environ.get("TEACHER_EMAILS", "").split(",")
-        if email.strip()
-    }
-
-
-def _is_teacher_email(email: str) -> bool:
-    configured = _configured_teacher_emails()
-    normalized = str(email or "").strip().lower()
-    # Existing teacher accounts are managed under the ielts.os domain. Deployment can
-    # tighten this further with the TEACHER_EMAILS environment variable.
-    return normalized in configured if configured else normalized.endswith("@ielts.os")
-
-
-async def require_authenticated_user(
-    authorization: str | None = Header(default=None),
-) -> Dict[str, Any]:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
-
-    token = authorization.removeprefix("Bearer ").strip()
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
-
-    try:
-        claims = id_token.verify_firebase_token(token, google_requests.Request(), FIREBASE_PROJECT_ID)
-    except Exception as exc:
-        print(f"Rejected Firebase token: {exc}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session.") from exc
-
-    email = str(claims.get("email") or "").strip().lower()
-    if not claims.get("uid") or not email:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incomplete authenticated session.")
-    return {"uid": str(claims["uid"]), "email": email, "claims": claims}
-
-
-async def require_teacher(user: Dict[str, Any] = Depends(require_authenticated_user)) -> Dict[str, Any]:
-    if not _is_teacher_email(user["email"]):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teacher permission required.")
-    return user
-
-
-def enforce_rate_limit(user: Dict[str, Any], scope: str, limit: int, window_seconds: int) -> None:
-    """Small per-instance guard for expensive endpoints; auth remains the primary gate."""
-    now = time.monotonic()
-    key = f"{scope}:{user['uid']}"
-    with _RATE_LIMIT_LOCK:
-        bucket = _RATE_BUCKETS[key]
-        cutoff = now - window_seconds
-        while bucket and bucket[0] <= cutoff:
-            bucket.popleft()
-        if len(bucket) >= limit:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests. Please wait a moment and try again.",
-            )
-        bucket.append(now)
 
 
 @app.exception_handler(Exception)
@@ -473,7 +405,6 @@ def parse_docx_to_quiz(doc):
 @app.post("/api/upload_docx")
 async def upload_docx(
     file: UploadFile = File(...),
-    _teacher: Dict[str, Any] = Depends(require_teacher),
 ):
     try:
         filename = str(file.filename or "").lower()
@@ -780,10 +711,8 @@ def _friendly_err(err: str, lang: str) -> str:
 @app.post("/api/ai_feedback")
 async def ai_feedback(
     payload: Dict[str, Any] = Body(...),
-    user: Dict[str, Any] = Depends(require_teacher),
 ):
     """Sinh nhận xét cho học viên (Groq / Llama). Cần GROQ_API_KEY."""
-    enforce_rate_limit(user, "ai_feedback", limit=6, window_seconds=60)
     lang = (payload.get("lang") or "vi").lower()
     student = payload.get("studentName", "học viên")
     quiz = payload.get("quizTitle", "bài thi")
@@ -835,10 +764,8 @@ async def ai_feedback(
 @app.post("/api/ai_explain")
 async def ai_explain(
     payload: Dict[str, Any] = Body(...),
-    user: Dict[str, Any] = Depends(require_authenticated_user),
 ):
     """Giải thích ngắn vì sao 1 câu đúng/sai (dùng trong màn Review)."""
-    enforce_rate_limit(user, "ai_explain", limit=30, window_seconds=60)
     lang = (payload.get("lang") or "vi").lower()
     question = payload.get("question", "")
     options = payload.get("options", "")
@@ -1669,10 +1596,8 @@ def _ground_vocab_items(items, source):
 @app.post("/api/ai_vocab")
 async def ai_vocab(
     payload: Dict[str, Any] = Body(...),
-    user: Dict[str, Any] = Depends(require_authenticated_user),
 ):
     """Trích & chọn lọc từ vựng cần học từ các đề học viên đã làm (trả JSON)."""
-    enforce_rate_limit(user, "ai_vocab", limit=4, window_seconds=60)
     import json as _json
     lang = (payload.get("lang") or "vi").lower()
     # SỐ LƯỢNG: count = yêu cầu HV; min_count = sàn tối thiểu (mặc định 15). Trích nhắm tới max(count, min_count).
@@ -2115,10 +2040,8 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
 @app.post("/api/ai_transcribe")
 async def ai_transcribe(
     payload: Dict[str, Any] = Body(...),
-    user: Dict[str, Any] = Depends(require_teacher),
 ):
     """Chép lời audio bài Listening bằng Groq Whisper (1 lần, nhanh). Lưu vào đề để dùng lại."""
-    enforce_rate_limit(user, "ai_transcribe", limit=2, window_seconds=10 * 60)
     import urllib.request as _urlreq
     import urllib.error as _urlerr
 
