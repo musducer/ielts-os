@@ -25,6 +25,7 @@ try {
 const auth = getAuth(app);
 const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
+const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
 const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
 // A full exam can exceed Firestore's 1 MiB document limit. Keep every exam in its
@@ -3265,6 +3266,8 @@ export default function IeltsSupremeOS() {
   // CHỐNG "GIẬT" KHI XÓA DATA: số ghi của chính mình đang chạy + thời điểm hết chặn snapshot.
   const writeInFlightRef = useRef(0);
   const suppressSnapshotUntilRef = useRef(0);
+  // A failed Firestore write must never recursively invoke syncData through error logging.
+  const syncFailureLogRef = useRef(false);
   // Phones commonly freeze a background tab and leave its Firestore listener stale until
   // the next network heartbeat. Coalesce lifecycle-triggered server refreshes on resume.
   const cloudRefreshInFlightRef = useRef(false);
@@ -3922,7 +3925,7 @@ useEffect(() => {
       setCurrentUser(user);
       if (user) {
           (window as any).__ielts_user_id = user.email;
-          setUserRole(user.email?.includes("@ielts.os") || user.email === "trung@ielts.os" ? "TEACHER" : "STUDENT");
+          setUserRole(isTeacherEmail(user.email) ? "TEACHER" : "STUDENT");
           localStorage.setItem('ielts_last_login', new Date(getRealTime()).toLocaleString('vi-VN'));
           setLoginLoading(false);
       } else { setUserRole(null); }
@@ -4577,11 +4580,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
   }, [activeExam]);
 
+  const getApiAuthHeaders = async (headers: Record<string, string> = {}) => {
+    const token = currentUser ? await currentUser.getIdToken() : "";
+    return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+  };
+
   useEffect(() => {
     if (userRole !== "TEACHER") return;
     const checkHealth = async () => {
       try {
-        const res = await fetch(`${getApiBase()}/api/health`);
+        const res = await fetch(`${getApiBase()}/api/health`, { headers: await getApiAuthHeaders() });
         if (res.ok) setServerStatus("OK");
         else setServerStatus("DOWN");
       } catch (e) {
@@ -4591,7 +4599,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     checkHealth();
     const timer = setInterval(checkHealth, 10000);
     return () => clearInterval(timer);
-  }, [userRole]);
+  }, [userRole, currentUser]);
 
   const logErrorToSystem = (errorType: string, message: string, contextObj?: any) => {
     const newLog: SystemLog = {
@@ -4864,8 +4872,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
       return true;
     } catch (error: any) {
       console.error("Critical Sync Blocked:", error);
-      if (typeof logErrorToSystem === "function") {
-        logErrorToSystem("CRITICAL_SYNC_FAIL", error.message || String(error), { user: currentUser?.email });
+      // Do not call logErrorToSystem here: it persists via syncData and used to turn one
+      // Firestore outage into an unbounded chain of failing transactions.
+      if (!syncFailureLogRef.current) {
+        syncFailureLogRef.current = true;
+        const localFailure: SystemLog = {
+          id: `sync_fail_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          errorType: "CRITICAL_SYNC_FAIL",
+          message: error.message || String(error),
+          context: JSON.stringify({ user: currentUser?.email || "Unknown" }),
+          timestamp: new Date().toLocaleString("vi-VN"),
+          email: currentUser?.email || "Unknown",
+        };
+        setSystemLogs(prev => [localFailure, ...prev].slice(0, 50));
+        window.setTimeout(() => { syncFailureLogRef.current = false; }, 5000);
       }
       return false;
     } finally {
@@ -5024,7 +5044,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_feedback`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", studentName: r.studentName, quizTitle: r.quizTitle, type: quiz?.type || "", score: r.score, total: r.total, band: r.band, weakness: weak, wrongCount, details })
       });
       const data = await readApiJson(resp);
@@ -5165,7 +5185,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         : undefined;
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
           question: stripTags(q.text),
@@ -5281,7 +5301,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setTranscribeMsg(t('eb_transcribing'));
     try {
       const resp = await fetch(`${API_BASE}/api/ai_transcribe`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lang, audioUrl: quiz.audioUrl })
       });
       const data = await resp.json();
@@ -5403,7 +5423,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const excludeWords = (me.vocabNotebook || []).map(c => String(c.word || "").trim()).filter(Boolean).slice(0, 800);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_vocab`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getApiAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", count: requestedCount, minCount: requestedCount, target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
       });
       const data = await readApiJson(resp);
@@ -6201,7 +6221,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     formData.append("file", file);
     try {
       alert("Sending file to FastAPI backend for processing...");
-      const response = await fetch(`${getApiBase()}/api/upload_docx`, { method: "POST", body: formData });
+      const response = await fetch(`${getApiBase()}/api/upload_docx`, {
+        method: "POST",
+        headers: await getApiAuthHeaders(),
+        body: formData,
+      });
       const data = await response.json();
       if (data.success && data.quiz) {
         const newQuiz: Quiz = { ...data.quiz, audience: "ALL", targetStudentIds: [], maxAttempts: 1, isLocked: false, folder: builderFolder }; 
