@@ -1520,6 +1520,14 @@ const formatContent = (html: string) => {
         });
     }
 
+    // Flow-chart arrows from Word may arrive as plain `->`, HTML-escaped text, or
+    // a standalone nested div. Normalize them here because this formatter powers
+    // both the active exam and the review renderer.
+    const flowArrowHtml = '<img class="idp-flow-arrow" src="/flowchart-arrow-down.png" alt="" aria-hidden="true" />';
+    const flowArrowToken = '(?:\\u2193|\\u2B07|\\u25BC|\\u21E9|\\|\\s*v|->|-&gt;|\\u2192|&rarr;|&darr;)';
+    res = res.replace(new RegExp('>\\s*' + flowArrowToken + '\\s*<', 'gi'), '>' + flowArrowHtml + '<');
+    res = res.replace(new RegExp('(?:^|<br\\s*\\/?>|\\n)\\s*' + flowArrowToken + '\\s*(?=<br\\s*\\/?>|\\n|<|$)', 'gi'), flowArrowHtml);
+
     const uid = safeString((window as any).__ielts_user_id || "Candidate")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -7086,22 +7094,22 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvJumpToEvidence = (quote: string) => {
           const root = document.getElementById('ielts-passage-content');
           if (!root) return;
-          root.querySelectorAll<HTMLElement>('.rv-evidence-hit').forEach((mark) => {
-              const parent = mark.parentNode;
-              if (!parent) return;
-              while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-              parent.removeChild(mark);
-              parent.normalize();
-          });
 
           const markFragment = (raw: string) => {
               const needle = String(raw || '').replace(/\s+/g, ' ').trim();
               if (needle.length < 4) return null;
+              // Evidence is cumulative for the whole review session. Reusing an
+              // exact existing hit avoids nested marks when a learner clicks it again.
+              const existing = Array.from(root.querySelectorAll<HTMLElement>('.rv-evidence-hit')).find((mark) =>
+                  (mark.textContent || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase() === needle.toLocaleLowerCase()
+              );
+              if (existing) return existing;
               const nodes: Array<{ node: Text; start: number; end: number }> = [];
               const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
               let text = '', current: Node | null;
               while ((current = walker.nextNode())) {
                   const node = current as Text;
+                  if ((node.parentElement && node.parentElement.closest('.rv-evidence-hit'))) continue;
                   const start = text.length;
                   text += node.data;
                   nodes.push({ node, start, end: text.length });
@@ -7147,7 +7155,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const first = marks[0];
           if (!first) return;
           first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-          window.setTimeout(() => marks.forEach((mark) => { mark.style.background = '#fef3c7'; }), 1800);
       };
       // Older explanations used normal quotation marks instead of the evidence marker.
       // Treat an exact passage quote as evidence too, so stored reviews stay useful.
@@ -7173,12 +7180,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
           // Backward compatibility: explanations stored before evidence markers used
           // plain quotation marks. Convert only quotes that really occur in this passage.
-          const quoteParts = String(txt || '').split(/("[^\n"]{4,300}")/g);
+          // Older Vietnamese explanations commonly quote the passage with single
+          // or curly quotation marks. Treat every quote style identically, but
+          // only make it interactive when it is verbatim passage text.
+          const quoteParts = String(txt || '').split(/("[^\n"]{4,500}"|'[^\n']{4,500}'|“[^\n”]{4,500}”)/g);
           if (quoteParts.length > 1) {
               return quoteParts.map((part, pi) => {
-                  const quoted = part.match(/^"([^\n"]{4,300})"$/);
+                  const quoted = part.match(/^(?:"([^\n"]{4,500})"|'([^\n']{4,500})'|“([^\n”]{4,500})”)$/);
                   if (quoted) {
-                      const quote = quoted[1].trim();
+                      const quote = (quoted[1] || quoted[2] || quoted[3] || '').trim();
                       if (rvCanJumpToEvidence(quote)) {
                           return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Open evidence in the reading passage" aria-label={`Open evidence: ${quote}`} style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 4, padding: '1px 5px', color: '#92400e', fontWeight: 700, cursor: 'pointer', textDecoration: 'none', fontSize: 'inherit', fontFamily: 'inherit', lineHeight: 'inherit' }}>&quot;{quote}&quot;</button>;
                       }

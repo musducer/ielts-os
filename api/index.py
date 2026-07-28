@@ -857,30 +857,59 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
 
         passage_norm = _norm_evidence(reading_passage)
 
-        def _keep_real_evidence(match: re.Match) -> str:
-            quote = match.group(1).strip()
-            quote_norm = _norm_evidence(quote)
-            if 4 <= len(quote_norm) <= 300 and quote_norm in passage_norm:
-                return f"[[EVIDENCE: {quote}]]"
-            return f'"{quote}"'
+        def _valid_evidence(raw: str) -> list[str]:
+            kept = []
+            seen = set()
+            for quote in re.findall(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", raw or "", flags=re.IGNORECASE):
+                quote = quote.strip()
+                quote_norm = _norm_evidence(quote)
+                if not (4 <= len(quote_norm) <= 300 and quote_norm in passage_norm) or quote_norm in seen:
+                    continue
+                kept.append(quote)
+                seen.add(quote_norm)
+                if len(kept) == 3:
+                    break
+            return kept
 
-        text = re.sub(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", _keep_real_evidence, text, flags=re.IGNORECASE)
-        # The model occasionally explains correctly but omits the required marker.
-        # Select an exact, relevant sentence from the passage instead of letting the
-        # client render an explanation with no clickable proof.
-        valid_evidence = re.findall(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", text, flags=re.IGNORECASE)
-        if not valid_evidence:
-            def _evidence_words(value: str) -> set:
-                return {
-                    word for word in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(value or "").lower())
-                    if word not in {
-                        "the", "and", "for", "with", "that", "this", "from", "which", "what", "when", "where",
-                        "does", "were", "was", "are", "has", "have", "had", "into", "than", "then", "only",
-                        "answer", "correct", "question", "option", "student", "read", "reading", "passage",
-                    }
+        # The tutor sometimes already gives the exact passage quotation in its
+        # prose. That is the primary evidence, so do not overwrite it with a
+        # second, merely related sentence selected later by another model pass.
+        draft_plain = re.sub(r"\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]", "", text, flags=re.IGNORECASE)
+        draft_norm = _norm_evidence(draft_plain)
+        inline_passage_quotes = [
+            sentence for sentence in re.split(r"(?<=[.!?])\s+|\n+", reading_passage)
+            if len(_norm_evidence(sentence)) >= 24 and _norm_evidence(sentence) in draft_norm
+        ]
+        has_inline_evidence = bool(inline_passage_quotes)
+
+        valid_evidence = [] if has_inline_evidence else _valid_evidence(text)
+        if not valid_evidence and not has_inline_evidence:
+            evidence_prompt = (
+                "You are a strict IELTS reading evidence verifier. Select one to three SHORT, CONTINUOUS, "
+                "word-for-word excerpts from the passage that directly prove the correct answer to this exact item. "
+                "Do not select generic background, a merely related topic sentence, or a sentence that only repeats a keyword. "
+                "For an inference, choose the precise premise or premises that logically require the answer. "
+                "Output ONLY markers in this exact form, one per line: [[EVIDENCE: exact passage excerpt]]."
+            )
+            evidence_request = (
+                f"PASSAGE:\n{reading_passage}\n\nQUESTION: {question}\nOPTIONS: {options or '(n/a)'}\n"
+                f"CORRECT ANSWER: {correct}\n"
+            )
+            verified_raw, verified_err = _gemini_generate(evidence_prompt, evidence_request, 650)
+            valid_evidence = _valid_evidence(verified_raw) if not verified_err else []
+
+        def _evidence_words(value: str) -> set:
+            return {
+                word for word in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(value or "").lower())
+                if word not in {
+                    "the", "and", "for", "with", "that", "this", "from", "which", "what", "when", "where",
+                    "does", "were", "was", "are", "has", "have", "had", "into", "than", "then", "only",
+                    "answer", "correct", "question", "option", "student", "read", "reading", "passage",
                 }
+            }
 
-            query_words = _evidence_words(question) | _evidence_words(correct)
+        if not valid_evidence and not has_inline_evidence:
+            query_words = _evidence_words(question) | _evidence_words(correct) | _evidence_words(options)
             candidates = [
                 re.sub(r"\s+", " ", sentence).strip(" -\t\r\n")
                 for sentence in re.split(r"(?<=[.!?])\s+|\n+", reading_passage)
@@ -893,14 +922,26 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
                     words = _evidence_words(sentence)
                     overlap = len(words & query_words)
                     exact_answer = int(bool(correct_norm and len(correct_norm) > 2 and correct_norm in _norm_evidence(sentence)))
-                    # Prefer a concise, answer-bearing passage sentence, then lexical relevance.
                     return (exact_answer, overlap, -abs(len(sentence) - 150))
 
                 fallback = max(candidates, key=_score_evidence)
                 if len(fallback) > 300:
                     fallback = fallback[:300].rsplit(" ", 1)[0].strip()
                 if len(_norm_evidence(fallback)) >= 4:
-                    text = text.rstrip() + f"\n\n[[EVIDENCE: {fallback}]]"
+                    valid_evidence = [fallback]
+
+        # Remove unverified draft markers from the prose. Curly quotes preserve
+        # readability while ensuring the client only highlights verified proof.
+        text = re.sub(
+            r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]",
+            lambda match: f"“{match.group(1).strip()}”",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if valid_evidence:
+            text = text.rstrip() + "\n\n" + "\n".join(
+                f"[[EVIDENCE: {quote}]]" for quote in valid_evidence
+            )
     return {"success": True, "explanation": text}
 
 

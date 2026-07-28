@@ -1520,6 +1520,14 @@ const formatContent = (html: string) => {
         });
     }
 
+    // Flow-chart arrows from Word may arrive as plain `->`, HTML-escaped text, or
+    // a standalone nested div. Normalize them here because this formatter powers
+    // both the active exam and the review renderer.
+    const flowArrowHtml = '<img class="idp-flow-arrow" src="/flowchart-arrow-down.png" alt="" aria-hidden="true" />';
+    const flowArrowToken = '(?:\\u2193|\\u2B07|\\u25BC|\\u21E9|\\|\\s*v|->|-&gt;|\\u2192|&rarr;|&darr;)';
+    res = res.replace(new RegExp('>\\s*' + flowArrowToken + '\\s*<', 'gi'), '>' + flowArrowHtml + '<');
+    res = res.replace(new RegExp('(?:^|<br\\s*\\/?>|\\n)\\s*' + flowArrowToken + '\\s*(?=<br\\s*\\/?>|\\n|<|$)', 'gi'), flowArrowHtml);
+
     const uid = safeString((window as any).__ielts_user_id || "Candidate")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
