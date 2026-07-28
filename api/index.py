@@ -726,6 +726,11 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         question_count = None
     question_type = str(payload.get("questionType", "") or "")
     question_subtype = str(payload.get("questionSubType", "") or "")
+    matching_kind = str(payload.get("matchingKind", "") or "")
+    matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
+    matching_target_text = str(payload.get("matchingTargetText", "") or "")[:12000]
+    is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
+    evidence_passage = matching_target_text if is_paragraph_information_matching else reading_passage
     integrated_part = int(payload.get("integratedPart", 0) or 0)
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
@@ -769,6 +774,28 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         "tu RIENG BAI DOC. Boc MOI trich doan dung cu phap [[EVIDENCE: doan trich chinh xac]]. Khong dung marker cho dien giai, "
         "loi cau hoi, lua chon hay noi dung tu bia. Moi doan trich phai la bang chung ngan nhat nhung du nghia va xuat hien nguyen van trong bai."
     ) if is_reading_evidence else ""
+    matching_rule_en = (
+        f" MATCHING INFORMATION RULE: this item is matched to paragraph {matching_target_label}. "
+        "The only valid clickable evidence is an exact excerpt from that target paragraph below; never cite another paragraph merely because it shares a keyword. "
+        "First match the statement's specific detail, then explain the paraphrase link."
+    ) if is_paragraph_information_matching else (
+        " MATCHING HEADINGS RULE: select evidence that states the paragraph's central purpose, not an isolated detail."
+        if matching_kind == "headings" else (
+            " MATCHING FEATURES RULE: identify the exact clue linking the named person, place, event, or feature to the answer; do not use a broadly related detail."
+            if matching_kind == "features" else ""
+        )
+    )
+    matching_rule_vi = (
+        f" QUY TẮC MATCHING INFORMATION: câu này ghép với đoạn {matching_target_label}. "
+        "Dẫn chứng clickable hợp lệ CHỈ được lấy nguyên văn từ đúng đoạn mục tiêu bên dưới; tuyệt đối không trích đoạn khác chỉ vì cùng từ khóa. "
+        "Phải đối chiếu chi tiết riêng của mệnh đề trước, rồi mới giải thích liên hệ paraphrase."
+    ) if is_paragraph_information_matching else (
+        " QUY TẮC MATCHING HEADINGS: dẫn chứng phải cho thấy ý/chức năng trung tâm của đoạn, không phải một chi tiết đơn lẻ."
+        if matching_kind == "headings" else (
+            " QUY TẮC MATCHING FEATURES: phải chỉ ra manh mối chính xác nối người, nơi chốn, sự kiện hoặc đặc điểm với đáp án; không lấy chi tiết chỉ liên quan chung chung."
+            if matching_kind == "features" else ""
+        )
+    )
 
     integrated_rule_en = (
         " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
@@ -786,6 +813,14 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         "xác định câu mở, quan hệ đáp lời, đại từ thay thế, từ nối và câu kết mạch lạc; với từ vựng, dựa vào cú pháp xung quanh "
         "và nghĩa chính xác, không chọn từ đồng nghĩa chung chung. Chỉ rõ bẫy mà từng phương án sai đang tạo ra."
     ) % integrated_part if is_vietnamese_high_school_integrated else ""
+    matching_target_prompt_en = (
+        f"TARGET PARAGRAPH {matching_target_label} (ONLY VALID EVIDENCE SOURCE):\n{matching_target_text}\n\n"
+        if is_paragraph_information_matching else ""
+    )
+    matching_target_prompt_vi = (
+        f"ĐOẠN {matching_target_label} MỤC TIÊU (NGUỒN DẪN CHỨNG DUY NHẤT):\n{matching_target_text}\n\n"
+        if is_paragraph_information_matching else ""
+    )
 
     if lang == "en":
         sys_prompt = (
@@ -797,13 +832,14 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
             "appear word-for-word in the source. If the student was correct, still explain why the other options lose. End with one short, "
-            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en
+            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
         source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
         user_prompt = (
             f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
             f"READING PASSAGE FOR CLICKABLE EVIDENCE:\n{reading_passage if is_reading_evidence else '(not applicable)'}\n\n"
+            f"{matching_target_prompt_en}"
             f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
             f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English."
@@ -818,13 +854,14 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi
+            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
         source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
         user_prompt = (
             f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
             f"BÀI ĐỌC DÙNG LÀM DẪN CHỨNG CLICKABLE:\n{reading_passage if is_reading_evidence else '(không áp dụng)'}\n\n"
+            f"{matching_target_prompt_vi}"
             f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
@@ -855,7 +892,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         def _norm_evidence(value: str) -> str:
             return re.sub(r"\s+", " ", str(value or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
 
-        passage_norm = _norm_evidence(reading_passage)
+        passage_norm = _norm_evidence(evidence_passage)
 
         def _valid_evidence(raw: str) -> list[str]:
             kept = []
@@ -877,7 +914,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
         draft_plain = re.sub(r"\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]", "", text, flags=re.IGNORECASE)
         draft_norm = _norm_evidence(draft_plain)
         inline_passage_quotes = [
-            sentence for sentence in re.split(r"(?<=[.!?])\s+|\n+", reading_passage)
+            sentence for sentence in re.split(r"(?<=[.!?])\s+|\n+", evidence_passage)
             if len(_norm_evidence(sentence)) >= 24 and _norm_evidence(sentence) in draft_norm
         ]
         has_inline_evidence = bool(inline_passage_quotes)
@@ -892,7 +929,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
                 "Output ONLY markers in this exact form, one per line: [[EVIDENCE: exact passage excerpt]]."
             )
             evidence_request = (
-                f"PASSAGE:\n{reading_passage}\n\nQUESTION: {question}\nOPTIONS: {options or '(n/a)'}\n"
+                f"PASSAGE:\n{evidence_passage}\n\nQUESTION: {question}\nOPTIONS: {options or '(n/a)'}\n"
                 f"CORRECT ANSWER: {correct}\n"
             )
             verified_raw, verified_err = _gemini_generate(evidence_prompt, evidence_request, 650)
@@ -912,7 +949,7 @@ async def ai_explain(payload: Dict[str, Any] = Body(...)):
             query_words = _evidence_words(question) | _evidence_words(correct) | _evidence_words(options)
             candidates = [
                 re.sub(r"\s+", " ", sentence).strip(" -\t\r\n")
-                for sentence in re.split(r"(?<=[.!?])\s+|\n+", reading_passage)
+                for sentence in re.split(r"(?<=[.!?])\s+|\n+", evidence_passage)
             ]
             candidates = [sentence for sentence in candidates if len(_norm_evidence(sentence)) >= 4]
             if candidates:

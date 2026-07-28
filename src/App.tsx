@@ -5014,7 +5014,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const optStr = (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null;
-      if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+      if (q.type === 'DRAG_DROP_HEADING') {
+        const headingFor = (value: any) => (q.options || []).find((opt: any) => {
+          const label = (String(opt).match(/^\s*([ivxlcdm]+)[\.)\s]/i) || [])[1];
+          return !!label && label.toLowerCase() === String(value ?? '').trim().toLowerCase();
+        });
+        correctStr = stripTags(headingFor(q.correctAnswer) ?? q.correctAnswer);
+        stuStr = blank ? "(trống)" : stripTags(headingFor(studentAnsRaw) ?? studentAnsRaw);
+      } else if (q.type === 'CHOICE' || q.type === 'MATCHING') {
         correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
       } else if (q.type === 'CHOICE_MULTIPLE') {
@@ -5035,6 +5042,22 @@ const applyWorkspaceSnapshot = (snap: any) => {
         if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
         if (qSectionIndex >= 0 && secs[qSectionIndex]) qPassage = secs[qSectionIndex].passage || qPassage;
       }
+      const matchingKind = (() => {
+        if (q.type === 'DRAG_DROP_HEADING') return 'headings';
+        if (q.type !== 'MATCHING') return '';
+        const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
+        return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
+      })();
+      const matchingTargetLabel = matchingKind === 'paragraph_information' ? correctStr.trim().toUpperCase().replace(/[.)]$/, '') : '';
+      const matchingTargetText = (() => {
+        if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
+        const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
+        const paragraphs = Array.from(doc.body.children)
+          .filter((el) => !el.querySelector('h1,h2,h3,h4,h5,h6'))
+          .map((el) => stripTags(el.innerHTML))
+          .filter((text) => text.length >= 30);
+        return paragraphs[matchingTargetLabel.charCodeAt(0) - 65] || '';
+      })();
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
       const timestampQuestions = isListeningQuestion
@@ -5109,6 +5132,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
           isListening: isListeningQuestion,
           questionType: q.type,
           questionSubType: q.subType || "",
+          matchingKind,
+          matchingTargetLabel,
+          matchingTargetText,
           integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
           answerSequence,
