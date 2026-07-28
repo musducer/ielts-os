@@ -2986,6 +2986,51 @@ export default function IeltsSupremeOS() {
     document.addEventListener('focusin', handleFocusIn);
     return () => document.removeEventListener('focusin', handleFocusIn);
   }, [activeExam]);
+
+  // Answer blanks must be typed by the candidate. Disable browser writing assistance
+  // and reject the special insertion event used when a suggestion is accepted.
+  useEffect(() => {
+    if (!activeExam) return;
+
+    const answerInputSelector = 'input[data-answer-input="true"], input.inline-blank-input';
+    const hardenAnswerInput = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLInputElement) || !target.matches(answerInputSelector)) return false;
+      target.autocomplete = 'off';
+      target.spellcheck = false;
+      target.writingSuggestions = 'false';
+      target.setAttribute('autocorrect', 'off');
+      target.setAttribute('autocapitalize', 'off');
+      target.setAttribute('writingsuggestions', 'false');
+      target.setAttribute('aria-autocomplete', 'none');
+      target.setAttribute('data-ms-editor', 'false');
+      target.setAttribute('data-gramm', 'false');
+      target.setAttribute('data-gramm_editor', 'false');
+      return true;
+    };
+
+    const hardenAllAnswerInputs = () => {
+      document.querySelectorAll<HTMLInputElement>(answerInputSelector).forEach(input => hardenAnswerInput(input));
+    };
+    const handleFocusIn = (event: FocusEvent) => { hardenAnswerInput(event.target); };
+    const blockAcceptedSuggestion = (event: InputEvent) => {
+      // Keep ordinary typing, IME composition and paste intact. Browsers normally use
+      // insertReplacementText for accepted suggestions; the multi-character fallback
+      // covers Edge/Windows builds that report the same action as insertText.
+      const isSuggestionInsertion = event.inputType === 'insertReplacementText'
+        || (!event.isComposing && event.inputType === 'insertText' && (event.data || '').length > 1);
+      if (isSuggestionInsertion && hardenAnswerInput(event.target)) {
+        event.preventDefault();
+      }
+    };
+
+    hardenAllAnswerInputs();
+    document.addEventListener('focusin', handleFocusIn, true);
+    document.addEventListener('beforeinput', blockAcceptedSuggestion, true);
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn, true);
+      document.removeEventListener('beforeinput', blockAcceptedSuggestion, true);
+    };
+  }, [activeExam?.id]);
   // =========================================================
   // BẢN VÁ: DOM-SAFE HIGHLIGHT REMOVAL & SỬA GHI CHÚ NOTE
   // =========================================================
@@ -6821,7 +6866,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const qIndexGlobal = allQ.findIndex((x: any) => x.id === gq.id) + 1;
                       const inputHtml = gq.type === 'DRAG_DROP'
                           ? `<span class="idp-dropzone" data-qid="${gq.id}" style="min-width:${_zoneW}px">${qIndexGlobal}</span>`
-                          : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" placeholder="${qIndexGlobal}" autocomplete="off" style="width:${_inW}px" />`;
+                          : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" data-answer-input="true" placeholder="${qIndexGlobal}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${_inW}px" />`;
                       
                       // Regex thông minh: Bắt số câu có gạch dưới, số trong ngoặc, hoặc số nằm trơ trọi trong thẻ HTML/Bảng
                       const exactRegex = new RegExp(
@@ -6862,7 +6907,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   const qIndexGlobal = allQ.findIndex((x: any) => x.id === gq.id) + 1;
                   const inputHtml = gq.type === 'DRAG_DROP'
                       ? `<span class="idp-dropzone" data-qid="${gq.id}" style="min-width:${_zoneW}px">${qIndexGlobal}</span>`
-                      : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" placeholder="${qIndexGlobal}" autocomplete="off" style="width:${_inW}px" />`;
+                      : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" data-answer-input="true" placeholder="${qIndexGlobal}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${_inW}px" />`;
                   
                   const exactRegex = new RegExp(
                       `(?:\\(|\\[)\\b${qIndexGlobal}\\b(?:\\)|\\])|` + 

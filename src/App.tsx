@@ -2986,6 +2986,51 @@ export default function IeltsSupremeOS() {
     document.addEventListener('focusin', handleFocusIn);
     return () => document.removeEventListener('focusin', handleFocusIn);
   }, [activeExam]);
+
+  // Answer blanks must be typed by the candidate. Disable browser writing assistance
+  // and reject the special insertion event used when a suggestion is accepted.
+  useEffect(() => {
+    if (!activeExam) return;
+
+    const answerInputSelector = 'input[data-answer-input="true"], input.inline-blank-input';
+    const hardenAnswerInput = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLInputElement) || !target.matches(answerInputSelector)) return false;
+      target.autocomplete = 'off';
+      target.spellcheck = false;
+      target.writingSuggestions = 'false';
+      target.setAttribute('autocorrect', 'off');
+      target.setAttribute('autocapitalize', 'off');
+      target.setAttribute('writingsuggestions', 'false');
+      target.setAttribute('aria-autocomplete', 'none');
+      target.setAttribute('data-ms-editor', 'false');
+      target.setAttribute('data-gramm', 'false');
+      target.setAttribute('data-gramm_editor', 'false');
+      return true;
+    };
+
+    const hardenAllAnswerInputs = () => {
+      document.querySelectorAll<HTMLInputElement>(answerInputSelector).forEach(input => hardenAnswerInput(input));
+    };
+    const handleFocusIn = (event: FocusEvent) => { hardenAnswerInput(event.target); };
+    const blockAcceptedSuggestion = (event: InputEvent) => {
+      // Keep ordinary typing, IME composition and paste intact. Browsers normally use
+      // insertReplacementText for accepted suggestions; the multi-character fallback
+      // covers Edge/Windows builds that report the same action as insertText.
+      const isSuggestionInsertion = event.inputType === 'insertReplacementText'
+        || (!event.isComposing && event.inputType === 'insertText' && (event.data || '').length > 1);
+      if (isSuggestionInsertion && hardenAnswerInput(event.target)) {
+        event.preventDefault();
+      }
+    };
+
+    hardenAllAnswerInputs();
+    document.addEventListener('focusin', handleFocusIn, true);
+    document.addEventListener('beforeinput', blockAcceptedSuggestion, true);
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn, true);
+      document.removeEventListener('beforeinput', blockAcceptedSuggestion, true);
+    };
+  }, [activeExam?.id]);
   // =========================================================
   // BẢN VÁ: DOM-SAFE HIGHLIGHT REMOVAL & SỬA GHI CHÚ NOTE
   // =========================================================
@@ -6821,7 +6866,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const qIndexGlobal = allQ.findIndex((x: any) => x.id === gq.id) + 1;
                       const inputHtml = gq.type === 'DRAG_DROP'
                           ? `<span class="idp-dropzone" data-qid="${gq.id}" style="min-width:${_zoneW}px">${qIndexGlobal}</span>`
-                          : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" placeholder="${qIndexGlobal}" autocomplete="off" style="width:${_inW}px" />`;
+                          : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" data-answer-input="true" placeholder="${qIndexGlobal}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${_inW}px" />`;
                       
                       // Regex thông minh: Bắt số câu có gạch dưới, số trong ngoặc, hoặc số nằm trơ trọi trong thẻ HTML/Bảng
                       const exactRegex = new RegExp(
@@ -6862,7 +6907,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   const qIndexGlobal = allQ.findIndex((x: any) => x.id === gq.id) + 1;
                   const inputHtml = gq.type === 'DRAG_DROP'
                       ? `<span class="idp-dropzone" data-qid="${gq.id}" style="min-width:${_zoneW}px">${qIndexGlobal}</span>`
-                      : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" placeholder="${qIndexGlobal}" autocomplete="off" style="width:${_inW}px" />`;
+                      : `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${gq.id}" data-answer-input="true" placeholder="${qIndexGlobal}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${_inW}px" />`;
                   
                   const exactRegex = new RegExp(
                       `(?:\\(|\\[)\\b${qIndexGlobal}\\b(?:\\)|\\])|` + 
@@ -8074,7 +8119,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       (() => {
                                           const hasBlankInText = (q.text || "").includes("___") || (q.text || "").includes("…") || (q.text || "").includes("____");
                                           return hasBlankInText ? (
-                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
+                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
                                           ) : null;
                                       })()
                                   )}
@@ -8088,7 +8133,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                           
                           <div style={{ marginLeft: (isFillBlank || isDragDrop) ? 0 : 40, marginTop: 8 }}>
                               {q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion && !isInjectedIntoContext && !isInlineInjected && !(q.text || "").includes("___") && !(q.text || "").includes("____") && (
-                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
+                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
                               )}
                               
                               {(q.type === "CHOICE" || isTFNGQuestion || isYNNGQuestion) && (
@@ -9067,7 +9112,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   const tQ = activeExam?.questions?.[tIdx];
                                   if (!tQ) return match;
                                   // PHẢI giống HỆT input của System1 (App.template) để TRƯỚC == SAU highlight.
-                                  return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" placeholder="${num}" autocomplete="off" style="width:${groupInputW}px" />`;
+                                  return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" data-answer-input="true" placeholder="${num}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${groupInputW}px" />`;
                               });
                               // Flow-chart markers may be sanitized to -&gt; before this point; normalize every standalone marker.
                               const flowArrowHtml = '<img class="idp-flow-arrow" src="/flowchart-arrow-down.png" alt="" aria-hidden="true" />';
@@ -9172,6 +9217,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           <input
                                               type="text"
                                               className={`idp-inline-input inline-blank-input ${isAnsweredFlow ? 'filled' : ''}`}
+                                              data-answer-input="true"
+                                              autoComplete="off"
+                                              spellCheck={false}
+                                              autoCorrect="off"
+                                              autoCapitalize="off"
+                                              inputMode="text"
+                                              aria-autocomplete="none"
+                                              {...({ writingsuggestions: "false" } as any)}
                                               placeholder={qGlobalIdx.toString()}
                                               defaultValue={(examAnswers[q.id] as string) || ""}
                                               onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
