@@ -5,6 +5,22 @@ import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import {
+  deriveQuestProgress,
+  emptyQuestProgress,
+  evaluateQuestRewards,
+  getLatestQuestAttempt,
+  getQuestNodeState,
+  mergeQuestProgressCollections,
+  parseQuestCoinReward,
+} from "./quest";
+import type {
+  QuestAttempt,
+  QuestLaunchContext,
+  QuestNodeConfig,
+  StudentQuestProgress,
+  TopicAssignment,
+} from "./quest";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -1368,7 +1384,7 @@ i18n.use(initReactI18next).init({
 // ==========================================
 // TYPES & INTERFACES
 // ==========================================
-type TabType = "DASHBOARD" | "CLASSROOM" | "STUDENTS" | "DRIVE" | "EXAM_BUILDER" | "LIVE_ARENA" | "ACADEMICS" | "FINANCE" | "HISTORY";
+type TabType = "DASHBOARD" | "CLASSROOM" | "STUDENTS" | "DRIVE" | "EXAM_BUILDER" | "TOPIC_ASSIGNMENTS" | "LIVE_ARENA" | "ACADEMICS" | "FINANCE" | "HISTORY";
 
 const TEACHERS = ["Trương Thanh Trung", "Vi Thị Khánh Linh"];
 const SKILLS = ["Reading", "Listening", "Speaking", "Writing", "Grammar & Vocab", "Mock Test"];
@@ -1418,7 +1434,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
 const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
   if (!quiz) return false;
@@ -1426,7 +1442,7 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
   // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
   return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
 };
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
 
 const getQuestionPointCount = (q: any) =>
   q?.type === "CHOICE_MULTIPLE" && Array.isArray(q.correctAnswer)
@@ -2774,6 +2790,12 @@ export default function IeltsSupremeOS() {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const quizzesRef = useRef<Quiz[]>([]);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
+  // Topic assignments are teacher-owned. Quest progress is append-only student work and
+  // is always merged by attempt ID inside syncData to survive a stale mobile snapshot.
+  const [topicAssignments, setTopicAssignments] = useState<TopicAssignment[]>([]);
+  const [questProgress, setQuestProgress] = useState<StudentQuestProgress[]>([]);
+  const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
+  const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3200,7 +3222,10 @@ export default function IeltsSupremeOS() {
   const [showInventory, setShowInventory] = useState(false);
   const [invTab, setInvTab] = useState<"CONSUMABLE"|"PERMANENT">("CONSUMABLE");
   // Portal học viên chia tab để hết cuộn dài: Tổng quan / Phòng thi / Từ vựng / Tiến độ / Phần thưởng
-  const [portalTab, setPortalTab] = useState<"home"|"exams"|"vocab"|"progress"|"rewards">("home");
+  const [portalTab, setPortalTab] = useState<"home"|"exams"|"quests"|"vocab"|"progress"|"rewards">("home");
+  const [selectedQuestNode, setSelectedQuestNode] = useState<{ assignmentId: string; nodeId: string } | null>(null);
+  const [questLaunchLoading, setQuestLaunchLoading] = useState<string | null>(null);
+  const [questStatusNotice, setQuestStatusNotice] = useState<string>("");
   // Sub-tab trong Phòng thi HS (hết cuộn): đề khả dụng / kết quả & review
   const [examRoomTab, setExamRoomTab] = useState<"available"|"results">("available");
   // Sub-tab trong hồ sơ HS phía giáo viên: kết quả thi / buổi học / thống kê
@@ -3881,6 +3906,26 @@ useEffect(() => {
   const flushOfflineQueue = async () => {
     const email = currentUser?.email;
     if (!email || !navigator.onLine) return;
+    // A quest submission carries both a normal result and append-only unlock state.
+    // Flush it as one transaction before the legacy result-only queue so a mobile
+    // reconnect cannot show the score while losing the path progression.
+    const pendingQuestKey = `ielts_pending_quest_${email}`;
+    try {
+      const rawQuest = localStorage.getItem(pendingQuestKey);
+      if (rawQuest) {
+        const pendingQuest = JSON.parse(rawQuest);
+        const synced = await syncData({
+          quizResults: pendingQuest.result ? [pendingQuest.result] : [],
+          questProgress: Array.isArray(pendingQuest.questProgress) ? pendingQuest.questProgress : [],
+          ...(Array.isArray(pendingQuest.students) ? { students: pendingQuest.students } : {}),
+          ...(pendingQuest.coinOperation ? { __coinOperation: pendingQuest.coinOperation } : {}),
+        });
+        if (synced) localStorage.removeItem(pendingQuestKey);
+      }
+    } catch (e) {
+      console.warn("Pending quest sync failed, will retry after the next reconnect:", e);
+      return;
+    }
     // Tương thích ngược: gộp key cũ (1 kết quả) vào hàng đợi
     const legacy = localStorage.getItem(`ielts_offline_result_${email}`);
     let q = readOfflineQueue(email);
@@ -4047,7 +4092,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // The transaction ledger makes this safe even if the server already applied it.
       window.setTimeout(() => { void syncData({ __coinOperation: pendingCoinOperation }); }, 0);
     }
-    setQuizResults(clean(d.quizResults)); 
+    setQuizResults(clean(d.quizResults));
+    const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
+    setTopicAssignments(incomingTopicAssignments);
+    setQuestProgress(prev => mergeQuestProgressCollections(
+      clean(d.questProgress),
+      prev,
+      incomingTopicAssignments.length ? incomingTopicAssignments : topicAssignments
+    ));
     setBannedIps(clean(d.bannedIps));
     setAnnouncement(d.announcement || "");
     setSystemLogs(clean(d.systemLogs));
@@ -4619,6 +4671,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
     const hasQuizCatalogWrite = Array.isArray(newData.quizzes) && userRole === "TEACHER";
+    const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
+      ? newData.topicAssignments as TopicAssignment[]
+      : topicAssignments;
     if (hasQuizCatalogWrite) {
       writePendingQuizWrite(newData.quizzes, quizDeleteIds);
     }
@@ -4693,6 +4748,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
           const serverArr = Array.isArray(serverVal) ? serverVal : [];
 
+          // Quest attempts are student-owned, append-only records. Never replace this
+          // array with an older browser snapshot: merge each node by immutable attempt ID.
+          if (key === "questProgress") {
+            finalUpdate.questProgress = mergeQuestProgressCollections(serverArr, localVal, questAssignmentsForMerge);
+            return;
+          }
+
           // SỔ CÁI MÃ THƯỞNG: luôn gộp theo "code" (không ghi đè) để học viên append & giáo viên redeem không xung đột
           if (key === "rewardCodes") {
             const mergedArr = [...serverArr];
@@ -4749,9 +4811,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
                     coins: hasCoinLedgerFor(String(serverItem.id || ""))
                       ? (Number(serverItem.coins) || 0)
                       : Math.max(Number(serverItem.coins) || 0, Number(localItem.coins) || 0),
-                    inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
-                      ? (serverItem.inventory || mergedInv)
-                      : mergedInv,
+                    // Coin ledger only changes the balance. Keep the append-only inventory
+                    // merge here as well, otherwise a milestone that grants Coins + a
+                    // permanent Quest gift in the same submission can lose the gift.
+                    inventory: mergedInv,
+                    myRewards: _tuniq(serverItem.myRewards, localItem.myRewards),
                     // CHỐNG BAY SỔ TỪ VỰNG: HV là chủ sổ — GV ghi (kể cả bằng state cũ) KHÔNG bao giờ được đè vocabNotebook.
                     vocabNotebook: serverItem.vocabNotebook !== undefined ? serverItem.vocabNotebook : (localItem.vocabNotebook || []),
                     vocabTombstones: serverItem.vocabTombstones !== undefined ? serverItem.vocabTombstones : (localItem.vocabTombstones || []),
@@ -4806,9 +4870,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       level: Math.max(Number(serverItem.level) || 1, Number(myLocalInfo.level) || 1),
                       vocabNotebook: mergedVocab.notebook,
                       vocabTombstones: mergedVocab.tombstones,
-                      inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
-                        ? (serverItem.inventory || mergedInventory)
-                        : mergedInventory,
+                      // Rewards are append-only student state. Do not let the coin-ledger
+                      // fast path discard a permanent gift granted in the same Quest reward.
+                      inventory: mergedInventory,
+                      myRewards: _uniq(serverItem.myRewards, myLocalInfo.myRewards),
                       name: serverItem.name,
                       phone: serverItem.phone,
                       rate: serverItem.rate,
@@ -6343,11 +6408,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const startExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
+      const isQuestLaunch = Boolean(quiz.questContext);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
+          if (!isQuestLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
           if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -6358,12 +6424,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               }
           }
           
-          if (quiz.passcode) {
+          if (!isQuestLaunch && quiz.passcode) {
               const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
               if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
           }
 
-          if (currentUser) {
+          if (currentUser && !isQuestLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (myHistory.length >= (quiz.maxAttempts || 1)) {
                   alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
@@ -6374,6 +6440,50 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       // Khôi phục lại màn hình chờ (Instructions)
       setPendingExamState({ quiz, isPreview: isTeacherPreview, isStudentTestUI });
+  };
+
+  const startTopicQuestNode = (assignment: TopicAssignment, node: QuestNodeConfig) => {
+      const me = students.find(student => student.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+      const nodeIndex = assignment.nodes.findIndex(item => item.id === node.id);
+      if (!me || nodeIndex < 0) return;
+      if (isOffline || !navigator.onLine) {
+          alert("Bài tập chuyên đề cần có kết nối để lưu tiến độ và mở khóa chính xác.");
+          return;
+      }
+      const progress = questProgress.find(item => item.studentId === me.id && item.topicAssignmentId === assignment.id);
+      const state = getQuestNodeState(assignment, progress, nodeIndex, getRealTime());
+      if (state !== "available" && state !== "retry") {
+          alert(state === "locked" ? "Hãy hoàn thành chặng trước trước khi mở bài này." : "Chặng này hiện chưa mở hoặc đã đóng.");
+          return;
+      }
+      const sourceQuiz = quizzes.find(quiz => quiz.id === node.testId);
+      if (!sourceQuiz || !Array.isArray(sourceQuiz.questions) || !sourceQuiz.questions.length) {
+          alert("Đề gốc của chặng này không còn khả dụng. Hãy báo giáo viên.");
+          return;
+      }
+      const requestedCount = Math.max(1, Math.min(Number(node.questionCount) || sourceQuiz.questions.length, sourceQuiz.questions.length));
+      const selectedQuestions = sourceQuiz.questions.slice(0, requestedCount);
+      const questQuiz: Quiz = {
+          ...sourceQuiz,
+          title: node.title || sourceQuiz.title,
+          questions: selectedQuestions,
+          timeLimit: Math.max(1, Number(node.timeLimitMinutes) || Number(sourceQuiz.timeLimit) || 1),
+          maxAttempts: Number.MAX_SAFE_INTEGER,
+          active: true,
+          practiceMode: node.mode === "practice",
+          audioMode: node.mode === "practice" ? "practice" : sourceQuiz.audioMode,
+          isSEBRequired: node.mode === "practice" ? false : sourceQuiz.isSEBRequired,
+          scheduledStart: undefined,
+          scheduledEnd: undefined,
+          isLocked: false,
+          passcode: undefined,
+          questContext: { topicAssignmentId: assignment.id, nodeId: node.id },
+      };
+      setQuestLaunchLoading(node.id);
+      window.setTimeout(() => {
+          setQuestLaunchLoading(null);
+          startExam(questQuiz, false, false);
+      }, 180);
   };
 
   // ROOT-CAUSE FIX (bug "sửa builder không tác động đề thật"):
@@ -6512,33 +6622,160 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const endTime = getRealTime();
       const durationSecs = Math.floor((endTime - examStartTime) / 1000);
 
+      const questContext = state.activeExam.questContext;
+      const assignment = questContext
+        ? topicAssignments.find(item => item.id === questContext.topicAssignmentId)
+        : undefined;
+      const node = assignment && questContext
+        ? assignment.nodes.find(item => item.id === questContext.nodeId)
+        : undefined;
+      const percentage = totalQ > 0 ? Number(((score / totalQ) * 100).toFixed(2)) : 0;
+      const questPassed = Boolean(node && percentage >= Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)));
+      const resultId = `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
       const result: QuizResult = {
-          id: getTrueTime().toString(), quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
+          id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
           date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
           startTime: new Date(examStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
-          scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false
+          scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
+          ...(questContext ? {
+            topicAssignmentId: questContext.topicAssignmentId,
+            topicNodeId: questContext.nodeId,
+            questPassed,
+            questQuestionIds: state.activeExam.questions.map(question => question.id),
+          } : {}),
       };
 
-      let earnedCoins = 50; 
-      if (state.activeExam.scheduledEnd) {
-          const endMs = parseVNTime(state.activeExam.scheduledEnd);
-          const diffHour = (endMs - endTime) / (1000 * 3600);
-          if (diffHour >= 24) earnedCoins += 150; 
-          else if (diffHour >= 12) earnedCoins += 100; 
-      }
-          const nxStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
-          const coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
-      setStudents(nxStudents);
+      const nextResults = [result, ...quizResults];
+      let nextStudents = students;
+      let nextQuestProgress = questProgress;
+      let coinOperation: CoinOperation | null = null;
+      let submissionMessage = `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
 
-      if (isOffline || !navigator.onLine) {
-          pushOfflineResult(currentUser?.email, result);
-          writePendingCoinOperation(coinOperation);
-          setQuizResults(prev => [result, ...prev]);
-          alert("NETWORK ERROR! The exam has been saved locally and queued. Please do not clear your browser cache; it will auto-sync when the connection is restored.");
+      if (questContext) {
+          if (!assignment || !node) {
+            submissionMessage = "Bài đã nộp, nhưng chuyên đề này đã bị giáo viên thay đổi. Kết quả chưa thể mở khóa chặng tiếp theo.";
+          } else {
+            const existingProgress = questProgress.find(item =>
+              item.studentId === me.id && item.topicAssignmentId === assignment.id
+            ) || emptyQuestProgress(me.id, assignment.id);
+            const normalizedProgress = deriveQuestProgress(existingProgress, assignment);
+            const previousAttempts = normalizedProgress.attempts[node.id] || [];
+            const questAttempt: QuestAttempt = {
+              id: resultId,
+              resultId,
+              score,
+              totalQuestions: totalQ,
+              percentage,
+              passed: questPassed,
+              submittedAt: endTime,
+              attemptCount: previousAttempts.length + 1,
+            };
+            const progressAfterAttempt = deriveQuestProgress({
+              ...normalizedProgress,
+              studentId: me.id,
+              topicAssignmentId: assignment.id,
+              attempts: { ...normalizedProgress.attempts, [node.id]: [...previousAttempts, questAttempt] },
+              updatedAt: endTime,
+            }, assignment);
+            const newlyUnlocked = evaluateQuestRewards(assignment, progressAfterAttempt)
+              .filter(reward => !progressAfterAttempt.unlockedRewards.includes(reward.id));
+            const progressAfterRewards = deriveQuestProgress({
+              ...progressAfterAttempt,
+              unlockedRewards: [...progressAfterAttempt.unlockedRewards, ...newlyUnlocked.map(reward => reward.id)],
+              updatedAt: endTime,
+            }, assignment);
+            nextQuestProgress = [
+              ...questProgress.filter(item => !(item.studentId === me.id && item.topicAssignmentId === assignment.id)),
+              progressAfterRewards,
+            ];
+
+            const earnedQuestCoins = newlyUnlocked
+              .filter(reward => reward.rewardType === "coins")
+              .reduce((sum, reward) => sum + parseQuestCoinReward(reward.rewardValue), 0);
+            const permanentGifts = newlyUnlocked
+              .filter(reward => reward.rewardType === "permanent_gift")
+              .map(reward => String(reward.rewardValue || reward.description || "Quest gift").trim())
+              .filter(Boolean);
+            const otherRewards = newlyUnlocked
+              .filter(reward => reward.rewardType === "voucher" || reward.rewardType === "custom")
+              .map(reward => `Chuyên đề: ${String(reward.rewardValue || reward.description || "Phần thưởng").trim()}`)
+              .filter(Boolean);
+            if (earnedQuestCoins || permanentGifts.length || otherRewards.length) {
+              nextStudents = students.map(student => {
+                if (student.id !== me.id) return student;
+                const inventory = student.inventory || { consumables: {}, permanents: [] };
+                return {
+                  ...student,
+                  coins: (Number(student.coins) || 0) + earnedQuestCoins,
+                  inventory: {
+                    ...inventory,
+                    consumables: inventory.consumables || {},
+                    permanents: Array.from(new Set([...(inventory.permanents || []), ...permanentGifts])),
+                  },
+                  myRewards: Array.from(new Set([...(student.myRewards || []), ...otherRewards])),
+                };
+              });
+              if (earnedQuestCoins > 0) {
+                coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
+                  id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
+                });
+              }
+            }
+            const threshold = Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0));
+            const rewardSummary = newlyUnlocked.length
+              ? ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(", ")}.`
+              : "";
+            submissionMessage = questPassed
+              ? `CHẶNG HOÀN THÀNH: ${score}/${totalQ} (${percentage}%) đạt ngưỡng ${threshold}%.${rewardSummary}`
+              : `CHƯA ĐẠT: ${score}/${totalQ} (${percentage}%). Cần ${threshold}% để mở chặng tiếp theo; hãy làm lại chặng này.`;
+          }
+
+          setQuestProgress(nextQuestProgress);
+          if (nextStudents !== students) setStudents(nextStudents);
+          setQuizResults(nextResults);
+          if (isOffline || !navigator.onLine) {
+            // Quest launch requires a connection, but preserve an interrupted submission
+            // locally rather than allowing its optimistic progress to disappear.
+            try {
+              localStorage.setItem(`ielts_pending_quest_${currentUser?.email || me.id}`, JSON.stringify({
+                result,
+                questProgress: nextQuestProgress,
+                students: nextStudents,
+                coinOperation,
+              }));
+            } catch (e) {}
+            pushOfflineResult(currentUser?.email, result);
+            if (coinOperation) writePendingCoinOperation(coinOperation);
+            submissionMessage += " Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.";
+          } else {
+            void syncData({
+              quizResults: nextResults,
+              questProgress: nextQuestProgress,
+              ...(nextStudents !== students ? { students: nextStudents } : {}),
+              ...(coinOperation ? { __coinOperation: coinOperation } : {}),
+            });
+          }
       } else {
-          const nx = [result, ...quizResults];
-          setQuizResults(nx); syncData({ quizResults: nx, students: nxStudents, __coinOperation: coinOperation });
+          let earnedCoins = 50;
+          if (state.activeExam.scheduledEnd) {
+              const endMs = parseVNTime(state.activeExam.scheduledEnd);
+              const diffHour = (endMs - endTime) / (1000 * 3600);
+              if (diffHour >= 24) earnedCoins += 150;
+              else if (diffHour >= 12) earnedCoins += 100;
+          }
+          nextStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
+          coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
+          setStudents(nextStudents);
+          if (isOffline || !navigator.onLine) {
+              pushOfflineResult(currentUser?.email, result);
+              writePendingCoinOperation(coinOperation);
+              setQuizResults(prev => [result, ...prev]);
+              alert("NETWORK ERROR! The exam has been saved locally and queued. Please do not clear your browser cache; it will auto-sync when the connection is restored.");
+          } else {
+              setQuizResults(nextResults);
+              void syncData({ quizResults: nextResults, students: nextStudents, __coinOperation: coinOperation });
+          }
       }
 
       if (!state.isPreview) {
@@ -6552,10 +6789,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
       _setAudioTested(false);
       if (Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
-        alert(`EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`);
+        alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
-        setReviewQuiz({ quiz: state.activeExam, result });
+        if (questContext) {
+          setReviewQuiz(null);
+          setPortalTab("quests");
+          setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
+          setQuestStatusNotice(submissionMessage);
+        } else {
+          setReviewQuiz({ quiz: state.activeExam, result });
+        }
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
   forceSubmitExamRef.current = forceSubmitExam;
@@ -7184,8 +7428,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         {/* TABS - SEGMENTED CONTROL IOS STYLE */}
         <div style={{ flex: 1, display: isMobile ? 'none' : 'flex', justifyContent: 'center', overflow: 'hidden' }}>
             <div className="ios-tabs-container">
-              {(["DASHBOARD", "CLASSROOM", "EXAM_BUILDER", "LIVE_ARENA", "STUDENTS", "FINANCE", "DRIVE"] as TabType[]).map(tabKey => (
-                <button key={tabKey} onClick={() => setActiveTab(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{t('tab_' + tabKey)}</button>
+              {(["DASHBOARD", "CLASSROOM", "EXAM_BUILDER", "TOPIC_ASSIGNMENTS", "LIVE_ARENA", "STUDENTS", "FINANCE", "DRIVE"] as TabType[]).map(tabKey => (
+                <button key={tabKey} onClick={() => setActiveTab(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{tabKey === "TOPIC_ASSIGNMENTS" ? (i18n.language === "vi" ? "Chuyên đề" : "Quests") : t('tab_' + tabKey)}</button>
               ))}
             </div>
         </div>
@@ -7209,6 +7453,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 /*INSERT_DASHBOARD*/
 /*INSERT_CLASSROOM*/
 /*INSERT_EXAM_BUILDER*/
+/*INSERT_TOPIC_ASSIGNMENTS*/
 /*INSERT_LIVE_ARENA*/
 /*INSERT_ACADEMICS*/
 /*INSERT_STUDENTS*/
@@ -7244,7 +7489,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                 </button>
               );
             })}
-            <button onClick={() => setMobileMoreOpen(v => !v)} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: (mobileMoreOpen || ['CLASSROOM','LIVE_ARENA','DRIVE','ACADEMICS','HISTORY'].includes(activeTab)) ? C.accent : C.sub }}>
+            <button onClick={() => setMobileMoreOpen(v => !v)} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: (mobileMoreOpen || ['CLASSROOM','TOPIC_ASSIGNMENTS','LIVE_ARENA','DRIVE','ACADEMICS','HISTORY'].includes(activeTab)) ? C.accent : C.sub }}>
               <Ico name="list" size={21} />
               <span style={{ fontSize: 10, fontWeight: 600 }}>{i18n.language === 'vi' ? 'Thêm' : 'More'}</span>
             </button>
@@ -7254,9 +7499,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             <div onClick={() => setMobileMoreOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1001, display: 'flex', alignItems: 'flex-end' }}>
               <div onClick={e => e.stopPropagation()} style={{ width: '100%', background: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: '10px 14px calc(20px + env(safe-area-inset-bottom))', borderTop: `1px solid ${C.border}` }}>
                 <div style={{ width: 38, height: 4, borderRadius: 2, background: C.border, margin: '6px auto 14px' }} />
-                {([{ key: 'CLASSROOM', icon: 'clock' }, { key: 'LIVE_ARENA', icon: 'monitor' }, { key: 'DRIVE', icon: 'cloud' }] as {key: TabType, icon: string}[]).map(it => (
+                {([{ key: 'CLASSROOM', icon: 'clock' }, { key: 'TOPIC_ASSIGNMENTS', icon: 'target' }, { key: 'LIVE_ARENA', icon: 'monitor' }, { key: 'DRIVE', icon: 'cloud' }] as {key: TabType, icon: string}[]).map(it => (
                   <button key={it.key} onClick={() => { setActiveTab(it.key); setMobileMoreOpen(false); }} style={{ width: '100%', textAlign: 'left', background: activeTab === it.key ? `${C.accent}12` : 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 12px', borderRadius: 12, color: C.text, fontSize: 15, fontWeight: 700 }}>
-                    <Ico name={it.icon} size={20} color={activeTab === it.key ? C.accent : C.sub} /> {t('tab_' + it.key)}
+                    <Ico name={it.icon} size={20} color={activeTab === it.key ? C.accent : C.sub} /> {it.key === 'TOPIC_ASSIGNMENTS' ? (i18n.language === 'vi' ? 'Bài tập chuyên đề' : 'Quest assignments') : t('tab_' + it.key)}
                   </button>
                 ))}
                 <div style={{ height: 1, background: C.border, margin: '8px 0' }} />

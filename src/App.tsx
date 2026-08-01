@@ -5,6 +5,22 @@ import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import {
+  deriveQuestProgress,
+  emptyQuestProgress,
+  evaluateQuestRewards,
+  getLatestQuestAttempt,
+  getQuestNodeState,
+  mergeQuestProgressCollections,
+  parseQuestCoinReward,
+} from "./quest";
+import type {
+  QuestAttempt,
+  QuestLaunchContext,
+  QuestNodeConfig,
+  StudentQuestProgress,
+  TopicAssignment,
+} from "./quest";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -1368,7 +1384,7 @@ i18n.use(initReactI18next).init({
 // ==========================================
 // TYPES & INTERFACES
 // ==========================================
-type TabType = "DASHBOARD" | "CLASSROOM" | "STUDENTS" | "DRIVE" | "EXAM_BUILDER" | "LIVE_ARENA" | "ACADEMICS" | "FINANCE" | "HISTORY";
+type TabType = "DASHBOARD" | "CLASSROOM" | "STUDENTS" | "DRIVE" | "EXAM_BUILDER" | "TOPIC_ASSIGNMENTS" | "LIVE_ARENA" | "ACADEMICS" | "FINANCE" | "HISTORY";
 
 const TEACHERS = ["Trương Thanh Trung", "Vi Thị Khánh Linh"];
 const SKILLS = ["Reading", "Listening", "Speaking", "Writing", "Grammar & Vocab", "Mock Test"];
@@ -1418,7 +1434,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
 interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
 const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
   if (!quiz) return false;
@@ -1426,7 +1442,7 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
   // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
   return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
 };
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
 
 const getQuestionPointCount = (q: any) =>
   q?.type === "CHOICE_MULTIPLE" && Array.isArray(q.correctAnswer)
@@ -2774,6 +2790,12 @@ export default function IeltsSupremeOS() {
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const quizzesRef = useRef<Quiz[]>([]);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
+  // Topic assignments are teacher-owned. Quest progress is append-only student work and
+  // is always merged by attempt ID inside syncData to survive a stale mobile snapshot.
+  const [topicAssignments, setTopicAssignments] = useState<TopicAssignment[]>([]);
+  const [questProgress, setQuestProgress] = useState<StudentQuestProgress[]>([]);
+  const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
+  const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3200,7 +3222,10 @@ export default function IeltsSupremeOS() {
   const [showInventory, setShowInventory] = useState(false);
   const [invTab, setInvTab] = useState<"CONSUMABLE"|"PERMANENT">("CONSUMABLE");
   // Portal học viên chia tab để hết cuộn dài: Tổng quan / Phòng thi / Từ vựng / Tiến độ / Phần thưởng
-  const [portalTab, setPortalTab] = useState<"home"|"exams"|"vocab"|"progress"|"rewards">("home");
+  const [portalTab, setPortalTab] = useState<"home"|"exams"|"quests"|"vocab"|"progress"|"rewards">("home");
+  const [selectedQuestNode, setSelectedQuestNode] = useState<{ assignmentId: string; nodeId: string } | null>(null);
+  const [questLaunchLoading, setQuestLaunchLoading] = useState<string | null>(null);
+  const [questStatusNotice, setQuestStatusNotice] = useState<string>("");
   // Sub-tab trong Phòng thi HS (hết cuộn): đề khả dụng / kết quả & review
   const [examRoomTab, setExamRoomTab] = useState<"available"|"results">("available");
   // Sub-tab trong hồ sơ HS phía giáo viên: kết quả thi / buổi học / thống kê
@@ -3881,6 +3906,26 @@ useEffect(() => {
   const flushOfflineQueue = async () => {
     const email = currentUser?.email;
     if (!email || !navigator.onLine) return;
+    // A quest submission carries both a normal result and append-only unlock state.
+    // Flush it as one transaction before the legacy result-only queue so a mobile
+    // reconnect cannot show the score while losing the path progression.
+    const pendingQuestKey = `ielts_pending_quest_${email}`;
+    try {
+      const rawQuest = localStorage.getItem(pendingQuestKey);
+      if (rawQuest) {
+        const pendingQuest = JSON.parse(rawQuest);
+        const synced = await syncData({
+          quizResults: pendingQuest.result ? [pendingQuest.result] : [],
+          questProgress: Array.isArray(pendingQuest.questProgress) ? pendingQuest.questProgress : [],
+          ...(Array.isArray(pendingQuest.students) ? { students: pendingQuest.students } : {}),
+          ...(pendingQuest.coinOperation ? { __coinOperation: pendingQuest.coinOperation } : {}),
+        });
+        if (synced) localStorage.removeItem(pendingQuestKey);
+      }
+    } catch (e) {
+      console.warn("Pending quest sync failed, will retry after the next reconnect:", e);
+      return;
+    }
     // Tương thích ngược: gộp key cũ (1 kết quả) vào hàng đợi
     const legacy = localStorage.getItem(`ielts_offline_result_${email}`);
     let q = readOfflineQueue(email);
@@ -4047,7 +4092,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // The transaction ledger makes this safe even if the server already applied it.
       window.setTimeout(() => { void syncData({ __coinOperation: pendingCoinOperation }); }, 0);
     }
-    setQuizResults(clean(d.quizResults)); 
+    setQuizResults(clean(d.quizResults));
+    const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
+    setTopicAssignments(incomingTopicAssignments);
+    setQuestProgress(prev => mergeQuestProgressCollections(
+      clean(d.questProgress),
+      prev,
+      incomingTopicAssignments.length ? incomingTopicAssignments : topicAssignments
+    ));
     setBannedIps(clean(d.bannedIps));
     setAnnouncement(d.announcement || "");
     setSystemLogs(clean(d.systemLogs));
@@ -4619,6 +4671,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
     const hasQuizCatalogWrite = Array.isArray(newData.quizzes) && userRole === "TEACHER";
+    const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
+      ? newData.topicAssignments as TopicAssignment[]
+      : topicAssignments;
     if (hasQuizCatalogWrite) {
       writePendingQuizWrite(newData.quizzes, quizDeleteIds);
     }
@@ -4693,6 +4748,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
           const serverArr = Array.isArray(serverVal) ? serverVal : [];
 
+          // Quest attempts are student-owned, append-only records. Never replace this
+          // array with an older browser snapshot: merge each node by immutable attempt ID.
+          if (key === "questProgress") {
+            finalUpdate.questProgress = mergeQuestProgressCollections(serverArr, localVal, questAssignmentsForMerge);
+            return;
+          }
+
           // SỔ CÁI MÃ THƯỞNG: luôn gộp theo "code" (không ghi đè) để học viên append & giáo viên redeem không xung đột
           if (key === "rewardCodes") {
             const mergedArr = [...serverArr];
@@ -4749,9 +4811,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
                     coins: hasCoinLedgerFor(String(serverItem.id || ""))
                       ? (Number(serverItem.coins) || 0)
                       : Math.max(Number(serverItem.coins) || 0, Number(localItem.coins) || 0),
-                    inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
-                      ? (serverItem.inventory || mergedInv)
-                      : mergedInv,
+                    // Coin ledger only changes the balance. Keep the append-only inventory
+                    // merge here as well, otherwise a milestone that grants Coins + a
+                    // permanent Quest gift in the same submission can lose the gift.
+                    inventory: mergedInv,
+                    myRewards: _tuniq(serverItem.myRewards, localItem.myRewards),
                     // CHỐNG BAY SỔ TỪ VỰNG: HV là chủ sổ — GV ghi (kể cả bằng state cũ) KHÔNG bao giờ được đè vocabNotebook.
                     vocabNotebook: serverItem.vocabNotebook !== undefined ? serverItem.vocabNotebook : (localItem.vocabNotebook || []),
                     vocabTombstones: serverItem.vocabTombstones !== undefined ? serverItem.vocabTombstones : (localItem.vocabTombstones || []),
@@ -4806,9 +4870,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       level: Math.max(Number(serverItem.level) || 1, Number(myLocalInfo.level) || 1),
                       vocabNotebook: mergedVocab.notebook,
                       vocabTombstones: mergedVocab.tombstones,
-                      inventory: coinOperation && String(coinOperation.studentId) === String(serverItem.id || "")
-                        ? (serverItem.inventory || mergedInventory)
-                        : mergedInventory,
+                      // Rewards are append-only student state. Do not let the coin-ledger
+                      // fast path discard a permanent gift granted in the same Quest reward.
+                      inventory: mergedInventory,
+                      myRewards: _uniq(serverItem.myRewards, myLocalInfo.myRewards),
                       name: serverItem.name,
                       phone: serverItem.phone,
                       rate: serverItem.rate,
@@ -6343,11 +6408,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const startExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
+      const isQuestLaunch = Boolean(quiz.questContext);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
+          if (!isQuestLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
           if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -6358,12 +6424,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               }
           }
           
-          if (quiz.passcode) {
+          if (!isQuestLaunch && quiz.passcode) {
               const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
               if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
           }
 
-          if (currentUser) {
+          if (currentUser && !isQuestLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (myHistory.length >= (quiz.maxAttempts || 1)) {
                   alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
@@ -6374,6 +6440,50 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       // Khôi phục lại màn hình chờ (Instructions)
       setPendingExamState({ quiz, isPreview: isTeacherPreview, isStudentTestUI });
+  };
+
+  const startTopicQuestNode = (assignment: TopicAssignment, node: QuestNodeConfig) => {
+      const me = students.find(student => student.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+      const nodeIndex = assignment.nodes.findIndex(item => item.id === node.id);
+      if (!me || nodeIndex < 0) return;
+      if (isOffline || !navigator.onLine) {
+          alert("Bài tập chuyên đề cần có kết nối để lưu tiến độ và mở khóa chính xác.");
+          return;
+      }
+      const progress = questProgress.find(item => item.studentId === me.id && item.topicAssignmentId === assignment.id);
+      const state = getQuestNodeState(assignment, progress, nodeIndex, getRealTime());
+      if (state !== "available" && state !== "retry") {
+          alert(state === "locked" ? "Hãy hoàn thành chặng trước trước khi mở bài này." : "Chặng này hiện chưa mở hoặc đã đóng.");
+          return;
+      }
+      const sourceQuiz = quizzes.find(quiz => quiz.id === node.testId);
+      if (!sourceQuiz || !Array.isArray(sourceQuiz.questions) || !sourceQuiz.questions.length) {
+          alert("Đề gốc của chặng này không còn khả dụng. Hãy báo giáo viên.");
+          return;
+      }
+      const requestedCount = Math.max(1, Math.min(Number(node.questionCount) || sourceQuiz.questions.length, sourceQuiz.questions.length));
+      const selectedQuestions = sourceQuiz.questions.slice(0, requestedCount);
+      const questQuiz: Quiz = {
+          ...sourceQuiz,
+          title: node.title || sourceQuiz.title,
+          questions: selectedQuestions,
+          timeLimit: Math.max(1, Number(node.timeLimitMinutes) || Number(sourceQuiz.timeLimit) || 1),
+          maxAttempts: Number.MAX_SAFE_INTEGER,
+          active: true,
+          practiceMode: node.mode === "practice",
+          audioMode: node.mode === "practice" ? "practice" : sourceQuiz.audioMode,
+          isSEBRequired: node.mode === "practice" ? false : sourceQuiz.isSEBRequired,
+          scheduledStart: undefined,
+          scheduledEnd: undefined,
+          isLocked: false,
+          passcode: undefined,
+          questContext: { topicAssignmentId: assignment.id, nodeId: node.id },
+      };
+      setQuestLaunchLoading(node.id);
+      window.setTimeout(() => {
+          setQuestLaunchLoading(null);
+          startExam(questQuiz, false, false);
+      }, 180);
   };
 
   // ROOT-CAUSE FIX (bug "sửa builder không tác động đề thật"):
@@ -6512,33 +6622,160 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const endTime = getRealTime();
       const durationSecs = Math.floor((endTime - examStartTime) / 1000);
 
+      const questContext = state.activeExam.questContext;
+      const assignment = questContext
+        ? topicAssignments.find(item => item.id === questContext.topicAssignmentId)
+        : undefined;
+      const node = assignment && questContext
+        ? assignment.nodes.find(item => item.id === questContext.nodeId)
+        : undefined;
+      const percentage = totalQ > 0 ? Number(((score / totalQ) * 100).toFixed(2)) : 0;
+      const questPassed = Boolean(node && percentage >= Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)));
+      const resultId = `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
       const result: QuizResult = {
-          id: getTrueTime().toString(), quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
+          id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
           date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
           startTime: new Date(examStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
-          scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false
+          scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
+          ...(questContext ? {
+            topicAssignmentId: questContext.topicAssignmentId,
+            topicNodeId: questContext.nodeId,
+            questPassed,
+            questQuestionIds: state.activeExam.questions.map(question => question.id),
+          } : {}),
       };
 
-      let earnedCoins = 50; 
-      if (state.activeExam.scheduledEnd) {
-          const endMs = parseVNTime(state.activeExam.scheduledEnd);
-          const diffHour = (endMs - endTime) / (1000 * 3600);
-          if (diffHour >= 24) earnedCoins += 150; 
-          else if (diffHour >= 12) earnedCoins += 100; 
-      }
-          const nxStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
-          const coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
-      setStudents(nxStudents);
+      const nextResults = [result, ...quizResults];
+      let nextStudents = students;
+      let nextQuestProgress = questProgress;
+      let coinOperation: CoinOperation | null = null;
+      let submissionMessage = `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
 
-      if (isOffline || !navigator.onLine) {
-          pushOfflineResult(currentUser?.email, result);
-          writePendingCoinOperation(coinOperation);
-          setQuizResults(prev => [result, ...prev]);
-          alert("NETWORK ERROR! The exam has been saved locally and queued. Please do not clear your browser cache; it will auto-sync when the connection is restored.");
+      if (questContext) {
+          if (!assignment || !node) {
+            submissionMessage = "Bài đã nộp, nhưng chuyên đề này đã bị giáo viên thay đổi. Kết quả chưa thể mở khóa chặng tiếp theo.";
+          } else {
+            const existingProgress = questProgress.find(item =>
+              item.studentId === me.id && item.topicAssignmentId === assignment.id
+            ) || emptyQuestProgress(me.id, assignment.id);
+            const normalizedProgress = deriveQuestProgress(existingProgress, assignment);
+            const previousAttempts = normalizedProgress.attempts[node.id] || [];
+            const questAttempt: QuestAttempt = {
+              id: resultId,
+              resultId,
+              score,
+              totalQuestions: totalQ,
+              percentage,
+              passed: questPassed,
+              submittedAt: endTime,
+              attemptCount: previousAttempts.length + 1,
+            };
+            const progressAfterAttempt = deriveQuestProgress({
+              ...normalizedProgress,
+              studentId: me.id,
+              topicAssignmentId: assignment.id,
+              attempts: { ...normalizedProgress.attempts, [node.id]: [...previousAttempts, questAttempt] },
+              updatedAt: endTime,
+            }, assignment);
+            const newlyUnlocked = evaluateQuestRewards(assignment, progressAfterAttempt)
+              .filter(reward => !progressAfterAttempt.unlockedRewards.includes(reward.id));
+            const progressAfterRewards = deriveQuestProgress({
+              ...progressAfterAttempt,
+              unlockedRewards: [...progressAfterAttempt.unlockedRewards, ...newlyUnlocked.map(reward => reward.id)],
+              updatedAt: endTime,
+            }, assignment);
+            nextQuestProgress = [
+              ...questProgress.filter(item => !(item.studentId === me.id && item.topicAssignmentId === assignment.id)),
+              progressAfterRewards,
+            ];
+
+            const earnedQuestCoins = newlyUnlocked
+              .filter(reward => reward.rewardType === "coins")
+              .reduce((sum, reward) => sum + parseQuestCoinReward(reward.rewardValue), 0);
+            const permanentGifts = newlyUnlocked
+              .filter(reward => reward.rewardType === "permanent_gift")
+              .map(reward => String(reward.rewardValue || reward.description || "Quest gift").trim())
+              .filter(Boolean);
+            const otherRewards = newlyUnlocked
+              .filter(reward => reward.rewardType === "voucher" || reward.rewardType === "custom")
+              .map(reward => `Chuyên đề: ${String(reward.rewardValue || reward.description || "Phần thưởng").trim()}`)
+              .filter(Boolean);
+            if (earnedQuestCoins || permanentGifts.length || otherRewards.length) {
+              nextStudents = students.map(student => {
+                if (student.id !== me.id) return student;
+                const inventory = student.inventory || { consumables: {}, permanents: [] };
+                return {
+                  ...student,
+                  coins: (Number(student.coins) || 0) + earnedQuestCoins,
+                  inventory: {
+                    ...inventory,
+                    consumables: inventory.consumables || {},
+                    permanents: Array.from(new Set([...(inventory.permanents || []), ...permanentGifts])),
+                  },
+                  myRewards: Array.from(new Set([...(student.myRewards || []), ...otherRewards])),
+                };
+              });
+              if (earnedQuestCoins > 0) {
+                coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
+                  id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
+                });
+              }
+            }
+            const threshold = Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0));
+            const rewardSummary = newlyUnlocked.length
+              ? ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(", ")}.`
+              : "";
+            submissionMessage = questPassed
+              ? `CHẶNG HOÀN THÀNH: ${score}/${totalQ} (${percentage}%) đạt ngưỡng ${threshold}%.${rewardSummary}`
+              : `CHƯA ĐẠT: ${score}/${totalQ} (${percentage}%). Cần ${threshold}% để mở chặng tiếp theo; hãy làm lại chặng này.`;
+          }
+
+          setQuestProgress(nextQuestProgress);
+          if (nextStudents !== students) setStudents(nextStudents);
+          setQuizResults(nextResults);
+          if (isOffline || !navigator.onLine) {
+            // Quest launch requires a connection, but preserve an interrupted submission
+            // locally rather than allowing its optimistic progress to disappear.
+            try {
+              localStorage.setItem(`ielts_pending_quest_${currentUser?.email || me.id}`, JSON.stringify({
+                result,
+                questProgress: nextQuestProgress,
+                students: nextStudents,
+                coinOperation,
+              }));
+            } catch (e) {}
+            pushOfflineResult(currentUser?.email, result);
+            if (coinOperation) writePendingCoinOperation(coinOperation);
+            submissionMessage += " Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.";
+          } else {
+            void syncData({
+              quizResults: nextResults,
+              questProgress: nextQuestProgress,
+              ...(nextStudents !== students ? { students: nextStudents } : {}),
+              ...(coinOperation ? { __coinOperation: coinOperation } : {}),
+            });
+          }
       } else {
-          const nx = [result, ...quizResults];
-          setQuizResults(nx); syncData({ quizResults: nx, students: nxStudents, __coinOperation: coinOperation });
+          let earnedCoins = 50;
+          if (state.activeExam.scheduledEnd) {
+              const endMs = parseVNTime(state.activeExam.scheduledEnd);
+              const diffHour = (endMs - endTime) / (1000 * 3600);
+              if (diffHour >= 24) earnedCoins += 150;
+              else if (diffHour >= 12) earnedCoins += 100;
+          }
+          nextStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
+          coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
+          setStudents(nextStudents);
+          if (isOffline || !navigator.onLine) {
+              pushOfflineResult(currentUser?.email, result);
+              writePendingCoinOperation(coinOperation);
+              setQuizResults(prev => [result, ...prev]);
+              alert("NETWORK ERROR! The exam has been saved locally and queued. Please do not clear your browser cache; it will auto-sync when the connection is restored.");
+          } else {
+              setQuizResults(nextResults);
+              void syncData({ quizResults: nextResults, students: nextStudents, __coinOperation: coinOperation });
+          }
       }
 
       if (!state.isPreview) {
@@ -6552,10 +6789,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
       _setAudioTested(false);
       if (Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
-        alert(`EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`);
+        alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
-        setReviewQuiz({ quiz: state.activeExam, result });
+        if (questContext) {
+          setReviewQuiz(null);
+          setPortalTab("quests");
+          setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
+          setQuestStatusNotice(submissionMessage);
+        } else {
+          setReviewQuiz({ quiz: state.activeExam, result });
+        }
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
   forceSubmitExamRef.current = forceSubmitExam;
@@ -10020,11 +10264,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     };
     const canPronounceVocab = (card: VocabCard) => (card.category || 'word') !== 'grammar' && Boolean(String(card.word || '').trim());
     const renderPronounceButton = (card: VocabCard, compact = false, stopCardFlip = false) => !canPronounceVocab(card) ? null : <button type="button" title={`${t('vocab_pronounce')}: ${card.word}`} aria-label={`${t('vocab_pronounce')}: ${card.word}`} onClick={(e) => { if (stopCardFlip) e.stopPropagation(); pronounceVocab(card.word); }} style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: compact ? 24 : 27, height: compact ? 24 : 27, padding: 0, borderRadius: compact ? 6 : 7, border: `1px solid ${C.border}`, background: C.card, color: C.accent, cursor: 'pointer', flexShrink: 0}}><Ico name="volume2" size={compact ? 14 : 15} /></button>;
+    const myTopicAssignments = topicAssignments.filter(assignment =>
+      assignment.audience !== "SPECIFIC" || (assignment.targetStudentIds || []).includes(me.id)
+    );
+    // A test used as a gated Quest node must not also appear as a free-standing
+    // exam card. Otherwise a student could bypass the sequence and see its review.
+    const questSourceTestIds = new Set(myTopicAssignments.flatMap(assignment => assignment.nodes.map(node => node.testId)));
     const activeQuizzes = quizzes.filter(q => {
-      if (!q.active) return false;
+      if (!q.active || questSourceTestIds.has(q.id)) return false;
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
+    const getMyQuestProgress = (assignment: TopicAssignment) => deriveQuestProgress(
+      questProgress.find(progress => progress.studentId === me.id && progress.topicAssignmentId === assignment.id),
+      assignment
+    );
+    const getQuestResult = (resultId?: string) => resultId ? myQuizResults.find(result => result.id === resultId) : undefined;
     const myLinks = sharedLinks.filter(l => {
       if (l.audience === "ALL_STUDENTS") return true;
       if (l.audience === "SPECIFIC_STUDENT" && l.targetStudentId === me.id) return true;
@@ -10042,7 +10297,20 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
 
     const handleReviewQuiz = (r: QuizResult) => {
-        setReviewQuiz({quiz: quizzes.find(q=>q.id===r.quizId) as Quiz, result: r});
+        if (r.topicAssignmentId && r.questPassed !== true) {
+            alert("Bạn cần đạt ngưỡng của chặng này trước khi mở phần Review.");
+            return;
+        }
+        const catalogQuiz = quizzes.find(q => q.id === r.quizId);
+        if (!catalogQuiz) {
+            alert("Không tìm thấy đề gốc để mở Review. Hãy báo giáo viên.");
+            return;
+        }
+        const questionIds = Array.isArray(r.questQuestionIds) ? new Set(r.questQuestionIds) : null;
+        const quizForReview = questionIds
+          ? normalizeExamSections({ ...catalogQuiz, questions: catalogQuiz.questions.filter(question => questionIds.has(question.id)) })
+          : catalogQuiz;
+        setReviewQuiz({quiz: quizForReview as Quiz, result: r});
         setReviewSectionIdx(0);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
@@ -10397,6 +10665,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -10725,6 +10994,74 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           </div>
           </>)}
 
+          {/* ===== TAB: BÀI TẬP CHUYÊN ĐỀ ===== */}
+          {portalTab === "quests" && (<>
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1.05, textTransform: 'uppercase', marginBottom: 5 }}>Quest path</div>
+            <h2 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 27, letterSpacing: 0 }}>Bài tập chuyên đề</h2>
+            <p style={{ margin: '7px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.55 }}>Hoàn thành từng chặng theo đúng thứ tự. Bạn chỉ mở được chặng kế tiếp sau khi đạt ngưỡng điểm của chặng hiện tại.</p>
+          </div>
+          {questStatusNotice && <div style={{ marginBottom: 16, padding: '11px 13px', border: `1px solid ${C.accent}55`, borderLeft: `3px solid ${C.accent}`, background: `${C.accent}0d`, color: C.text, fontSize: 13, lineHeight: 1.5, borderRadius: 7, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}><span>{questStatusNotice}</span><button onClick={() => setQuestStatusNotice('')} style={{ border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', padding: 0 }}><Ico name="x" size={15} /></button></div>}
+          <div style={{ display: 'grid', gap: 16 }}>
+            {myTopicAssignments.map(assignment => {
+              const progress = getMyQuestProgress(assignment);
+              const selectedInAssignment = selectedQuestNode?.assignmentId === assignment.id
+                ? assignment.nodes.find(node => node.id === selectedQuestNode.nodeId) || null
+                : null;
+              const selectedIndex = selectedInAssignment ? assignment.nodes.findIndex(node => node.id === selectedInAssignment.id) : -1;
+              const selectedState = selectedIndex >= 0 ? getQuestNodeState(assignment, progress, selectedIndex, getRealTime()) : null;
+              const selectedAttempt = selectedInAssignment ? getLatestQuestAttempt(progress, selectedInAssignment.id) : null;
+              const selectedPassedAttempt = selectedInAssignment
+                ? [...(progress.attempts[selectedInAssignment.id] || [])].reverse().find(attempt => attempt.passed) || null
+                : null;
+              const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
+              const statusCopy: Record<string, { label: string; color: string; icon: string }> = {
+                completed: { label: 'Đã đạt', color: C.succ, icon: 'check' },
+                available: { label: 'Sẵn sàng', color: C.accent, icon: 'unlock' },
+                retry: { label: 'Làm lại', color: C.warn, icon: 'refresh' },
+                locked: { label: 'Đang khóa', color: C.sub, icon: 'lock' },
+                scheduled: { label: 'Chưa mở', color: C.warn, icon: 'clock' },
+                closed: { label: 'Đã đóng', color: C.err, icon: 'xcircle' },
+              };
+              return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                <div style={{ padding: '18px 19px 14px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                    <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
+                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>chặng hoàn thành</div></div>
+                  </div>
+                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>Mốc thưởng:</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
+                </div>
+                <div style={{ padding: '16px 19px 18px' }}>
+                  <div style={{ display: 'grid', gap: 0 }}>
+                    {assignment.nodes.map((node, index) => {
+                      const state = getQuestNodeState(assignment, progress, index, getRealTime());
+                      const meta = statusCopy[state];
+                      const latestAttempt = getLatestQuestAttempt(progress, node.id);
+                      const selected = selectedInAssignment?.id === node.id;
+                      return <React.Fragment key={node.id}>
+                        {index > 0 && <div style={{ width: 2, height: 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
+                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(''); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
+                          <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
+                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} câu · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? 'PASS' : 'CHƯA ĐẠT'}</span>}</span>
+                          <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                        </button>
+                      </React.Fragment>;
+                    })}
+                  </div>
+                  {selectedInAssignment && selectedState && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16, display: 'grid', gap: 11 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}><div><div style={{ fontWeight: 900, fontSize: 15 }}>{selectedInAssignment.title}</div><div style={{ color: C.sub, fontSize: 12, marginTop: 4 }}>{selectedInAssignment.mode === 'practice' ? 'Practice: không có chống thoát web hoặc bắt toàn màn hình.' : 'Exam: áp dụng quy tắc phòng thi của đề gốc.'}</div></div>{selectedAttempt && <div style={{ color: selectedAttempt.passed ? C.succ : C.warn, fontSize: 12, fontWeight: 900 }}>{selectedAttempt.score}/{selectedAttempt.totalQuestions} · {selectedAttempt.percentage}%</div>}</div>
+                    {(selectedState === 'available' || selectedState === 'retry') && <button onClick={() => startTopicQuestNode(assignment, selectedInAssignment)} disabled={questLaunchLoading === selectedInAssignment.id} style={{ justifySelf: 'start', border: 'none', background: C.accent, color: '#fff', cursor: questLaunchLoading === selectedInAssignment.id ? 'wait' : 'pointer', opacity: questLaunchLoading === selectedInAssignment.id ? 0.7 : 1, padding: '9px 14px', borderRadius: 7, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="play" size={14} /> {questLaunchLoading === selectedInAssignment.id ? 'Đang mở...' : selectedState === 'retry' ? 'Làm lại chặng này' : 'Bắt đầu chặng'}</button>}
+                    {selectedState === 'completed' && selectedResult && <button onClick={() => handleReviewQuiz(selectedResult)} style={{ justifySelf: 'start', border: `1px solid ${C.accent}`, background: `${C.accent}0d`, color: C.accent, cursor: 'pointer', padding: '9px 14px', borderRadius: 7, fontWeight: 800 }}>Review bài đã đạt</button>}
+                    {selectedState === 'completed' && !selectedResult && <div style={{ fontSize: 12, color: C.sub }}>Đã đạt chặng này. Kết quả Review đang được đồng bộ.</div>}
+                    {selectedState === 'locked' && <div style={{ fontSize: 12, color: C.sub }}>Hoàn thành chặng ngay trước đó để mở khóa.</div>}
+                  </div>}
+                </div>
+              </section>;
+            })}
+            {!myTopicAssignments.length && <div className="card" style={{ padding: '42px 20px', textAlign: 'center', color: C.sub }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, color: C.text, fontWeight: 800 }}>Chưa có bài tập chuyên đề được phân phối</div><div style={{ fontSize: 13, marginTop: 4 }}>Khi giáo viên mở chuyên đề cho bạn, hành trình sẽ xuất hiện ở đây.</div></div>}
+          </div>
+          </>)}
+
           {/* ===== TAB: PHÒNG THI ===== */}
           {portalTab === "exams" && (<>
           <div className="card" style={{ marginBottom: 24, border: `2px solid ${C.warn}` }}>
@@ -10900,6 +11237,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -10938,8 +11276,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         {/* TABS - SEGMENTED CONTROL IOS STYLE */}
         <div style={{ flex: 1, display: isMobile ? 'none' : 'flex', justifyContent: 'center', overflow: 'hidden' }}>
             <div className="ios-tabs-container">
-              {(["DASHBOARD", "CLASSROOM", "EXAM_BUILDER", "LIVE_ARENA", "STUDENTS", "FINANCE", "DRIVE"] as TabType[]).map(tabKey => (
-                <button key={tabKey} onClick={() => setActiveTab(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{t('tab_' + tabKey)}</button>
+              {(["DASHBOARD", "CLASSROOM", "EXAM_BUILDER", "TOPIC_ASSIGNMENTS", "LIVE_ARENA", "STUDENTS", "FINANCE", "DRIVE"] as TabType[]).map(tabKey => (
+                <button key={tabKey} onClick={() => setActiveTab(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{tabKey === "TOPIC_ASSIGNMENTS" ? (i18n.language === "vi" ? "Chuyên đề" : "Quests") : t('tab_' + tabKey)}</button>
               ))}
             </div>
         </div>
@@ -12109,6 +12447,251 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </div>
             )
         })()}
+      {activeTab === "TOPIC_ASSIGNMENTS" && (() => {
+        const isVi = i18n.language === "vi";
+        const tx = (vi: string, en: string) => isVi ? vi : en;
+        const sourceTests = quizzes.filter(quiz => Array.isArray(quiz.questions) && quiz.questions.length > 0);
+        const activeAssignment = topicAssignmentProgressFor
+          ? topicAssignments.find(item => item.id === topicAssignmentProgressFor) || null
+          : null;
+        const toDateInput = (value?: string) => {
+          if (!value) return "";
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+          const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+          return local.toISOString().slice(0, 16);
+        };
+        const makeAssignment = (): TopicAssignment => ({
+          id: `topic_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`,
+          title: "",
+          topicCategory: "",
+          description: "",
+          openDate: "",
+          closeDate: "",
+          audience: "ALL",
+          targetStudentIds: [],
+          nodes: [],
+          rewards: [],
+          createdBy: currentUser?.email || "",
+          createdAt: getTrueTime(),
+        });
+        const updateDraft = (patch: Partial<TopicAssignment>) => {
+          setTopicAssignmentEditor(previous => previous ? { ...previous, ...patch } : previous);
+        };
+        const addNode = () => {
+          const source = sourceTests[0];
+          if (!source) { alert(tx("Hãy tạo hoặc tải ít nhất một đề trước khi thêm chặng.", "Create or upload at least one test before adding a step.")); return; }
+          const node: QuestNodeConfig = {
+            id: `node_${getTrueTime()}_${Math.random().toString(36).slice(2, 6)}`,
+            testId: source.id,
+            title: source.title,
+            description: "",
+            openDate: "",
+            closeDate: "",
+            passingThresholdPercent: 70,
+            mode: "practice",
+            timeLimitMinutes: source.timeLimit,
+            questionCount: source.questions.length,
+          };
+          setTopicAssignmentEditor(previous => previous ? { ...previous, nodes: [...previous.nodes, node] } : previous);
+        };
+        const updateNode = (nodeId: string, patch: Partial<QuestNodeConfig>) => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            nodes: previous.nodes.map(node => node.id === nodeId ? { ...node, ...patch } : node),
+          } : previous);
+        };
+        const moveNode = (nodeIndex: number, direction: -1 | 1) => {
+          setTopicAssignmentEditor(previous => {
+            if (!previous) return previous;
+            const nextIndex = nodeIndex + direction;
+            if (nextIndex < 0 || nextIndex >= previous.nodes.length) return previous;
+            const nodes = [...previous.nodes];
+            [nodes[nodeIndex], nodes[nextIndex]] = [nodes[nextIndex], nodes[nodeIndex]];
+            return { ...previous, nodes };
+          });
+        };
+        const addReward = () => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            rewards: [...previous.rewards, {
+              id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 6)}`,
+              type: "milestone",
+              targetValue: Math.max(1, previous.nodes.length || 1),
+              rewardType: "coins",
+              rewardValue: "50",
+              description: "",
+            }],
+          } : previous);
+        };
+        const updateReward = (rewardId: string, patch: any) => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            rewards: previous.rewards.map(reward => reward.id === rewardId ? { ...reward, ...patch } : reward),
+          } : previous);
+        };
+        const saveAssignment = async () => {
+          if (!topicAssignmentEditor) return;
+          const draft = {
+            ...topicAssignmentEditor,
+            title: String(topicAssignmentEditor.title || "").trim(),
+            topicCategory: String(topicAssignmentEditor.topicCategory || "").trim(),
+            targetStudentIds: Array.from(new Set(topicAssignmentEditor.targetStudentIds || [])),
+            nodes: topicAssignmentEditor.nodes.map(node => ({
+              ...node,
+              title: String(node.title || "").trim(),
+              testId: String(node.testId || "").trim(),
+              passingThresholdPercent: Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)),
+              questionCount: Math.max(1, Math.floor(Number(node.questionCount) || 1)),
+              timeLimitMinutes: node.timeLimitMinutes ? Math.max(1, Math.floor(Number(node.timeLimitMinutes))) : undefined,
+            })),
+            updatedAt: getTrueTime(),
+          } as TopicAssignment;
+          if (!draft.title || !draft.topicCategory || !draft.nodes.length || draft.nodes.some(node => !node.testId || !node.title)) {
+            alert(tx("Cần có tiêu đề, chuyên đề và ít nhất một chặng đã chọn đề.", "A title, topic category, and at least one configured step are required."));
+            return;
+          }
+          const nextAssignments = topicAssignments.some(item => item.id === draft.id)
+            ? topicAssignments.map(item => item.id === draft.id ? draft : item)
+            : [draft, ...topicAssignments];
+          setTopicAssignments(nextAssignments);
+          const saved = await syncData({ topicAssignments: nextAssignments });
+          if (saved) {
+            setTopicAssignmentEditor(null);
+            alert(tx("Đã lưu chuyên đề và đồng bộ cho các thiết bị.", "Quest assignment saved and synchronized."));
+          } else {
+            alert(tx("Bản nháp vẫn còn trên thiết bị này. Hệ thống sẽ thử đồng bộ lại khi có mạng.", "The draft remains on this device and will retry when the connection returns."));
+          }
+        };
+        const deleteAssignment = async (assignment: TopicAssignment) => {
+          if (!confirm(tx(`Xóa chuyên đề "${assignment.title}"? Tiến độ đã nộp được giữ lại để đối soát.`, `Delete "${assignment.title}"? Submitted progress is retained for audit.`))) return;
+          const nextAssignments = topicAssignments.filter(item => item.id !== assignment.id);
+          setTopicAssignments(nextAssignments);
+          setTopicAssignmentProgressFor(current => current === assignment.id ? null : current);
+          await syncData({ topicAssignments: nextAssignments });
+        };
+        const statusMeta: Record<string, { label: string; color: string }> = {
+          completed: { label: tx("Đã đạt", "Passed"), color: C.succ },
+          available: { label: tx("Sẵn sàng", "Ready"), color: C.accent },
+          retry: { label: tx("Làm lại", "Retry"), color: C.warn },
+          locked: { label: tx("Khóa", "Locked"), color: C.sub },
+          scheduled: { label: tx("Chưa mở", "Scheduled"), color: C.warn },
+          closed: { label: tx("Đã đóng", "Closed"), color: C.err },
+        };
+
+        if (topicAssignmentEditor) {
+          const draft = topicAssignmentEditor;
+          return (
+            <div style={{ maxWidth: 1120, margin: "0 auto", paddingBottom: 42 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
+                <div>
+                  <div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</div>
+                  <h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)", letterSpacing: 0 }}>{draft.title || tx("Chuyên đề mới", "New quest")}</h2>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setTopicAssignmentEditor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
+                  <button onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="save" size={15} /> {tx("Lưu chuyên đề", "Save quest")}</button>
+                </div>
+              </div>
+
+              <section style={{ borderTop: `2px solid ${C.accent}`, padding: "20px 0 25px", borderBottom: `1px solid ${C.border}` }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="fileText" size={17} color={C.accent} /> {tx("Thông tin & phân phối", "Information & distribution")}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                  <label style={{ display: "grid", gap: 6, gridColumn: "span 2" }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Tên chuyên đề", "Quest title")}</span><input value={draft.title} onChange={event => updateDraft({ title: event.target.value })} placeholder={tx("Ví dụ: Matching Headings Foundation", "e.g. Matching Headings Foundation")} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Chuyên đề", "Topic category")}</span><input value={draft.topicCategory} onChange={event => updateDraft({ topicCategory: event.target.value })} placeholder="Matching headings / Map labelling" style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Đối tượng", "Audience")}</span><select value={draft.audience || "ALL"} onChange={event => updateDraft({ audience: event.target.value as "ALL" | "SPECIFIC" })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }}><option value="ALL">{tx("Tất cả học sinh", "All students")}</option><option value="SPECIFIC">{tx("Học sinh chọn riêng", "Specific students")}</option></select></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Mở từ", "Open from")}</span><input type="datetime-local" value={toDateInput(draft.openDate)} onChange={event => updateDraft({ openDate: event.target.value })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Đóng lúc", "Close at")}</span><input type="datetime-local" value={toDateInput(draft.closeDate)} onChange={event => updateDraft({ closeDate: event.target.value })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                </div>
+                <label style={{ display: "grid", gap: 6, marginTop: 12 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Mô tả cho học sinh", "Student-facing description")}</span><textarea value={draft.description || ""} onChange={event => updateDraft({ description: event.target.value })} rows={3} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, resize: "vertical", fontFamily: "inherit" }} /></label>
+                {draft.audience === "SPECIFIC" && <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.sub, marginBottom: 9 }}>{tx("Chọn học sinh nhận chuyên đề", "Select students")}</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{students.map(student => {
+                    const selected = (draft.targetStudentIds || []).includes(student.id);
+                    return <button key={student.id} onClick={() => updateDraft({ targetStudentIds: selected ? (draft.targetStudentIds || []).filter(id => id !== student.id) : [...(draft.targetStudentIds || []), student.id] })} style={{ border: `1px solid ${selected ? C.accent : C.border}`, background: selected ? `${C.accent}14` : C.card, color: selected ? C.accent : C.text, padding: "7px 10px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>{student.name}</button>;
+                  })}</div>
+                </div>}
+              </section>
+
+              <section style={{ padding: "24px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="target" size={17} color={C.accent} /> {tx("Chuỗi chặng", "Quest path")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Học sinh phải đạt ngưỡng của chặng hiện tại để mở chặng kế tiếp.", "Students must pass the current step before the next one unlocks.")}</div></div>
+                  <button onClick={addNode} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm chặng", "Add step")}</button>
+                </div>
+                {!sourceTests.length && <div style={{ padding: "14px 0", color: C.warn, fontSize: 13 }}>{tx("Chưa có đề nào trong Exam Builder. Hãy tạo/tải đề trước khi cấu hình chuyên đề.", "No tests are available yet. Create or upload one in Exam Builder first.")} <button onClick={() => setActiveTab("EXAM_BUILDER")} style={{ marginLeft: 7, color: C.accent, border: "none", background: "transparent", cursor: "pointer", fontWeight: 800 }}>{tx("Mở Exam Builder", "Open Exam Builder")}</button></div>}
+                <div style={{ display: "grid", gap: 10 }}>
+                  {draft.nodes.map((node, nodeIndex) => {
+                    const selectedSource = sourceTests.find(test => test.id === node.testId);
+                    return <details key={node.id} open style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: C.card }}>
+                      <summary style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "12px 13px", listStyle: "none" }}>
+                        <span style={{ width: 25, height: 25, borderRadius: "50%", background: C.accent, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 900, flexShrink: 0 }}>{nodeIndex + 1}</span>
+                        <span style={{ fontWeight: 800, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{node.title || tx("Chặng chưa có tên", "Untitled step")}</span>
+                        <span style={{ color: C.sub, fontSize: 11, fontWeight: 700 }}>{node.mode === "practice" ? tx("Luyện tập", "Practice") : tx("Thi", "Exam")} · {node.passingThresholdPercent}%</span>
+                      </summary>
+                      <div style={{ padding: "0 13px 14px", display: "grid", gap: 11, borderTop: `1px solid ${C.border}` }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(210px, 2fr) minmax(160px, 1fr) minmax(130px, 1fr)", gap: 10, marginTop: 12 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Đề có sẵn", "Existing test")}</span><select value={node.testId} onChange={event => { const test = sourceTests.find(item => item.id === event.target.value); updateNode(node.id, { testId: event.target.value, title: test?.title || node.title, questionCount: test?.questions.length || node.questionCount, timeLimitMinutes: test?.timeLimit || node.timeLimitMinutes }); }} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }}><option value="">{tx("Chọn đề", "Choose a test")}</option>{sourceTests.map(test => <option key={test.id} value={test.id}>{test.title} ({test.questions.length})</option>)}</select></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Ngưỡng pass (%)", "Pass threshold (%)")}</span><input type="number" min="0" max="100" value={node.passingThresholdPercent} onChange={event => updateNode(node.id, { passingThresholdPercent: Number(event.target.value) })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Chế độ", "Mode")}</span><select value={node.mode} onChange={event => updateNode(node.id, { mode: event.target.value as "practice" | "exam" })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }}><option value="practice">{tx("Luyện tập", "Practice")}</option><option value="exam">{tx("Thi", "Exam")}</option></select></label>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(210px, 2fr) repeat(2, minmax(130px, 1fr))", gap: 10 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Tên hiển thị", "Display title")}</span><input value={node.title} onChange={event => updateNode(node.id, { title: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Số câu", "Questions")}</span><input type="number" min="1" max={selectedSource?.questions.length || node.questionCount || 1} value={node.questionCount} onChange={event => updateNode(node.id, { questionCount: Number(event.target.value) })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Phút", "Minutes")}</span><input type="number" min="1" value={node.timeLimitMinutes || ""} onChange={event => updateNode(node.id, { timeLimitMinutes: event.target.value ? Number(event.target.value) : undefined })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        </div>
+                        <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Gợi ý / mô tả ngắn", "Hint / short description")}</span><input value={node.description || ""} onChange={event => updateNode(node.id, { description: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(150px, 1fr))", gap: 10 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mở riêng", "Step open")}</span><input type="datetime-local" value={toDateInput(node.openDate)} onChange={event => updateNode(node.id, { openDate: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Đóng riêng", "Step close")}</span><input type="datetime-local" value={toDateInput(node.closeDate)} onChange={event => updateNode(node.id, { closeDate: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 11, color: C.sub }}>{node.mode === "practice" ? tx("Practice không bật chống thoát trang/toàn màn hình.", "Practice bypasses fullscreen and anti-exit checks.") : tx("Exam dùng quy tắc bảo mật của đề gốc.", "Exam keeps the source test security rules.")}</span>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button disabled={nodeIndex === 0} onClick={() => moveNode(nodeIndex, -1)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: nodeIndex === 0 ? "default" : "pointer", opacity: nodeIndex === 0 ? 0.45 : 1, width: 31, height: 30 }} title={tx("Đưa lên", "Move up")}><Ico name="arrowUp" size={14} /></button>
+                            <button disabled={nodeIndex === draft.nodes.length - 1} onClick={() => moveNode(nodeIndex, 1)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: nodeIndex === draft.nodes.length - 1 ? "default" : "pointer", opacity: nodeIndex === draft.nodes.length - 1 ? 0.45 : 1, width: 31, height: 30 }} title={tx("Đưa xuống", "Move down")}><Ico name="arrowDown" size={14} /></button>
+                            <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, nodes: previous.nodes.filter(item => item.id !== node.id) } : previous)} style={{ border: `1px solid ${C.err}55`, background: `${C.err}0d`, color: C.err, cursor: "pointer", width: 31, height: 30 }} title={tx("Xóa chặng", "Delete step")}><Ico name="trash" size={14} /></button>
+                          </div>
+                        </div>
+                      </div>
+                    </details>;
+                  })}
+                  {!draft.nodes.length && <div style={{ padding: "22px 4px", color: C.sub, fontSize: 13 }}>{tx("Thêm các chặng theo đúng thứ tự học sinh phải hoàn thành.", "Add the steps in the exact order students must complete.")}</div>}
+                </div>
+              </section>
+
+              <section style={{ padding: "24px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="gift" size={17} color={C.accent} /> {tx("Phần thưởng", "Rewards")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Mỗi rule chỉ được cấp một lần cho mỗi học sinh.", "Each reward rule can be granted only once per student.")}</div></div><button onClick={addReward} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm phần thưởng", "Add reward")}</button></div>
+                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(145px, 1fr) minmax(150px, 1.3fr) 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={reward.rewardType} onChange={event => updateReward(reward.id, { rewardType: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option><option value="voucher">Voucher</option><option value="custom">{tx("Tùy chỉnh", "Custom")}</option></select></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Giá trị / ghi chú", "Value / note")}</span><input value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value })} placeholder={reward.rewardType === "coins" ? "50" : tx("Tên quà hoặc nội dung", "Gift name or content")} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
+                </div>)}</div>
+              </section>
+            </div>
+          );
+        }
+
+        if (activeAssignment) {
+          const studentRows = students.filter(student => activeAssignment.audience !== "SPECIFIC" || (activeAssignment.targetStudentIds || []).includes(student.id));
+          return <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 22 }}><div><div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Theo dõi chuyên đề", "Quest progress")}</div><h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)" }}>{activeAssignment.title}</h2></div><button onClick={() => setTopicAssignmentProgressFor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại danh sách", "Back to assignments")}</button></div>
+            <div style={{ overflowX: "auto", borderTop: `2px solid ${C.accent}` }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}`, color: C.sub, fontSize: 11, textAlign: "left" }}><th style={{ padding: "12px 8px" }}>{tx("Học sinh", "Student")}</th><th>{tx("Chặng", "Steps")}</th><th>{tx("Điểm tích lũy", "Total score")}</th><th>{tx("First-pass streak", "First-pass streak")}</th><th>{tx("Đã mở khóa", "Unlocked")}</th></tr></thead><tbody>{studentRows.map(student => {
+              const progress = deriveQuestProgress(questProgress.find(item => item.studentId === student.id && item.topicAssignmentId === activeAssignment.id), activeAssignment);
+              return <tr key={student.id} style={{ borderBottom: `1px solid ${C.border}`, fontSize: 13 }}><td style={{ padding: "13px 8px", fontWeight: 800 }}>{student.name}<div style={{ fontSize: 11, fontWeight: 500, color: C.sub, marginTop: 2 }}>{student.email}</div></td><td>{progress.completedNodeIds.length}/{activeAssignment.nodes.length}</td><td>{progress.totalAccumulatedScore}</td><td>{progress.currentStreak}</td><td>{progress.unlockedRewards.length}</td></tr>;
+            })}{!studentRows.length && <tr><td colSpan={5} style={{ padding: 22, color: C.sub }}>{tx("Chưa có học sinh được phân phối.", "No students have been assigned.")}</td></tr>}</tbody></table></div>
+          </div>;
+        }
+
+        return <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 16, flexWrap: "wrap", marginBottom: 24 }}><div><div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Lộ trình có điều kiện", "Gated learning paths")}</div><h2 style={{ margin: 0, fontSize: 30, fontFamily: "var(--display)", letterSpacing: 0 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</h2><p style={{ margin: "7px 0 0", color: C.sub, maxWidth: 620, lineHeight: 1.55 }}>{tx("Ghép các đề có sẵn thành hành trình theo dạng bài. Học sinh chỉ mở chặng kế tiếp sau khi đạt ngưỡng bạn đặt.", "Sequence existing tests by skill. Students unlock the next step only after reaching your threshold.")}</p></div><button onClick={() => setTopicAssignmentEditor(makeAssignment())} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "10px 15px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="plus" size={16} /> {tx("Tạo chuyên đề", "Create quest")}</button></div>
+          <div style={{ borderTop: `2px solid ${C.accent}` }}>{topicAssignments.map(assignment => {
+            const assignedCount = assignment.audience === "SPECIFIC" ? (assignment.targetStudentIds || []).length : students.length;
+            return <div key={assignment.id} style={{ padding: "18px 0", borderBottom: `1px solid ${C.border}`, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 18, alignItems: "center" }}><div style={{ minWidth: 0 }}><div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><h3 style={{ margin: 0, fontSize: 17 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, padding: "3px 7px", fontSize: 10, fontWeight: 800, borderRadius: 5 }}>{assignment.topicCategory}</span></div><div style={{ color: C.sub, fontSize: 12, marginTop: 6 }}>{assignment.nodes.length} {tx("chặng", "steps")} · {assignment.rewards.length} {tx("phần thưởng", "rewards")} · {assignedCount} {tx("học sinh", "students")}</div>{assignment.description && <div style={{ color: C.sub, fontSize: 13, marginTop: 5, maxWidth: 700 }}>{assignment.description}</div>}</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button onClick={() => setTopicAssignmentProgressFor(assignment.id)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, padding: "8px 10px", cursor: "pointer", borderRadius: 7, fontWeight: 700, fontSize: 12 }}><Ico name="trending" size={14} /> {tx("Tiến độ", "Progress")}</button><button onClick={() => setTopicAssignmentEditor({ ...assignment, nodes: [...assignment.nodes], rewards: [...assignment.rewards], targetStudentIds: [...(assignment.targetStudentIds || [])] })} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, padding: "8px 10px", cursor: "pointer", borderRadius: 7 }} title={tx("Chỉnh sửa", "Edit")}><Ico name="edit" size={14} /></button><button onClick={() => void deleteAssignment(assignment)} style={{ border: `1px solid ${C.err}50`, background: `${C.err}0d`, color: C.err, padding: "8px 10px", cursor: "pointer", borderRadius: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={14} /></button></div></div>;
+          })}{!topicAssignments.length && <div style={{ padding: "54px 8px", color: C.sub, textAlign: "center" }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, fontWeight: 800, color: C.text }}>{tx("Chưa có chuyên đề nào", "No quest assignments yet")}</div><div style={{ fontSize: 13, marginTop: 4 }}>{tx("Tạo hành trình đầu tiên từ các đề đã có trong Exam Builder.", "Create the first path from tests already in Exam Builder.")}</div></div>}</div>
+        </div>;
+      })()}
         {activeTab === "LIVE_ARENA" && (
           <div style={{ display: "grid", gap: 24 }}>
             <div className="card" style={{ background: `linear-gradient(135deg, #EFF6FF, #FFFFFF)`, border: `1px solid #BFDBFE`, padding: 40 }}>
@@ -12895,7 +13478,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 </button>
               );
             })}
-            <button onClick={() => setMobileMoreOpen(v => !v)} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: (mobileMoreOpen || ['CLASSROOM','LIVE_ARENA','DRIVE','ACADEMICS','HISTORY'].includes(activeTab)) ? C.accent : C.sub }}>
+            <button onClick={() => setMobileMoreOpen(v => !v)} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: (mobileMoreOpen || ['CLASSROOM','TOPIC_ASSIGNMENTS','LIVE_ARENA','DRIVE','ACADEMICS','HISTORY'].includes(activeTab)) ? C.accent : C.sub }}>
               <Ico name="list" size={21} />
               <span style={{ fontSize: 10, fontWeight: 600 }}>{i18n.language === 'vi' ? 'Thêm' : 'More'}</span>
             </button>
@@ -12905,9 +13488,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <div onClick={() => setMobileMoreOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1001, display: 'flex', alignItems: 'flex-end' }}>
               <div onClick={e => e.stopPropagation()} style={{ width: '100%', background: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: '10px 14px calc(20px + env(safe-area-inset-bottom))', borderTop: `1px solid ${C.border}` }}>
                 <div style={{ width: 38, height: 4, borderRadius: 2, background: C.border, margin: '6px auto 14px' }} />
-                {([{ key: 'CLASSROOM', icon: 'clock' }, { key: 'LIVE_ARENA', icon: 'monitor' }, { key: 'DRIVE', icon: 'cloud' }] as {key: TabType, icon: string}[]).map(it => (
+                {([{ key: 'CLASSROOM', icon: 'clock' }, { key: 'TOPIC_ASSIGNMENTS', icon: 'target' }, { key: 'LIVE_ARENA', icon: 'monitor' }, { key: 'DRIVE', icon: 'cloud' }] as {key: TabType, icon: string}[]).map(it => (
                   <button key={it.key} onClick={() => { setActiveTab(it.key); setMobileMoreOpen(false); }} style={{ width: '100%', textAlign: 'left', background: activeTab === it.key ? `${C.accent}12` : 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 12px', borderRadius: 12, color: C.text, fontSize: 15, fontWeight: 700 }}>
-                    <Ico name={it.icon} size={20} color={activeTab === it.key ? C.accent : C.sub} /> {t('tab_' + it.key)}
+                    <Ico name={it.icon} size={20} color={activeTab === it.key ? C.accent : C.sub} /> {it.key === 'TOPIC_ASSIGNMENTS' ? (i18n.language === 'vi' ? 'Bài tập chuyên đề' : 'Quest assignments') : t('tab_' + it.key)}
                   </button>
                 ))}
                 <div style={{ height: 1, background: C.border, margin: '8px 0' }} />

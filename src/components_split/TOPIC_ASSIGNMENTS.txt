@@ -1,0 +1,245 @@
+      {activeTab === "TOPIC_ASSIGNMENTS" && (() => {
+        const isVi = i18n.language === "vi";
+        const tx = (vi: string, en: string) => isVi ? vi : en;
+        const sourceTests = quizzes.filter(quiz => Array.isArray(quiz.questions) && quiz.questions.length > 0);
+        const activeAssignment = topicAssignmentProgressFor
+          ? topicAssignments.find(item => item.id === topicAssignmentProgressFor) || null
+          : null;
+        const toDateInput = (value?: string) => {
+          if (!value) return "";
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+          const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+          return local.toISOString().slice(0, 16);
+        };
+        const makeAssignment = (): TopicAssignment => ({
+          id: `topic_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`,
+          title: "",
+          topicCategory: "",
+          description: "",
+          openDate: "",
+          closeDate: "",
+          audience: "ALL",
+          targetStudentIds: [],
+          nodes: [],
+          rewards: [],
+          createdBy: currentUser?.email || "",
+          createdAt: getTrueTime(),
+        });
+        const updateDraft = (patch: Partial<TopicAssignment>) => {
+          setTopicAssignmentEditor(previous => previous ? { ...previous, ...patch } : previous);
+        };
+        const addNode = () => {
+          const source = sourceTests[0];
+          if (!source) { alert(tx("Hãy tạo hoặc tải ít nhất một đề trước khi thêm chặng.", "Create or upload at least one test before adding a step.")); return; }
+          const node: QuestNodeConfig = {
+            id: `node_${getTrueTime()}_${Math.random().toString(36).slice(2, 6)}`,
+            testId: source.id,
+            title: source.title,
+            description: "",
+            openDate: "",
+            closeDate: "",
+            passingThresholdPercent: 70,
+            mode: "practice",
+            timeLimitMinutes: source.timeLimit,
+            questionCount: source.questions.length,
+          };
+          setTopicAssignmentEditor(previous => previous ? { ...previous, nodes: [...previous.nodes, node] } : previous);
+        };
+        const updateNode = (nodeId: string, patch: Partial<QuestNodeConfig>) => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            nodes: previous.nodes.map(node => node.id === nodeId ? { ...node, ...patch } : node),
+          } : previous);
+        };
+        const moveNode = (nodeIndex: number, direction: -1 | 1) => {
+          setTopicAssignmentEditor(previous => {
+            if (!previous) return previous;
+            const nextIndex = nodeIndex + direction;
+            if (nextIndex < 0 || nextIndex >= previous.nodes.length) return previous;
+            const nodes = [...previous.nodes];
+            [nodes[nodeIndex], nodes[nextIndex]] = [nodes[nextIndex], nodes[nodeIndex]];
+            return { ...previous, nodes };
+          });
+        };
+        const addReward = () => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            rewards: [...previous.rewards, {
+              id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 6)}`,
+              type: "milestone",
+              targetValue: Math.max(1, previous.nodes.length || 1),
+              rewardType: "coins",
+              rewardValue: "50",
+              description: "",
+            }],
+          } : previous);
+        };
+        const updateReward = (rewardId: string, patch: any) => {
+          setTopicAssignmentEditor(previous => previous ? {
+            ...previous,
+            rewards: previous.rewards.map(reward => reward.id === rewardId ? { ...reward, ...patch } : reward),
+          } : previous);
+        };
+        const saveAssignment = async () => {
+          if (!topicAssignmentEditor) return;
+          const draft = {
+            ...topicAssignmentEditor,
+            title: String(topicAssignmentEditor.title || "").trim(),
+            topicCategory: String(topicAssignmentEditor.topicCategory || "").trim(),
+            targetStudentIds: Array.from(new Set(topicAssignmentEditor.targetStudentIds || [])),
+            nodes: topicAssignmentEditor.nodes.map(node => ({
+              ...node,
+              title: String(node.title || "").trim(),
+              testId: String(node.testId || "").trim(),
+              passingThresholdPercent: Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)),
+              questionCount: Math.max(1, Math.floor(Number(node.questionCount) || 1)),
+              timeLimitMinutes: node.timeLimitMinutes ? Math.max(1, Math.floor(Number(node.timeLimitMinutes))) : undefined,
+            })),
+            updatedAt: getTrueTime(),
+          } as TopicAssignment;
+          if (!draft.title || !draft.topicCategory || !draft.nodes.length || draft.nodes.some(node => !node.testId || !node.title)) {
+            alert(tx("Cần có tiêu đề, chuyên đề và ít nhất một chặng đã chọn đề.", "A title, topic category, and at least one configured step are required."));
+            return;
+          }
+          const nextAssignments = topicAssignments.some(item => item.id === draft.id)
+            ? topicAssignments.map(item => item.id === draft.id ? draft : item)
+            : [draft, ...topicAssignments];
+          setTopicAssignments(nextAssignments);
+          const saved = await syncData({ topicAssignments: nextAssignments });
+          if (saved) {
+            setTopicAssignmentEditor(null);
+            alert(tx("Đã lưu chuyên đề và đồng bộ cho các thiết bị.", "Quest assignment saved and synchronized."));
+          } else {
+            alert(tx("Bản nháp vẫn còn trên thiết bị này. Hệ thống sẽ thử đồng bộ lại khi có mạng.", "The draft remains on this device and will retry when the connection returns."));
+          }
+        };
+        const deleteAssignment = async (assignment: TopicAssignment) => {
+          if (!confirm(tx(`Xóa chuyên đề "${assignment.title}"? Tiến độ đã nộp được giữ lại để đối soát.`, `Delete "${assignment.title}"? Submitted progress is retained for audit.`))) return;
+          const nextAssignments = topicAssignments.filter(item => item.id !== assignment.id);
+          setTopicAssignments(nextAssignments);
+          setTopicAssignmentProgressFor(current => current === assignment.id ? null : current);
+          await syncData({ topicAssignments: nextAssignments });
+        };
+        const statusMeta: Record<string, { label: string; color: string }> = {
+          completed: { label: tx("Đã đạt", "Passed"), color: C.succ },
+          available: { label: tx("Sẵn sàng", "Ready"), color: C.accent },
+          retry: { label: tx("Làm lại", "Retry"), color: C.warn },
+          locked: { label: tx("Khóa", "Locked"), color: C.sub },
+          scheduled: { label: tx("Chưa mở", "Scheduled"), color: C.warn },
+          closed: { label: tx("Đã đóng", "Closed"), color: C.err },
+        };
+
+        if (topicAssignmentEditor) {
+          const draft = topicAssignmentEditor;
+          return (
+            <div style={{ maxWidth: 1120, margin: "0 auto", paddingBottom: 42 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
+                <div>
+                  <div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</div>
+                  <h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)", letterSpacing: 0 }}>{draft.title || tx("Chuyên đề mới", "New quest")}</h2>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setTopicAssignmentEditor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
+                  <button onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="save" size={15} /> {tx("Lưu chuyên đề", "Save quest")}</button>
+                </div>
+              </div>
+
+              <section style={{ borderTop: `2px solid ${C.accent}`, padding: "20px 0 25px", borderBottom: `1px solid ${C.border}` }}>
+                <h3 style={{ margin: "0 0 16px", fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="fileText" size={17} color={C.accent} /> {tx("Thông tin & phân phối", "Information & distribution")}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                  <label style={{ display: "grid", gap: 6, gridColumn: "span 2" }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Tên chuyên đề", "Quest title")}</span><input value={draft.title} onChange={event => updateDraft({ title: event.target.value })} placeholder={tx("Ví dụ: Matching Headings Foundation", "e.g. Matching Headings Foundation")} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Chuyên đề", "Topic category")}</span><input value={draft.topicCategory} onChange={event => updateDraft({ topicCategory: event.target.value })} placeholder="Matching headings / Map labelling" style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Đối tượng", "Audience")}</span><select value={draft.audience || "ALL"} onChange={event => updateDraft({ audience: event.target.value as "ALL" | "SPECIFIC" })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, fontSize: 14 }}><option value="ALL">{tx("Tất cả học sinh", "All students")}</option><option value="SPECIFIC">{tx("Học sinh chọn riêng", "Specific students")}</option></select></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Mở từ", "Open from")}</span><input type="datetime-local" value={toDateInput(draft.openDate)} onChange={event => updateDraft({ openDate: event.target.value })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Đóng lúc", "Close at")}</span><input type="datetime-local" value={toDateInput(draft.closeDate)} onChange={event => updateDraft({ closeDate: event.target.value })} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                </div>
+                <label style={{ display: "grid", gap: 6, marginTop: 12 }}><span style={{ fontSize: 12, fontWeight: 800, color: C.sub }}>{tx("Mô tả cho học sinh", "Student-facing description")}</span><textarea value={draft.description || ""} onChange={event => updateDraft({ description: event.target.value })} rows={3} style={{ padding: "10px 11px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7, resize: "vertical", fontFamily: "inherit" }} /></label>
+                {draft.audience === "SPECIFIC" && <div style={{ marginTop: 14, paddingTop: 13, borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.sub, marginBottom: 9 }}>{tx("Chọn học sinh nhận chuyên đề", "Select students")}</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{students.map(student => {
+                    const selected = (draft.targetStudentIds || []).includes(student.id);
+                    return <button key={student.id} onClick={() => updateDraft({ targetStudentIds: selected ? (draft.targetStudentIds || []).filter(id => id !== student.id) : [...(draft.targetStudentIds || []), student.id] })} style={{ border: `1px solid ${selected ? C.accent : C.border}`, background: selected ? `${C.accent}14` : C.card, color: selected ? C.accent : C.text, padding: "7px 10px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>{student.name}</button>;
+                  })}</div>
+                </div>}
+              </section>
+
+              <section style={{ padding: "24px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="target" size={17} color={C.accent} /> {tx("Chuỗi chặng", "Quest path")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Học sinh phải đạt ngưỡng của chặng hiện tại để mở chặng kế tiếp.", "Students must pass the current step before the next one unlocks.")}</div></div>
+                  <button onClick={addNode} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm chặng", "Add step")}</button>
+                </div>
+                {!sourceTests.length && <div style={{ padding: "14px 0", color: C.warn, fontSize: 13 }}>{tx("Chưa có đề nào trong Exam Builder. Hãy tạo/tải đề trước khi cấu hình chuyên đề.", "No tests are available yet. Create or upload one in Exam Builder first.")} <button onClick={() => setActiveTab("EXAM_BUILDER")} style={{ marginLeft: 7, color: C.accent, border: "none", background: "transparent", cursor: "pointer", fontWeight: 800 }}>{tx("Mở Exam Builder", "Open Exam Builder")}</button></div>}
+                <div style={{ display: "grid", gap: 10 }}>
+                  {draft.nodes.map((node, nodeIndex) => {
+                    const selectedSource = sourceTests.find(test => test.id === node.testId);
+                    return <details key={node.id} open style={{ border: `1px solid ${C.border}`, borderRadius: 8, background: C.card }}>
+                      <summary style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "12px 13px", listStyle: "none" }}>
+                        <span style={{ width: 25, height: 25, borderRadius: "50%", background: C.accent, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 900, flexShrink: 0 }}>{nodeIndex + 1}</span>
+                        <span style={{ fontWeight: 800, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{node.title || tx("Chặng chưa có tên", "Untitled step")}</span>
+                        <span style={{ color: C.sub, fontSize: 11, fontWeight: 700 }}>{node.mode === "practice" ? tx("Luyện tập", "Practice") : tx("Thi", "Exam")} · {node.passingThresholdPercent}%</span>
+                      </summary>
+                      <div style={{ padding: "0 13px 14px", display: "grid", gap: 11, borderTop: `1px solid ${C.border}` }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(210px, 2fr) minmax(160px, 1fr) minmax(130px, 1fr)", gap: 10, marginTop: 12 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Đề có sẵn", "Existing test")}</span><select value={node.testId} onChange={event => { const test = sourceTests.find(item => item.id === event.target.value); updateNode(node.id, { testId: event.target.value, title: test?.title || node.title, questionCount: test?.questions.length || node.questionCount, timeLimitMinutes: test?.timeLimit || node.timeLimitMinutes }); }} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }}><option value="">{tx("Chọn đề", "Choose a test")}</option>{sourceTests.map(test => <option key={test.id} value={test.id}>{test.title} ({test.questions.length})</option>)}</select></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Ngưỡng pass (%)", "Pass threshold (%)")}</span><input type="number" min="0" max="100" value={node.passingThresholdPercent} onChange={event => updateNode(node.id, { passingThresholdPercent: Number(event.target.value) })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Chế độ", "Mode")}</span><select value={node.mode} onChange={event => updateNode(node.id, { mode: event.target.value as "practice" | "exam" })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }}><option value="practice">{tx("Luyện tập", "Practice")}</option><option value="exam">{tx("Thi", "Exam")}</option></select></label>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(210px, 2fr) repeat(2, minmax(130px, 1fr))", gap: 10 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Tên hiển thị", "Display title")}</span><input value={node.title} onChange={event => updateNode(node.id, { title: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Số câu", "Questions")}</span><input type="number" min="1" max={selectedSource?.questions.length || node.questionCount || 1} value={node.questionCount} onChange={event => updateNode(node.id, { questionCount: Number(event.target.value) })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Phút", "Minutes")}</span><input type="number" min="1" value={node.timeLimitMinutes || ""} onChange={event => updateNode(node.id, { timeLimitMinutes: event.target.value ? Number(event.target.value) : undefined })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        </div>
+                        <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Gợi ý / mô tả ngắn", "Hint / short description")}</span><input value={node.description || ""} onChange={event => updateNode(node.id, { description: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(150px, 1fr))", gap: 10 }}>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mở riêng", "Step open")}</span><input type="datetime-local" value={toDateInput(node.openDate)} onChange={event => updateNode(node.id, { openDate: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                          <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Đóng riêng", "Step close")}</span><input type="datetime-local" value={toDateInput(node.closeDate)} onChange={event => updateNode(node.id, { closeDate: event.target.value })} style={{ padding: "9px 10px", border: `1px solid ${C.border}`, background: C.bg, color: C.text, borderRadius: 7 }} /></label>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 11, color: C.sub }}>{node.mode === "practice" ? tx("Practice không bật chống thoát trang/toàn màn hình.", "Practice bypasses fullscreen and anti-exit checks.") : tx("Exam dùng quy tắc bảo mật của đề gốc.", "Exam keeps the source test security rules.")}</span>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button disabled={nodeIndex === 0} onClick={() => moveNode(nodeIndex, -1)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: nodeIndex === 0 ? "default" : "pointer", opacity: nodeIndex === 0 ? 0.45 : 1, width: 31, height: 30 }} title={tx("Đưa lên", "Move up")}><Ico name="arrowUp" size={14} /></button>
+                            <button disabled={nodeIndex === draft.nodes.length - 1} onClick={() => moveNode(nodeIndex, 1)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: nodeIndex === draft.nodes.length - 1 ? "default" : "pointer", opacity: nodeIndex === draft.nodes.length - 1 ? 0.45 : 1, width: 31, height: 30 }} title={tx("Đưa xuống", "Move down")}><Ico name="arrowDown" size={14} /></button>
+                            <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, nodes: previous.nodes.filter(item => item.id !== node.id) } : previous)} style={{ border: `1px solid ${C.err}55`, background: `${C.err}0d`, color: C.err, cursor: "pointer", width: 31, height: 30 }} title={tx("Xóa chặng", "Delete step")}><Ico name="trash" size={14} /></button>
+                          </div>
+                        </div>
+                      </div>
+                    </details>;
+                  })}
+                  {!draft.nodes.length && <div style={{ padding: "22px 4px", color: C.sub, fontSize: 13 }}>{tx("Thêm các chặng theo đúng thứ tự học sinh phải hoàn thành.", "Add the steps in the exact order students must complete.")}</div>}
+                </div>
+              </section>
+
+              <section style={{ padding: "24px 0" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="gift" size={17} color={C.accent} /> {tx("Phần thưởng", "Rewards")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Mỗi rule chỉ được cấp một lần cho mỗi học sinh.", "Each reward rule can be granted only once per student.")}</div></div><button onClick={addReward} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm phần thưởng", "Add reward")}</button></div>
+                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(145px, 1fr) minmax(150px, 1.3fr) 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={reward.rewardType} onChange={event => updateReward(reward.id, { rewardType: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option><option value="voucher">Voucher</option><option value="custom">{tx("Tùy chỉnh", "Custom")}</option></select></label>
+                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Giá trị / ghi chú", "Value / note")}</span><input value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value })} placeholder={reward.rewardType === "coins" ? "50" : tx("Tên quà hoặc nội dung", "Gift name or content")} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                  <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
+                </div>)}</div>
+              </section>
+            </div>
+          );
+        }
+
+        if (activeAssignment) {
+          const studentRows = students.filter(student => activeAssignment.audience !== "SPECIFIC" || (activeAssignment.targetStudentIds || []).includes(student.id));
+          return <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 22 }}><div><div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Theo dõi chuyên đề", "Quest progress")}</div><h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)" }}>{activeAssignment.title}</h2></div><button onClick={() => setTopicAssignmentProgressFor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại danh sách", "Back to assignments")}</button></div>
+            <div style={{ overflowX: "auto", borderTop: `2px solid ${C.accent}` }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}`, color: C.sub, fontSize: 11, textAlign: "left" }}><th style={{ padding: "12px 8px" }}>{tx("Học sinh", "Student")}</th><th>{tx("Chặng", "Steps")}</th><th>{tx("Điểm tích lũy", "Total score")}</th><th>{tx("First-pass streak", "First-pass streak")}</th><th>{tx("Đã mở khóa", "Unlocked")}</th></tr></thead><tbody>{studentRows.map(student => {
+              const progress = deriveQuestProgress(questProgress.find(item => item.studentId === student.id && item.topicAssignmentId === activeAssignment.id), activeAssignment);
+              return <tr key={student.id} style={{ borderBottom: `1px solid ${C.border}`, fontSize: 13 }}><td style={{ padding: "13px 8px", fontWeight: 800 }}>{student.name}<div style={{ fontSize: 11, fontWeight: 500, color: C.sub, marginTop: 2 }}>{student.email}</div></td><td>{progress.completedNodeIds.length}/{activeAssignment.nodes.length}</td><td>{progress.totalAccumulatedScore}</td><td>{progress.currentStreak}</td><td>{progress.unlockedRewards.length}</td></tr>;
+            })}{!studentRows.length && <tr><td colSpan={5} style={{ padding: 22, color: C.sub }}>{tx("Chưa có học sinh được phân phối.", "No students have been assigned.")}</td></tr>}</tbody></table></div>
+          </div>;
+        }
+
+        return <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 16, flexWrap: "wrap", marginBottom: 24 }}><div><div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Lộ trình có điều kiện", "Gated learning paths")}</div><h2 style={{ margin: 0, fontSize: 30, fontFamily: "var(--display)", letterSpacing: 0 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</h2><p style={{ margin: "7px 0 0", color: C.sub, maxWidth: 620, lineHeight: 1.55 }}>{tx("Ghép các đề có sẵn thành hành trình theo dạng bài. Học sinh chỉ mở chặng kế tiếp sau khi đạt ngưỡng bạn đặt.", "Sequence existing tests by skill. Students unlock the next step only after reaching your threshold.")}</p></div><button onClick={() => setTopicAssignmentEditor(makeAssignment())} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "10px 15px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="plus" size={16} /> {tx("Tạo chuyên đề", "Create quest")}</button></div>
+          <div style={{ borderTop: `2px solid ${C.accent}` }}>{topicAssignments.map(assignment => {
+            const assignedCount = assignment.audience === "SPECIFIC" ? (assignment.targetStudentIds || []).length : students.length;
+            return <div key={assignment.id} style={{ padding: "18px 0", borderBottom: `1px solid ${C.border}`, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 18, alignItems: "center" }}><div style={{ minWidth: 0 }}><div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><h3 style={{ margin: 0, fontSize: 17 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, padding: "3px 7px", fontSize: 10, fontWeight: 800, borderRadius: 5 }}>{assignment.topicCategory}</span></div><div style={{ color: C.sub, fontSize: 12, marginTop: 6 }}>{assignment.nodes.length} {tx("chặng", "steps")} · {assignment.rewards.length} {tx("phần thưởng", "rewards")} · {assignedCount} {tx("học sinh", "students")}</div>{assignment.description && <div style={{ color: C.sub, fontSize: 13, marginTop: 5, maxWidth: 700 }}>{assignment.description}</div>}</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button onClick={() => setTopicAssignmentProgressFor(assignment.id)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, padding: "8px 10px", cursor: "pointer", borderRadius: 7, fontWeight: 700, fontSize: 12 }}><Ico name="trending" size={14} /> {tx("Tiến độ", "Progress")}</button><button onClick={() => setTopicAssignmentEditor({ ...assignment, nodes: [...assignment.nodes], rewards: [...assignment.rewards], targetStudentIds: [...(assignment.targetStudentIds || [])] })} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, padding: "8px 10px", cursor: "pointer", borderRadius: 7 }} title={tx("Chỉnh sửa", "Edit")}><Ico name="edit" size={14} /></button><button onClick={() => void deleteAssignment(assignment)} style={{ border: `1px solid ${C.err}50`, background: `${C.err}0d`, color: C.err, padding: "8px 10px", cursor: "pointer", borderRadius: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={14} /></button></div></div>;
+          })}{!topicAssignments.length && <div style={{ padding: "54px 8px", color: C.sub, textAlign: "center" }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, fontWeight: 800, color: C.text }}>{tx("Chưa có chuyên đề nào", "No quest assignments yet")}</div><div style={{ fontSize: 13, marginTop: 4 }}>{tx("Tạo hành trình đầu tiên từ các đề đã có trong Exam Builder.", "Create the first path from tests already in Exam Builder.")}</div></div>}</div>
+        </div>;
+      })()}

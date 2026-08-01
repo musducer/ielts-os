@@ -250,11 +250,22 @@
     };
     const canPronounceVocab = (card: VocabCard) => (card.category || 'word') !== 'grammar' && Boolean(String(card.word || '').trim());
     const renderPronounceButton = (card: VocabCard, compact = false, stopCardFlip = false) => !canPronounceVocab(card) ? null : <button type="button" title={`${t('vocab_pronounce')}: ${card.word}`} aria-label={`${t('vocab_pronounce')}: ${card.word}`} onClick={(e) => { if (stopCardFlip) e.stopPropagation(); pronounceVocab(card.word); }} style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: compact ? 24 : 27, height: compact ? 24 : 27, padding: 0, borderRadius: compact ? 6 : 7, border: `1px solid ${C.border}`, background: C.card, color: C.accent, cursor: 'pointer', flexShrink: 0}}><Ico name="volume2" size={compact ? 14 : 15} /></button>;
+    const myTopicAssignments = topicAssignments.filter(assignment =>
+      assignment.audience !== "SPECIFIC" || (assignment.targetStudentIds || []).includes(me.id)
+    );
+    // A test used as a gated Quest node must not also appear as a free-standing
+    // exam card. Otherwise a student could bypass the sequence and see its review.
+    const questSourceTestIds = new Set(myTopicAssignments.flatMap(assignment => assignment.nodes.map(node => node.testId)));
     const activeQuizzes = quizzes.filter(q => {
-      if (!q.active) return false;
+      if (!q.active || questSourceTestIds.has(q.id)) return false;
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
+    const getMyQuestProgress = (assignment: TopicAssignment) => deriveQuestProgress(
+      questProgress.find(progress => progress.studentId === me.id && progress.topicAssignmentId === assignment.id),
+      assignment
+    );
+    const getQuestResult = (resultId?: string) => resultId ? myQuizResults.find(result => result.id === resultId) : undefined;
     const myLinks = sharedLinks.filter(l => {
       if (l.audience === "ALL_STUDENTS") return true;
       if (l.audience === "SPECIFIC_STUDENT" && l.targetStudentId === me.id) return true;
@@ -272,7 +283,20 @@
     const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
 
     const handleReviewQuiz = (r: QuizResult) => {
-        setReviewQuiz({quiz: quizzes.find(q=>q.id===r.quizId) as Quiz, result: r});
+        if (r.topicAssignmentId && r.questPassed !== true) {
+            alert("Bạn cần đạt ngưỡng của chặng này trước khi mở phần Review.");
+            return;
+        }
+        const catalogQuiz = quizzes.find(q => q.id === r.quizId);
+        if (!catalogQuiz) {
+            alert("Không tìm thấy đề gốc để mở Review. Hãy báo giáo viên.");
+            return;
+        }
+        const questionIds = Array.isArray(r.questQuestionIds) ? new Set(r.questQuestionIds) : null;
+        const quizForReview = questionIds
+          ? normalizeExamSections({ ...catalogQuiz, questions: catalogQuiz.questions.filter(question => questionIds.has(question.id)) })
+          : catalogQuiz;
+        setReviewQuiz({quiz: quizForReview as Quiz, result: r});
         setReviewSectionIdx(0);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
@@ -627,6 +651,7 @@
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -955,6 +980,74 @@
           </div>
           </>)}
 
+          {/* ===== TAB: BÀI TẬP CHUYÊN ĐỀ ===== */}
+          {portalTab === "quests" && (<>
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1.05, textTransform: 'uppercase', marginBottom: 5 }}>Quest path</div>
+            <h2 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 27, letterSpacing: 0 }}>Bài tập chuyên đề</h2>
+            <p style={{ margin: '7px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.55 }}>Hoàn thành từng chặng theo đúng thứ tự. Bạn chỉ mở được chặng kế tiếp sau khi đạt ngưỡng điểm của chặng hiện tại.</p>
+          </div>
+          {questStatusNotice && <div style={{ marginBottom: 16, padding: '11px 13px', border: `1px solid ${C.accent}55`, borderLeft: `3px solid ${C.accent}`, background: `${C.accent}0d`, color: C.text, fontSize: 13, lineHeight: 1.5, borderRadius: 7, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}><span>{questStatusNotice}</span><button onClick={() => setQuestStatusNotice('')} style={{ border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', padding: 0 }}><Ico name="x" size={15} /></button></div>}
+          <div style={{ display: 'grid', gap: 16 }}>
+            {myTopicAssignments.map(assignment => {
+              const progress = getMyQuestProgress(assignment);
+              const selectedInAssignment = selectedQuestNode?.assignmentId === assignment.id
+                ? assignment.nodes.find(node => node.id === selectedQuestNode.nodeId) || null
+                : null;
+              const selectedIndex = selectedInAssignment ? assignment.nodes.findIndex(node => node.id === selectedInAssignment.id) : -1;
+              const selectedState = selectedIndex >= 0 ? getQuestNodeState(assignment, progress, selectedIndex, getRealTime()) : null;
+              const selectedAttempt = selectedInAssignment ? getLatestQuestAttempt(progress, selectedInAssignment.id) : null;
+              const selectedPassedAttempt = selectedInAssignment
+                ? [...(progress.attempts[selectedInAssignment.id] || [])].reverse().find(attempt => attempt.passed) || null
+                : null;
+              const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
+              const statusCopy: Record<string, { label: string; color: string; icon: string }> = {
+                completed: { label: 'Đã đạt', color: C.succ, icon: 'check' },
+                available: { label: 'Sẵn sàng', color: C.accent, icon: 'unlock' },
+                retry: { label: 'Làm lại', color: C.warn, icon: 'refresh' },
+                locked: { label: 'Đang khóa', color: C.sub, icon: 'lock' },
+                scheduled: { label: 'Chưa mở', color: C.warn, icon: 'clock' },
+                closed: { label: 'Đã đóng', color: C.err, icon: 'xcircle' },
+              };
+              return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                <div style={{ padding: '18px 19px 14px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                    <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
+                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>chặng hoàn thành</div></div>
+                  </div>
+                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>Mốc thưởng:</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
+                </div>
+                <div style={{ padding: '16px 19px 18px' }}>
+                  <div style={{ display: 'grid', gap: 0 }}>
+                    {assignment.nodes.map((node, index) => {
+                      const state = getQuestNodeState(assignment, progress, index, getRealTime());
+                      const meta = statusCopy[state];
+                      const latestAttempt = getLatestQuestAttempt(progress, node.id);
+                      const selected = selectedInAssignment?.id === node.id;
+                      return <React.Fragment key={node.id}>
+                        {index > 0 && <div style={{ width: 2, height: 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
+                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(''); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
+                          <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
+                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} câu · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? 'PASS' : 'CHƯA ĐẠT'}</span>}</span>
+                          <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                        </button>
+                      </React.Fragment>;
+                    })}
+                  </div>
+                  {selectedInAssignment && selectedState && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16, display: 'grid', gap: 11 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}><div><div style={{ fontWeight: 900, fontSize: 15 }}>{selectedInAssignment.title}</div><div style={{ color: C.sub, fontSize: 12, marginTop: 4 }}>{selectedInAssignment.mode === 'practice' ? 'Practice: không có chống thoát web hoặc bắt toàn màn hình.' : 'Exam: áp dụng quy tắc phòng thi của đề gốc.'}</div></div>{selectedAttempt && <div style={{ color: selectedAttempt.passed ? C.succ : C.warn, fontSize: 12, fontWeight: 900 }}>{selectedAttempt.score}/{selectedAttempt.totalQuestions} · {selectedAttempt.percentage}%</div>}</div>
+                    {(selectedState === 'available' || selectedState === 'retry') && <button onClick={() => startTopicQuestNode(assignment, selectedInAssignment)} disabled={questLaunchLoading === selectedInAssignment.id} style={{ justifySelf: 'start', border: 'none', background: C.accent, color: '#fff', cursor: questLaunchLoading === selectedInAssignment.id ? 'wait' : 'pointer', opacity: questLaunchLoading === selectedInAssignment.id ? 0.7 : 1, padding: '9px 14px', borderRadius: 7, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="play" size={14} /> {questLaunchLoading === selectedInAssignment.id ? 'Đang mở...' : selectedState === 'retry' ? 'Làm lại chặng này' : 'Bắt đầu chặng'}</button>}
+                    {selectedState === 'completed' && selectedResult && <button onClick={() => handleReviewQuiz(selectedResult)} style={{ justifySelf: 'start', border: `1px solid ${C.accent}`, background: `${C.accent}0d`, color: C.accent, cursor: 'pointer', padding: '9px 14px', borderRadius: 7, fontWeight: 800 }}>Review bài đã đạt</button>}
+                    {selectedState === 'completed' && !selectedResult && <div style={{ fontSize: 12, color: C.sub }}>Đã đạt chặng này. Kết quả Review đang được đồng bộ.</div>}
+                    {selectedState === 'locked' && <div style={{ fontSize: 12, color: C.sub }}>Hoàn thành chặng ngay trước đó để mở khóa.</div>}
+                  </div>}
+                </div>
+              </section>;
+            })}
+            {!myTopicAssignments.length && <div className="card" style={{ padding: '42px 20px', textAlign: 'center', color: C.sub }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, color: C.text, fontWeight: 800 }}>Chưa có bài tập chuyên đề được phân phối</div><div style={{ fontSize: 13, marginTop: 4 }}>Khi giáo viên mở chuyên đề cho bạn, hành trình sẽ xuất hiện ở đây.</div></div>}
+          </div>
+          </>)}
+
           {/* ===== TAB: PHÒNG THI ===== */}
           {portalTab === "exams" && (<>
           <div className="card" style={{ marginBottom: 24, border: `2px solid ${C.warn}` }}>
@@ -1130,6 +1223,7 @@
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
