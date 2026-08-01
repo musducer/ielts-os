@@ -106,16 +106,96 @@ const readVocabCardsFromServer = async (email: string) => {
 // HÀNG ĐỢI NỘP BÀI OFFLINE (lưu nhiều kết quả, đồng bộ khi có mạng)
 // ==========================================
 const offlineQueueKey = (email?: string | null) => `ielts_offline_queue_${email || "anon"}`;
+const stableOfflineIdentity = (identity?: string | null) =>
+  String(identity || "anon").trim().toLowerCase() || "anon";
 const readOfflineQueue = (email?: string | null): any[] => {
-  try { const s = localStorage.getItem(offlineQueueKey(email)); return s ? JSON.parse(s) : []; } catch { return []; }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(offlineQueueKey(email)) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
 };
 const writeOfflineQueue = (email: string | null | undefined, q: any[]) => {
   try { localStorage.setItem(offlineQueueKey(email), JSON.stringify(q)); } catch {}
 };
 const pushOfflineResult = (email: string | null | undefined, result: any) => {
   const q = readOfflineQueue(email);
-  q.push(result);
-  writeOfflineQueue(email, q);
+  const resultId = String(result?.id || "");
+  writeOfflineQueue(email, resultId ? [...q.filter((item: any) => String(item?.id || "") !== resultId), result] : [...q, result]);
+};
+const removeOfflineResult = (email: string | null | undefined, resultId?: string | null) => {
+  if (!resultId) return;
+  writeOfflineQueue(email, readOfflineQueue(email).filter((item: any) => String(item?.id || "") !== String(resultId)));
+};
+
+// Quest submissions are a compound write: the score, the append-only route progress,
+// and a possible reward ledger operation must reach Firestore together. Keep a durable
+// write-ahead journal until the server transaction confirms it, even when navigator.onLine
+// is stale while Wi-Fi is dropping.
+const pendingQuestSubmissionsKey = (identity?: string | null) =>
+  `ielts_pending_quest_submissions_${stableOfflineIdentity(identity)}`;
+const legacyPendingQuestKeys = (identity?: string | null) => Array.from(new Set([
+  `ielts_pending_quest_${identity || "anon"}`,
+  `ielts_pending_quest_${stableOfflineIdentity(identity)}`,
+]));
+const parsePendingQuestSubmissions = (raw: string | null): any[] => {
+  try {
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) return parsed.filter((entry: any) => entry?.result?.id);
+    return parsed?.result?.id ? [parsed] : [];
+  } catch {
+    return [];
+  }
+};
+const dedupePendingQuestSubmissions = (entries: any[]) => {
+  const byResultId = new Map<string, any>();
+  entries.forEach((entry: any) => {
+    const resultId = String(entry?.result?.id || "");
+    if (!resultId) return;
+    const existing = byResultId.get(resultId);
+    // Prefer the new journal record, but retain any field that an older legacy record has.
+    byResultId.set(resultId, existing ? { ...existing, ...entry } : entry);
+  });
+  return Array.from(byResultId.values()).sort((a: any, b: any) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
+};
+const readPendingQuestSubmissions = (identity?: string | null): any[] => {
+  try {
+    const records = parsePendingQuestSubmissions(localStorage.getItem(pendingQuestSubmissionsKey(identity)));
+    legacyPendingQuestKeys(identity).forEach((key) => {
+      records.push(...parsePendingQuestSubmissions(localStorage.getItem(key)));
+    });
+    return dedupePendingQuestSubmissions(records);
+  } catch {
+    return [];
+  }
+};
+const writePendingQuestSubmissions = (identity: string | null | undefined, entries: any[]) => {
+  try {
+    const next = dedupePendingQuestSubmissions(entries);
+    if (next.length) localStorage.setItem(pendingQuestSubmissionsKey(identity), JSON.stringify(next));
+    else localStorage.removeItem(pendingQuestSubmissionsKey(identity));
+    return true;
+  } catch {
+    return false;
+  }
+};
+const enqueuePendingQuestSubmission = (identity: string | null | undefined, entry: any) => {
+  const resultId = String(entry?.result?.id || "");
+  if (!resultId) return false;
+  const current = readPendingQuestSubmissions(identity).filter((item: any) => String(item?.result?.id || "") !== resultId);
+  return writePendingQuestSubmissions(identity, [...current, entry]);
+};
+const clearPendingQuestSubmission = (identity: string | null | undefined, resultId?: string | null) => {
+  if (!resultId) return;
+  const target = String(resultId);
+  writePendingQuestSubmissions(identity, readPendingQuestSubmissions(identity).filter((entry: any) => String(entry?.result?.id || "") !== target));
+  legacyPendingQuestKeys(identity).forEach((key) => {
+    try {
+      const remaining = parsePendingQuestSubmissions(localStorage.getItem(key))
+        .filter((entry: any) => String(entry?.result?.id || "") !== target);
+      if (!remaining.length) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(remaining));
+    } catch {}
+  });
 };
 
 // ==========================================
@@ -2829,7 +2909,7 @@ export default function IeltsSupremeOS() {
   const [colorblind, setColorblind] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [studentIp, setStudentIp] = useState<string>("Loading...");
-  const [isOffline, setIsOffline] = useState(false);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
   const [announcement, setAnnouncement] = useState<string>("");
   const [lastLoginTime, setLastLoginTime] = useState<string>("");
   const [timeOffset, setTimeOffset] = useState<number>(0);
@@ -3968,41 +4048,70 @@ useEffect(() => {
     const email = currentUser?.email;
     if (!email || !navigator.onLine) return;
     // A quest submission carries both a normal result and append-only unlock state.
-    // Flush it as one transaction before the legacy result-only queue so a mobile
-    // reconnect cannot show the score while losing the path progression.
-    const pendingQuestKey = `ielts_pending_quest_${email}`;
-    try {
-      const rawQuest = localStorage.getItem(pendingQuestKey);
-      if (rawQuest) {
-        const pendingQuest = JSON.parse(rawQuest);
+    // Replay the durable journal first. Each entry is removed only after its Firestore
+    // transaction succeeds, so a false-positive navigator.onLine can never erase a pass.
+    const pendingQuestSubmissions = readPendingQuestSubmissions(email);
+    for (const pendingQuest of pendingQuestSubmissions) {
+      const pendingResult = pendingQuest?.result;
+      if (pendingResult?.id) {
+        setQuizResults(prev => {
+          const ids = new Set(prev.map(item => String(item?.id || "")));
+          return ids.has(String(pendingResult.id)) ? prev : [pendingResult, ...prev];
+        });
+      }
+      if (Array.isArray(pendingQuest?.questProgress)) {
+        setQuestProgress(prev => mergeQuestProgressCollections(
+          prev,
+          pendingQuest.questProgress,
+          topicAssignments
+        ));
+      }
+      try {
         const synced = await syncData({
-          quizResults: pendingQuest.result ? [pendingQuest.result] : [],
+          quizResults: pendingResult ? [pendingResult] : [],
           questProgress: Array.isArray(pendingQuest.questProgress) ? pendingQuest.questProgress : [],
           ...(Array.isArray(pendingQuest.students) ? { students: pendingQuest.students } : {}),
           ...(pendingQuest.coinOperation ? { __coinOperation: pendingQuest.coinOperation } : {}),
         });
-        if (synced) localStorage.removeItem(pendingQuestKey);
+        if (!synced) {
+          console.warn("Pending quest sync was not acknowledged; preserving the local journal.");
+          return;
+        }
+        clearPendingQuestSubmission(email, pendingResult?.id);
+        removeOfflineResult(email, pendingResult?.id);
+      } catch (e) {
+        console.warn("Pending quest sync failed, preserving the local journal:", e);
+        return;
       }
-    } catch (e) {
-      console.warn("Pending quest sync failed, will retry after the next reconnect:", e);
-      return;
     }
     // Tương thích ngược: gộp key cũ (1 kết quả) vào hàng đợi
     const legacy = localStorage.getItem(`ielts_offline_result_${email}`);
     let q = readOfflineQueue(email);
-    if (legacy) { try { q = [JSON.parse(legacy), ...q]; } catch {} localStorage.removeItem(`ielts_offline_result_${email}`); }
+    if (legacy) {
+      try {
+        const legacyResult = JSON.parse(legacy);
+        q = legacyResult?.id && !q.some((item: any) => String(item?.id || "") === String(legacyResult.id))
+          ? [legacyResult, ...q]
+          : q;
+      } catch {}
+    }
     if (!q.length) return;
     try {
       setQuizResults(prev => {
-        const ids = new Set(prev.map(r => r.id));
-        return [...q.filter((r: any) => !ids.has(r.id)), ...prev];
+        const ids = new Set(prev.map(r => String(r?.id || "")));
+        return [...q.filter((r: any) => !ids.has(String(r?.id || ""))), ...prev];
       });
       const pendingCoinOperation = readPendingCoinOperation();
-      await syncData({ quizResults: q, ...(pendingCoinOperation ? { __coinOperation: pendingCoinOperation } : {}) });
+      const synced = await syncData({ quizResults: q, ...(pendingCoinOperation ? { __coinOperation: pendingCoinOperation } : {}) });
+      if (!synced) {
+        console.warn("Offline result sync was not acknowledged; preserving the local queue.");
+        return;
+      }
       writeOfflineQueue(email, []);
+      if (legacy) localStorage.removeItem(`ielts_offline_result_${email}`);
       alert(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`);
     } catch (e) {
-      console.warn("Flush offline queue failed, will retry later:", e);
+      console.warn("Flush offline queue failed, preserving the local queue:", e);
     }
   };
 
@@ -4153,12 +4262,36 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // The transaction ledger makes this safe even if the server already applied it.
       window.setTimeout(() => { void syncData({ __coinOperation: pendingCoinOperation }); }, 0);
     }
-    setQuizResults(clean(d.quizResults));
+    const serverQuizResults = clean(d.quizResults) as QuizResult[];
+    const pendingQuestSubmissions = userRole === "STUDENT" && currentUser?.email
+      ? readPendingQuestSubmissions(currentUser.email)
+      : [];
+    // A cached/local Firestore echo is not an acknowledgement. Keep the on-device
+    // journal until a server-confirmed snapshot includes the result ID.
+    const snapshotIsServerConfirmed = !snap.metadata?.hasPendingWrites && snap.metadata?.fromCache !== true;
+    const serverResultIds = new Set(serverQuizResults.map(result => String(result?.id || "")));
+    const unconfirmedQuestSubmissions = pendingQuestSubmissions.filter((entry: any) => {
+      const resultId = String(entry?.result?.id || "");
+      const acknowledged = snapshotIsServerConfirmed && !!resultId && serverResultIds.has(resultId);
+      if (acknowledged) clearPendingQuestSubmission(currentUser?.email, resultId);
+      return !acknowledged;
+    });
+    const recoveredQuizResults = new Map<string, QuizResult>();
+    unconfirmedQuestSubmissions.forEach((entry: any) => {
+      if (entry?.result?.id) recoveredQuizResults.set(String(entry.result.id), entry.result as QuizResult);
+    });
+    serverQuizResults.forEach(result => {
+      if (result?.id) recoveredQuizResults.set(String(result.id), result);
+    });
+    setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
+    const recoveredQuestProgress = unconfirmedQuestSubmissions.flatMap((entry: any) =>
+      Array.isArray(entry?.questProgress) ? entry.questProgress : []
+    );
     setQuestProgress(prev => mergeQuestProgressCollections(
       clean(d.questProgress),
-      prev,
+      [...prev, ...recoveredQuestProgress],
       incomingTopicAssignments.length ? incomingTopicAssignments : topicAssignments
     ));
     setBannedIps(clean(d.bannedIps));
@@ -4197,7 +4330,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
         cloudRefreshInFlightRef.current = false;
       }
     };
-    const handleForeground = () => { void refreshCloudAfterForeground(); };
+    const handleForeground = () => {
+      void refreshCloudAfterForeground();
+      void flushOfflineQueue();
+    };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") handleForeground();
     };
@@ -6822,30 +6958,52 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             };
           }
 
+          // Write-ahead journal first. navigator.onLine may stay true for several
+          // seconds after Wi-Fi fails, so waiting for an "offline" event here can
+          // lose a completed quest on refresh.
+          const questSubmission = {
+            result,
+            questProgress: nextQuestProgress,
+            ...(nextStudents !== students ? { students: nextStudents } : {}),
+            ...(coinOperation ? { coinOperation } : {}),
+            createdAt: Date.now(),
+          };
+          const questJournalSaved = enqueuePendingQuestSubmission(currentUser?.email || me.id, questSubmission);
+          if (coinOperation) writePendingCoinOperation(coinOperation);
+          if (!questJournalSaved) {
+            // This only runs when browser storage is unavailable/full. Preserve the
+            // score through the existing result queue as a degraded fallback.
+            pushOfflineResult(currentUser?.email, result);
+            console.error("Unable to persist the quest submission journal.");
+          }
+
           setQuestProgress(nextQuestProgress);
           if (nextStudents !== students) setStudents(nextStudents);
           setQuizResults(nextResults);
           if (isOffline || !navigator.onLine) {
-            // Quest launch requires a connection, but preserve an interrupted submission
-            // locally rather than allowing its optimistic progress to disappear.
-            try {
-              localStorage.setItem(`ielts_pending_quest_${currentUser?.email || me.id}`, JSON.stringify({
-                result,
-                questProgress: nextQuestProgress,
-                students: nextStudents,
-                coinOperation,
-              }));
-            } catch (e) {}
-            pushOfflineResult(currentUser?.email, result);
-            if (coinOperation) writePendingCoinOperation(coinOperation);
             if (questNotice) questNotice = { ...questNotice, pendingSync: true };
-            submissionMessage += questTx(' Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.', ' Your connection dropped while submitting; a local copy has been kept for sync.');
+            submissionMessage += questTx(' Máy chủ chưa nhận được bài do kết nối bị gián đoạn; bản lưu trên thiết bị sẽ tự đồng bộ khi mạng ổn định.', ' The server has not acknowledged this submission because the connection is unstable; the on-device copy will sync automatically when the network is stable.');
           } else {
+            const savedQuestNotice = questNotice;
+            const failedSyncNotice: QuestStatusNotice = savedQuestNotice || { kind: questPassed ? "passed" : "failed" };
             void syncData({
-              quizResults: nextResults,
+              quizResults: [result],
               questProgress: nextQuestProgress,
               ...(nextStudents !== students ? { students: nextStudents } : {}),
               ...(coinOperation ? { __coinOperation: coinOperation } : {}),
+            }).then((synced) => {
+              if (synced) {
+                clearPendingQuestSubmission(currentUser?.email || me.id, result.id);
+                removeOfflineResult(currentUser?.email, result.id);
+                return;
+              }
+              // A connection can fail while the browser still reports online. The
+              // journal is already on disk; now make that state visible to the student.
+              setQuestStatusNotice(current => ({ ...(current || failedSyncNotice), pendingSync: true }));
+              window.setTimeout(() => alert(questTx(
+                'Kết quả chuyên đề đã được lưu trên thiết bị, nhưng máy chủ chưa xác nhận do kết nối bị gián đoạn. Hệ thống sẽ tự đồng bộ lại khi mạng ổn định.',
+                'Your quest result has been saved on this device, but the server has not acknowledged it because the connection was interrupted. It will sync automatically when the network is stable.'
+              )), 0);
             });
           }
       } else {

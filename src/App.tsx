@@ -106,16 +106,96 @@ const readVocabCardsFromServer = async (email: string) => {
 // HÀNG ĐỢI NỘP BÀI OFFLINE (lưu nhiều kết quả, đồng bộ khi có mạng)
 // ==========================================
 const offlineQueueKey = (email?: string | null) => `ielts_offline_queue_${email || "anon"}`;
+const stableOfflineIdentity = (identity?: string | null) =>
+  String(identity || "anon").trim().toLowerCase() || "anon";
 const readOfflineQueue = (email?: string | null): any[] => {
-  try { const s = localStorage.getItem(offlineQueueKey(email)); return s ? JSON.parse(s) : []; } catch { return []; }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(offlineQueueKey(email)) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
 };
 const writeOfflineQueue = (email: string | null | undefined, q: any[]) => {
   try { localStorage.setItem(offlineQueueKey(email), JSON.stringify(q)); } catch {}
 };
 const pushOfflineResult = (email: string | null | undefined, result: any) => {
   const q = readOfflineQueue(email);
-  q.push(result);
-  writeOfflineQueue(email, q);
+  const resultId = String(result?.id || "");
+  writeOfflineQueue(email, resultId ? [...q.filter((item: any) => String(item?.id || "") !== resultId), result] : [...q, result]);
+};
+const removeOfflineResult = (email: string | null | undefined, resultId?: string | null) => {
+  if (!resultId) return;
+  writeOfflineQueue(email, readOfflineQueue(email).filter((item: any) => String(item?.id || "") !== String(resultId)));
+};
+
+// Quest submissions are a compound write: the score, the append-only route progress,
+// and a possible reward ledger operation must reach Firestore together. Keep a durable
+// write-ahead journal until the server transaction confirms it, even when navigator.onLine
+// is stale while Wi-Fi is dropping.
+const pendingQuestSubmissionsKey = (identity?: string | null) =>
+  `ielts_pending_quest_submissions_${stableOfflineIdentity(identity)}`;
+const legacyPendingQuestKeys = (identity?: string | null) => Array.from(new Set([
+  `ielts_pending_quest_${identity || "anon"}`,
+  `ielts_pending_quest_${stableOfflineIdentity(identity)}`,
+]));
+const parsePendingQuestSubmissions = (raw: string | null): any[] => {
+  try {
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) return parsed.filter((entry: any) => entry?.result?.id);
+    return parsed?.result?.id ? [parsed] : [];
+  } catch {
+    return [];
+  }
+};
+const dedupePendingQuestSubmissions = (entries: any[]) => {
+  const byResultId = new Map<string, any>();
+  entries.forEach((entry: any) => {
+    const resultId = String(entry?.result?.id || "");
+    if (!resultId) return;
+    const existing = byResultId.get(resultId);
+    // Prefer the new journal record, but retain any field that an older legacy record has.
+    byResultId.set(resultId, existing ? { ...existing, ...entry } : entry);
+  });
+  return Array.from(byResultId.values()).sort((a: any, b: any) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
+};
+const readPendingQuestSubmissions = (identity?: string | null): any[] => {
+  try {
+    const records = parsePendingQuestSubmissions(localStorage.getItem(pendingQuestSubmissionsKey(identity)));
+    legacyPendingQuestKeys(identity).forEach((key) => {
+      records.push(...parsePendingQuestSubmissions(localStorage.getItem(key)));
+    });
+    return dedupePendingQuestSubmissions(records);
+  } catch {
+    return [];
+  }
+};
+const writePendingQuestSubmissions = (identity: string | null | undefined, entries: any[]) => {
+  try {
+    const next = dedupePendingQuestSubmissions(entries);
+    if (next.length) localStorage.setItem(pendingQuestSubmissionsKey(identity), JSON.stringify(next));
+    else localStorage.removeItem(pendingQuestSubmissionsKey(identity));
+    return true;
+  } catch {
+    return false;
+  }
+};
+const enqueuePendingQuestSubmission = (identity: string | null | undefined, entry: any) => {
+  const resultId = String(entry?.result?.id || "");
+  if (!resultId) return false;
+  const current = readPendingQuestSubmissions(identity).filter((item: any) => String(item?.result?.id || "") !== resultId);
+  return writePendingQuestSubmissions(identity, [...current, entry]);
+};
+const clearPendingQuestSubmission = (identity: string | null | undefined, resultId?: string | null) => {
+  if (!resultId) return;
+  const target = String(resultId);
+  writePendingQuestSubmissions(identity, readPendingQuestSubmissions(identity).filter((entry: any) => String(entry?.result?.id || "") !== target));
+  legacyPendingQuestKeys(identity).forEach((key) => {
+    try {
+      const remaining = parsePendingQuestSubmissions(localStorage.getItem(key))
+        .filter((entry: any) => String(entry?.result?.id || "") !== target);
+      if (!remaining.length) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(remaining));
+    } catch {}
+  });
 };
 
 // ==========================================
@@ -2829,7 +2909,7 @@ export default function IeltsSupremeOS() {
   const [colorblind, setColorblind] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [studentIp, setStudentIp] = useState<string>("Loading...");
-  const [isOffline, setIsOffline] = useState(false);
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
   const [announcement, setAnnouncement] = useState<string>("");
   const [lastLoginTime, setLastLoginTime] = useState<string>("");
   const [timeOffset, setTimeOffset] = useState<number>(0);
@@ -3968,41 +4048,70 @@ useEffect(() => {
     const email = currentUser?.email;
     if (!email || !navigator.onLine) return;
     // A quest submission carries both a normal result and append-only unlock state.
-    // Flush it as one transaction before the legacy result-only queue so a mobile
-    // reconnect cannot show the score while losing the path progression.
-    const pendingQuestKey = `ielts_pending_quest_${email}`;
-    try {
-      const rawQuest = localStorage.getItem(pendingQuestKey);
-      if (rawQuest) {
-        const pendingQuest = JSON.parse(rawQuest);
+    // Replay the durable journal first. Each entry is removed only after its Firestore
+    // transaction succeeds, so a false-positive navigator.onLine can never erase a pass.
+    const pendingQuestSubmissions = readPendingQuestSubmissions(email);
+    for (const pendingQuest of pendingQuestSubmissions) {
+      const pendingResult = pendingQuest?.result;
+      if (pendingResult?.id) {
+        setQuizResults(prev => {
+          const ids = new Set(prev.map(item => String(item?.id || "")));
+          return ids.has(String(pendingResult.id)) ? prev : [pendingResult, ...prev];
+        });
+      }
+      if (Array.isArray(pendingQuest?.questProgress)) {
+        setQuestProgress(prev => mergeQuestProgressCollections(
+          prev,
+          pendingQuest.questProgress,
+          topicAssignments
+        ));
+      }
+      try {
         const synced = await syncData({
-          quizResults: pendingQuest.result ? [pendingQuest.result] : [],
+          quizResults: pendingResult ? [pendingResult] : [],
           questProgress: Array.isArray(pendingQuest.questProgress) ? pendingQuest.questProgress : [],
           ...(Array.isArray(pendingQuest.students) ? { students: pendingQuest.students } : {}),
           ...(pendingQuest.coinOperation ? { __coinOperation: pendingQuest.coinOperation } : {}),
         });
-        if (synced) localStorage.removeItem(pendingQuestKey);
+        if (!synced) {
+          console.warn("Pending quest sync was not acknowledged; preserving the local journal.");
+          return;
+        }
+        clearPendingQuestSubmission(email, pendingResult?.id);
+        removeOfflineResult(email, pendingResult?.id);
+      } catch (e) {
+        console.warn("Pending quest sync failed, preserving the local journal:", e);
+        return;
       }
-    } catch (e) {
-      console.warn("Pending quest sync failed, will retry after the next reconnect:", e);
-      return;
     }
     // Tương thích ngược: gộp key cũ (1 kết quả) vào hàng đợi
     const legacy = localStorage.getItem(`ielts_offline_result_${email}`);
     let q = readOfflineQueue(email);
-    if (legacy) { try { q = [JSON.parse(legacy), ...q]; } catch {} localStorage.removeItem(`ielts_offline_result_${email}`); }
+    if (legacy) {
+      try {
+        const legacyResult = JSON.parse(legacy);
+        q = legacyResult?.id && !q.some((item: any) => String(item?.id || "") === String(legacyResult.id))
+          ? [legacyResult, ...q]
+          : q;
+      } catch {}
+    }
     if (!q.length) return;
     try {
       setQuizResults(prev => {
-        const ids = new Set(prev.map(r => r.id));
-        return [...q.filter((r: any) => !ids.has(r.id)), ...prev];
+        const ids = new Set(prev.map(r => String(r?.id || "")));
+        return [...q.filter((r: any) => !ids.has(String(r?.id || ""))), ...prev];
       });
       const pendingCoinOperation = readPendingCoinOperation();
-      await syncData({ quizResults: q, ...(pendingCoinOperation ? { __coinOperation: pendingCoinOperation } : {}) });
+      const synced = await syncData({ quizResults: q, ...(pendingCoinOperation ? { __coinOperation: pendingCoinOperation } : {}) });
+      if (!synced) {
+        console.warn("Offline result sync was not acknowledged; preserving the local queue.");
+        return;
+      }
       writeOfflineQueue(email, []);
+      if (legacy) localStorage.removeItem(`ielts_offline_result_${email}`);
       alert(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`);
     } catch (e) {
-      console.warn("Flush offline queue failed, will retry later:", e);
+      console.warn("Flush offline queue failed, preserving the local queue:", e);
     }
   };
 
@@ -4153,12 +4262,36 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // The transaction ledger makes this safe even if the server already applied it.
       window.setTimeout(() => { void syncData({ __coinOperation: pendingCoinOperation }); }, 0);
     }
-    setQuizResults(clean(d.quizResults));
+    const serverQuizResults = clean(d.quizResults) as QuizResult[];
+    const pendingQuestSubmissions = userRole === "STUDENT" && currentUser?.email
+      ? readPendingQuestSubmissions(currentUser.email)
+      : [];
+    // A cached/local Firestore echo is not an acknowledgement. Keep the on-device
+    // journal until a server-confirmed snapshot includes the result ID.
+    const snapshotIsServerConfirmed = !snap.metadata?.hasPendingWrites && snap.metadata?.fromCache !== true;
+    const serverResultIds = new Set(serverQuizResults.map(result => String(result?.id || "")));
+    const unconfirmedQuestSubmissions = pendingQuestSubmissions.filter((entry: any) => {
+      const resultId = String(entry?.result?.id || "");
+      const acknowledged = snapshotIsServerConfirmed && !!resultId && serverResultIds.has(resultId);
+      if (acknowledged) clearPendingQuestSubmission(currentUser?.email, resultId);
+      return !acknowledged;
+    });
+    const recoveredQuizResults = new Map<string, QuizResult>();
+    unconfirmedQuestSubmissions.forEach((entry: any) => {
+      if (entry?.result?.id) recoveredQuizResults.set(String(entry.result.id), entry.result as QuizResult);
+    });
+    serverQuizResults.forEach(result => {
+      if (result?.id) recoveredQuizResults.set(String(result.id), result);
+    });
+    setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
+    const recoveredQuestProgress = unconfirmedQuestSubmissions.flatMap((entry: any) =>
+      Array.isArray(entry?.questProgress) ? entry.questProgress : []
+    );
     setQuestProgress(prev => mergeQuestProgressCollections(
       clean(d.questProgress),
-      prev,
+      [...prev, ...recoveredQuestProgress],
       incomingTopicAssignments.length ? incomingTopicAssignments : topicAssignments
     ));
     setBannedIps(clean(d.bannedIps));
@@ -4197,7 +4330,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
         cloudRefreshInFlightRef.current = false;
       }
     };
-    const handleForeground = () => { void refreshCloudAfterForeground(); };
+    const handleForeground = () => {
+      void refreshCloudAfterForeground();
+      void flushOfflineQueue();
+    };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") handleForeground();
     };
@@ -6822,30 +6958,52 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             };
           }
 
+          // Write-ahead journal first. navigator.onLine may stay true for several
+          // seconds after Wi-Fi fails, so waiting for an "offline" event here can
+          // lose a completed quest on refresh.
+          const questSubmission = {
+            result,
+            questProgress: nextQuestProgress,
+            ...(nextStudents !== students ? { students: nextStudents } : {}),
+            ...(coinOperation ? { coinOperation } : {}),
+            createdAt: Date.now(),
+          };
+          const questJournalSaved = enqueuePendingQuestSubmission(currentUser?.email || me.id, questSubmission);
+          if (coinOperation) writePendingCoinOperation(coinOperation);
+          if (!questJournalSaved) {
+            // This only runs when browser storage is unavailable/full. Preserve the
+            // score through the existing result queue as a degraded fallback.
+            pushOfflineResult(currentUser?.email, result);
+            console.error("Unable to persist the quest submission journal.");
+          }
+
           setQuestProgress(nextQuestProgress);
           if (nextStudents !== students) setStudents(nextStudents);
           setQuizResults(nextResults);
           if (isOffline || !navigator.onLine) {
-            // Quest launch requires a connection, but preserve an interrupted submission
-            // locally rather than allowing its optimistic progress to disappear.
-            try {
-              localStorage.setItem(`ielts_pending_quest_${currentUser?.email || me.id}`, JSON.stringify({
-                result,
-                questProgress: nextQuestProgress,
-                students: nextStudents,
-                coinOperation,
-              }));
-            } catch (e) {}
-            pushOfflineResult(currentUser?.email, result);
-            if (coinOperation) writePendingCoinOperation(coinOperation);
             if (questNotice) questNotice = { ...questNotice, pendingSync: true };
-            submissionMessage += questTx(' Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.', ' Your connection dropped while submitting; a local copy has been kept for sync.');
+            submissionMessage += questTx(' Máy chủ chưa nhận được bài do kết nối bị gián đoạn; bản lưu trên thiết bị sẽ tự đồng bộ khi mạng ổn định.', ' The server has not acknowledged this submission because the connection is unstable; the on-device copy will sync automatically when the network is stable.');
           } else {
+            const savedQuestNotice = questNotice;
+            const failedSyncNotice: QuestStatusNotice = savedQuestNotice || { kind: questPassed ? "passed" : "failed" };
             void syncData({
-              quizResults: nextResults,
+              quizResults: [result],
               questProgress: nextQuestProgress,
               ...(nextStudents !== students ? { students: nextStudents } : {}),
               ...(coinOperation ? { __coinOperation: coinOperation } : {}),
+            }).then((synced) => {
+              if (synced) {
+                clearPendingQuestSubmission(currentUser?.email || me.id, result.id);
+                removeOfflineResult(currentUser?.email, result.id);
+                return;
+              }
+              // A connection can fail while the browser still reports online. The
+              // journal is already on disk; now make that state visible to the student.
+              setQuestStatusNotice(current => ({ ...(current || failedSyncNotice), pendingSync: true }));
+              window.setTimeout(() => alert(questTx(
+                'Kết quả chuyên đề đã được lưu trên thiết bị, nhưng máy chủ chưa xác nhận do kết nối bị gián đoạn. Hệ thống sẽ tự đồng bộ lại khi mạng ổn định.',
+                'Your quest result has been saved on this device, but the server has not acknowledged it because the connection was interrupted. It will sync automatically when the network is stable.'
+              )), 0);
             });
           }
       } else {
@@ -10568,6 +10726,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
+          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-1.35deg) translateY(0); } 50% { transform: rotate(1.35deg) translateY(2px); } }
+          .quest-milestone-hanger { transform-origin: 50% 0; will-change: transform; }
+          @media (prefers-reduced-motion: reduce) { .quest-milestone-hanger { animation: none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
             <div id="os-pet" title={me.inventory?.equippedPet}
@@ -11097,6 +11258,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 ? [...(progress.attempts[selectedInAssignment.id] || [])].reverse().find(attempt => attempt.passed) || null
                 : null;
               const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
+              const totalQuestQuestions = assignment.nodes.reduce((sum, node) => sum + Math.max(0, Number(node.questionCount) || 0), 0);
+              const correctAnswerCount = Math.min(Math.max(0, Number(progress.totalAccumulatedScore) || 0), totalQuestQuestions || Number(progress.totalAccumulatedScore) || 0);
+              const nextRewardFor = (type: 'total_score' | 'streak') => assignment.rewards
+                .filter(reward => reward.type === type && !progress.unlockedRewards.includes(reward.id))
+                .sort((a, b) => Number(a.targetValue || 0) - Number(b.targetValue || 0))[0] || null;
+              const nextScoreReward = nextRewardFor('total_score');
+              const nextStreakReward = nextRewardFor('streak');
               const statusCopy: Record<string, { label: string; color: string; icon: string }> = {
                 completed: { label: questTx('Đã đạt', 'Passed'), color: C.succ, icon: 'check' },
                 available: { label: questTx('Sẵn sàng', 'Ready'), color: C.accent, icon: 'unlock' },
@@ -11106,12 +11274,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 closed: { label: questTx('Đã đóng', 'Closed'), color: C.err, icon: 'xcircle' },
               };
               return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${C.border}`, borderRadius: 8 }}>
-                <div style={{ padding: '18px 19px 14px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                    <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
-                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>{questTx('chặng hoàn thành', 'steps complete')}</div></div>
+                <div style={{ padding: '18px 19px 16px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch', gap: 16, flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0, flex: '1 1 250px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>
+                      {assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}
+                      {assignment.rewards.length > 0 && <div style={{ marginTop: 11, color: C.sub, fontSize: 11, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 6 }}><Ico name="gift" size={14} color={C.accent} /><span>{questTx('Quà được treo ở đúng chặng hoặc chỉ số cần đạt.', 'Rewards are pinned to the exact step or progress target that unlocks them.')}</span></div>}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(88px, 1fr))', gap: 8, flex: '1 1 300px', maxWidth: 390, minWidth: 0 }}>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.accent}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.accent }}><Ico name="check" size={15} color={C.accent} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Chặng đạt', 'Steps passed')}</div>
+                      </div>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.succ}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.succ }}><Ico name="target" size={15} color={C.succ} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{correctAnswerCount}/{totalQuestQuestions || 0}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Câu đúng', 'Correct answers')}</div>
+                        {nextScoreReward && <div title={formatQuestReward(nextScoreReward)} style={{ marginTop: 5, color: C.accent, fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><Ico name="gift" size={11} color={C.accent} /> {nextScoreReward.targetValue}: {formatQuestReward(nextScoreReward)}</div>}
+                      </div>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.warn}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.warn }}><Ico name="flame" size={15} color={C.warn} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{progress.currentStreak}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Chuỗi pass đầu', 'First-pass streak')}</div>
+                        {nextStreakReward && <div title={formatQuestReward(nextStreakReward)} style={{ marginTop: 5, color: C.accent, fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><Ico name="gift" size={11} color={C.accent} /> {nextStreakReward.targetValue}: {formatQuestReward(nextStreakReward)}</div>}
+                      </div>
+                    </div>
                   </div>
-                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{formatQuestReward(reward)}</span>)}</div>}
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
                   <div style={{ display: 'grid', gap: 0 }}>
@@ -11120,13 +11306,28 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       const meta = statusCopy[state];
                       const latestAttempt = getLatestQuestAttempt(progress, node.id);
                       const selected = selectedInAssignment?.id === node.id;
+                      const milestoneRewards = assignment.rewards.filter(reward =>
+                        reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
+                      );
                       return <React.Fragment key={node.id}>
-                        {index > 0 && <div style={{ width: 2, height: 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
-                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
-                          <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
-                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
-                          <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
-                        </button>
+                        {index > 0 && <div style={{ width: 2, height: milestoneRewards.length ? 35 : 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
+                        <div style={{ position: 'relative', paddingTop: milestoneRewards.length ? 47 : 0 }}>
+                          {milestoneRewards.length > 0 && <div style={{ position: 'absolute', top: 0, left: 47, right: 0, zIndex: 1, display: 'flex', alignItems: 'flex-start', gap: 9, flexWrap: 'wrap', pointerEvents: 'none' }}>
+                            {milestoneRewards.map((reward, rewardIndex) => {
+                              const unlocked = progress.unlockedRewards.includes(reward.id);
+                              const rewardColor = unlocked ? C.succ : C.accent;
+                              return <span className="quest-milestone-hanger" key={reward.id} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', transformOrigin: '50% 0', animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
+                                <span style={{ display: 'block', width: 1, height: 15, background: `${rewardColor}aa`, boxShadow: `0 0 0 1px ${C.bg}` }} />
+                                <span title={reward.description || formatQuestReward(reward)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: 'max-content', maxWidth: 230, padding: '5px 8px 6px', border: `1px solid ${rewardColor}88`, borderRadius: 6, background: unlocked ? `${C.succ}16` : `${C.accent}12`, color: rewardColor, fontSize: 11, fontWeight: 900, lineHeight: 1.2, boxShadow: `0 5px 12px ${rewardColor}18` }}><Ico name="gift" size={13} color={rewardColor} /><span style={{ whiteSpace: 'normal' }}>{formatQuestReward(reward)}</span></span>
+                              </span>;
+                            })}
+                          </div>}
+                          <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
+                            <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
+                            <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
+                            <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                          </button>
+                        </div>
                       </React.Fragment>;
                     })}
                   </div>

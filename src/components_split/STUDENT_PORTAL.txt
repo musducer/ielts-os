@@ -462,6 +462,9 @@
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
+          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-1.35deg) translateY(0); } 50% { transform: rotate(1.35deg) translateY(2px); } }
+          .quest-milestone-hanger { transform-origin: 50% 0; will-change: transform; }
+          @media (prefers-reduced-motion: reduce) { .quest-milestone-hanger { animation: none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
             <div id="os-pet" title={me.inventory?.equippedPet}
@@ -991,6 +994,13 @@
                 ? [...(progress.attempts[selectedInAssignment.id] || [])].reverse().find(attempt => attempt.passed) || null
                 : null;
               const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
+              const totalQuestQuestions = assignment.nodes.reduce((sum, node) => sum + Math.max(0, Number(node.questionCount) || 0), 0);
+              const correctAnswerCount = Math.min(Math.max(0, Number(progress.totalAccumulatedScore) || 0), totalQuestQuestions || Number(progress.totalAccumulatedScore) || 0);
+              const nextRewardFor = (type: 'total_score' | 'streak') => assignment.rewards
+                .filter(reward => reward.type === type && !progress.unlockedRewards.includes(reward.id))
+                .sort((a, b) => Number(a.targetValue || 0) - Number(b.targetValue || 0))[0] || null;
+              const nextScoreReward = nextRewardFor('total_score');
+              const nextStreakReward = nextRewardFor('streak');
               const statusCopy: Record<string, { label: string; color: string; icon: string }> = {
                 completed: { label: questTx('Đã đạt', 'Passed'), color: C.succ, icon: 'check' },
                 available: { label: questTx('Sẵn sàng', 'Ready'), color: C.accent, icon: 'unlock' },
@@ -1000,12 +1010,30 @@
                 closed: { label: questTx('Đã đóng', 'Closed'), color: C.err, icon: 'xcircle' },
               };
               return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${C.border}`, borderRadius: 8 }}>
-                <div style={{ padding: '18px 19px 14px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-                    <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
-                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>{questTx('chặng hoàn thành', 'steps complete')}</div></div>
+                <div style={{ padding: '18px 19px 16px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch', gap: 16, flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0, flex: '1 1 250px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>
+                      {assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}
+                      {assignment.rewards.length > 0 && <div style={{ marginTop: 11, color: C.sub, fontSize: 11, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 6 }}><Ico name="gift" size={14} color={C.accent} /><span>{questTx('Quà được treo ở đúng chặng hoặc chỉ số cần đạt.', 'Rewards are pinned to the exact step or progress target that unlocks them.')}</span></div>}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(88px, 1fr))', gap: 8, flex: '1 1 300px', maxWidth: 390, minWidth: 0 }}>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.accent}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.accent }}><Ico name="check" size={15} color={C.accent} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Chặng đạt', 'Steps passed')}</div>
+                      </div>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.succ}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.succ }}><Ico name="target" size={15} color={C.succ} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{correctAnswerCount}/{totalQuestQuestions || 0}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Câu đúng', 'Correct answers')}</div>
+                        {nextScoreReward && <div title={formatQuestReward(nextScoreReward)} style={{ marginTop: 5, color: C.accent, fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><Ico name="gift" size={11} color={C.accent} /> {nextScoreReward.targetValue}: {formatQuestReward(nextScoreReward)}</div>}
+                      </div>
+                      <div style={{ minWidth: 0, padding: '11px 10px 9px', border: `1px solid ${C.border}`, borderTop: `3px solid ${C.warn}`, background: C.bg, borderRadius: 7 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: C.warn }}><Ico name="flame" size={15} color={C.warn} /><span style={{ fontSize: 19, fontWeight: 900, lineHeight: 1 }}>{progress.currentStreak}</span></div>
+                        <div style={{ marginTop: 7, color: C.sub, fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: .35 }}>{questTx('Chuỗi pass đầu', 'First-pass streak')}</div>
+                        {nextStreakReward && <div title={formatQuestReward(nextStreakReward)} style={{ marginTop: 5, color: C.accent, fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><Ico name="gift" size={11} color={C.accent} /> {nextStreakReward.targetValue}: {formatQuestReward(nextStreakReward)}</div>}
+                      </div>
+                    </div>
                   </div>
-                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{formatQuestReward(reward)}</span>)}</div>}
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
                   <div style={{ display: 'grid', gap: 0 }}>
@@ -1014,13 +1042,28 @@
                       const meta = statusCopy[state];
                       const latestAttempt = getLatestQuestAttempt(progress, node.id);
                       const selected = selectedInAssignment?.id === node.id;
+                      const milestoneRewards = assignment.rewards.filter(reward =>
+                        reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
+                      );
                       return <React.Fragment key={node.id}>
-                        {index > 0 && <div style={{ width: 2, height: 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
-                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
-                          <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
-                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
-                          <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
-                        </button>
+                        {index > 0 && <div style={{ width: 2, height: milestoneRewards.length ? 35 : 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
+                        <div style={{ position: 'relative', paddingTop: milestoneRewards.length ? 47 : 0 }}>
+                          {milestoneRewards.length > 0 && <div style={{ position: 'absolute', top: 0, left: 47, right: 0, zIndex: 1, display: 'flex', alignItems: 'flex-start', gap: 9, flexWrap: 'wrap', pointerEvents: 'none' }}>
+                            {milestoneRewards.map((reward, rewardIndex) => {
+                              const unlocked = progress.unlockedRewards.includes(reward.id);
+                              const rewardColor = unlocked ? C.succ : C.accent;
+                              return <span className="quest-milestone-hanger" key={reward.id} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', transformOrigin: '50% 0', animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
+                                <span style={{ display: 'block', width: 1, height: 15, background: `${rewardColor}aa`, boxShadow: `0 0 0 1px ${C.bg}` }} />
+                                <span title={reward.description || formatQuestReward(reward)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: 'max-content', maxWidth: 230, padding: '5px 8px 6px', border: `1px solid ${rewardColor}88`, borderRadius: 6, background: unlocked ? `${C.succ}16` : `${C.accent}12`, color: rewardColor, fontSize: 11, fontWeight: 900, lineHeight: 1.2, boxShadow: `0 5px 12px ${rewardColor}18` }}><Ico name="gift" size={13} color={rewardColor} /><span style={{ whiteSpace: 'normal' }}>{formatQuestReward(reward)}</span></span>
+                              </span>;
+                            })}
+                          </div>}
+                          <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
+                            <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
+                            <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
+                            <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                          </button>
+                        </div>
                       </React.Fragment>;
                     })}
                   </div>
