@@ -3100,7 +3100,7 @@ export default function IeltsSupremeOS() {
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");
   const [_hideTimer, _setHideTimer] = useState(false);
-  const [timeAlert, setTimeAlert] = useState("");
+  const [timeAlert, setTimeAlert] = useState<{ message: string; urgency: "notice" | "urgent" } | null>(null);
   const [_isSepia, _setIsSepia] = useState(false);
   const [_fontSize, _setFontSize] = useState(16);
   const [_lineHeight, _setLineHeight] = useState(1.15); 
@@ -3702,8 +3702,38 @@ export default function IeltsSupremeOS() {
   const meetAudioIssueRef = useRef(false);
   const androidAudioCtxRef = useRef<AudioContext | null>(null);
   const examTimerRef = useRef<number | null>(null);
+  const timeAlertDismissRef = useRef<number | null>(null);
+  const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
+
+  const dismissExamTimeAlert = () => {
+    if (timeAlertDismissRef.current !== null) {
+      window.clearTimeout(timeAlertDismissRef.current);
+      timeAlertDismissRef.current = null;
+    }
+    setTimeAlert(null);
+  };
+
+  const showExamTimeAlert = (message: string, urgency: "notice" | "urgent") => {
+    if (timeAlertDismissRef.current !== null) window.clearTimeout(timeAlertDismissRef.current);
+    setTimeAlert({ message, urgency });
+    timeAlertDismissRef.current = window.setTimeout(() => {
+      timeAlertDismissRef.current = null;
+      setTimeAlert(null);
+    }, urgency === "urgent" ? 5200 : 4600);
+  };
+
+  useEffect(() => {
+    timeAlertMilestonesRef.current.clear();
+    dismissExamTimeAlert();
+    return () => {
+      if (timeAlertDismissRef.current !== null) {
+        window.clearTimeout(timeAlertDismissRef.current);
+        timeAlertDismissRef.current = null;
+      }
+    };
+  }, [activeExam?.id]);
 
   const isListeningExamAudio = () => {
     if (!activeExam) return false;
@@ -4678,9 +4708,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
             if (examTimerRef.current) window.clearInterval(examTimerRef.current);
         } else {
             setExamTimeLeft(exactTimeLeft);
-            if (exactTimeLeft === 600) { setTimeAlert("10 minutes left!"); setTimeout(()=>setTimeAlert(""), 5000); if (state.enableTimerBeep) playBeep(880, 200); }
-            if (exactTimeLeft === 300) { setTimeAlert("5 minutes left!"); setTimeout(()=>setTimeAlert(""), 5000); if (state.enableTimerBeep) playBeep(880, 300); }
-            if (exactTimeLeft <= 60 && exactTimeLeft % 10 === 0) { if (state.enableTimerBeep) playBeep(1000, 500); }
+            const warningMilestones = [
+                { seconds: 600, urgency: "notice" as const, vi: "Còn 10 phút làm bài. Hãy rà soát lại các câu hỏi.", en: "10 minutes remaining. Review your answers.", beep: 200 },
+                { seconds: 300, urgency: "notice" as const, vi: "Còn 5 phút làm bài. Hãy rà soát lại các câu hỏi.", en: "5 minutes remaining. Review your answers.", beep: 300 },
+                { seconds: 60, urgency: "urgent" as const, vi: "Còn 1 phút làm bài. Hãy hoàn tất kiểm tra cuối cùng.", en: "1 minute remaining. Finish your final checks.", beep: 500 },
+            ];
+            const nextWarning = warningMilestones.find(warning =>
+                exactTimeLeft <= warning.seconds && exactTimeLeft > warning.seconds - 10 && !timeAlertMilestonesRef.current.has(warning.seconds)
+            );
+            if (nextWarning) {
+                timeAlertMilestonesRef.current.add(nextWarning.seconds);
+                showExamTimeAlert(i18n.language === "vi" ? nextWarning.vi : nextWarning.en, nextWarning.urgency);
+                if (state.enableTimerBeep) playBeep(nextWarning.urgency === "urgent" ? 1000 : 880, nextWarning.beep);
+            }
+            if (!nextWarning && exactTimeLeft <= 60 && exactTimeLeft % 10 === 0) { if (state.enableTimerBeep) playBeep(1000, 500); }
         }
         
         let aTime = 0; let aStatus = "IDLE";
@@ -9099,6 +9140,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-spinner { width: 48px; height: 48px; border: 4px solid #e0e0e0; border-top-color: #111; border-radius: 50%; animation: idp-spin 0.8s linear infinite; margin: 0 auto 24px; }
                       @keyframes idp-spin { to { transform: rotate(360deg); } }
 
+                      /* Cảnh báo thời gian: một toast gọn ở góc trên, không che đề. */
+                      .exam-time-toast { position:fixed; top:74px; right:24px; z-index:10000; display:flex; align-items:center; gap:10px; width:min(390px, calc(100vw - 48px)); box-sizing:border-box; padding:10px 10px 10px 12px; border:1px solid #f3c66a; border-radius:12px; background:rgba(255,250,238,.97); box-shadow:0 12px 30px rgba(102,65,11,.16), inset 0 1px 0 rgba(255,255,255,.82); color:#73450a; animation:examTimeToastEnter .34s cubic-bezier(.2,.8,.2,1) both; }
+                      .exam-time-toast.is-urgent { border-color:#ef9ba8; background:rgba(255,245,247,.98); box-shadow:0 12px 30px rgba(156,31,57,.17), inset 0 1px 0 rgba(255,255,255,.85); color:#941c35; animation:examTimeToastEnter .34s cubic-bezier(.2,.8,.2,1) both, examTimeToastUrgentPulse 2.1s ease-in-out .38s infinite; }
+                      .exam-time-toast-icon { display:grid; flex:0 0 auto; width:30px; height:30px; place-items:center; border:1px solid currentColor; border-radius:50%; background:rgba(255,255,255,.58); opacity:.92; }
+                      .exam-time-toast-copy { min-width:0; flex:1; font-size:13px; font-weight:800; line-height:1.35; }
+                      .exam-time-toast-dismiss { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px; min-height:30px; border:0; border-left:1px solid currentColor; background:transparent; color:inherit; cursor:pointer; padding:0 0 0 10px; font:inherit; font-size:11px; font-weight:900; white-space:nowrap; opacity:.86; }
+                      .exam-time-toast-dismiss:hover { opacity:1; }
+                      @keyframes examTimeToastEnter { from { opacity:0; transform:translate3d(0,-14px,0); } to { opacity:1; transform:translate3d(0,0,0); } }
+                      @keyframes examTimeToastUrgentPulse { 0%,100% { box-shadow:0 12px 30px rgba(156,31,57,.17), inset 0 1px 0 rgba(255,255,255,.85); } 50% { box-shadow:0 14px 38px rgba(190,34,67,.34), inset 0 1px 0 rgba(255,255,255,.85); } }
+                      @media (max-width:620px) { .exam-time-toast { top:58px; right:12px; width:calc(100vw - 24px); padding:9px 9px 9px 10px; } .exam-time-toast-copy { font-size:12px; } .exam-time-toast-dismiss { padding-left:8px; } }
+                      @media (prefers-reduced-motion:reduce) { .exam-time-toast, .exam-time-toast.is-urgent { animation:none; } }
+
                       /* Hình 3: Matching matrix table */
                       .idp-matching-table { border-collapse: collapse; width: 100%; font-size: 14px; }
                       .idp-matching-table th { background: #f4f5f7; border: 1px solid #ccc; padding: 8px 12px; text-align: center; font-weight: 700; color: #24292f; min-width: 42px; }
@@ -9200,8 +9253,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   )}
 
                   {timeAlert && (
-                      <div style={{position: 'fixed', top: 80, left: '50%', transform: 'translateX(-50%)', background: idpC.accent, color: '#fff', padding: '10px 20px', borderRadius: 30, fontWeight: 900, zIndex: 10000, animation: 'pulse 1s infinite'}}>
-                          ⏳ {timeAlert}
+                      <div className={`exam-time-toast ${timeAlert.urgency === 'urgent' ? 'is-urgent' : ''}`} role="status" aria-live="polite">
+                          <span className="exam-time-toast-icon"><Ico name="clock" size={16} color="currentColor" /></span>
+                          <span className="exam-time-toast-copy">{timeAlert.message}</span>
+                          <button type="button" className="exam-time-toast-dismiss" onClick={dismissExamTimeAlert} aria-label={i18n.language === 'vi' ? 'Đóng cảnh báo thời gian' : 'Dismiss time warning'}><Ico name="x" size={13} color="currentColor" />{i18n.language === 'vi' ? 'Đã hiểu' : 'Dismiss'}</button>
                       </div>
                   )}
                   
@@ -10726,38 +10781,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
-          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-2.35deg) translateY(0); } 50% { transform: rotate(2.15deg) translateY(3px); } }
+          @keyframes questBadgeFloat { 0%,100% { transform:translate3d(0,0,0) rotate(-.5deg); } 50% { transform:translate3d(0,-5px,0) rotate(.5deg); } }
+          @keyframes questTetherFlow { to { stroke-dashoffset:-56; } }
+          @keyframes questTetherPulse { 0%,100% { opacity:.58; r:3.5; } 50% { opacity:1; r:5.1; } }
+          .quest-path-list { position:relative; display:grid; gap:0; min-width:0; }
+          .quest-path-list.has-milestone { --quest-reward-gutter:clamp(238px, 25vw, 300px); padding-right:var(--quest-reward-gutter); }
           .quest-path-row { position:relative; min-width:0; }
           .quest-path-connector { position:relative; height:23px; }
           .quest-path-connector-line { display:block; width:2px; height:100%; margin-left:19px; }
-          .quest-milestone-side { position:absolute; top:50%; z-index:2; display:flex; align-items:center; width:max-content; max-width:min(246px, 26vw); transform:translateY(-50%); }
-          .quest-milestone-side.is-left { right:100%; justify-content:flex-end; }
-          .quest-milestone-side.is-right { left:100%; justify-content:flex-start; }
-          .quest-milestone-tags { display:flex; flex-direction:column; align-items:flex-start; gap:10px; width:max-content; max-width:246px; }
-          .quest-milestone-side.is-left .quest-milestone-tags { align-items:flex-end; }
-          .quest-milestone-hanger { display:inline-flex; align-items:center; width:max-content; max-width:246px; will-change:transform; }
-          .quest-milestone-side.is-left .quest-milestone-hanger { flex-direction:row; margin-right:-14px; transform-origin:100% 50%; }
-          .quest-milestone-side.is-right .quest-milestone-hanger { flex-direction:row-reverse; margin-left:-14px; transform-origin:0 50%; }
-          .quest-milestone-cord { position:relative; display:block; flex:0 0 28px; height:1px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); opacity:.88; }
-          .quest-milestone-cord::before { content:""; position:absolute; top:-5px; width:1px; height:11px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); }
-          .quest-milestone-cord::after { content:""; position:absolute; top:50%; width:6px; height:6px; border:1px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 5px var(--reward-glow); transform:translateY(-50%); }
-          .quest-milestone-side.is-left .quest-milestone-cord::before, .quest-milestone-side.is-left .quest-milestone-cord::after { right:-2px; }
-          .quest-milestone-side.is-right .quest-milestone-cord::before, .quest-milestone-side.is-right .quest-milestone-cord::after { left:-2px; }
-          .quest-milestone-tag { position:relative; display:inline-flex; align-items:center; justify-content:center; gap:7px; box-sizing:border-box; width:fit-content; min-width:108px; max-width:204px; min-height:38px; padding:8px 18px 8px 34px; border:1px solid var(--reward-color); background:var(--tag-surface); color:var(--tag-text); filter:drop-shadow(0 0 1px var(--reward-color)) drop-shadow(0 5px 10px var(--reward-glow)); font-size:11px; font-weight:900; line-height:1.25; letter-spacing:.08px; text-align:center; }
-          .quest-milestone-tag::before { content:""; position:absolute; left:13px; top:50%; width:7px; height:7px; transform:translateY(-50%); border:2px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 0 2px var(--tag-surface), 0 0 7px var(--reward-glow); }
-          .quest-milestone-tag.shape-price { clip-path:polygon(12px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 12px 100%, 0 calc(100% - 12px), 0 12px); }
-          .quest-milestone-tag.shape-ribbon { min-height:43px; padding-bottom:13px; clip-path:polygon(0 0, 100% 0, 100% 100%, 70% 100%, 60% 82%, 50% 100%, 0 100%); }
-          .quest-milestone-tag.shape-ticket { clip-path:polygon(0 0, 100% 0, 100% 35%, calc(100% - 6px) 50%, 100% 65%, 100% 100%, 0 100%, 0 65%, 6px 50%, 0 35%); }
-          .quest-milestone-tag.shape-burst { min-width:124px; max-width:154px; min-height:48px; padding:10px 18px; font-size:10px; clip-path:polygon(50% 0, 59% 8%, 71% 3%, 78% 15%, 91% 14%, 90% 28%, 100% 37%, 93% 49%, 100% 61%, 89% 68%, 90% 82%, 77% 81%, 69% 96%, 58% 89%, 50% 100%, 41% 91%, 29% 97%, 22% 85%, 9% 85%, 10% 71%, 0 62%, 7% 50%, 0 38%, 10% 30%, 8% 17%, 22% 18%, 30% 5%, 42% 10%); }
-          .quest-milestone-tag.shape-burst::before { display:none; }
-          .quest-milestone-side.is-left .quest-milestone-tag { padding:8px 34px 8px 18px; }
-          .quest-milestone-side.is-left .quest-milestone-tag.shape-ribbon { padding:8px 18px 13px; }
-          .quest-milestone-side.is-left .quest-milestone-tag.shape-burst { padding:10px 18px; }
-          .quest-milestone-side.is-left .quest-milestone-tag::before { right:13px; left:auto; }
-          .quest-milestone-tag-text { min-width:0; overflow-wrap:break-word; word-break:normal; }
-          @media (max-width:820px) { .quest-milestone-side { max-width:min(204px, 27vw); } .quest-milestone-tags, .quest-milestone-hanger { max-width:204px; } .quest-milestone-side.is-left .quest-milestone-hanger { margin-right:-8px; } .quest-milestone-side.is-right .quest-milestone-hanger { margin-left:-8px; } .quest-milestone-cord { flex-basis:17px; } .quest-milestone-tag { min-width:94px; max-width:172px; font-size:10px; } }
-          @media (max-width:560px) { .quest-milestone-side { top:0; max-width:148px; transform:translateY(-56%); } .quest-milestone-side.is-left { right:auto; left:38px; } .quest-milestone-side.is-right { left:auto; right:8px; } .quest-milestone-tags, .quest-milestone-hanger { max-width:148px; } .quest-milestone-cord { display:none; } .quest-milestone-hanger { margin:0 !important; } .quest-milestone-tag { min-width:92px; max-width:142px; min-height:32px; font-size:10px; padding-top:6px; padding-bottom:6px; } .quest-milestone-tag.shape-burst { min-width:108px; min-height:42px; } }
-          @media (prefers-reduced-motion: reduce) { .quest-milestone-hanger { animation: none !important; } }
+          .quest-tether-layer { position:absolute; z-index:4; top:0; left:100%; width:var(--quest-reward-gutter); height:150px; pointer-events:none; overflow:visible; }
+          .quest-tether { position:absolute; inset:0; height:var(--tether-height, 150px); color:var(--reward-color); }
+          .quest-tether-svg { position:absolute; inset:0 auto auto 0; width:142px; height:100%; overflow:visible; }
+          .quest-tether-wire { fill:none; stroke:var(--reward-color); stroke-width:1.35; opacity:.46; vector-effect:non-scaling-stroke; }
+          .quest-tether-energy { fill:none; stroke:var(--reward-color); stroke-width:2.5; stroke-linecap:round; stroke-dasharray:2 13; opacity:.96; vector-effect:non-scaling-stroke; animation:questTetherFlow 2.85s linear infinite; }
+          .quest-tether-anchor { fill:var(--badge-surface); stroke:var(--reward-color); stroke-width:2; vector-effect:non-scaling-stroke; animation:questTetherPulse 2.85s ease-in-out infinite; }
+          .quest-reward-badge { position:absolute; top:var(--reward-top); left:104px; display:inline-flex; align-items:center; gap:9px; box-sizing:border-box; width:max-content; min-width:118px; max-width:calc(var(--quest-reward-gutter) - 112px); min-height:42px; padding:8px 14px 8px 8px; border:1px solid var(--reward-color); border-color:color-mix(in srgb, var(--reward-color) 58%, var(--badge-surface)); border-radius:999px; background:var(--badge-surface); background:color-mix(in srgb, var(--badge-surface) 84%, transparent); color:var(--badge-text); box-shadow:0 12px 25px var(--reward-glow), inset 0 1px 0 rgba(255,255,255,.52); backdrop-filter:blur(14px) saturate(1.12); -webkit-backdrop-filter:blur(14px) saturate(1.12); font-size:11px; font-weight:900; letter-spacing:.08px; line-height:1.25; text-align:left; will-change:transform; animation:questBadgeFloat var(--badge-float-duration, 3.7s) ease-in-out var(--badge-float-delay, 0s) infinite; }
+          .quest-reward-badge-icon { display:grid; flex:0 0 auto; width:25px; height:25px; place-items:center; border:1px solid color-mix(in srgb, var(--reward-color) 45%, transparent); border-radius:50%; background:var(--badge-icon-surface); box-shadow:inset 0 1px 0 rgba(255,255,255,.5); }
+          .quest-reward-badge-label { min-width:0; overflow-wrap:break-word; word-break:normal; }
+          @media (max-width:760px) { .quest-path-list.has-milestone { --quest-reward-gutter:0px; padding-right:0; } .quest-path-row.has-milestone { padding-top:var(--quest-mobile-space, 50px); } .quest-tether-layer { top:0; left:auto; right:0; display:flex; justify-content:flex-end; align-items:flex-start; gap:6px; width:auto; height:auto; } .quest-tether { position:relative; inset:auto; width:auto; height:auto; } .quest-tether-svg { display:none; } .quest-reward-badge { position:relative; top:auto; left:auto; min-width:0; max-width:min(164px, calc(50vw - 24px)); min-height:36px; padding:6px 10px 6px 6px; font-size:10px; } .quest-reward-badge-icon { width:22px; height:22px; } }
+          @media (prefers-reduced-motion: reduce) { .quest-reward-badge, .quest-tether-energy, .quest-tether-anchor { animation:none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
             <div id="os-pet" title={me.inventory?.equippedPet}
@@ -11329,7 +11371,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   </div>
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
-                  <div style={{ display: 'grid', gap: 0 }}>
+                  <div className={`quest-path-list${assignment.rewards.some(reward => reward.type === 'milestone') ? ' has-milestone' : ''}`}>
                     {assignment.nodes.map((node, index) => {
                       const state = getQuestNodeState(assignment, progress, index, getRealTime());
                       const meta = statusCopy[state];
@@ -11338,37 +11380,34 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       const milestoneRewards = assignment.rewards.filter(reward =>
                         reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
                       );
-                      const milestoneSide = index % 2 === 0 ? 'left' : 'right';
-                      const leftMilestoneRewards = milestoneRewards.filter((_reward, rewardIndex) =>
-                        milestoneRewards.length > 1 ? rewardIndex % 2 === 0 : milestoneSide === 'left'
-                      );
-                      const rightMilestoneRewards = milestoneRewards.filter((_reward, rewardIndex) =>
-                        milestoneRewards.length > 1 ? rewardIndex % 2 === 1 : milestoneSide === 'right'
-                      );
-                      const renderMilestoneTags = (rewards: typeof milestoneRewards) => rewards.length > 0 && <div className="quest-milestone-tags">
-                        {rewards.map((reward, rewardIndex) => {
+                      const renderMilestoneTethers = () => milestoneRewards.map((reward, rewardIndex) => {
                           const unlocked = progress.unlockedRewards.includes(reward.id);
                           const rewardColor = unlocked ? C.succ : C.accent;
                           const rewardLabel = formatQuestReward(reward);
-                          const shapeSeed = Array.from(`${reward.id}:${rewardLabel}`).reduce((total, character) => total + character.charCodeAt(0), index + rewardIndex);
-                          const tagShapes = rewardLabel.length <= 14 ? ['burst', 'ticket', 'price'] : ['price', 'ribbon', 'ticket'];
-                          const tagShape = tagShapes[shapeSeed % tagShapes.length];
-                          return <span className="quest-milestone-hanger" key={reward.id} style={{ animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
-                            <span className={`quest-milestone-tag shape-${tagShape}`} title={reward.description || rewardLabel} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card, '--tag-text': C.text } as React.CSSProperties}><Ico name="gift" size={13} color={rewardColor} /><span className="quest-milestone-tag-text">{rewardLabel}</span></span>
-                            <span className="quest-milestone-cord" style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card } as React.CSSProperties} />
-                          </span>;
-                        })}
-                      </div>;
+                          const endpointY = milestoneRewards.length === 1 ? 58 : 28 + rewardIndex * 60;
+                          const tetherHeight = Math.max(124, endpointY + 36);
+                          const tetherPath = `M 5 8 C 37 9, 72 ${Math.max(13, endpointY - 28)}, 120 ${endpointY}`;
+                          return <div className="quest-tether" key={reward.id} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}4d`, '--badge-surface': C.card, '--badge-icon-surface': `${rewardColor}18`, '--badge-text': C.text, '--reward-top': `${endpointY - 20}px`, '--tether-height': `${tetherHeight}px`, '--badge-float-duration': `${3.55 + ((index + rewardIndex) % 3) * .28}s`, '--badge-float-delay': `${rewardIndex * -.42}s` } as React.CSSProperties}>
+                            <svg className="quest-tether-svg" viewBox={`0 0 142 ${tetherHeight}`} preserveAspectRatio="none" aria-hidden="true">
+                              <path className="quest-tether-wire" d={tetherPath} />
+                              <path className="quest-tether-energy" d={tetherPath} />
+                              <circle className="quest-tether-anchor" cx="5" cy="8" r="3.5" />
+                            </svg>
+                            <span className="quest-reward-badge" title={reward.description || rewardLabel}>
+                              <span className="quest-reward-badge-icon"><Ico name="gift" size={15} color={rewardColor} /></span>
+                              <span className="quest-reward-badge-label">{rewardLabel}</span>
+                            </span>
+                          </div>;
+                        });
                       return <React.Fragment key={node.id}>
                         {index > 0 && <div className="quest-path-connector"><span className="quest-path-connector-line" style={{ background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55` }} /></div>}
-                        <div className="quest-path-row">
-                          <div className="quest-milestone-side is-left">{renderMilestoneTags(leftMilestoneRewards)}</div>
+                        <div className={`quest-path-row${milestoneRewards.length ? ' has-milestone' : ''}`} style={milestoneRewards.length ? { '--quest-mobile-space': `${Math.min(2, milestoneRewards.length) * 48}px` } as React.CSSProperties : undefined}>
+                          {milestoneRewards.length > 0 && <div className="quest-tether-layer">{renderMilestoneTethers()}</div>}
                           <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
                             <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
                             <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
                             <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
                           </button>
-                          <div className="quest-milestone-side is-right">{renderMilestoneTags(rightMilestoneRewards)}</div>
                         </div>
                       </React.Fragment>;
                     })}

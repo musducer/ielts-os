@@ -3100,7 +3100,7 @@ export default function IeltsSupremeOS() {
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");
   const [_hideTimer, _setHideTimer] = useState(false);
-  const [timeAlert, setTimeAlert] = useState("");
+  const [timeAlert, setTimeAlert] = useState<{ message: string; urgency: "notice" | "urgent" } | null>(null);
   const [_isSepia, _setIsSepia] = useState(false);
   const [_fontSize, _setFontSize] = useState(16);
   const [_lineHeight, _setLineHeight] = useState(1.15); 
@@ -3702,8 +3702,38 @@ export default function IeltsSupremeOS() {
   const meetAudioIssueRef = useRef(false);
   const androidAudioCtxRef = useRef<AudioContext | null>(null);
   const examTimerRef = useRef<number | null>(null);
+  const timeAlertDismissRef = useRef<number | null>(null);
+  const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
+
+  const dismissExamTimeAlert = () => {
+    if (timeAlertDismissRef.current !== null) {
+      window.clearTimeout(timeAlertDismissRef.current);
+      timeAlertDismissRef.current = null;
+    }
+    setTimeAlert(null);
+  };
+
+  const showExamTimeAlert = (message: string, urgency: "notice" | "urgent") => {
+    if (timeAlertDismissRef.current !== null) window.clearTimeout(timeAlertDismissRef.current);
+    setTimeAlert({ message, urgency });
+    timeAlertDismissRef.current = window.setTimeout(() => {
+      timeAlertDismissRef.current = null;
+      setTimeAlert(null);
+    }, urgency === "urgent" ? 5200 : 4600);
+  };
+
+  useEffect(() => {
+    timeAlertMilestonesRef.current.clear();
+    dismissExamTimeAlert();
+    return () => {
+      if (timeAlertDismissRef.current !== null) {
+        window.clearTimeout(timeAlertDismissRef.current);
+        timeAlertDismissRef.current = null;
+      }
+    };
+  }, [activeExam?.id]);
 
   const isListeningExamAudio = () => {
     if (!activeExam) return false;
@@ -4678,9 +4708,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
             if (examTimerRef.current) window.clearInterval(examTimerRef.current);
         } else {
             setExamTimeLeft(exactTimeLeft);
-            if (exactTimeLeft === 600) { setTimeAlert("10 minutes left!"); setTimeout(()=>setTimeAlert(""), 5000); if (state.enableTimerBeep) playBeep(880, 200); }
-            if (exactTimeLeft === 300) { setTimeAlert("5 minutes left!"); setTimeout(()=>setTimeAlert(""), 5000); if (state.enableTimerBeep) playBeep(880, 300); }
-            if (exactTimeLeft <= 60 && exactTimeLeft % 10 === 0) { if (state.enableTimerBeep) playBeep(1000, 500); }
+            const warningMilestones = [
+                { seconds: 600, urgency: "notice" as const, vi: "Còn 10 phút làm bài. Hãy rà soát lại các câu hỏi.", en: "10 minutes remaining. Review your answers.", beep: 200 },
+                { seconds: 300, urgency: "notice" as const, vi: "Còn 5 phút làm bài. Hãy rà soát lại các câu hỏi.", en: "5 minutes remaining. Review your answers.", beep: 300 },
+                { seconds: 60, urgency: "urgent" as const, vi: "Còn 1 phút làm bài. Hãy hoàn tất kiểm tra cuối cùng.", en: "1 minute remaining. Finish your final checks.", beep: 500 },
+            ];
+            const nextWarning = warningMilestones.find(warning =>
+                exactTimeLeft <= warning.seconds && exactTimeLeft > warning.seconds - 10 && !timeAlertMilestonesRef.current.has(warning.seconds)
+            );
+            if (nextWarning) {
+                timeAlertMilestonesRef.current.add(nextWarning.seconds);
+                showExamTimeAlert(i18n.language === "vi" ? nextWarning.vi : nextWarning.en, nextWarning.urgency);
+                if (state.enableTimerBeep) playBeep(nextWarning.urgency === "urgent" ? 1000 : 880, nextWarning.beep);
+            }
+            if (!nextWarning && exactTimeLeft <= 60 && exactTimeLeft % 10 === 0) { if (state.enableTimerBeep) playBeep(1000, 500); }
         }
         
         let aTime = 0; let aStatus = "IDLE";
