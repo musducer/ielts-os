@@ -1390,6 +1390,55 @@ const TEACHERS = ["Trương Thanh Trung", "Vi Thị Khánh Linh"];
 const SKILLS = ["Reading", "Listening", "Speaking", "Writing", "Grammar & Vocab", "Mock Test"];
 const QUICK_NOTES = ["Well done", "Improve pronunciation", "Homework incomplete", "Great reflexes", "Expand vocabulary", "Grammar needs work", "Significant progress"];
 
+// One source of truth for every item that can enter a student's bag. Quest rewards,
+// manual teacher grants, and Gacha must all use these exact inventory names.
+const CONSUMABLE_GIFT_CATALOG = [
+  { name: "Thẻ dời deadline (24h)" },
+  { name: "1 Hộp Milo" },
+  { name: "1 Ly Trái Chò" },
+  { name: "1 Trà sữa Viên Viên" },
+] as const;
+
+const PERMANENT_GIFT_CATALOG = [
+  { group: "titles", name: "Danh hiệu: Chiến Thần IELTS" },
+  { group: "titles", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
+  { group: "titles", name: "Danh hiệu: Học Bá Thượng Đẳng" },
+  { group: "titles", name: "Danh hiệu: Cao Thủ Reading" },
+  { group: "titles", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
+  { group: "titles", name: "Danh hiệu: Vua Tốc Độ" },
+  { group: "titles", name: "Danh hiệu: Huyền Thoại 8.0+" },
+  { group: "titles", name: "Danh hiệu: Mọt Sách Bất Bại" },
+  { group: "titles", name: "Danh hiệu: Thợ Săn Band Điểm" },
+  { group: "titles", name: "Danh hiệu: Ninja Phòng Thi" },
+  { group: "themes", name: "Giao diện: Hoàng Kim" },
+  { group: "themes", name: "Giao diện: Nửa Đêm" },
+  { group: "themes", name: "Giao diện: Anh Đào" },
+  { group: "themes", name: "Giao diện: Rừng Sâu" },
+  { group: "frames", name: "Khung avatar: Vương Miện" },
+  { group: "frames", name: "Khung avatar: Rồng Lửa" },
+  { group: "frames", name: "Khung avatar: Băng Giá" },
+  { group: "frames", name: "Khung avatar: Cầu Vồng" },
+  { group: "frames", name: "Khung avatar: Sao Băng" },
+  { group: "pets", name: "Linh thú: Cú Mèo" },
+  { group: "pets", name: "Linh thú: Mèo Thần Tài" },
+  { group: "pets", name: "Linh thú: Rồng Con" },
+  { group: "pets", name: "Linh thú: Cáo Lửa" },
+  { group: "pets", name: "Linh thú: Chim Cánh Cụt" },
+  { group: "pets", name: "Linh thú: Gấu Trúc" },
+] as const;
+
+const isConsumableGiftName = (value: unknown) => CONSUMABLE_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
+const isPermanentGiftName = (value: unknown) => PERMANENT_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
+const getQuestRewardQuantity = (reward: any) => reward?.rewardType === "permanent_gift"
+  ? 1
+  : Math.max(1, Math.floor(Number(reward?.rewardQuantity) || 1));
+const formatQuestReward = (reward: any) => {
+  const type = String(reward?.rewardType || "");
+  if (type === "coins") return `${parseQuestCoinReward(reward?.rewardValue)} OS Coins`;
+  if (type === "consumable_gift") return `${getQuestRewardQuantity(reward)} × ${String(reward?.rewardValue || "").trim()}`;
+  return String(reward?.rewardValue || reward?.description || type).trim();
+};
+
 interface VocabCard { id: string; word: string; phonetic?: string; pos?: string; meaning?: string; example?: string; cefr?: string; category?: string; evidence?: string; box: number; due: number; createdAt: number; }
 interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
@@ -1406,7 +1455,9 @@ interface CoinOperation {
   kind: string;
   createdAt: number;
   consumableName?: string;
+  consumableQuantity?: number;
   permanentName?: string;
+  inventoryGrants?: { consumables?: Record<string, number>; permanents?: string[] };
   reviewedQuizId?: string;
 }
 
@@ -1417,10 +1468,20 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
     const inventory = student.inventory || {};
     const consumables = { ...(inventory.consumables || {}) };
     const permanents = Array.isArray(inventory.permanents) ? [...inventory.permanents] : [];
+    const consumableGrants: Record<string, number> = { ...(operation.inventoryGrants?.consumables || {}) };
     if (operation.consumableName) {
-      consumables[operation.consumableName] = (Number(consumables[operation.consumableName]) || 0) + 1;
+      consumableGrants[operation.consumableName] = (Number(consumableGrants[operation.consumableName]) || 0)
+        + Math.max(1, Math.floor(Number(operation.consumableQuantity) || 1));
     }
-    if (operation.permanentName && !permanents.includes(operation.permanentName)) permanents.push(operation.permanentName);
+    Object.entries(consumableGrants).forEach(([name, quantity]) => {
+      const count = Math.max(0, Math.floor(Number(quantity) || 0));
+      if (name && count) consumables[name] = (Number(consumables[name]) || 0) + count;
+    });
+    const permanentGrants = Array.from(new Set([
+      ...(Array.isArray(operation.inventoryGrants?.permanents) ? operation.inventoryGrants!.permanents : []),
+      ...(operation.permanentName ? [operation.permanentName] : []),
+    ].map(name => String(name || "").trim()).filter(Boolean)));
+    permanentGrants.forEach(name => { if (!permanents.includes(name)) permanents.push(name); });
     const reviewedQuizzes = Array.isArray(inventory.reviewedQuizzes) ? [...inventory.reviewedQuizzes] : [];
     if (operation.reviewedQuizId && !reviewedQuizzes.includes(operation.reviewedQuizId)) reviewedQuizzes.push(operation.reviewedQuizId);
     return {
@@ -2765,7 +2826,6 @@ export default function IeltsSupremeOS() {
   const [ovTool, setOvTool] = useState<"" | "calc" | "push" | "verify">("");
   // GV tặng quà thủ công (không cần xu/gacha): id HV đang mở modal tặng quà, hoặc null
   const [giftFor, setGiftFor] = useState<string | null>(null);
-  const [giftCustom, setGiftCustom] = useState("");
   const [colorblind, setColorblind] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [studentIp, setStudentIp] = useState<string>("Loading...");
@@ -4786,20 +4846,24 @@ const applyWorkspaceSnapshot = (snap: any) => {
               finalUpdate[key] = localVal.map((localItem: any) => {
                 const serverItem = serverArr.find((s: any) => s.id === localItem.id);
                 if (serverItem) {
-                  // CHỐNG MẤT QUÀ (GV ghi cũng KHÔNG được làm bay inventory HV): permanents/reviewedQuizzes
-                  // là APPEND-ONLY -> union; phần inventory còn lại ƯU TIÊN SERVER (HV là chủ kho đồ của mình),
-                  // nên GV ghi bằng snapshot cũ KHÔNG xoá được consumables/equipped/quà của HV.
+                    // CHỐNG MẤT QUÀ (GV ghi cũng KHÔNG được làm bay inventory HV): permanents/reviewedQuizzes
+                    // là APPEND-ONLY -> union; consumables giữ server làm chuẩn, trừ grant đi kèm
+                    // ledger operation vừa được transaction áp chính xác vào serverStudents.
                   const _tsv = serverItem.inventory || {};
                   const _tlc = localItem.inventory || {};
                   const _tuniq = (a: any, b: any) => Array.from(new Set([
                     ...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])
                   ]));
-                  const mergedInv = {
-                    ..._tlc, ..._tsv,
-                    permanents: _tuniq(_tsv.permanents, _tlc.permanents),
-                    reviewedQuizzes: _tuniq(_tsv.reviewedQuizzes, _tlc.reviewedQuizzes),
-                    consumables: _tsv.consumables || _tlc.consumables || {},
-                  };
+                    const operationTargetsStudent = !!coinOperation
+                      && String(coinOperation.studentId || "") === String(serverItem.id || "");
+                    const mergedInv = {
+                      ..._tlc, ..._tsv,
+                      permanents: _tuniq(_tsv.permanents, _tlc.permanents),
+                      reviewedQuizzes: _tuniq(_tsv.reviewedQuizzes, _tlc.reviewedQuizzes),
+                      consumables: operationTargetsStudent
+                        ? { ...(_tsv.consumables || {}) }
+                        : (_tsv.consumables || _tlc.consumables || {}),
+                    };
                   return {
                     ...serverItem,
                     ...localItem,
@@ -6705,38 +6769,44 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               .reduce((sum, reward) => sum + parseQuestCoinReward(reward.rewardValue), 0);
             const permanentGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "permanent_gift")
-              .map(reward => String(reward.rewardValue || reward.description || "Quest gift").trim())
-              .filter(Boolean);
-            const otherRewards = newlyUnlocked
-              .filter(reward => reward.rewardType === "voucher" || reward.rewardType === "custom")
-              .map(reward => `Chuyên đề: ${String(reward.rewardValue || reward.description || "Phần thưởng").trim()}`)
-              .filter(Boolean);
-            if (earnedQuestCoins || permanentGifts.length || otherRewards.length) {
+              .map(reward => String(reward.rewardValue || "").trim())
+              .filter(isPermanentGiftName);
+            const consumableGifts = newlyUnlocked
+              .filter(reward => reward.rewardType === "consumable_gift")
+              .reduce<Record<string, number>>((grants, reward) => {
+                const name = String(reward.rewardValue || "").trim();
+                if (isConsumableGiftName(name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
+                return grants;
+              }, {});
+            const hasConsumableGifts = Object.keys(consumableGifts).length > 0;
+            if (earnedQuestCoins || permanentGifts.length || hasConsumableGifts) {
               nextStudents = students.map(student => {
                 if (student.id !== me.id) return student;
                 const inventory = student.inventory || { consumables: {}, permanents: [] };
+                const nextConsumables = { ...(inventory.consumables || {}) };
+                Object.entries(consumableGifts).forEach(([name, quantity]) => {
+                  nextConsumables[name] = (Number(nextConsumables[name]) || 0) + quantity;
+                });
                 return {
                   ...student,
                   coins: (Number(student.coins) || 0) + earnedQuestCoins,
                   inventory: {
                     ...inventory,
-                    consumables: inventory.consumables || {},
+                    consumables: nextConsumables,
                     permanents: Array.from(new Set([...(inventory.permanents || []), ...permanentGifts])),
                   },
-                  myRewards: Array.from(new Set([...(student.myRewards || []), ...otherRewards])),
                 };
               });
-              if (earnedQuestCoins > 0) {
-                coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
-                  id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
-                });
-              }
+              coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
+                id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
+                inventoryGrants: { consumables: consumableGifts, permanents: permanentGifts },
+              });
             }
             const threshold = Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0));
             const rewardSummary = newlyUnlocked.length
               ? questTx(
-                ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`,
-                ` Unlocked reward${newlyUnlocked.length > 1 ? 's' : ''}: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`
+                ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(formatQuestReward).filter(Boolean).join(', ')}.`,
+                ` Unlocked reward${newlyUnlocked.length > 1 ? 's' : ''}: ${newlyUnlocked.map(formatQuestReward).filter(Boolean).join(', ')}.`
               )
               : "";
             submissionMessage = questPassed
@@ -6748,7 +6818,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               total: totalQ,
               percentage,
               threshold,
-              rewards: newlyUnlocked.map(reward => String(reward.description || reward.rewardValue || reward.rewardType).trim()).filter(Boolean),
+              rewards: newlyUnlocked.map(formatQuestReward).filter(Boolean),
             };
           }
 
@@ -10393,41 +10463,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         if ((me.coins || 0) < 500) { alert("Cần 500 Xu để quay Gacha!"); return; }
         if (confirm("Dùng 500 Xu để mở Hộp Quà Ngẫu Nhiên?")) {
             const pool = [
-                // 🏆 DANH HIỆU VĨNH VIỄN — đa dạng, hiển thị cạnh tên (equippedTitle)
-                { type: "PERMANENT", name: "Danh hiệu: Chiến Thần IELTS" },
-                { type: "PERMANENT", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
-                { type: "PERMANENT", name: "Danh hiệu: Học Bá Thượng Đẳng" },
-                { type: "PERMANENT", name: "Danh hiệu: Cao Thủ Reading" },
-                { type: "PERMANENT", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
-                { type: "PERMANENT", name: "Danh hiệu: Vua Tốc Độ" },
-                { type: "PERMANENT", name: "Danh hiệu: Huyền Thoại 8.0+" },
-                { type: "PERMANENT", name: "Danh hiệu: Mọt Sách Bất Bại" },
-                { type: "PERMANENT", name: "Danh hiệu: Thợ Săn Band Điểm" },
-                { type: "PERMANENT", name: "Danh hiệu: Ninja Phòng Thi" },
-                // 🎨 GIAO DIỆN VĨNH VIỄN — đổi màu portal học viên (equippedTheme)
-                { type: "PERMANENT", name: "Giao diện: Hoàng Kim" },
-                { type: "PERMANENT", name: "Giao diện: Nửa Đêm" },
-                { type: "PERMANENT", name: "Giao diện: Anh Đào" },
-                { type: "PERMANENT", name: "Giao diện: Rừng Sâu" },
-                // 🖼️ KHUNG AVATAR VĨNH VIỄN — viền + hiệu ứng quanh ảnh đại diện (equippedFrame)
-                { type: "PERMANENT", name: "Khung avatar: Vương Miện" },
-                { type: "PERMANENT", name: "Khung avatar: Rồng Lửa" },
-                { type: "PERMANENT", name: "Khung avatar: Băng Giá" },
-                { type: "PERMANENT", name: "Khung avatar: Cầu Vồng" },
-                { type: "PERMANENT", name: "Khung avatar: Sao Băng" },
-                // 🐾 LINH THÚ VĨNH VIỄN — pet cosmetic nổi góc màn hình (equippedPet)
-                { type: "PERMANENT", name: "Linh thú: Cú Mèo" },
-                { type: "PERMANENT", name: "Linh thú: Mèo Thần Tài" },
-                { type: "PERMANENT", name: "Linh thú: Rồng Con" },
-                { type: "PERMANENT", name: "Linh thú: Cáo Lửa" },
-                { type: "PERMANENT", name: "Linh thú: Chim Cánh Cụt" },
-                { type: "PERMANENT", name: "Linh thú: Gấu Trúc" },
-                // 🍕 PHẦN THƯỞNG THỰC TẾ (tốn chi phí GV) — hiếm hơn
-                { type: "CONSUMABLE", name: "Thẻ dời deadline (24h)" },
-                { type: "CONSUMABLE", name: "1 Hộp Milo" },
-                { type: "CONSUMABLE", name: "1 Ly Trái Chò" },
-                { type: "CONSUMABLE", name: "1 Trà sữa Viên Viên" },
-                // 😢 Trượt — giữ chút hồi hộp
+                ...PERMANENT_GIFT_CATALOG.map(item => ({ type: "PERMANENT", name: item.name })),
+                ...CONSUMABLE_GIFT_CATALOG.map(item => ({ type: "CONSUMABLE", name: item.name })),
                 { type: "NONE", name: "Chúc bạn may mắn lần sau" },
                 { type: "NONE", name: "Chúc bạn may mắn lần sau" }
             ];
@@ -11074,7 +11111,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
                     <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>{questTx('chặng hoàn thành', 'steps complete')}</div></div>
                   </div>
-                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
+                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{formatQuestReward(reward)}</span>)}</div>}
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
                   <div style={{ display: 'grid', gap: 0 }}>
@@ -12565,6 +12602,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               targetValue: Math.max(1, previous.nodes.length || 1),
               rewardType: "coins",
               rewardValue: "50",
+              rewardQuantity: 1,
               description: "",
             }],
           } : previous);
@@ -12575,8 +12613,29 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             rewards: previous.rewards.map(reward => reward.id === rewardId ? { ...reward, ...patch } : reward),
           } : previous);
         };
+        const normaliseReward = (reward: any) => {
+          const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward?.rewardType || ""))
+            ? String(reward.rewardType)
+            : (isPermanentGiftName(reward?.rewardValue) ? "permanent_gift" : "consumable_gift");
+          return {
+            ...reward,
+            rewardType,
+            rewardValue: String(reward?.rewardValue || "").trim(),
+            rewardQuantity: rewardType === "permanent_gift" ? 1 : Math.max(1, Math.floor(Number(reward?.rewardQuantity) || 1)),
+          };
+        };
         const saveAssignment = async () => {
           if (!topicAssignmentEditor) return;
+          const rewards = topicAssignmentEditor.rewards.map(normaliseReward);
+          const invalidReward = rewards.find(reward =>
+            (reward.rewardType === "coins" && parseQuestCoinReward(reward.rewardValue) < 1)
+            || (reward.rewardType === "permanent_gift" && !isPermanentGiftName(reward.rewardValue))
+            || (reward.rewardType === "consumable_gift" && !isConsumableGiftName(reward.rewardValue))
+          );
+          if (invalidReward) {
+            alert(tx("Mỗi phần thưởng phải chọn từ kho quà có sẵn; quà vĩnh viễn luôn có số lượng 1.", "Each reward must be chosen from the existing gift catalog; permanent gifts always have quantity 1."));
+            return;
+          }
           const draft = {
             ...topicAssignmentEditor,
             title: String(topicAssignmentEditor.title || "").trim(),
@@ -12590,6 +12649,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               questionCount: Math.max(1, Math.floor(Number(node.questionCount) || 1)),
               timeLimitMinutes: node.timeLimitMinutes ? Math.max(1, Math.floor(Number(node.timeLimitMinutes))) : undefined,
             })),
+            rewards,
             updatedAt: getTrueTime(),
           } as TopicAssignment;
           if (!draft.title || !draft.topicCategory || !draft.nodes.length || draft.nodes.some(node => !node.testId || !node.title)) {
@@ -12706,13 +12766,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
               <section style={{ padding: "24px 0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="gift" size={17} color={C.accent} /> {tx("Phần thưởng", "Rewards")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Mỗi rule chỉ được cấp một lần cho mỗi học sinh.", "Each reward rule can be granted only once per student.")}</div></div><button onClick={addReward} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm phần thưởng", "Add reward")}</button></div>
-                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(145px, 1fr) minmax(150px, 1.3fr) 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={reward.rewardType} onChange={event => updateReward(reward.id, { rewardType: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option><option value="voucher">Voucher</option><option value="custom">{tx("Tùy chỉnh", "Custom")}</option></select></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Giá trị / ghi chú", "Value / note")}</span><input value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value })} placeholder={reward.rewardType === "coins" ? "50" : tx("Tên quà hoặc nội dung", "Gift name or content")} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
-                  <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
-                </div>)}</div>
+                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => {
+                  const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward.rewardType || ""))
+                    ? String(reward.rewardType)
+                    : (isPermanentGiftName(reward.rewardValue) ? "permanent_gift" : "consumable_gift");
+                  const catalog = rewardType === "permanent_gift" ? PERMANENT_GIFT_CATALOG : CONSUMABLE_GIFT_CATALOG;
+                  const selectedGift = catalog.some(item => item.name === String(reward.rewardValue || "").trim())
+                    ? String(reward.rewardValue || "").trim()
+                    : "";
+                  return <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(155px, 1fr) minmax(185px, 1.35fr) 74px 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={rewardType} onChange={event => { const nextType = event.target.value; updateReward(reward.id, { rewardType: nextType, rewardValue: nextType === "coins" ? "50" : (nextType === "permanent_gift" ? PERMANENT_GIFT_CATALOG[0].name : CONSUMABLE_GIFT_CATALOG[0].name), rewardQuantity: 1, description: "" }); }} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="consumable_gift">{tx("Quà tiêu hao", "Consumable gift")}</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option></select></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{rewardType === "coins" ? tx("Số xu", "Coins") : tx("Vật phẩm", "Item")}</span>{rewardType === "coins" ? <input type="number" min="1" value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value, rewardQuantity: 1 })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /> : <select value={selectedGift} onChange={event => updateReward(reward.id, { rewardType, rewardValue: event.target.value, rewardQuantity: rewardType === "permanent_gift" ? 1 : Math.max(1, Number(reward.rewardQuantity) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="">{tx("Chọn từ kho quà", "Choose from catalog")}</option>{catalog.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select>}</label>
+                    {rewardType === "consumable_gift" ? <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Số lượng", "Qty")}</span><input type="number" min="1" value={getQuestRewardQuantity(reward)} onChange={event => updateReward(reward.id, { rewardQuantity: Math.max(1, Number(event.target.value) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label> : <div />}
+                    <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
+                  </div>;
+                })}</div>
               </section>
             </div>
           );
@@ -13232,43 +13302,43 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 const gst = students.find(s => s.id === giftFor);
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
-                // Cộng vào kho HV rồi đồng bộ (syncData nhánh GV union permanents nên không bao giờ làm giảm quà)
-                const writeInv = (mut: (inv: any) => void, okMsg?: string) => {
-                  const nx = students.map(s => {
-                    if (s.id !== giftFor) return s;
-                    const inv: any = { ...(s.inventory || {}) };
-                    inv.consumables = { ...(s.inventory?.consumables || {}) };
-                    inv.permanents = [...(Array.isArray(s.inventory?.permanents) ? s.inventory!.permanents : [])];
-                    mut(inv);
-                    return { ...s, inventory: inv };
-                  });
-                  setStudents(nx); syncData({ students: nx });
-                  if (okMsg) alert(okMsg);
-                };
                 const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
-                const giveConsumable = (name: string) => { if (!name.trim()) return; writeInv(inv => { inv.consumables[name] = (inv.consumables[name] || 0) + 1; }, `${t('gift_done')} (${name})`); };
-                const givePermanent = (name: string) => { if (owned.includes(name)) return; writeInv(inv => { if (!inv.permanents.includes(name)) inv.permanents.push(name); }, `${t('gift_done')} (${name})`); };
-                const CONSUMABLES = ["Thẻ dời deadline (24h)", "1 Hộp Milo", "1 Ly Trái Chò", "1 Trà sữa Viên Viên"];
-                const TITLES = ["Chiến Thần IELTS", "Kẻ Hủy Diệt Đề", "Học Bá Thượng Đẳng", "Cao Thủ Reading", "Bậc Thầy Từ Vựng", "Vua Tốc Độ", "Huyền Thoại 8.0+", "Mọt Sách Bất Bại", "Thợ Săn Band Điểm", "Ninja Phòng Thi"].map(x => "Danh hiệu: " + x);
-                const THEMES = ["Giao diện: Hoàng Kim", "Giao diện: Nửa Đêm", "Giao diện: Anh Đào", "Giao diện: Rừng Sâu"];
-                const FRAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
-                const PETS = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+                const giveConsumable = (name: string) => {
+                  if (!isConsumableGiftName(name)) return;
+                  const nx = students.map(s => s.id === giftFor ? {
+                    ...s,
+                    inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
+                  } : s);
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1 });
+                  setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
+                  alert(`${t('gift_done')} (${name})`);
+                };
+                const givePermanent = (name: string) => {
+                  if (!isPermanentGiftName(name) || owned.includes(name)) return;
+                  const nx = students.map(s => s.id === giftFor ? {
+                    ...s,
+                    inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
+                  } : s);
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name });
+                  setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
+                  alert(`${t('gift_done')} (${name})`);
+                };
                 const permChip = (name: string) => {
                   const has = owned.includes(name);
                   return <button key={name} disabled={has} onClick={() => givePermanent(name)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{name.split(': ')[1] || name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
                 };
-                const grp = (title: string, items: string[]) => (
+                const grp = (title: string, group: string) => (
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{title}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{items.map(permChip)}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{PERMANENT_GIFT_CATALOG.filter(item => item.group === group).map(item => permChip(item.name))}</div>
                   </div>
                 );
                 return (
-                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => { setGiftFor(null); setGiftCustom(""); }}>
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setGiftFor(null)}>
                     <div className="card" style={{ width: 600, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                         <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
-                        <button onClick={() => { setGiftFor(null); setGiftCustom(""); }} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                        <button onClick={() => setGiftFor(null)} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
                       </div>
                       <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -13279,19 +13349,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                            {CONSUMABLES.map(n => <button key={n} onClick={() => giveConsumable(n)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {n}</button>)}
-                          </div>
-                          <div style={{ display: 'flex', gap: 7, marginTop: 8 }}>
-                            <input value={giftCustom} onChange={(e: any) => setGiftCustom(e.target.value)} placeholder={t('gift_custom_ph')} style={{ flex: 1, fontSize: 12.5 }} />
-                            <button onClick={() => { giveConsumable(giftCustom.trim()); setGiftCustom(""); }} disabled={!giftCustom.trim()} style={{ background: C.accent, color: '#fff', fontSize: 12.5, padding: '8px 16px', fontWeight: 600, opacity: giftCustom.trim() ? 1 : 0.5 }}>{t('gift_grant')}</button>
+                            {CONSUMABLE_GIFT_CATALOG.map(item => <button key={item.name} onClick={() => giveConsumable(item.name)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_permanent')}</div>
-                          {grp('Danh hiệu', TITLES)}
-                          {grp('Giao diện', THEMES)}
-                          {grp('Khung avatar', FRAMES)}
-                          {grp('Linh thú', PETS)}
+                          {grp('Danh hiệu', 'titles')}
+                          {grp('Giao diện', 'themes')}
+                          {grp('Khung avatar', 'frames')}
+                          {grp('Linh thú', 'pets')}
                         </div>
                       </div>
                     </div>

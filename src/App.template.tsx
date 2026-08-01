@@ -1390,6 +1390,55 @@ const TEACHERS = ["Trương Thanh Trung", "Vi Thị Khánh Linh"];
 const SKILLS = ["Reading", "Listening", "Speaking", "Writing", "Grammar & Vocab", "Mock Test"];
 const QUICK_NOTES = ["Well done", "Improve pronunciation", "Homework incomplete", "Great reflexes", "Expand vocabulary", "Grammar needs work", "Significant progress"];
 
+// One source of truth for every item that can enter a student's bag. Quest rewards,
+// manual teacher grants, and Gacha must all use these exact inventory names.
+const CONSUMABLE_GIFT_CATALOG = [
+  { name: "Thẻ dời deadline (24h)" },
+  { name: "1 Hộp Milo" },
+  { name: "1 Ly Trái Chò" },
+  { name: "1 Trà sữa Viên Viên" },
+] as const;
+
+const PERMANENT_GIFT_CATALOG = [
+  { group: "titles", name: "Danh hiệu: Chiến Thần IELTS" },
+  { group: "titles", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
+  { group: "titles", name: "Danh hiệu: Học Bá Thượng Đẳng" },
+  { group: "titles", name: "Danh hiệu: Cao Thủ Reading" },
+  { group: "titles", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
+  { group: "titles", name: "Danh hiệu: Vua Tốc Độ" },
+  { group: "titles", name: "Danh hiệu: Huyền Thoại 8.0+" },
+  { group: "titles", name: "Danh hiệu: Mọt Sách Bất Bại" },
+  { group: "titles", name: "Danh hiệu: Thợ Săn Band Điểm" },
+  { group: "titles", name: "Danh hiệu: Ninja Phòng Thi" },
+  { group: "themes", name: "Giao diện: Hoàng Kim" },
+  { group: "themes", name: "Giao diện: Nửa Đêm" },
+  { group: "themes", name: "Giao diện: Anh Đào" },
+  { group: "themes", name: "Giao diện: Rừng Sâu" },
+  { group: "frames", name: "Khung avatar: Vương Miện" },
+  { group: "frames", name: "Khung avatar: Rồng Lửa" },
+  { group: "frames", name: "Khung avatar: Băng Giá" },
+  { group: "frames", name: "Khung avatar: Cầu Vồng" },
+  { group: "frames", name: "Khung avatar: Sao Băng" },
+  { group: "pets", name: "Linh thú: Cú Mèo" },
+  { group: "pets", name: "Linh thú: Mèo Thần Tài" },
+  { group: "pets", name: "Linh thú: Rồng Con" },
+  { group: "pets", name: "Linh thú: Cáo Lửa" },
+  { group: "pets", name: "Linh thú: Chim Cánh Cụt" },
+  { group: "pets", name: "Linh thú: Gấu Trúc" },
+] as const;
+
+const isConsumableGiftName = (value: unknown) => CONSUMABLE_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
+const isPermanentGiftName = (value: unknown) => PERMANENT_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
+const getQuestRewardQuantity = (reward: any) => reward?.rewardType === "permanent_gift"
+  ? 1
+  : Math.max(1, Math.floor(Number(reward?.rewardQuantity) || 1));
+const formatQuestReward = (reward: any) => {
+  const type = String(reward?.rewardType || "");
+  if (type === "coins") return `${parseQuestCoinReward(reward?.rewardValue)} OS Coins`;
+  if (type === "consumable_gift") return `${getQuestRewardQuantity(reward)} × ${String(reward?.rewardValue || "").trim()}`;
+  return String(reward?.rewardValue || reward?.description || type).trim();
+};
+
 interface VocabCard { id: string; word: string; phonetic?: string; pos?: string; meaning?: string; example?: string; cefr?: string; category?: string; evidence?: string; box: number; due: number; createdAt: number; }
 interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
@@ -1406,7 +1455,9 @@ interface CoinOperation {
   kind: string;
   createdAt: number;
   consumableName?: string;
+  consumableQuantity?: number;
   permanentName?: string;
+  inventoryGrants?: { consumables?: Record<string, number>; permanents?: string[] };
   reviewedQuizId?: string;
 }
 
@@ -1417,10 +1468,20 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
     const inventory = student.inventory || {};
     const consumables = { ...(inventory.consumables || {}) };
     const permanents = Array.isArray(inventory.permanents) ? [...inventory.permanents] : [];
+    const consumableGrants: Record<string, number> = { ...(operation.inventoryGrants?.consumables || {}) };
     if (operation.consumableName) {
-      consumables[operation.consumableName] = (Number(consumables[operation.consumableName]) || 0) + 1;
+      consumableGrants[operation.consumableName] = (Number(consumableGrants[operation.consumableName]) || 0)
+        + Math.max(1, Math.floor(Number(operation.consumableQuantity) || 1));
     }
-    if (operation.permanentName && !permanents.includes(operation.permanentName)) permanents.push(operation.permanentName);
+    Object.entries(consumableGrants).forEach(([name, quantity]) => {
+      const count = Math.max(0, Math.floor(Number(quantity) || 0));
+      if (name && count) consumables[name] = (Number(consumables[name]) || 0) + count;
+    });
+    const permanentGrants = Array.from(new Set([
+      ...(Array.isArray(operation.inventoryGrants?.permanents) ? operation.inventoryGrants!.permanents : []),
+      ...(operation.permanentName ? [operation.permanentName] : []),
+    ].map(name => String(name || "").trim()).filter(Boolean)));
+    permanentGrants.forEach(name => { if (!permanents.includes(name)) permanents.push(name); });
     const reviewedQuizzes = Array.isArray(inventory.reviewedQuizzes) ? [...inventory.reviewedQuizzes] : [];
     if (operation.reviewedQuizId && !reviewedQuizzes.includes(operation.reviewedQuizId)) reviewedQuizzes.push(operation.reviewedQuizId);
     return {
@@ -2765,7 +2826,6 @@ export default function IeltsSupremeOS() {
   const [ovTool, setOvTool] = useState<"" | "calc" | "push" | "verify">("");
   // GV tặng quà thủ công (không cần xu/gacha): id HV đang mở modal tặng quà, hoặc null
   const [giftFor, setGiftFor] = useState<string | null>(null);
-  const [giftCustom, setGiftCustom] = useState("");
   const [colorblind, setColorblind] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [studentIp, setStudentIp] = useState<string>("Loading...");
@@ -4786,20 +4846,24 @@ const applyWorkspaceSnapshot = (snap: any) => {
               finalUpdate[key] = localVal.map((localItem: any) => {
                 const serverItem = serverArr.find((s: any) => s.id === localItem.id);
                 if (serverItem) {
-                  // CHỐNG MẤT QUÀ (GV ghi cũng KHÔNG được làm bay inventory HV): permanents/reviewedQuizzes
-                  // là APPEND-ONLY -> union; phần inventory còn lại ƯU TIÊN SERVER (HV là chủ kho đồ của mình),
-                  // nên GV ghi bằng snapshot cũ KHÔNG xoá được consumables/equipped/quà của HV.
+                    // CHỐNG MẤT QUÀ (GV ghi cũng KHÔNG được làm bay inventory HV): permanents/reviewedQuizzes
+                    // là APPEND-ONLY -> union; consumables giữ server làm chuẩn, trừ grant đi kèm
+                    // ledger operation vừa được transaction áp chính xác vào serverStudents.
                   const _tsv = serverItem.inventory || {};
                   const _tlc = localItem.inventory || {};
                   const _tuniq = (a: any, b: any) => Array.from(new Set([
                     ...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])
                   ]));
-                  const mergedInv = {
-                    ..._tlc, ..._tsv,
-                    permanents: _tuniq(_tsv.permanents, _tlc.permanents),
-                    reviewedQuizzes: _tuniq(_tsv.reviewedQuizzes, _tlc.reviewedQuizzes),
-                    consumables: _tsv.consumables || _tlc.consumables || {},
-                  };
+                    const operationTargetsStudent = !!coinOperation
+                      && String(coinOperation.studentId || "") === String(serverItem.id || "");
+                    const mergedInv = {
+                      ..._tlc, ..._tsv,
+                      permanents: _tuniq(_tsv.permanents, _tlc.permanents),
+                      reviewedQuizzes: _tuniq(_tsv.reviewedQuizzes, _tlc.reviewedQuizzes),
+                      consumables: operationTargetsStudent
+                        ? { ...(_tsv.consumables || {}) }
+                        : (_tsv.consumables || _tlc.consumables || {}),
+                    };
                   return {
                     ...serverItem,
                     ...localItem,
@@ -6705,38 +6769,44 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               .reduce((sum, reward) => sum + parseQuestCoinReward(reward.rewardValue), 0);
             const permanentGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "permanent_gift")
-              .map(reward => String(reward.rewardValue || reward.description || "Quest gift").trim())
-              .filter(Boolean);
-            const otherRewards = newlyUnlocked
-              .filter(reward => reward.rewardType === "voucher" || reward.rewardType === "custom")
-              .map(reward => `Chuyên đề: ${String(reward.rewardValue || reward.description || "Phần thưởng").trim()}`)
-              .filter(Boolean);
-            if (earnedQuestCoins || permanentGifts.length || otherRewards.length) {
+              .map(reward => String(reward.rewardValue || "").trim())
+              .filter(isPermanentGiftName);
+            const consumableGifts = newlyUnlocked
+              .filter(reward => reward.rewardType === "consumable_gift")
+              .reduce<Record<string, number>>((grants, reward) => {
+                const name = String(reward.rewardValue || "").trim();
+                if (isConsumableGiftName(name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
+                return grants;
+              }, {});
+            const hasConsumableGifts = Object.keys(consumableGifts).length > 0;
+            if (earnedQuestCoins || permanentGifts.length || hasConsumableGifts) {
               nextStudents = students.map(student => {
                 if (student.id !== me.id) return student;
                 const inventory = student.inventory || { consumables: {}, permanents: [] };
+                const nextConsumables = { ...(inventory.consumables || {}) };
+                Object.entries(consumableGifts).forEach(([name, quantity]) => {
+                  nextConsumables[name] = (Number(nextConsumables[name]) || 0) + quantity;
+                });
                 return {
                   ...student,
                   coins: (Number(student.coins) || 0) + earnedQuestCoins,
                   inventory: {
                     ...inventory,
-                    consumables: inventory.consumables || {},
+                    consumables: nextConsumables,
                     permanents: Array.from(new Set([...(inventory.permanents || []), ...permanentGifts])),
                   },
-                  myRewards: Array.from(new Set([...(student.myRewards || []), ...otherRewards])),
                 };
               });
-              if (earnedQuestCoins > 0) {
-                coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
-                  id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
-                });
-              }
+              coinOperation = makeCoinOperation(me.id, earnedQuestCoins, "QUEST_REWARD", {
+                id: `quest_reward_${me.id}_${assignment.id}_${newlyUnlocked.map(reward => reward.id).sort().join("_")}`,
+                inventoryGrants: { consumables: consumableGifts, permanents: permanentGifts },
+              });
             }
             const threshold = Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0));
             const rewardSummary = newlyUnlocked.length
               ? questTx(
-                ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`,
-                ` Unlocked reward${newlyUnlocked.length > 1 ? 's' : ''}: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`
+                ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(formatQuestReward).filter(Boolean).join(', ')}.`,
+                ` Unlocked reward${newlyUnlocked.length > 1 ? 's' : ''}: ${newlyUnlocked.map(formatQuestReward).filter(Boolean).join(', ')}.`
               )
               : "";
             submissionMessage = questPassed
@@ -6748,7 +6818,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               total: totalQ,
               percentage,
               threshold,
-              rewards: newlyUnlocked.map(reward => String(reward.description || reward.rewardValue || reward.rewardType).trim()).filter(Boolean),
+              rewards: newlyUnlocked.map(formatQuestReward).filter(Boolean),
             };
           }
 

@@ -71,6 +71,7 @@
               targetValue: Math.max(1, previous.nodes.length || 1),
               rewardType: "coins",
               rewardValue: "50",
+              rewardQuantity: 1,
               description: "",
             }],
           } : previous);
@@ -81,8 +82,29 @@
             rewards: previous.rewards.map(reward => reward.id === rewardId ? { ...reward, ...patch } : reward),
           } : previous);
         };
+        const normaliseReward = (reward: any) => {
+          const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward?.rewardType || ""))
+            ? String(reward.rewardType)
+            : (isPermanentGiftName(reward?.rewardValue) ? "permanent_gift" : "consumable_gift");
+          return {
+            ...reward,
+            rewardType,
+            rewardValue: String(reward?.rewardValue || "").trim(),
+            rewardQuantity: rewardType === "permanent_gift" ? 1 : Math.max(1, Math.floor(Number(reward?.rewardQuantity) || 1)),
+          };
+        };
         const saveAssignment = async () => {
           if (!topicAssignmentEditor) return;
+          const rewards = topicAssignmentEditor.rewards.map(normaliseReward);
+          const invalidReward = rewards.find(reward =>
+            (reward.rewardType === "coins" && parseQuestCoinReward(reward.rewardValue) < 1)
+            || (reward.rewardType === "permanent_gift" && !isPermanentGiftName(reward.rewardValue))
+            || (reward.rewardType === "consumable_gift" && !isConsumableGiftName(reward.rewardValue))
+          );
+          if (invalidReward) {
+            alert(tx("Mỗi phần thưởng phải chọn từ kho quà có sẵn; quà vĩnh viễn luôn có số lượng 1.", "Each reward must be chosen from the existing gift catalog; permanent gifts always have quantity 1."));
+            return;
+          }
           const draft = {
             ...topicAssignmentEditor,
             title: String(topicAssignmentEditor.title || "").trim(),
@@ -96,6 +118,7 @@
               questionCount: Math.max(1, Math.floor(Number(node.questionCount) || 1)),
               timeLimitMinutes: node.timeLimitMinutes ? Math.max(1, Math.floor(Number(node.timeLimitMinutes))) : undefined,
             })),
+            rewards,
             updatedAt: getTrueTime(),
           } as TopicAssignment;
           if (!draft.title || !draft.topicCategory || !draft.nodes.length || draft.nodes.some(node => !node.testId || !node.title)) {
@@ -212,13 +235,23 @@
 
               <section style={{ padding: "24px 0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Ico name="gift" size={17} color={C.accent} /> {tx("Phần thưởng", "Rewards")}</h3><div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx("Mỗi rule chỉ được cấp một lần cho mỗi học sinh.", "Each reward rule can be granted only once per student.")}</div></div><button onClick={addReward} style={{ border: `1px solid ${C.accent}`, background: `${C.accent}12`, color: C.accent, padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6 }}><Ico name="plus" size={15} /> {tx("Thêm phần thưởng", "Add reward")}</button></div>
-                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(145px, 1fr) minmax(150px, 1.3fr) 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={reward.rewardType} onChange={event => updateReward(reward.id, { rewardType: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option><option value="voucher">Voucher</option><option value="custom">{tx("Tùy chỉnh", "Custom")}</option></select></label>
-                  <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Giá trị / ghi chú", "Value / note")}</span><input value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value })} placeholder={reward.rewardType === "coins" ? "50" : tx("Tên quà hoặc nội dung", "Gift name or content")} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
-                  <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
-                </div>)}</div>
+                <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => {
+                  const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward.rewardType || ""))
+                    ? String(reward.rewardType)
+                    : (isPermanentGiftName(reward.rewardValue) ? "permanent_gift" : "consumable_gift");
+                  const catalog = rewardType === "permanent_gift" ? PERMANENT_GIFT_CATALOG : CONSUMABLE_GIFT_CATALOG;
+                  const selectedGift = catalog.some(item => item.name === String(reward.rewardValue || "").trim())
+                    ? String(reward.rewardValue || "").trim()
+                    : "";
+                  return <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(155px, 1fr) minmax(185px, 1.35fr) 74px 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={rewardType} onChange={event => { const nextType = event.target.value; updateReward(reward.id, { rewardType: nextType, rewardValue: nextType === "coins" ? "50" : (nextType === "permanent_gift" ? PERMANENT_GIFT_CATALOG[0].name : CONSUMABLE_GIFT_CATALOG[0].name), rewardQuantity: 1, description: "" }); }} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="consumable_gift">{tx("Quà tiêu hao", "Consumable gift")}</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option></select></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{rewardType === "coins" ? tx("Số xu", "Coins") : tx("Vật phẩm", "Item")}</span>{rewardType === "coins" ? <input type="number" min="1" value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value, rewardQuantity: 1 })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /> : <select value={selectedGift} onChange={event => updateReward(reward.id, { rewardType, rewardValue: event.target.value, rewardQuantity: rewardType === "permanent_gift" ? 1 : Math.max(1, Number(reward.rewardQuantity) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="">{tx("Chọn từ kho quà", "Choose from catalog")}</option>{catalog.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select>}</label>
+                    {rewardType === "consumable_gift" ? <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Số lượng", "Qty")}</span><input type="number" min="1" value={getQuestRewardQuantity(reward)} onChange={event => updateReward(reward.id, { rewardQuantity: Math.max(1, Number(event.target.value) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label> : <div />}
+                    <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
+                  </div>;
+                })}</div>
               </section>
             </div>
           );

@@ -418,43 +418,43 @@
                 const gst = students.find(s => s.id === giftFor);
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
-                // Cộng vào kho HV rồi đồng bộ (syncData nhánh GV union permanents nên không bao giờ làm giảm quà)
-                const writeInv = (mut: (inv: any) => void, okMsg?: string) => {
-                  const nx = students.map(s => {
-                    if (s.id !== giftFor) return s;
-                    const inv: any = { ...(s.inventory || {}) };
-                    inv.consumables = { ...(s.inventory?.consumables || {}) };
-                    inv.permanents = [...(Array.isArray(s.inventory?.permanents) ? s.inventory!.permanents : [])];
-                    mut(inv);
-                    return { ...s, inventory: inv };
-                  });
-                  setStudents(nx); syncData({ students: nx });
-                  if (okMsg) alert(okMsg);
-                };
                 const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
-                const giveConsumable = (name: string) => { if (!name.trim()) return; writeInv(inv => { inv.consumables[name] = (inv.consumables[name] || 0) + 1; }, `${t('gift_done')} (${name})`); };
-                const givePermanent = (name: string) => { if (owned.includes(name)) return; writeInv(inv => { if (!inv.permanents.includes(name)) inv.permanents.push(name); }, `${t('gift_done')} (${name})`); };
-                const CONSUMABLES = ["Thẻ dời deadline (24h)", "1 Hộp Milo", "1 Ly Trái Chò", "1 Trà sữa Viên Viên"];
-                const TITLES = ["Chiến Thần IELTS", "Kẻ Hủy Diệt Đề", "Học Bá Thượng Đẳng", "Cao Thủ Reading", "Bậc Thầy Từ Vựng", "Vua Tốc Độ", "Huyền Thoại 8.0+", "Mọt Sách Bất Bại", "Thợ Săn Band Điểm", "Ninja Phòng Thi"].map(x => "Danh hiệu: " + x);
-                const THEMES = ["Giao diện: Hoàng Kim", "Giao diện: Nửa Đêm", "Giao diện: Anh Đào", "Giao diện: Rừng Sâu"];
-                const FRAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
-                const PETS = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+                const giveConsumable = (name: string) => {
+                  if (!isConsumableGiftName(name)) return;
+                  const nx = students.map(s => s.id === giftFor ? {
+                    ...s,
+                    inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
+                  } : s);
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1 });
+                  setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
+                  alert(`${t('gift_done')} (${name})`);
+                };
+                const givePermanent = (name: string) => {
+                  if (!isPermanentGiftName(name) || owned.includes(name)) return;
+                  const nx = students.map(s => s.id === giftFor ? {
+                    ...s,
+                    inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
+                  } : s);
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name });
+                  setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
+                  alert(`${t('gift_done')} (${name})`);
+                };
                 const permChip = (name: string) => {
                   const has = owned.includes(name);
                   return <button key={name} disabled={has} onClick={() => givePermanent(name)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{name.split(': ')[1] || name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
                 };
-                const grp = (title: string, items: string[]) => (
+                const grp = (title: string, group: string) => (
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{title}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{items.map(permChip)}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{PERMANENT_GIFT_CATALOG.filter(item => item.group === group).map(item => permChip(item.name))}</div>
                   </div>
                 );
                 return (
-                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => { setGiftFor(null); setGiftCustom(""); }}>
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setGiftFor(null)}>
                     <div className="card" style={{ width: 600, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                         <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
-                        <button onClick={() => { setGiftFor(null); setGiftCustom(""); }} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                        <button onClick={() => setGiftFor(null)} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
                       </div>
                       <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -465,19 +465,15 @@
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                            {CONSUMABLES.map(n => <button key={n} onClick={() => giveConsumable(n)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {n}</button>)}
-                          </div>
-                          <div style={{ display: 'flex', gap: 7, marginTop: 8 }}>
-                            <input value={giftCustom} onChange={(e: any) => setGiftCustom(e.target.value)} placeholder={t('gift_custom_ph')} style={{ flex: 1, fontSize: 12.5 }} />
-                            <button onClick={() => { giveConsumable(giftCustom.trim()); setGiftCustom(""); }} disabled={!giftCustom.trim()} style={{ background: C.accent, color: '#fff', fontSize: 12.5, padding: '8px 16px', fontWeight: 600, opacity: giftCustom.trim() ? 1 : 0.5 }}>{t('gift_grant')}</button>
+                            {CONSUMABLE_GIFT_CATALOG.map(item => <button key={item.name} onClick={() => giveConsumable(item.name)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_permanent')}</div>
-                          {grp('Danh hiệu', TITLES)}
-                          {grp('Giao diện', THEMES)}
-                          {grp('Khung avatar', FRAMES)}
-                          {grp('Linh thú', PETS)}
+                          {grp('Danh hiệu', 'titles')}
+                          {grp('Giao diện', 'themes')}
+                          {grp('Khung avatar', 'frames')}
+                          {grp('Linh thú', 'pets')}
                         </div>
                       </div>
                     </div>

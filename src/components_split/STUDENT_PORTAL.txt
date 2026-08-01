@@ -357,41 +357,8 @@
         if ((me.coins || 0) < 500) { alert("Cần 500 Xu để quay Gacha!"); return; }
         if (confirm("Dùng 500 Xu để mở Hộp Quà Ngẫu Nhiên?")) {
             const pool = [
-                // 🏆 DANH HIỆU VĨNH VIỄN — đa dạng, hiển thị cạnh tên (equippedTitle)
-                { type: "PERMANENT", name: "Danh hiệu: Chiến Thần IELTS" },
-                { type: "PERMANENT", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
-                { type: "PERMANENT", name: "Danh hiệu: Học Bá Thượng Đẳng" },
-                { type: "PERMANENT", name: "Danh hiệu: Cao Thủ Reading" },
-                { type: "PERMANENT", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
-                { type: "PERMANENT", name: "Danh hiệu: Vua Tốc Độ" },
-                { type: "PERMANENT", name: "Danh hiệu: Huyền Thoại 8.0+" },
-                { type: "PERMANENT", name: "Danh hiệu: Mọt Sách Bất Bại" },
-                { type: "PERMANENT", name: "Danh hiệu: Thợ Săn Band Điểm" },
-                { type: "PERMANENT", name: "Danh hiệu: Ninja Phòng Thi" },
-                // 🎨 GIAO DIỆN VĨNH VIỄN — đổi màu portal học viên (equippedTheme)
-                { type: "PERMANENT", name: "Giao diện: Hoàng Kim" },
-                { type: "PERMANENT", name: "Giao diện: Nửa Đêm" },
-                { type: "PERMANENT", name: "Giao diện: Anh Đào" },
-                { type: "PERMANENT", name: "Giao diện: Rừng Sâu" },
-                // 🖼️ KHUNG AVATAR VĨNH VIỄN — viền + hiệu ứng quanh ảnh đại diện (equippedFrame)
-                { type: "PERMANENT", name: "Khung avatar: Vương Miện" },
-                { type: "PERMANENT", name: "Khung avatar: Rồng Lửa" },
-                { type: "PERMANENT", name: "Khung avatar: Băng Giá" },
-                { type: "PERMANENT", name: "Khung avatar: Cầu Vồng" },
-                { type: "PERMANENT", name: "Khung avatar: Sao Băng" },
-                // 🐾 LINH THÚ VĨNH VIỄN — pet cosmetic nổi góc màn hình (equippedPet)
-                { type: "PERMANENT", name: "Linh thú: Cú Mèo" },
-                { type: "PERMANENT", name: "Linh thú: Mèo Thần Tài" },
-                { type: "PERMANENT", name: "Linh thú: Rồng Con" },
-                { type: "PERMANENT", name: "Linh thú: Cáo Lửa" },
-                { type: "PERMANENT", name: "Linh thú: Chim Cánh Cụt" },
-                { type: "PERMANENT", name: "Linh thú: Gấu Trúc" },
-                // 🍕 PHẦN THƯỞNG THỰC TẾ (tốn chi phí GV) — hiếm hơn
-                { type: "CONSUMABLE", name: "Thẻ dời deadline (24h)" },
-                { type: "CONSUMABLE", name: "1 Hộp Milo" },
-                { type: "CONSUMABLE", name: "1 Ly Trái Chò" },
-                { type: "CONSUMABLE", name: "1 Trà sữa Viên Viên" },
-                // 😢 Trượt — giữ chút hồi hộp
+                ...PERMANENT_GIFT_CATALOG.map(item => ({ type: "PERMANENT", name: item.name })),
+                ...CONSUMABLE_GIFT_CATALOG.map(item => ({ type: "CONSUMABLE", name: item.name })),
                 { type: "NONE", name: "Chúc bạn may mắn lần sau" },
                 { type: "NONE", name: "Chúc bạn may mắn lần sau" }
             ];
@@ -1038,7 +1005,7 @@
                     <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
                     <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>{questTx('chặng hoàn thành', 'steps complete')}</div></div>
                   </div>
-                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
+                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{formatQuestReward(reward)}</span>)}</div>}
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
                   <div style={{ display: 'grid', gap: 0 }}>

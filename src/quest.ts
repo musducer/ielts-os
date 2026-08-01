@@ -1,5 +1,7 @@
 export type QuestRewardTrigger = "milestone" | "total_score" | "streak";
-export type QuestRewardType = "coins" | "permanent_gift" | "voucher" | "custom";
+// voucher/custom remain readable for older assignments, but new rewards must use
+// the catalog-backed gift types below.
+export type QuestRewardType = "coins" | "permanent_gift" | "consumable_gift" | "voucher" | "custom";
 export type QuestNodeMode = "practice" | "exam";
 
 export interface RewardRule {
@@ -8,6 +10,7 @@ export interface RewardRule {
   targetValue: number;
   rewardType: QuestRewardType;
   rewardValue: string;
+  rewardQuantity?: number;
   description?: string;
 }
 
