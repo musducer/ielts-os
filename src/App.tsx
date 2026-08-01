@@ -10726,8 +10726,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
-          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-1.35deg) translateY(0); } 50% { transform: rotate(1.35deg) translateY(2px); } }
-          .quest-milestone-hanger { transform-origin: 50% 0; will-change: transform; }
+          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-1.15deg) translateY(0); } 50% { transform: rotate(1.15deg) translateY(2px); } }
+          .quest-milestone-cluster { position:absolute; top:0; z-index:2; display:flex; max-width:calc(100% - 58px); pointer-events:none; }
+          .quest-milestone-cluster.is-left { left:39px; justify-content:flex-start; }
+          .quest-milestone-cluster.is-right { right:12px; justify-content:flex-end; }
+          .quest-milestone-tags { display:flex; align-items:flex-start; flex-wrap:wrap; gap:10px; }
+          .quest-milestone-cluster.is-right .quest-milestone-tags { justify-content:flex-end; }
+          .quest-milestone-hanger { display:inline-flex; flex-direction:column; align-items:flex-start; transform-origin:21px 0; will-change:transform; }
+          .quest-milestone-cord { display:block; width:1px; height:15px; margin-left:20px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); opacity:.88; }
+          .quest-milestone-tag { position:relative; display:inline-flex; align-items:center; gap:7px; min-height:34px; max-width:min(238px, calc(100vw - 120px)); padding:7px 13px 7px 34px; background:var(--tag-surface); color:var(--tag-text); clip-path:polygon(11px 0, calc(100% - 9px) 0, 100% 9px, 100% calc(100% - 9px), calc(100% - 9px) 100%, 11px 100%, 0 calc(100% - 11px), 0 11px); filter:drop-shadow(0 0 1px var(--reward-color)) drop-shadow(0 5px 10px var(--reward-glow)); font-size:11px; font-weight:900; line-height:1.22; letter-spacing:.08px; }
+          .quest-milestone-tag::before { content:""; position:absolute; left:13px; top:50%; width:7px; height:7px; transform:translateY(-50%); border:2px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 0 2px var(--tag-surface), 0 0 7px var(--reward-glow); }
+          .quest-milestone-tag-text { min-width:0; overflow-wrap:anywhere; }
+          @media (max-width:640px) { .quest-milestone-cluster.is-right { left:39px; right:auto; justify-content:flex-start; } .quest-milestone-cluster.is-right .quest-milestone-tags { justify-content:flex-start; } .quest-milestone-tags { gap:8px; } }
           @media (prefers-reduced-motion: reduce) { .quest-milestone-hanger { animation: none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
@@ -11309,18 +11319,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       const milestoneRewards = assignment.rewards.filter(reward =>
                         reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
                       );
+                      const milestoneSide = index % 2 === 0 ? 'left' : 'right';
+                      const milestoneExtraHeight = Math.max(0, milestoneRewards.length - 1) * 52;
+                      const milestoneTagPadding = 61 + milestoneExtraHeight;
                       return <React.Fragment key={node.id}>
-                        {index > 0 && <div style={{ width: 2, height: milestoneRewards.length ? 35 : 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
-                        <div style={{ position: 'relative', paddingTop: milestoneRewards.length ? 47 : 0 }}>
-                          {milestoneRewards.length > 0 && <div style={{ position: 'absolute', top: 0, left: 47, right: 0, zIndex: 1, display: 'flex', alignItems: 'flex-start', gap: 9, flexWrap: 'wrap', pointerEvents: 'none' }}>
-                            {milestoneRewards.map((reward, rewardIndex) => {
-                              const unlocked = progress.unlockedRewards.includes(reward.id);
-                              const rewardColor = unlocked ? C.succ : C.accent;
-                              return <span className="quest-milestone-hanger" key={reward.id} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', transformOrigin: '50% 0', animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
-                                <span style={{ display: 'block', width: 1, height: 15, background: `${rewardColor}aa`, boxShadow: `0 0 0 1px ${C.bg}` }} />
-                                <span title={reward.description || formatQuestReward(reward)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, width: 'max-content', maxWidth: 230, padding: '5px 8px 6px', border: `1px solid ${rewardColor}88`, borderRadius: 6, background: unlocked ? `${C.succ}16` : `${C.accent}12`, color: rewardColor, fontSize: 11, fontWeight: 900, lineHeight: 1.2, boxShadow: `0 5px 12px ${rewardColor}18` }}><Ico name="gift" size={13} color={rewardColor} /><span style={{ whiteSpace: 'normal' }}>{formatQuestReward(reward)}</span></span>
-                              </span>;
-                            })}
+                        {index > 0 && <div style={{ width: 2, height: milestoneRewards.length ? 35 + Math.min(milestoneExtraHeight, 78) : 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
+                        <div style={{ position: 'relative', paddingTop: milestoneRewards.length ? milestoneTagPadding : 0 }}>
+                          {milestoneRewards.length > 0 && <div className={`quest-milestone-cluster is-${milestoneSide}`}>
+                            <div className="quest-milestone-tags">
+                              {milestoneRewards.map((reward, rewardIndex) => {
+                                const unlocked = progress.unlockedRewards.includes(reward.id);
+                                const rewardColor = unlocked ? C.succ : C.accent;
+                                return <span className="quest-milestone-hanger" key={reward.id} style={{ animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
+                                  <span className="quest-milestone-cord" style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70` } as React.CSSProperties} />
+                                  <span className="quest-milestone-tag" title={reward.description || formatQuestReward(reward)} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card, '--tag-text': C.text } as React.CSSProperties}><Ico name="gift" size={13} color={rewardColor} /><span className="quest-milestone-tag-text">{formatQuestReward(reward)}</span></span>
+                                </span>;
+                              })}
+                            </div>
                           </div>}
                           <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
                             <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
