@@ -462,25 +462,50 @@
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
-          @keyframes questBadgeFloat { 0%,100% { transform:translate3d(0,0,0) rotate(-.5deg); } 50% { transform:translate3d(0,-5px,0) rotate(.5deg); } }
-          @keyframes questTetherFlow { to { stroke-dashoffset:-56; } }
-          @keyframes questTetherPulse { 0%,100% { opacity:.58; r:3.5; } 50% { opacity:1; r:5.1; } }
-          .quest-path-list { position:relative; display:grid; gap:0; min-width:0; }
-          .quest-path-list.has-milestone { --quest-reward-gutter:clamp(238px, 25vw, 300px); padding-right:var(--quest-reward-gutter); }
-          .quest-path-row { position:relative; min-width:0; }
-          .quest-path-connector { position:relative; height:23px; }
-          .quest-path-connector-line { display:block; width:2px; height:100%; margin-left:19px; }
-          .quest-tether-layer { position:absolute; z-index:4; top:0; left:100%; width:var(--quest-reward-gutter); height:150px; pointer-events:none; overflow:visible; }
-          .quest-tether { position:absolute; inset:0; height:var(--tether-height, 150px); color:var(--reward-color); }
-          .quest-tether-svg { position:absolute; inset:0 auto auto 0; width:142px; height:100%; overflow:visible; }
-          .quest-tether-wire { fill:none; stroke:var(--reward-color); stroke-width:1.35; opacity:.46; vector-effect:non-scaling-stroke; }
-          .quest-tether-energy { fill:none; stroke:var(--reward-color); stroke-width:2.5; stroke-linecap:round; stroke-dasharray:2 13; opacity:.96; vector-effect:non-scaling-stroke; animation:questTetherFlow 2.85s linear infinite; }
-          .quest-tether-anchor { fill:var(--badge-surface); stroke:var(--reward-color); stroke-width:2; vector-effect:non-scaling-stroke; animation:questTetherPulse 2.85s ease-in-out infinite; }
-          .quest-reward-badge { position:absolute; top:var(--reward-top); left:104px; display:inline-flex; align-items:center; gap:9px; box-sizing:border-box; width:max-content; min-width:118px; max-width:calc(var(--quest-reward-gutter) - 112px); min-height:42px; padding:8px 14px 8px 8px; border:1px solid var(--reward-color); border-color:color-mix(in srgb, var(--reward-color) 58%, var(--badge-surface)); border-radius:999px; background:var(--badge-surface); background:color-mix(in srgb, var(--badge-surface) 84%, transparent); color:var(--badge-text); box-shadow:0 12px 25px var(--reward-glow), inset 0 1px 0 rgba(255,255,255,.52); backdrop-filter:blur(14px) saturate(1.12); -webkit-backdrop-filter:blur(14px) saturate(1.12); font-size:11px; font-weight:900; letter-spacing:.08px; line-height:1.25; text-align:left; will-change:transform; animation:questBadgeFloat var(--badge-float-duration, 3.7s) ease-in-out var(--badge-float-delay, 0s) infinite; }
-          .quest-reward-badge-icon { display:grid; flex:0 0 auto; width:25px; height:25px; place-items:center; border:1px solid color-mix(in srgb, var(--reward-color) 45%, transparent); border-radius:50%; background:var(--badge-icon-surface); box-shadow:inset 0 1px 0 rgba(255,255,255,.5); }
-          .quest-reward-badge-label { min-width:0; overflow-wrap:break-word; word-break:normal; }
-          @media (max-width:760px) { .quest-path-list.has-milestone { --quest-reward-gutter:0px; padding-right:0; } .quest-path-row.has-milestone { padding-top:var(--quest-mobile-space, 50px); } .quest-tether-layer { top:0; left:auto; right:0; display:flex; justify-content:flex-end; align-items:flex-start; gap:6px; width:auto; height:auto; } .quest-tether { position:relative; inset:auto; width:auto; height:auto; } .quest-tether-svg { display:none; } .quest-reward-badge { position:relative; top:auto; left:auto; min-width:0; max-width:min(164px, calc(50vw - 24px)); min-height:36px; padding:6px 10px 6px 6px; font-size:10px; } .quest-reward-badge-icon { width:22px; height:22px; } }
-          @media (prefers-reduced-motion: reduce) { .quest-reward-badge, .quest-tether-energy, .quest-tether-anchor { animation:none !important; } }
+          @keyframes questRewardPulse { 0%,100% { box-shadow:0 0 0 0 color-mix(in srgb, var(--quest-reward-color) 0%, transparent); } 50% { box-shadow:0 0 0 5px color-mix(in srgb, var(--quest-reward-color) 18%, transparent); } }
+          .quest-split-layout { display:grid; grid-template-columns:minmax(260px, .78fr) minmax(0, 1.22fr); gap:18px; align-items:start; }
+          .quest-stepper { max-height:min(640px, calc(100dvh - 210px)); padding:2px 8px 2px 2px; overflow-y:auto; overscroll-behavior:contain; }
+          .quest-step-item { position:relative; min-width:0; }
+          .quest-step-button { display:grid; grid-template-columns:34px minmax(0, 1fr) auto; align-items:center; gap:9px; width:100%; min-height:58px; border:1px solid var(--quest-step-border); border-left:3px solid var(--quest-step-color); border-radius:10px; background:var(--quest-step-bg); color:var(--quest-step-text); cursor:pointer; padding:10px 10px 10px 8px; text-align:left; transition:border-color .16s ease, background .16s ease, transform .16s ease, box-shadow .16s ease; }
+          .quest-step-button:hover { border-color:color-mix(in srgb, var(--quest-step-color) 68%, var(--quest-step-border)); background:color-mix(in srgb, var(--quest-step-color) 7%, var(--quest-step-bg)); }
+          .quest-step-button:active { transform:scale(.992); }
+          .quest-step-button.is-active { border-color:var(--quest-step-color); background:color-mix(in srgb, var(--quest-step-color) 10%, var(--quest-step-bg)); box-shadow:0 0 0 2px color-mix(in srgb, var(--quest-step-color) 17%, transparent); }
+          .quest-step-number { display:grid; width:27px; height:27px; place-items:center; border-radius:50%; background:color-mix(in srgb, var(--quest-step-color) 15%, transparent); color:var(--quest-step-color); font-size:10px; font-weight:900; letter-spacing:.1px; }
+          .quest-step-copy { min-width:0; }
+          .quest-step-title { display:block; overflow:hidden; color:var(--quest-step-text); font-size:12px; font-weight:900; line-height:1.25; text-overflow:ellipsis; white-space:nowrap; }
+          .quest-step-meta { display:block; overflow:hidden; margin-top:3px; color:var(--quest-step-sub); font-size:10px; font-weight:750; line-height:1.25; text-overflow:ellipsis; white-space:nowrap; }
+          .quest-step-status { border:1px solid color-mix(in srgb, var(--quest-step-color) 38%, transparent); border-radius:999px; padding:4px 7px; color:var(--quest-step-color); font-size:9px; font-weight:900; line-height:1; white-space:nowrap; }
+          .quest-step-connector { position:relative; height:25px; margin-left:21px; }
+          .quest-step-connector::before { content:""; position:absolute; top:0; bottom:0; left:0; width:2px; border-radius:2px; background:var(--quest-connector-color); }
+          .quest-step-reward { position:absolute; z-index:2; top:50%; left:0; display:grid; width:24px; height:24px; place-items:center; border:1px solid var(--quest-reward-color); border-radius:50%; background:var(--quest-step-bg); color:var(--quest-reward-color); cursor:help; transform:translate(-50%,-50%); animation:questRewardPulse 2.8s ease-in-out infinite; }
+          .quest-detail-column { position:relative; min-width:0; }
+          .quest-detail-panel { position:sticky; top:18px; overflow:hidden; border:1px solid var(--quest-detail-border); border-top:3px solid var(--quest-detail-accent); border-radius:12px; background:var(--quest-detail-bg); background:color-mix(in srgb, var(--quest-detail-bg) 88%, transparent); color:var(--quest-detail-text); box-shadow:0 16px 35px rgba(8,20,42,.16), inset 0 1px 0 rgba(255,255,255,.16); backdrop-filter:blur(16px) saturate(1.06); -webkit-backdrop-filter:blur(16px) saturate(1.06); }
+          .quest-detail-panel::before { content:""; position:absolute; inset:0 0 auto; height:58px; pointer-events:none; background:linear-gradient(110deg, color-mix(in srgb, var(--quest-detail-accent) 14%, transparent), transparent 66%); }
+          .quest-detail-body { position:relative; padding:20px; }
+          .quest-detail-close { position:absolute; z-index:1; top:10px; right:10px; display:none; width:30px; height:30px; place-items:center; border:1px solid var(--quest-detail-border); border-radius:50%; background:var(--quest-detail-bg); color:var(--quest-detail-sub); cursor:pointer; }
+          .quest-detail-overline { color:var(--quest-detail-accent); font-size:10px; font-weight:900; letter-spacing:.72px; text-transform:uppercase; }
+          .quest-detail-heading { margin:5px 0 0; padding-right:56px; color:var(--quest-detail-text); font-size:20px; font-weight:900; line-height:1.2; }
+          .quest-detail-mode { display:inline-flex; align-items:center; gap:5px; margin-top:9px; border:1px solid color-mix(in srgb, var(--quest-detail-accent) 45%, transparent); border-radius:999px; padding:5px 8px; color:var(--quest-detail-accent); font-size:10px; font-weight:900; line-height:1; }
+          .quest-detail-description { margin:13px 0 0; color:var(--quest-detail-sub); font-size:12px; line-height:1.55; }
+          .quest-detail-stats { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:17px; }
+          .quest-detail-stat { min-width:0; border:1px solid var(--quest-detail-border); border-radius:8px; padding:10px; background:color-mix(in srgb, var(--quest-detail-bg) 82%, transparent); }
+          .quest-detail-stat-label { display:flex; align-items:center; gap:5px; color:var(--quest-detail-sub); font-size:10px; font-weight:800; }
+          .quest-detail-stat-value { overflow:hidden; margin-top:6px; color:var(--quest-detail-text); font-size:14px; font-weight:900; line-height:1.2; text-overflow:ellipsis; white-space:nowrap; }
+          .quest-detail-reward { display:flex; align-items:flex-start; gap:10px; margin-top:15px; border:1px solid color-mix(in srgb, var(--quest-detail-accent) 42%, var(--quest-detail-border)); border-radius:9px; padding:11px; background:color-mix(in srgb, var(--quest-detail-accent) 8%, var(--quest-detail-bg)); }
+          .quest-detail-reward-icon { display:grid; flex:0 0 auto; width:29px; height:29px; place-items:center; border:1px solid color-mix(in srgb, var(--quest-detail-accent) 46%, transparent); border-radius:8px; color:var(--quest-detail-accent); }
+          .quest-detail-reward-label { color:var(--quest-detail-sub); font-size:10px; font-weight:800; }
+          .quest-detail-reward-value { margin-top:3px; color:var(--quest-detail-text); font-size:12px; font-weight:900; line-height:1.35; }
+          .quest-detail-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+          .quest-detail-primary, .quest-detail-secondary { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; border-radius:8px; padding:0 14px; cursor:pointer; font-size:12px; font-weight:900; transition:transform .16s ease, opacity .16s ease, box-shadow .16s ease; }
+          .quest-detail-primary { flex:1 1 180px; border:0; background:linear-gradient(100deg, var(--quest-detail-accent), color-mix(in srgb, var(--quest-detail-accent) 62%, #5566cf)); color:#fff; box-shadow:0 10px 20px color-mix(in srgb, var(--quest-detail-accent) 29%, transparent); }
+          .quest-detail-secondary { flex:0 1 auto; border:1px solid var(--quest-detail-accent); background:transparent; color:var(--quest-detail-accent); }
+          .quest-detail-primary:hover, .quest-detail-secondary:hover { transform:translateY(-1px); }
+          .quest-detail-primary:active, .quest-detail-secondary:active { transform:scale(.98); }
+          .quest-detail-primary[disabled] { cursor:wait; opacity:.7; transform:none; }
+          .quest-detail-state-copy { margin:16px 0 0; color:var(--quest-detail-sub); font-size:12px; line-height:1.5; }
+          @media (max-width:760px) { .quest-split-layout { display:block; } .quest-stepper { max-height:min(570px, calc(100dvh - 170px)); padding-right:4px; } .quest-detail-column { display:none; } .quest-detail-column.is-mobile-open { position:fixed; z-index:74; right:12px; bottom:12px; left:12px; display:block; } .quest-detail-panel { position:relative; top:auto; max-height:min(76dvh, 620px); overflow-y:auto; border-radius:14px; box-shadow:0 22px 54px rgba(8,20,42,.32); } .quest-detail-close { display:grid; } .quest-detail-body { padding:18px; } }
+          @media (prefers-reduced-transparency: reduce) { .quest-detail-panel { background:var(--quest-detail-bg); backdrop-filter:none; -webkit-backdrop-filter:none; } }
+          @media (prefers-reduced-motion: reduce) { .quest-step-button, .quest-detail-primary, .quest-detail-secondary { transition:none !important; } .quest-step-reward { animation:none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
             <div id="os-pet" title={me.inventory?.equippedPet}
@@ -1000,16 +1025,6 @@
           <div style={{ display: 'grid', gap: 16 }}>
             {myTopicAssignments.map(assignment => {
               const progress = getMyQuestProgress(assignment);
-              const selectedInAssignment = selectedQuestNode?.assignmentId === assignment.id
-                ? assignment.nodes.find(node => node.id === selectedQuestNode.nodeId) || null
-                : null;
-              const selectedIndex = selectedInAssignment ? assignment.nodes.findIndex(node => node.id === selectedInAssignment.id) : -1;
-              const selectedState = selectedIndex >= 0 ? getQuestNodeState(assignment, progress, selectedIndex, getRealTime()) : null;
-              const selectedAttempt = selectedInAssignment ? getLatestQuestAttempt(progress, selectedInAssignment.id) : null;
-              const selectedPassedAttempt = selectedInAssignment
-                ? [...(progress.attempts[selectedInAssignment.id] || [])].reverse().find(attempt => attempt.passed) || null
-                : null;
-              const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
               const totalQuestQuestions = assignment.nodes.reduce((sum, node) => sum + Math.max(0, Number(node.questionCount) || 0), 0);
               const correctAnswerCount = Math.min(Math.max(0, Number(progress.totalAccumulatedScore) || 0), totalQuestQuestions || Number(progress.totalAccumulatedScore) || 0);
               const nextRewardFor = (type: 'total_score' | 'streak') => assignment.rewards
@@ -1025,6 +1040,29 @@
                 scheduled: { label: questTx('Chưa mở', 'Scheduled'), color: C.warn, icon: 'clock' },
                 closed: { label: questTx('Đã đóng', 'Closed'), color: C.err, icon: 'xcircle' },
               };
+              const questNow = getRealTime();
+              const selectedCandidate = selectedQuestNode?.assignmentId === assignment.id
+                ? assignment.nodes.find(node => node.id === selectedQuestNode.nodeId) || null
+                : null;
+              const fallbackNode = assignment.nodes.find((node, index) => {
+                const nodeState = getQuestNodeState(assignment, progress, index, questNow);
+                return nodeState === 'available' || nodeState === 'retry';
+              }) || assignment.nodes[0] || null;
+              const activeNode = selectedCandidate || fallbackNode;
+              const activeIndex = activeNode ? assignment.nodes.findIndex(node => node.id === activeNode.id) : -1;
+              const activeState = activeIndex >= 0 ? getQuestNodeState(assignment, progress, activeIndex, questNow) : null;
+              const activeMeta = activeState ? statusCopy[activeState] : null;
+              const activeAttempt = activeNode ? getLatestQuestAttempt(progress, activeNode.id) : null;
+              const activePassedAttempt = activeNode
+                ? [...(progress.attempts[activeNode.id] || [])].reverse().find(attempt => attempt.passed) || null
+                : null;
+              const activeResult = getQuestResult(activePassedAttempt?.resultId);
+              const activeRewards = activeIndex >= 0
+                ? assignment.rewards.filter(reward => reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === activeIndex + 1)
+                : [];
+              const activeSourceQuiz = activeNode ? quizzes.find(quiz => quiz.id === activeNode.testId) : null;
+              const activeTimeLimit = Math.max(0, Number(activeNode?.timeLimitMinutes) || Number(activeSourceQuiz?.timeLimit) || 0);
+              const isMobileDetailOpen = selectedCandidate !== null;
               return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'visible', border: `1px solid ${C.border}`, borderRadius: 8 }}>
                 <div style={{ padding: '18px 19px 16px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch', gap: 16, flexWrap: 'wrap' }}>
@@ -1052,54 +1090,66 @@
                   </div>
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
-                  <div className={`quest-path-list${assignment.rewards.some(reward => reward.type === 'milestone') ? ' has-milestone' : ''}`}>
-                    {assignment.nodes.map((node, index) => {
-                      const state = getQuestNodeState(assignment, progress, index, getRealTime());
-                      const meta = statusCopy[state];
-                      const latestAttempt = getLatestQuestAttempt(progress, node.id);
-                      const selected = selectedInAssignment?.id === node.id;
-                      const milestoneRewards = assignment.rewards.filter(reward =>
-                        reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
-                      );
-                      const renderMilestoneTethers = () => milestoneRewards.map((reward, rewardIndex) => {
-                          const unlocked = progress.unlockedRewards.includes(reward.id);
-                          const rewardColor = unlocked ? C.succ : C.accent;
-                          const rewardLabel = formatQuestReward(reward);
-                          const endpointY = milestoneRewards.length === 1 ? 58 : 28 + rewardIndex * 60;
-                          const tetherHeight = Math.max(124, endpointY + 36);
-                          const tetherPath = `M 5 8 C 37 9, 72 ${Math.max(13, endpointY - 28)}, 120 ${endpointY}`;
-                          return <div className="quest-tether" key={reward.id} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}4d`, '--badge-surface': C.card, '--badge-icon-surface': `${rewardColor}18`, '--badge-text': C.text, '--reward-top': `${endpointY - 20}px`, '--tether-height': `${tetherHeight}px`, '--badge-float-duration': `${3.55 + ((index + rewardIndex) % 3) * .28}s`, '--badge-float-delay': `${rewardIndex * -.42}s` } as React.CSSProperties}>
-                            <svg className="quest-tether-svg" viewBox={`0 0 142 ${tetherHeight}`} preserveAspectRatio="none" aria-hidden="true">
-                              <path className="quest-tether-wire" d={tetherPath} />
-                              <path className="quest-tether-energy" d={tetherPath} />
-                              <circle className="quest-tether-anchor" cx="5" cy="8" r="3.5" />
-                            </svg>
-                            <span className="quest-reward-badge" title={reward.description || rewardLabel}>
-                              <span className="quest-reward-badge-icon"><Ico name="gift" size={15} color={rewardColor} /></span>
-                              <span className="quest-reward-badge-label">{rewardLabel}</span>
+                  <div className="quest-split-layout">
+                    <div className="quest-stepper">
+                      {assignment.nodes.map((node, index) => {
+                        const state = getQuestNodeState(assignment, progress, index, questNow);
+                        const meta = statusCopy[state];
+                        const isActive = activeNode?.id === node.id;
+                        const milestoneRewards = assignment.rewards.filter(reward =>
+                          reward.type === 'milestone' && Math.max(1, Number(reward.targetValue) || 1) === index + 1
+                        );
+                        const rewardColor = milestoneRewards.length && milestoneRewards.every(reward => progress.unlockedRewards.includes(reward.id)) ? C.succ : C.accent;
+                        const rewardTitle = milestoneRewards.map(reward => formatQuestReward(reward)).filter(Boolean).join(' + ');
+                        return <div className="quest-step-item" key={node.id}>
+                          <button
+                            className={`quest-step-button${isActive ? ' is-active' : ''}`}
+                            aria-current={isActive ? 'step' : undefined}
+                            onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }}
+                            style={{ '--quest-step-color': meta.color, '--quest-step-border': C.border, '--quest-step-bg': C.bg, '--quest-step-text': C.text, '--quest-step-sub': C.sub } as React.CSSProperties}
+                          >
+                            <span className="quest-step-number">{String(index + 1).padStart(2, '0')}</span>
+                            <span className="quest-step-copy">
+                              <span className="quest-step-title">{node.title}</span>
+                              <span className="quest-step-meta">{questTx('Chặng', 'Step')} {String(index + 1).padStart(2, '0')} / {node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} / {node.questionCount} {questTx('câu', 'questions')}</span>
                             </span>
-                          </div>;
-                        });
-                      return <React.Fragment key={node.id}>
-                        {index > 0 && <div className="quest-path-connector"><span className="quest-path-connector-line" style={{ background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55` }} /></div>}
-                        <div className={`quest-path-row${milestoneRewards.length ? ' has-milestone' : ''}`} style={milestoneRewards.length ? { '--quest-mobile-space': `${Math.min(2, milestoneRewards.length) * 48}px` } as React.CSSProperties : undefined}>
-                          {milestoneRewards.length > 0 && <div className="quest-tether-layer">{renderMilestoneTethers()}</div>}
-                          <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
-                            <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
-                            <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
-                            <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                            <span className="quest-step-status">{meta.label}</span>
                           </button>
+                          {index < assignment.nodes.length - 1 && <div className="quest-step-connector" style={{ '--quest-connector-color': state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}66`, '--quest-step-bg': C.bg, '--quest-reward-color': rewardColor } as React.CSSProperties}>
+                            {milestoneRewards.length > 0 && <span className="quest-step-reward" title={questTx(`Thưởng chặng ${index + 1}: ${rewardTitle}`, `Step ${index + 1} reward: ${rewardTitle}`)}><Ico name="gift" size={13} color={rewardColor} /></span>}
+                          </div>}
+                        </div>;
+                      })}
+                    </div>
+                    {activeNode && activeState && activeMeta && <div className={`quest-detail-column${isMobileDetailOpen ? ' is-mobile-open' : ''}`}>
+                      <div className="quest-detail-panel" style={{ '--quest-detail-accent': activeMeta.color, '--quest-detail-border': C.border, '--quest-detail-bg': C.card, '--quest-detail-text': C.text, '--quest-detail-sub': C.sub } as React.CSSProperties}>
+                        <button className="quest-detail-close" aria-label={questTx('Đóng chi tiết chặng', 'Close step details')} onClick={() => setSelectedQuestNode(null)}><Ico name="x" size={15} /></button>
+                        <div className="quest-detail-body">
+                          <div className="quest-detail-overline">{questTx('Chặng', 'Step')} {String(activeIndex + 1).padStart(2, '0')} / {activeMeta.label}</div>
+                          <h3 className="quest-detail-heading">{activeNode.title}</h3>
+                          <span className="quest-detail-mode"><Ico name={activeNode.mode === 'practice' ? 'refresh' : 'shield'} size={13} color={activeMeta.color} /> {activeNode.mode === 'practice' ? questTx('Chế độ luyện tập', 'Practice mode') : questTx('Chế độ thi', 'Exam mode')}</span>
+                          <p className="quest-detail-description">{activeNode.description || (activeNode.mode === 'practice'
+                            ? questTx('Luyện tập thoải mái, không áp dụng cơ chế chống rời màn hình hoặc bắt toàn màn hình.', 'Practice freely without exit prevention or a fullscreen requirement.')
+                            : questTx('Làm bài theo quy tắc của đề gốc. Hệ thống ghi nhận kết quả để mở chặng tiếp theo.', 'Follow the source test rules. Your result unlocks the next step.'))}</p>
+                          <div className="quest-detail-stats">
+                            <div className="quest-detail-stat"><div className="quest-detail-stat-label"><Ico name="clock" size={13} color={activeMeta.color} /> {questTx('Thời gian', 'Time')}</div><div className="quest-detail-stat-value">{activeTimeLimit ? `${activeTimeLimit} ${questTx('phút', 'min')}` : questTx('Theo đề gốc', 'From source test')}</div></div>
+                            <div className="quest-detail-stat"><div className="quest-detail-stat-label"><Ico name="fileText" size={13} color={activeMeta.color} /> {questTx('Số câu', 'Questions')}</div><div className="quest-detail-stat-value">{activeNode.questionCount} {questTx('câu', 'questions')}</div></div>
+                            <div className="quest-detail-stat"><div className="quest-detail-stat-label"><Ico name="target" size={13} color={activeMeta.color} /> {questTx('Mốc đạt', 'Pass')}</div><div className="quest-detail-stat-value">{activeNode.passingThresholdPercent}%</div></div>
+                            <div className="quest-detail-stat"><div className="quest-detail-stat-label"><Ico name="trophy" size={13} color={activeAttempt?.passed ? C.succ : activeMeta.color} /> {questTx('Kết quả gần nhất', 'Latest result')}</div><div className="quest-detail-stat-value" style={{ color: activeAttempt ? (activeAttempt.passed ? C.succ : C.warn) : C.sub }}>{activeAttempt ? `${activeAttempt.score}/${activeAttempt.totalQuestions} (${activeAttempt.percentage}%)` : questTx('Chưa làm', 'Not attempted')}</div></div>
+                          </div>
+                          {activeRewards.length > 0 && <div className="quest-detail-reward"><span className="quest-detail-reward-icon"><Ico name="gift" size={17} color={activeMeta.color} /></span><span><div className="quest-detail-reward-label">{questTx('Quà đạt mốc', 'Milestone reward')}</div><div className="quest-detail-reward-value">{activeRewards.map(formatQuestReward).filter(Boolean).join(' + ')}</div></span></div>}
+                          <div className="quest-detail-actions">
+                            {(activeState === 'available' || activeState === 'retry') && <button className="quest-detail-primary" onClick={() => startTopicQuestNode(assignment, activeNode)} disabled={questLaunchLoading === activeNode.id}><Ico name="play" size={15} /> {questLaunchLoading === activeNode.id ? questTx('ĐANG MỞ...', 'OPENING...') : activeState === 'retry' ? questTx('LÀM LẠI BÀI', 'RETRY TEST') : questTx('BẮT ĐẦU LÀM BÀI', 'START TEST')}</button>}
+                            {activeState === 'completed' && activeResult && <button className="quest-detail-secondary" onClick={() => handleReviewQuiz(activeResult)}><Ico name="eye" size={15} /> {questTx('Xem lại đáp án', 'Review answers')}</button>}
+                          </div>
+                          {activeState === 'completed' && !activeResult && <div className="quest-detail-state-copy">{questTx('Bạn đã đạt chặng này. Kết quả Review đang được đồng bộ.', 'You passed this step. Its Review result is still syncing.')}</div>}
+                          {activeState === 'locked' && <div className="quest-detail-state-copy">{questTx('Hoàn thành chặng ngay trước đó để mở khóa.', 'Complete the previous step to unlock this one.')}</div>}
+                          {activeState === 'scheduled' && <div className="quest-detail-state-copy">{questTx('Chặng này chưa đến thời gian mở.', 'This step is not open yet.')}</div>}
+                          {activeState === 'closed' && <div className="quest-detail-state-copy">{questTx('Chặng này đã hết thời gian làm bài.', 'This step is closed.')}</div>}
                         </div>
-                      </React.Fragment>;
-                    })}
+                      </div>
+                    </div>}
                   </div>
-                  {selectedInAssignment && selectedState && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16, display: 'grid', gap: 11 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}><div><div style={{ fontWeight: 900, fontSize: 15 }}>{selectedInAssignment.title}</div><div style={{ color: C.sub, fontSize: 12, marginTop: 4 }}>{selectedInAssignment.mode === 'practice' ? questTx('Practice: không có chống thoát web hoặc bắt toàn màn hình.', 'Practice: no exit prevention or fullscreen requirement.') : questTx('Exam: áp dụng quy tắc phòng thi của đề gốc.', 'Exam: uses the source test’s proctoring rules.')}</div></div>{selectedAttempt && <div style={{ color: selectedAttempt.passed ? C.succ : C.warn, fontSize: 12, fontWeight: 900 }}>{selectedAttempt.score}/{selectedAttempt.totalQuestions} · {selectedAttempt.percentage}%</div>}</div>
-                    {(selectedState === 'available' || selectedState === 'retry') && <button onClick={() => startTopicQuestNode(assignment, selectedInAssignment)} disabled={questLaunchLoading === selectedInAssignment.id} style={{ justifySelf: 'start', border: 'none', background: C.accent, color: '#fff', cursor: questLaunchLoading === selectedInAssignment.id ? 'wait' : 'pointer', opacity: questLaunchLoading === selectedInAssignment.id ? 0.7 : 1, padding: '9px 14px', borderRadius: 7, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="play" size={14} /> {questLaunchLoading === selectedInAssignment.id ? questTx('Đang mở...', 'Opening...') : selectedState === 'retry' ? questTx('Làm lại chặng này', 'Retry this step') : questTx('Bắt đầu chặng', 'Start step')}</button>}
-                    {selectedState === 'completed' && selectedResult && <button onClick={() => handleReviewQuiz(selectedResult)} style={{ justifySelf: 'start', border: `1px solid ${C.accent}`, background: `${C.accent}0d`, color: C.accent, cursor: 'pointer', padding: '9px 14px', borderRadius: 7, fontWeight: 800 }}>{questTx('Xem lại bài đã đạt', 'Review passed test')}</button>}
-                    {selectedState === 'completed' && !selectedResult && <div style={{ fontSize: 12, color: C.sub }}>{questTx('Đã đạt chặng này. Kết quả Review đang được đồng bộ.', 'This step is passed. Its Review result is still syncing.')}</div>}
-                    {selectedState === 'locked' && <div style={{ fontSize: 12, color: C.sub }}>{questTx('Hoàn thành chặng ngay trước đó để mở khóa.', 'Complete the previous step to unlock this one.')}</div>}
-                  </div>}
                 </div>
               </section>;
             })}
