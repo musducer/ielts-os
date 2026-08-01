@@ -1443,6 +1443,7 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
   return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
 };
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
+interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
 const getQuestionPointCount = (q: any) =>
   q?.type === "CHOICE_MULTIPLE" && Array.isArray(q.correctAnswer)
@@ -3225,7 +3226,7 @@ export default function IeltsSupremeOS() {
   const [portalTab, setPortalTab] = useState<"home"|"exams"|"quests"|"vocab"|"progress"|"rewards">("home");
   const [selectedQuestNode, setSelectedQuestNode] = useState<{ assignmentId: string; nodeId: string } | null>(null);
   const [questLaunchLoading, setQuestLaunchLoading] = useState<string | null>(null);
-  const [questStatusNotice, setQuestStatusNotice] = useState<string>("");
+  const [questStatusNotice, setQuestStatusNotice] = useState<QuestStatusNotice | null>(null);
   // Sub-tab trong Phòng thi HS (hết cuộn): đề khả dụng / kết quả & review
   const [examRoomTab, setExamRoomTab] = useState<"available"|"results">("available");
   // Sub-tab trong hồ sơ HS phía giáo viên: kết quả thi / buổi học / thống kê
@@ -6443,22 +6444,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const startTopicQuestNode = (assignment: TopicAssignment, node: QuestNodeConfig) => {
+      const questTx = (vi: string, en: string) => i18n.language === 'vi' ? vi : en;
       const me = students.find(student => student.email?.toLowerCase() === currentUser?.email?.toLowerCase());
       const nodeIndex = assignment.nodes.findIndex(item => item.id === node.id);
       if (!me || nodeIndex < 0) return;
       if (isOffline || !navigator.onLine) {
-          alert("Bài tập chuyên đề cần có kết nối để lưu tiến độ và mở khóa chính xác.");
+          alert(questTx('Bài tập chuyên đề cần có kết nối để lưu tiến độ và mở khóa chính xác.', 'Topic-based assignments need a connection to save progress and unlock steps accurately.'));
           return;
       }
       const progress = questProgress.find(item => item.studentId === me.id && item.topicAssignmentId === assignment.id);
       const state = getQuestNodeState(assignment, progress, nodeIndex, getRealTime());
       if (state !== "available" && state !== "retry") {
-          alert(state === "locked" ? "Hãy hoàn thành chặng trước trước khi mở bài này." : "Chặng này hiện chưa mở hoặc đã đóng.");
+          alert(state === "locked"
+            ? questTx('Hãy hoàn thành chặng trước trước khi mở bài này.', 'Complete the previous step before opening this test.')
+            : questTx('Chặng này hiện chưa mở hoặc đã đóng.', 'This step is not open or has already closed.'));
           return;
       }
       const sourceQuiz = quizzes.find(quiz => quiz.id === node.testId);
       if (!sourceQuiz || !Array.isArray(sourceQuiz.questions) || !sourceQuiz.questions.length) {
-          alert("Đề gốc của chặng này không còn khả dụng. Hãy báo giáo viên.");
+          alert(questTx('Đề gốc của chặng này không còn khả dụng. Hãy báo giáo viên.', 'The source test for this step is unavailable. Please contact your teacher.'));
           return;
       }
       const requestedCount = Math.max(1, Math.min(Number(node.questionCount) || sourceQuiz.questions.length, sourceQuiz.questions.length));
@@ -6651,10 +6655,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       let nextQuestProgress = questProgress;
       let coinOperation: CoinOperation | null = null;
       let submissionMessage = `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
+      let questNotice: QuestStatusNotice | null = null;
+      const questTx = (vi: string, en: string) => i18n.language === 'vi' ? vi : en;
 
       if (questContext) {
           if (!assignment || !node) {
-            submissionMessage = "Bài đã nộp, nhưng chuyên đề này đã bị giáo viên thay đổi. Kết quả chưa thể mở khóa chặng tiếp theo.";
+            submissionMessage = questTx(
+              'Bài đã nộp, nhưng chuyên đề này đã bị giáo viên thay đổi. Kết quả chưa thể mở khóa chặng tiếp theo.',
+              'Your test was submitted, but this quest has since been changed by your teacher. Its result cannot unlock the next step.'
+            );
+            questNotice = { kind: 'changed' };
           } else {
             const existingProgress = questProgress.find(item =>
               item.studentId === me.id && item.topicAssignmentId === assignment.id
@@ -6724,11 +6734,22 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             }
             const threshold = Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0));
             const rewardSummary = newlyUnlocked.length
-              ? ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(", ")}.`
+              ? questTx(
+                ` Phần thưởng đã mở khóa: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`,
+                ` Unlocked reward${newlyUnlocked.length > 1 ? 's' : ''}: ${newlyUnlocked.map(reward => reward.description || reward.rewardValue || reward.rewardType).join(', ')}.`
+              )
               : "";
             submissionMessage = questPassed
-              ? `CHẶNG HOÀN THÀNH: ${score}/${totalQ} (${percentage}%) đạt ngưỡng ${threshold}%.${rewardSummary}`
-              : `CHƯA ĐẠT: ${score}/${totalQ} (${percentage}%). Cần ${threshold}% để mở chặng tiếp theo; hãy làm lại chặng này.`;
+              ? questTx(`CHẶNG HOÀN THÀNH: ${score}/${totalQ} (${percentage}%) đạt ngưỡng ${threshold}%.${rewardSummary}`, `STEP COMPLETED: ${score}/${totalQ} (${percentage}%) meets the ${threshold}% threshold.${rewardSummary}`)
+              : questTx(`CHƯA ĐẠT: ${score}/${totalQ} (${percentage}%). Cần ${threshold}% để mở chặng tiếp theo; hãy làm lại chặng này.`, `NOT PASSED: ${score}/${totalQ} (${percentage}%). You need ${threshold}% to unlock the next step; try this step again.`);
+            questNotice = {
+              kind: questPassed ? 'passed' : 'failed',
+              score,
+              total: totalQ,
+              percentage,
+              threshold,
+              rewards: newlyUnlocked.map(reward => String(reward.description || reward.rewardValue || reward.rewardType).trim()).filter(Boolean),
+            };
           }
 
           setQuestProgress(nextQuestProgress);
@@ -6747,7 +6768,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             } catch (e) {}
             pushOfflineResult(currentUser?.email, result);
             if (coinOperation) writePendingCoinOperation(coinOperation);
-            submissionMessage += " Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.";
+            if (questNotice) questNotice = { ...questNotice, pendingSync: true };
+            submissionMessage += questTx(' Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.', ' Your connection dropped while submitting; a local copy has been kept for sync.');
           } else {
             void syncData({
               quizResults: nextResults,
@@ -6796,7 +6818,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setReviewQuiz(null);
           setPortalTab("quests");
           setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
-          setQuestStatusNotice(submissionMessage);
+          setQuestStatusNotice(questNotice);
         } else {
           setReviewQuiz({ quiz: state.activeExam, result });
         }

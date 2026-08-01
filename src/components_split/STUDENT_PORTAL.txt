@@ -266,6 +266,28 @@
       assignment
     );
     const getQuestResult = (resultId?: string) => resultId ? myQuizResults.find(result => result.id === resultId) : undefined;
+    const questTx = (vi: string, en: string) => i18n.language === 'vi' ? vi : en;
+    const questStatusText = (notice: QuestStatusNotice | null) => {
+      if (!notice) return '';
+      if (notice.kind === 'changed') {
+        return questTx(
+          'Bài đã nộp, nhưng chuyên đề này đã được giáo viên thay đổi. Kết quả chưa thể mở khóa chặng tiếp theo.',
+          'Your test was submitted, but this quest has since been changed by your teacher. Its result cannot unlock the next step.'
+        );
+      }
+      const score = `${notice.score ?? 0}/${notice.total ?? 0} (${notice.percentage ?? 0}%)`;
+      const threshold = notice.threshold ?? 0;
+      const rewards = (notice.rewards || []).filter(Boolean).join(', ');
+      const rewardText = rewards
+        ? questTx(` Phần thưởng đã mở khóa: ${rewards}.`, ` Unlocked reward${(notice.rewards || []).length > 1 ? 's' : ''}: ${rewards}.`)
+        : '';
+      const syncText = notice.pendingSync
+        ? questTx(' Kết nối bị ngắt đúng lúc nộp bài; hệ thống đã giữ bản sao cục bộ để đồng bộ lại.', ' Your connection dropped while submitting; a local copy has been kept for sync.')
+        : '';
+      return notice.kind === 'passed'
+        ? questTx(`Chặng hoàn thành: ${score}, đạt ngưỡng ${threshold}%.`, `Step completed: ${score}, meeting the ${threshold}% threshold.`) + rewardText + syncText
+        : questTx(`Chưa đạt: ${score}. Cần ${threshold}% để mở chặng tiếp theo; hãy làm lại chặng này.`, `Not passed: ${score}. You need ${threshold}% to unlock the next step; try this step again.`) + syncText;
+    };
     const myLinks = sharedLinks.filter(l => {
       if (l.audience === "ALL_STUDENTS") return true;
       if (l.audience === "SPECIFIC_STUDENT" && l.targetStudentId === me.id) return true;
@@ -284,12 +306,12 @@
 
     const handleReviewQuiz = (r: QuizResult) => {
         if (r.topicAssignmentId && r.questPassed !== true) {
-            alert("Bạn cần đạt ngưỡng của chặng này trước khi mở phần Review.");
+            alert(questTx('Bạn cần đạt ngưỡng của chặng này trước khi mở phần Review.', 'You need to meet this step\'s threshold before opening Review.'));
             return;
         }
         const catalogQuiz = quizzes.find(q => q.id === r.quizId);
         if (!catalogQuiz) {
-            alert("Không tìm thấy đề gốc để mở Review. Hãy báo giáo viên.");
+            alert(questTx('Không tìm thấy đề gốc để mở Review. Hãy báo giáo viên.', 'The source test for this review is unavailable. Please contact your teacher.'));
             return;
         }
         const questionIds = Array.isArray(r.questQuestionIds) ? new Set(r.questQuestionIds) : null;
@@ -447,7 +469,7 @@
     };
 
     return (
-      <div onMouseMove={(e) => { const pet = document.getElementById('os-pet'); if (!pet) return; const r = pet.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2; const dx = Math.max(-1, Math.min(1, (e.clientX - cx) / 240)) * 2.6; const dy = Math.max(-1, Math.min(1, (e.clientY - cy) / 240)) * 2.2; pet.style.setProperty('--pex', dx.toFixed(2) + 'px'); pet.style.setProperty('--pey', dy.toFixed(2) + 'px'); }} style={{ minHeight: "100vh", background: C.bg, color: C.text, position: 'relative', overflowX: 'hidden' }}>
+      <div className="student-portal" onMouseMove={(e) => { const pet = document.getElementById('os-pet'); if (!pet) return; const r = pet.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2; const dx = Math.max(-1, Math.min(1, (e.clientX - cx) / 240)) * 2.6; const dy = Math.max(-1, Math.min(1, (e.clientY - cy) / 240)) * 2.2; pet.style.setProperty('--pex', dx.toFixed(2) + 'px'); pet.style.setProperty('--pey', dy.toFixed(2) + 'px'); }} style={{ minHeight: "100vh", background: C.bg, color: C.text, position: 'relative', overflowX: 'hidden', ['--text' as any]: C.text, ['--text-h' as any]: C.text, ['--bg' as any]: C.bg, ['--border' as any]: C.border }}>
         {globalStyles}
         {/* PHỦ THEME + NỀN GLOW TRANG TRÍ (chỉ khi đang bật theme giao diện) */}
         {_themed && <>
@@ -458,6 +480,7 @@
           .ios-tabs-container { background: ${C.border} !important; }
           .tab-btn { color: ${C.text} !important; }
           .tab-btn.active { color: ${C.bg} !important; background: ${C.accent} !important; }
+          .student-portal h1, .student-portal h2, .student-portal h3, .student-portal h4 { color: ${C.text}; }
           ::-webkit-scrollbar-thumb { background: ${C.accent}55 !important; border-color: ${C.bg} !important; }
           `}</style>
           <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', background: `radial-gradient(1100px 540px at 50% -12%, ${_glow}24, transparent 62%), radial-gradient(760px 520px at 102% 4%, ${C.accent}14, transparent 56%), radial-gradient(640px 480px at -6% 30%, ${_glow}12, transparent 60%)` }} />
@@ -524,7 +547,7 @@
             </div>
         )}
 
-        <nav style={{ background: 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid rgba(226, 232, 240, 0.8)`, padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
+        <nav style={{ background: C.card, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <BrandLogo size={38} />
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 8 }}><BrandWordmark size={20} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 12, fontWeight: 800, padding: '2px 7px', borderRadius: 6 }}>STUDENT</span></h1>
@@ -983,11 +1006,11 @@
           {/* ===== TAB: BÀI TẬP CHUYÊN ĐỀ ===== */}
           {portalTab === "quests" && (<>
           <div style={{ marginBottom: 18 }}>
-            <div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1.05, textTransform: 'uppercase', marginBottom: 5 }}>Quest path</div>
-            <h2 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 27, letterSpacing: 0 }}>Bài tập chuyên đề</h2>
-            <p style={{ margin: '7px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.55 }}>Hoàn thành từng chặng theo đúng thứ tự. Bạn chỉ mở được chặng kế tiếp sau khi đạt ngưỡng điểm của chặng hiện tại.</p>
+            <div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1.05, textTransform: 'uppercase', marginBottom: 5 }}>{questTx('Lộ trình chuyên đề', 'Quest path')}</div>
+            <h2 style={{ margin: 0, color: C.text, fontFamily: 'var(--display)', fontSize: 27, letterSpacing: 0 }}>{questTx('Bài tập chuyên đề', 'Topic-based assignments')}</h2>
+            <p style={{ margin: '7px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.55 }}>{questTx('Hoàn thành từng chặng theo đúng thứ tự. Bạn chỉ mở được chặng kế tiếp sau khi đạt ngưỡng điểm của chặng hiện tại.', 'Complete each step in sequence. The next step unlocks only after you meet the current step’s score threshold.')}</p>
           </div>
-          {questStatusNotice && <div style={{ marginBottom: 16, padding: '11px 13px', border: `1px solid ${C.accent}55`, borderLeft: `3px solid ${C.accent}`, background: `${C.accent}0d`, color: C.text, fontSize: 13, lineHeight: 1.5, borderRadius: 7, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}><span>{questStatusNotice}</span><button onClick={() => setQuestStatusNotice('')} style={{ border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', padding: 0 }}><Ico name="x" size={15} /></button></div>}
+          {questStatusNotice && <div style={{ marginBottom: 16, padding: '11px 13px', border: `1px solid ${C.accent}55`, borderLeft: `3px solid ${C.accent}`, background: `${C.accent}0d`, color: C.text, fontSize: 13, lineHeight: 1.5, borderRadius: 7, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}><span>{questStatusText(questStatusNotice)}</span><button onClick={() => setQuestStatusNotice(null)} style={{ border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', padding: 0 }}><Ico name="x" size={15} /></button></div>}
           <div style={{ display: 'grid', gap: 16 }}>
             {myTopicAssignments.map(assignment => {
               const progress = getMyQuestProgress(assignment);
@@ -1002,20 +1025,20 @@
                 : null;
               const selectedResult = getQuestResult(selectedPassedAttempt?.resultId);
               const statusCopy: Record<string, { label: string; color: string; icon: string }> = {
-                completed: { label: 'Đã đạt', color: C.succ, icon: 'check' },
-                available: { label: 'Sẵn sàng', color: C.accent, icon: 'unlock' },
-                retry: { label: 'Làm lại', color: C.warn, icon: 'refresh' },
-                locked: { label: 'Đang khóa', color: C.sub, icon: 'lock' },
-                scheduled: { label: 'Chưa mở', color: C.warn, icon: 'clock' },
-                closed: { label: 'Đã đóng', color: C.err, icon: 'xcircle' },
+                completed: { label: questTx('Đã đạt', 'Passed'), color: C.succ, icon: 'check' },
+                available: { label: questTx('Sẵn sàng', 'Ready'), color: C.accent, icon: 'unlock' },
+                retry: { label: questTx('Làm lại', 'Retry'), color: C.warn, icon: 'refresh' },
+                locked: { label: questTx('Đang khóa', 'Locked'), color: C.sub, icon: 'lock' },
+                scheduled: { label: questTx('Chưa mở', 'Scheduled'), color: C.warn, icon: 'clock' },
+                closed: { label: questTx('Đã đóng', 'Closed'), color: C.err, icon: 'xcircle' },
               };
               return <section key={assignment.id} className="card" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${C.border}`, borderRadius: 8 }}>
                 <div style={{ padding: '18px 19px 14px', borderBottom: `1px solid ${C.border}`, background: C.card }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                     <div><div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 18 }}>{assignment.title}</h3><span style={{ background: `${C.accent}12`, color: C.accent, borderRadius: 5, padding: '3px 7px', fontSize: 10, fontWeight: 900 }}>{assignment.topicCategory}</span></div>{assignment.description && <div style={{ fontSize: 13, color: C.sub, marginTop: 6, lineHeight: 1.45 }}>{assignment.description}</div>}</div>
-                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>chặng hoàn thành</div></div>
+                    <div style={{ textAlign: 'right', fontSize: 12, color: C.sub }}><div style={{ fontWeight: 900, color: C.accent, fontSize: 16 }}>{progress.completedNodeIds.length}/{assignment.nodes.length}</div><div>{questTx('chặng hoàn thành', 'steps complete')}</div></div>
                   </div>
-                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>Mốc thưởng:</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
+                  {assignment.rewards.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginTop: 13 }}><Ico name="gift" size={14} color={C.accent} /><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{questTx('Mốc thưởng:', 'Reward milestones:')}</span>{assignment.rewards.map(reward => <span key={reward.id} style={{ fontSize: 11, fontWeight: 700, color: progress.unlockedRewards.includes(reward.id) ? C.succ : C.sub, border: `1px solid ${progress.unlockedRewards.includes(reward.id) ? C.succ : C.border}`, padding: '3px 7px', borderRadius: 5 }}>{reward.rewardValue || reward.description || reward.rewardType}</span>)}</div>}
                 </div>
                 <div style={{ padding: '16px 19px 18px' }}>
                   <div style={{ display: 'grid', gap: 0 }}>
@@ -1026,25 +1049,25 @@
                       const selected = selectedInAssignment?.id === node.id;
                       return <React.Fragment key={node.id}>
                         {index > 0 && <div style={{ width: 2, height: 23, background: state === 'locked' || state === 'scheduled' || state === 'closed' ? C.border : `${C.accent}55`, marginLeft: 19 }} />}
-                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(''); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
+                        <button onClick={() => { setSelectedQuestNode({ assignmentId: assignment.id, nodeId: node.id }); setQuestStatusNotice(null); }} onDoubleClick={() => { if (state === 'available' || state === 'retry') startTopicQuestNode(assignment, node); }} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto', alignItems: 'center', gap: 12, width: '100%', border: `1px solid ${selected ? meta.color : C.border}`, borderLeft: `3px solid ${meta.color}`, background: selected ? `${meta.color}10` : C.bg, color: C.text, cursor: 'pointer', padding: '12px 12px 12px 9px', textAlign: 'left', borderRadius: 7 }}>
                           <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: `${meta.color}18`, color: meta.color, fontWeight: 900, fontSize: 12 }}><Ico name={meta.icon} size={16} color={meta.color} /></span>
-                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} câu · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? 'PASS' : 'CHƯA ĐẠT'}</span>}</span>
+                          <span style={{ minWidth: 0 }}><span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}><b style={{ fontSize: 14 }}>{index + 1}. {node.title}</b><span style={{ fontSize: 10, color: C.sub, fontWeight: 800 }}>{node.mode === 'practice' ? 'PRACTICE' : 'EXAM'} · {node.questionCount} {questTx('câu', 'questions')} · {node.passingThresholdPercent}%</span></span>{node.description && <span style={{ display: 'block', color: C.sub, marginTop: 3, fontSize: 12, whiteSpace: 'normal' }}>{node.description}</span>}{latestAttempt && <span style={{ display: 'block', color: latestAttempt.passed ? C.succ : C.warn, marginTop: 4, fontSize: 11, fontWeight: 800 }}>{latestAttempt.score}/{latestAttempt.totalQuestions} · {latestAttempt.percentage}% {latestAttempt.passed ? questTx('ĐẠT', 'PASSED') : questTx('CHƯA ĐẠT', 'NOT PASSED')}</span>}</span>
                           <span style={{ color: meta.color, fontSize: 11, fontWeight: 900, whiteSpace: 'nowrap' }}>{meta.label}</span>
                         </button>
                       </React.Fragment>;
                     })}
                   </div>
                   {selectedInAssignment && selectedState && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16, display: 'grid', gap: 11 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}><div><div style={{ fontWeight: 900, fontSize: 15 }}>{selectedInAssignment.title}</div><div style={{ color: C.sub, fontSize: 12, marginTop: 4 }}>{selectedInAssignment.mode === 'practice' ? 'Practice: không có chống thoát web hoặc bắt toàn màn hình.' : 'Exam: áp dụng quy tắc phòng thi của đề gốc.'}</div></div>{selectedAttempt && <div style={{ color: selectedAttempt.passed ? C.succ : C.warn, fontSize: 12, fontWeight: 900 }}>{selectedAttempt.score}/{selectedAttempt.totalQuestions} · {selectedAttempt.percentage}%</div>}</div>
-                    {(selectedState === 'available' || selectedState === 'retry') && <button onClick={() => startTopicQuestNode(assignment, selectedInAssignment)} disabled={questLaunchLoading === selectedInAssignment.id} style={{ justifySelf: 'start', border: 'none', background: C.accent, color: '#fff', cursor: questLaunchLoading === selectedInAssignment.id ? 'wait' : 'pointer', opacity: questLaunchLoading === selectedInAssignment.id ? 0.7 : 1, padding: '9px 14px', borderRadius: 7, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="play" size={14} /> {questLaunchLoading === selectedInAssignment.id ? 'Đang mở...' : selectedState === 'retry' ? 'Làm lại chặng này' : 'Bắt đầu chặng'}</button>}
-                    {selectedState === 'completed' && selectedResult && <button onClick={() => handleReviewQuiz(selectedResult)} style={{ justifySelf: 'start', border: `1px solid ${C.accent}`, background: `${C.accent}0d`, color: C.accent, cursor: 'pointer', padding: '9px 14px', borderRadius: 7, fontWeight: 800 }}>Review bài đã đạt</button>}
-                    {selectedState === 'completed' && !selectedResult && <div style={{ fontSize: 12, color: C.sub }}>Đã đạt chặng này. Kết quả Review đang được đồng bộ.</div>}
-                    {selectedState === 'locked' && <div style={{ fontSize: 12, color: C.sub }}>Hoàn thành chặng ngay trước đó để mở khóa.</div>}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}><div><div style={{ fontWeight: 900, fontSize: 15 }}>{selectedInAssignment.title}</div><div style={{ color: C.sub, fontSize: 12, marginTop: 4 }}>{selectedInAssignment.mode === 'practice' ? questTx('Practice: không có chống thoát web hoặc bắt toàn màn hình.', 'Practice: no exit prevention or fullscreen requirement.') : questTx('Exam: áp dụng quy tắc phòng thi của đề gốc.', 'Exam: uses the source test’s proctoring rules.')}</div></div>{selectedAttempt && <div style={{ color: selectedAttempt.passed ? C.succ : C.warn, fontSize: 12, fontWeight: 900 }}>{selectedAttempt.score}/{selectedAttempt.totalQuestions} · {selectedAttempt.percentage}%</div>}</div>
+                    {(selectedState === 'available' || selectedState === 'retry') && <button onClick={() => startTopicQuestNode(assignment, selectedInAssignment)} disabled={questLaunchLoading === selectedInAssignment.id} style={{ justifySelf: 'start', border: 'none', background: C.accent, color: '#fff', cursor: questLaunchLoading === selectedInAssignment.id ? 'wait' : 'pointer', opacity: questLaunchLoading === selectedInAssignment.id ? 0.7 : 1, padding: '9px 14px', borderRadius: 7, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="play" size={14} /> {questLaunchLoading === selectedInAssignment.id ? questTx('Đang mở...', 'Opening...') : selectedState === 'retry' ? questTx('Làm lại chặng này', 'Retry this step') : questTx('Bắt đầu chặng', 'Start step')}</button>}
+                    {selectedState === 'completed' && selectedResult && <button onClick={() => handleReviewQuiz(selectedResult)} style={{ justifySelf: 'start', border: `1px solid ${C.accent}`, background: `${C.accent}0d`, color: C.accent, cursor: 'pointer', padding: '9px 14px', borderRadius: 7, fontWeight: 800 }}>{questTx('Xem lại bài đã đạt', 'Review passed test')}</button>}
+                    {selectedState === 'completed' && !selectedResult && <div style={{ fontSize: 12, color: C.sub }}>{questTx('Đã đạt chặng này. Kết quả Review đang được đồng bộ.', 'This step is passed. Its Review result is still syncing.')}</div>}
+                    {selectedState === 'locked' && <div style={{ fontSize: 12, color: C.sub }}>{questTx('Hoàn thành chặng ngay trước đó để mở khóa.', 'Complete the previous step to unlock this one.')}</div>}
                   </div>}
                 </div>
               </section>;
             })}
-            {!myTopicAssignments.length && <div className="card" style={{ padding: '42px 20px', textAlign: 'center', color: C.sub }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, color: C.text, fontWeight: 800 }}>Chưa có bài tập chuyên đề được phân phối</div><div style={{ fontSize: 13, marginTop: 4 }}>Khi giáo viên mở chuyên đề cho bạn, hành trình sẽ xuất hiện ở đây.</div></div>}
+            {!myTopicAssignments.length && <div className="card" style={{ padding: '42px 20px', textAlign: 'center', color: C.sub }}><Ico name="target" size={28} color={C.accent} /><div style={{ marginTop: 10, color: C.text, fontWeight: 800 }}>{questTx('Chưa có bài tập chuyên đề được phân phối', 'No topic-based assignments have been assigned')}</div><div style={{ fontSize: 13, marginTop: 4 }}>{questTx('Khi giáo viên mở chuyên đề cho bạn, hành trình sẽ xuất hiện ở đây.', 'Your quest path will appear here when your teacher assigns a topic.')}</div></div>}
           </div>
           </>)}
 
