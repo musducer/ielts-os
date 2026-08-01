@@ -10726,29 +10726,37 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .petPop { animation: petPop .62s cubic-bezier(.2,.85,.25,1); }
           .petHeart { position:absolute; bottom:42px; left:0; font-size:15px; pointer-events:none; animation: petHeartUp .95s ease-out forwards; }
           @keyframes petHeartUp { 0%{opacity:0; transform:translateY(0) scale(.5)} 25%{opacity:1} 100%{opacity:0; transform:translateY(-50px) scale(1.15)} }
-          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-1deg) translateY(0); } 50% { transform: rotate(1deg) translateY(1px); } }
+          @keyframes questMilestoneSway { 0%,100% { transform: rotate(-2.35deg) translateY(0); } 50% { transform: rotate(2.15deg) translateY(3px); } }
           .quest-path-row { position:relative; min-width:0; }
           .quest-path-connector { position:relative; height:23px; }
           .quest-path-connector-line { display:block; width:2px; height:100%; margin-left:19px; }
-          .quest-milestone-side { position:absolute; top:50%; z-index:2; display:flex; align-items:center; min-width:0; transform:translateY(-50%); }
+          .quest-milestone-side { position:absolute; top:50%; z-index:2; display:flex; align-items:center; width:max-content; max-width:min(246px, 26vw); transform:translateY(-50%); }
           .quest-milestone-side.is-left { right:100%; justify-content:flex-end; }
           .quest-milestone-side.is-right { left:100%; justify-content:flex-start; }
-          .quest-milestone-tags { display:flex; flex-direction:column; align-items:flex-start; gap:8px; min-width:0; max-width:100%; }
+          .quest-milestone-tags { display:flex; flex-direction:column; align-items:flex-start; gap:10px; width:max-content; max-width:246px; }
           .quest-milestone-side.is-left .quest-milestone-tags { align-items:flex-end; }
-          .quest-milestone-hanger { display:inline-flex; align-items:center; max-width:100%; will-change:transform; }
+          .quest-milestone-hanger { display:inline-flex; align-items:center; width:max-content; max-width:246px; will-change:transform; }
           .quest-milestone-side.is-left .quest-milestone-hanger { flex-direction:row; margin-right:-14px; transform-origin:100% 50%; }
           .quest-milestone-side.is-right .quest-milestone-hanger { flex-direction:row-reverse; margin-left:-14px; transform-origin:0 50%; }
-          .quest-milestone-cord { position:relative; display:block; flex:0 0 25px; height:1px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); opacity:.88; }
-          .quest-milestone-cord::after { content:""; position:absolute; top:50%; width:5px; height:5px; border:1px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 5px var(--reward-glow); transform:translateY(-50%); }
-          .quest-milestone-side.is-left .quest-milestone-cord::after { right:-2px; }
-          .quest-milestone-side.is-right .quest-milestone-cord::after { left:-2px; }
-          .quest-milestone-tag { position:relative; display:inline-flex; align-items:center; gap:7px; min-height:34px; max-width:min(222px, 100%); padding:7px 13px 7px 34px; border:1px solid var(--reward-color); background:var(--tag-surface); color:var(--tag-text); clip-path:polygon(11px 0, calc(100% - 9px) 0, 100% 9px, 100% calc(100% - 9px), calc(100% - 9px) 100%, 11px 100%, 0 calc(100% - 11px), 0 11px); filter:drop-shadow(0 0 1px var(--reward-color)) drop-shadow(0 4px 9px var(--reward-glow)); font-size:11px; font-weight:900; line-height:1.22; letter-spacing:.08px; }
+          .quest-milestone-cord { position:relative; display:block; flex:0 0 28px; height:1px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); opacity:.88; }
+          .quest-milestone-cord::before { content:""; position:absolute; top:-5px; width:1px; height:11px; background:var(--reward-color); box-shadow:0 0 5px var(--reward-glow); }
+          .quest-milestone-cord::after { content:""; position:absolute; top:50%; width:6px; height:6px; border:1px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 5px var(--reward-glow); transform:translateY(-50%); }
+          .quest-milestone-side.is-left .quest-milestone-cord::before, .quest-milestone-side.is-left .quest-milestone-cord::after { right:-2px; }
+          .quest-milestone-side.is-right .quest-milestone-cord::before, .quest-milestone-side.is-right .quest-milestone-cord::after { left:-2px; }
+          .quest-milestone-tag { position:relative; display:inline-flex; align-items:center; justify-content:center; gap:7px; box-sizing:border-box; width:fit-content; min-width:108px; max-width:204px; min-height:38px; padding:8px 18px 8px 34px; border:1px solid var(--reward-color); background:var(--tag-surface); color:var(--tag-text); filter:drop-shadow(0 0 1px var(--reward-color)) drop-shadow(0 5px 10px var(--reward-glow)); font-size:11px; font-weight:900; line-height:1.25; letter-spacing:.08px; text-align:center; }
           .quest-milestone-tag::before { content:""; position:absolute; left:13px; top:50%; width:7px; height:7px; transform:translateY(-50%); border:2px solid var(--reward-color); border-radius:50%; background:var(--tag-surface); box-shadow:0 0 0 2px var(--tag-surface), 0 0 7px var(--reward-glow); }
-          .quest-milestone-side.is-left .quest-milestone-tag { padding:7px 34px 7px 13px; }
+          .quest-milestone-tag.shape-price { clip-path:polygon(12px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 12px 100%, 0 calc(100% - 12px), 0 12px); }
+          .quest-milestone-tag.shape-ribbon { min-height:43px; padding-bottom:13px; clip-path:polygon(0 0, 100% 0, 100% 100%, 70% 100%, 60% 82%, 50% 100%, 0 100%); }
+          .quest-milestone-tag.shape-ticket { clip-path:polygon(0 0, 100% 0, 100% 35%, calc(100% - 6px) 50%, 100% 65%, 100% 100%, 0 100%, 0 65%, 6px 50%, 0 35%); }
+          .quest-milestone-tag.shape-burst { min-width:124px; max-width:154px; min-height:48px; padding:10px 18px; font-size:10px; clip-path:polygon(50% 0, 59% 8%, 71% 3%, 78% 15%, 91% 14%, 90% 28%, 100% 37%, 93% 49%, 100% 61%, 89% 68%, 90% 82%, 77% 81%, 69% 96%, 58% 89%, 50% 100%, 41% 91%, 29% 97%, 22% 85%, 9% 85%, 10% 71%, 0 62%, 7% 50%, 0 38%, 10% 30%, 8% 17%, 22% 18%, 30% 5%, 42% 10%); }
+          .quest-milestone-tag.shape-burst::before { display:none; }
+          .quest-milestone-side.is-left .quest-milestone-tag { padding:8px 34px 8px 18px; }
+          .quest-milestone-side.is-left .quest-milestone-tag.shape-ribbon { padding:8px 18px 13px; }
+          .quest-milestone-side.is-left .quest-milestone-tag.shape-burst { padding:10px 18px; }
           .quest-milestone-side.is-left .quest-milestone-tag::before { right:13px; left:auto; }
-          .quest-milestone-tag-text { min-width:0; overflow-wrap:anywhere; }
-          @media (max-width:820px) { .quest-milestone-side.is-left .quest-milestone-hanger { margin-right:-8px; } .quest-milestone-side.is-right .quest-milestone-hanger { margin-left:-8px; } .quest-milestone-cord { flex-basis:17px; } .quest-milestone-tag { max-width:154px; font-size:10px; } }
-          @media (max-width:560px) { .quest-milestone-side { top:0; transform:translateY(-56%); } .quest-milestone-side.is-left { right:auto; left:38px; } .quest-milestone-side.is-right { left:auto; right:8px; } .quest-milestone-cord { display:none; } .quest-milestone-hanger { margin:0 !important; } .quest-milestone-tag { max-width:142px; min-height:29px; font-size:10px; padding-top:5px; padding-bottom:5px; } }
+          .quest-milestone-tag-text { min-width:0; overflow-wrap:break-word; word-break:normal; }
+          @media (max-width:820px) { .quest-milestone-side { max-width:min(204px, 27vw); } .quest-milestone-tags, .quest-milestone-hanger { max-width:204px; } .quest-milestone-side.is-left .quest-milestone-hanger { margin-right:-8px; } .quest-milestone-side.is-right .quest-milestone-hanger { margin-left:-8px; } .quest-milestone-cord { flex-basis:17px; } .quest-milestone-tag { min-width:94px; max-width:172px; font-size:10px; } }
+          @media (max-width:560px) { .quest-milestone-side { top:0; max-width:148px; transform:translateY(-56%); } .quest-milestone-side.is-left { right:auto; left:38px; } .quest-milestone-side.is-right { left:auto; right:8px; } .quest-milestone-tags, .quest-milestone-hanger { max-width:148px; } .quest-milestone-cord { display:none; } .quest-milestone-hanger { margin:0 !important; } .quest-milestone-tag { min-width:92px; max-width:142px; min-height:32px; font-size:10px; padding-top:6px; padding-bottom:6px; } .quest-milestone-tag.shape-burst { min-width:108px; min-height:42px; } }
           @media (prefers-reduced-motion: reduce) { .quest-milestone-hanger { animation: none !important; } }
         `}</style>
         {STUDENT_PET_NAMES.indexOf(me.inventory?.equippedPet || '') >= 0 && (
@@ -11341,8 +11349,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         {rewards.map((reward, rewardIndex) => {
                           const unlocked = progress.unlockedRewards.includes(reward.id);
                           const rewardColor = unlocked ? C.succ : C.accent;
+                          const rewardLabel = formatQuestReward(reward);
+                          const shapeSeed = Array.from(`${reward.id}:${rewardLabel}`).reduce((total, character) => total + character.charCodeAt(0), index + rewardIndex);
+                          const tagShapes = rewardLabel.length <= 14 ? ['burst', 'ticket', 'price'] : ['price', 'ribbon', 'ticket'];
+                          const tagShape = tagShapes[shapeSeed % tagShapes.length];
                           return <span className="quest-milestone-hanger" key={reward.id} style={{ animation: `questMilestoneSway ${3.45 + ((index + rewardIndex) % 3) * .35}s ease-in-out ${rewardIndex * -.4}s infinite` }}>
-                            <span className="quest-milestone-tag" title={reward.description || formatQuestReward(reward)} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card, '--tag-text': C.text } as React.CSSProperties}><Ico name="gift" size={13} color={rewardColor} /><span className="quest-milestone-tag-text">{formatQuestReward(reward)}</span></span>
+                            <span className={`quest-milestone-tag shape-${tagShape}`} title={reward.description || rewardLabel} style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card, '--tag-text': C.text } as React.CSSProperties}><Ico name="gift" size={13} color={rewardColor} /><span className="quest-milestone-tag-text">{rewardLabel}</span></span>
                             <span className="quest-milestone-cord" style={{ '--reward-color': rewardColor, '--reward-glow': `${rewardColor}70`, '--tag-surface': C.card } as React.CSSProperties} />
                           </span>;
                         })}
