@@ -7,6 +7,16 @@
       const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
       const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
       const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
+      const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, reviewQuiz.result.answers || {});
+      const rvGroupByQuestionId = new Map<string, any>();
+      rvScoreSummary.groups.forEach((group: any) => group.questions.forEach((question: any) => rvGroupByQuestionId.set(question.id, group)));
+      const rvGroupQuestionLabel = (group: any) => {
+          const first = group.questions[0];
+          const last = group.questions[group.questions.length - 1];
+          const start = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], first.id);
+          const end = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], last.id) + getQuestionPointCount(last) - 1;
+          return end > start ? `${start}-${end}` : `${start}`;
+      };
       const rvIsListeningExam = rvType.includes("listen");
       const rvIsIntegrated = rvType.includes("integrated");
       const rvIsListeningPart = (idx: number) => rvIsListeningExam || (rvIsIntegrated && idx === 0);
@@ -317,6 +327,8 @@
                               </div>
                               {reviewQuiz.quiz.questions.map((q, i) => {
                                   if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+                                  const rvGroup = rvGroupByQuestionId.get(q.id);
+                                  if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
                                   const showCtx = q.groupContext && q.groupContext !== leftCtx;
                                   if (showCtx) { leftCtx = q.groupContext as string; lastBank = ""; }
                                   const opts = Array.isArray(q.options) ? q.options : [];
@@ -328,6 +340,7 @@
                                   const showBank = isBankType && bankKey !== lastBank;
                                   if (showBank) lastBank = bankKey;
                                   // Câu là ô trống inline trong form/context -> đã hiện trong group-context, không lặp text.
+                                  const displayLabel = rvGroup ? rvGroupQuestionLabel(rvGroup) : `${i + 1}`;
                                   const textInCtx = showCtx || (leftCtx && (leftCtx as string).indexOf(`[${i + 1}]`) !== -1);
                                   return (
                                       <React.Fragment key={q.id}>
@@ -340,7 +353,7 @@
                                           {!textInCtx && (
                                               <div className="rv-ql">
                                                   <div className="rv-ql-head">
-                                                      <span className="rv-ql-num">{i + 1}.</span>
+                                                      <span className="rv-ql-num">{displayLabel}.</span>
                                                       <span className="rv-ql-text" dangerouslySetInnerHTML={{ __html: formatContent(q.text || "") }} />
                                                   </div>
                                                   {isMCQ && (
@@ -368,23 +381,15 @@
                           const rqRes = reviewQuiz.result;
                           
                           // Phân tích và tính toán dữ liệu thống kê
-                          let correctCount = rqRes.score;
-                          let totalQs = rqRes.total;
-                          let skippedCount = 0;
+                          const liveSummary = rvScoreSummary;
+                          const correctCount = liveSummary.score;
+                          const totalQs = liveSummary.total;
+                          const skippedCount = liveSummary.skipped;
+                          const incorrectCount = liveSummary.incorrect;
                           
-                          rqQuiz.questions.forEach(q => {
-                              const ans = rqRes.answers[q.id];
-                              let isSkipped = false;
-                              if (ans === undefined || ans === null || ans === "") isSkipped = true;
-                              if (Array.isArray(ans) && ans.length === 0) isSkipped = true;
-                              if (isSkipped) skippedCount++;
-                          });
-                          
-                          let incorrectCount = totalQs - correctCount - skippedCount;
-                          if (incorrectCount < 0) incorrectCount = 0;
-                          
-                          const accuracy = ((correctCount / totalQs) * 100).toFixed(1);
-                          const bandNum = Number(rqRes.band) || 0;
+                          const accuracy = totalQs ? ((correctCount / totalQs) * 100).toFixed(1) : '0.0';
+                          const liveBand = getIeltsBand(correctCount, totalQs, rqQuiz.type);
+                          const bandNum = Number(liveBand) || 0;
                           const bandPct = (bandNum / 9) * 100;
                           const durM = Math.floor((rqRes.durationSeconds || 0) / 60);
                           const durS = (rqRes.durationSeconds || 0) % 60;
@@ -410,7 +415,7 @@
                                                   </div>
                                                   <div>
                                                       <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_total_band')}</div>
-                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{rqRes.band}</div>
+                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{liveBand}</div>
                                                   </div>
                                               </div>
                                           </div>
@@ -418,7 +423,7 @@
                                           {/* Vòng tròn điểm (Donut Chart CSS) */}
                                           <div style={{position: 'relative', width: 120, height: 120, borderRadius: '50%', background: `conic-gradient(#facc15 ${bandPct}%, #e2e8f0 0)`, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                                               <div style={{width: 90, height: 90, background: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 900, color: '#eab308'}}>
-                                                  {rqRes.band}
+                                                  {liveBand}
                                               </div>
                                           </div>
                                       </div>
@@ -509,30 +514,22 @@
                                           <div style={{fontSize: 14, fontWeight: 800, marginBottom: 15, color: '#1e293b'}}><Ico name="barChart" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />WEAKNESS ANALYSIS BY TYPE</div>
                                           <div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>
                                               {(() => {
-                                                  const groups: Record<string, QuizQuestion[]> = {};
-                                                  rqQuiz.questions.forEach(q => {
-                                                      const label = q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : 'Sentence Completion');
+                                                  const groups: Record<string, any[]> = {};
+                                                  liveSummary.groups.forEach((group: any) => {
+                                                      const q = group.questions[0];
+                                                      const label = q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'CHOICE_MULTIPLE' ? 'Multiple Choice' : 'Sentence Completion');
                                                       if (!groups[label]) groups[label] = [];
-                                                      groups[label].push(q);
+                                                      groups[label].push(group);
                                                   });
-                                                  return Object.entries(groups).map(([label, typeQs]) => {
+                                                  return Object.entries(groups).map(([label, typeGroups]) => {
                                                       let correctInType = 0;
-                                                      typeQs.forEach(q => {
-                                                          const sAns = rqRes.answers[q.id];
-                                                          if ((q.type === "CHOICE" || q.type === "MATCHING") && sAns === q.correctAnswer) correctInType++;
-                                                          else if (q.type === "CHOICE_MULTIPLE") {
-                                                              const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-                                                              if (sAns !== undefined && sAns !== "" && correctArr.includes(Number(sAns))) correctInType++;
-                                                          }
-                                                          else if (sAns !== undefined && sAns !== null) {
-                                                              if (String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase()).includes(String(sAns).trim().toLowerCase())) correctInType++;
-                                                          }
-                                                      });
-                                                      const rate = Math.round((correctInType / typeQs.length) * 100);
+                                                      const totalInType = typeGroups.reduce((sum, group: any) => sum + group.total, 0);
+                                                      typeGroups.forEach((group: any) => { correctInType += group.score; });
+                                                      const rate = totalInType ? Math.round((correctInType / totalInType) * 100) : 0;
                                                       return (
                                                           <div key={label} style={{flex: '1 1 calc(50% - 15px)', minWidth: 160, background: '#f8fafc', padding: 16, borderRadius: 12, border: `1px solid #e2e8f0`}}>
                                                               <div style={{fontSize: 12, color: '#64748b', fontWeight: 700, textTransform: 'uppercase'}}>{label}</div>
-                                                              <div style={{fontSize: 18, fontWeight: 900, marginTop: 4, color: rate >= 70 ? '#22c55e' : '#ef4444'}}>{correctInType}/{typeQs.length} ({rate}%)</div>
+                                                              <div style={{fontSize: 18, fontWeight: 900, marginTop: 4, color: rate >= 70 ? '#22c55e' : '#ef4444'}}>{correctInType}/{totalInType} ({rate}%)</div>
                                                           </div>
                                                       );
                                                   });
@@ -546,16 +543,23 @@
                       
                       {reviewQuiz.quiz.questions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
-                          const studentAns = (reviewQuiz.result.answers && reviewQuiz.result.answers[q.id] !== undefined) ? reviewQuiz.result.answers[q.id] : undefined;
+                          const rvGroup = rvGroupByQuestionId.get(q.id);
+                          if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
+                          const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
+                          const studentAns = multiOutcome
+                            ? multiOutcome.selected
+                            : ((reviewQuiz.result.answers && reviewQuiz.result.answers[q.id] !== undefined) ? reviewQuiz.result.answers[q.id] : undefined);
                           let isCorrect = false;
+                              let isPartial = false;
                               let correctDisplay: string | number = String(q.correctAnswer);
                               
                               if (q.type === "CHOICE" || q.type === "MATCHING") {
                                   isCorrect = studentAns === q.correctAnswer;
                                   correctDisplay = q.options ? q.options[q.correctAnswer as number] : String(q.correctAnswer);
                               } else if (q.type === "CHOICE_MULTIPLE") {
-                                  const correctArr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-                                  isCorrect = studentAns !== undefined && studentAns !== "" && correctArr.includes(Number(studentAns));
+                                  const correctArr = multiOutcome?.correct || (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]);
+                                  isCorrect = multiOutcome ? multiOutcome.isFullyCorrect : getChoiceMultipleOutcome([q], { [q.id]: studentAns }).isFullyCorrect;
+                                  isPartial = !isCorrect && Boolean(multiOutcome?.score);
                                   correctDisplay = correctArr.map((idx: any) => q.options ? q.options[idx] : idx).join(" / ");
                               } else {
                                   const sA = String(studentAns || "").trim().toLowerCase();
@@ -571,7 +575,7 @@
                           const rvShowOpts = rvOpts.length > 0 && ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP_HEADING"].includes(q.type);
                           const rvIsMulti = q.type === "CHOICE_MULTIPLE";
                           const rvNorm = (v: any) => String(v ?? "").trim().toLowerCase();
-                          const rvCMulti = rvIsMulti ? (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]).map(Number) : [];
+                          const rvCMulti = rvIsMulti ? (multiOutcome?.correct || (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer])).map(Number) : [];
                           const rvSMulti = rvIsMulti ? (Array.isArray(studentAns) ? studentAns.map(Number) : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : [])) : [];
                           const rvOptMark = (oi: number, otext: string) => {
                               if (q.type === "CHOICE" || q.type === "MATCHING") return { correct: Number(q.correctAnswer) === oi, chosen: studentAns !== undefined && studentAns !== "" && Number(studentAns) === oi };
@@ -582,8 +586,8 @@
                           return (
                           <React.Fragment key={q.id}>
                               {showContext && <div className="group-context" dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />}
-                              <div className="card" style={{marginBottom: 20, borderLeft: `5px solid ${isCorrect ? C.succ : C.err}`}}>
-                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {i+1}: <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: formatContent(q.text)}} /></div>
+                              <div className="card" style={{marginBottom: 20, borderLeft: `5px solid ${isCorrect ? C.succ : (isPartial ? C.warn : C.err)}`}}>
+                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}: <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: formatContent(q.text)}} /></div>
                                   {rvShowOpts ? (
                                       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
                                           {rvOpts.map((o: any, oi: number) => {
@@ -609,7 +613,7 @@
                                       </ul>
                                   ) : (
                                   <div style={{display:'flex', gap: 10, fontSize: 14, flexWrap: 'wrap'}}>
-                                      <div style={{background: isCorrect ? `${C.succ}20` : `${C.err}20`, color: isCorrect ? C.succ : C.err, padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
+                                      <div style={{background: isCorrect ? `${C.succ}20` : (isPartial ? `${C.warn}20` : `${C.err}20`), color: isCorrect ? C.succ : (isPartial ? C.warn : C.err), padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
                                           <b>Your answer:</b> {(studentAns === undefined || studentAns === "" || (Array.isArray(studentAns) && studentAns.length === 0)) ? "No answer" : String(studentAns)}
                                       </div>
                                       {!isCorrect && (
@@ -622,7 +626,7 @@
                                   {!isCorrect && (
                                       <div style={{marginTop: 12}}>
                                           {!explainMap[q.id] ? (
-                                              <button onClick={() => handleAiExplain(q, studentAns, reviewQuiz.quiz)} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '6px 14px', borderRadius: 8}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_why')}</button>
+                                              <button onClick={() => handleAiExplain(multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q, studentAns, reviewQuiz.quiz)} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '6px 14px', borderRadius: 8}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_why')}</button>
                                           ) : explainMap[q.id].loading ? (
                                               <div style={{fontSize: 13, color: C.sub, fontWeight: 600}}><Ico name="refresh" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_loading')}</div>
                                           ) : (

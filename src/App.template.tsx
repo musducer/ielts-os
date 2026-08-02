@@ -1586,13 +1586,101 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
+const normalizeChoiceMultipleIndexes = (value: any): number[] => {
+  const raw = Array.isArray(value) ? value : (value === undefined || value === null || value === "" ? [] : [value]);
+  return Array.from(new Set(raw.map(Number).filter(Number.isInteger)));
+};
+
+// A "choose TWO/THREE" item is sometimes stored as consecutive CHOICE_MULTIPLE
+// records with one shared option bank. They are one response set, not independent
+// questions whose answers should be paired in click order.
+const getQuizScoringGroups = (questions: any[] = []) => {
+  const groups: { questions: any[]; isChoiceMultiple: boolean }[] = [];
+  for (let index = 0; index < questions.length; index++) {
+    const question = questions[index];
+    if (question?.type !== "CHOICE_MULTIPLE") {
+      groups.push({ questions: [question], isChoiceMultiple: false });
+      continue;
+    }
+    const grouped = [question];
+    let cursor = index + 1;
+    const optionKey = JSON.stringify(question.options || []);
+    const passageKey = question.passageIndex ?? null;
+    while (
+      cursor < questions.length
+      && questions[cursor]?.type === "CHOICE_MULTIPLE"
+      && JSON.stringify(questions[cursor].options || []) === optionKey
+      && (questions[cursor].passageIndex ?? null) === passageKey
+    ) {
+      grouped.push(questions[cursor]);
+      cursor++;
+    }
+    groups.push({ questions: grouped, isChoiceMultiple: true });
+    index = cursor - 1;
+  }
+  return groups;
+};
+
+const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any> = {}) => {
+  const correct = Array.from(new Set(questions.flatMap(question => normalizeChoiceMultipleIndexes(question?.correctAnswer))));
+  const selected = Array.from(new Set(questions.flatMap(question => normalizeChoiceMultipleIndexes(answers?.[question?.id]))));
+  const total = Math.max(1, correct.length);
+  const selectedCorrectly = selected.filter(index => correct.includes(index));
+  const selectedIncorrectly = selected.filter(index => !correct.includes(index));
+  const missing = correct.filter(index => !selected.includes(index));
+  // The exam UI caps selections at the requested number. Treat tampered/legacy
+  // over-selections as invalid rather than allowing a learner to tick every option.
+  const score = selected.length > total ? 0 : selectedCorrectly.length;
+  return {
+    correct,
+    selected,
+    selectedCorrectly,
+    selectedIncorrectly,
+    missing,
+    total,
+    score,
+    skipped: Math.max(0, total - selected.length),
+    isFullyCorrect: score === total && selectedIncorrectly.length === 0,
+  };
+};
+
+const isSingleQuestionCorrect = (question: any, answer: any) => {
+  if (question?.type === "CHOICE" || question?.type === "MATCHING") return answer === question.correctAnswer;
+  return String(question?.correctAnswer).split("/").map(value => value.trim().toLowerCase()).includes(String(answer ?? "").trim().toLowerCase());
+};
+
+const getQuizScoreSummary = (quizOrQuestions: any, answers: Record<string, any> = {}) => {
+  const questions = Array.isArray(quizOrQuestions) ? quizOrQuestions : (quizOrQuestions?.questions || []);
+  let score = 0;
+  let total = 0;
+  let skipped = 0;
+  const groups = getQuizScoringGroups(questions).map(group => {
+    if (group.isChoiceMultiple) {
+      const multiple = getChoiceMultipleOutcome(group.questions, answers);
+      score += multiple.score;
+      total += multiple.total;
+      skipped += multiple.skipped;
+      return { ...group, score: multiple.score, total: multiple.total, skipped: multiple.skipped, isFullyCorrect: multiple.isFullyCorrect, multiple };
+    }
+    const question = group.questions[0];
+    const answer = answers?.[question?.id];
+    const hasAnswer = !(answer === undefined || answer === null || answer === "" || (Array.isArray(answer) && answer.length === 0));
+    const isCorrect = hasAnswer && isSingleQuestionCorrect(question, answer);
+    score += isCorrect ? 1 : 0;
+    total += 1;
+    skipped += hasAnswer ? 0 : 1;
+    return { ...group, score: isCorrect ? 1 : 0, total: 1, skipped: hasAnswer ? 0 : 1, isFullyCorrect: isCorrect, multiple: null };
+  });
+  return { score, total, skipped, incorrect: Math.max(0, total - score - skipped), groups };
+};
+
 const getQuestionPointCount = (q: any) =>
   q?.type === "CHOICE_MULTIPLE" && Array.isArray(q.correctAnswer)
     ? Math.max(1, q.correctAnswer.length)
     : 1;
 
 const getQuizPointTotal = (quiz: any) =>
-  (quiz?.questions || []).reduce((sum: number, q: any) => sum + getQuestionPointCount(q), 0);
+  getQuizScoreSummary(quiz, {}).total;
 
 const getQuizQuestionNumber = (questions: any[] = [], qId: string) => {
   let n = 1;
@@ -1611,12 +1699,7 @@ const getQuizQuestionLabel = (questions: any[] = [], q: any) => {
 };
 
 const getChoiceMultipleScore = (q: any, studentAns: any) => {
-  const correctArr = (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]).map(Number);
-  const selectedArr = Array.isArray(studentAns)
-    ? studentAns.map(Number)
-    : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : []);
-  const selected = Array.from(new Set(selectedArr.filter(Number.isFinite)));
-  return selected.filter(x => correctArr.includes(x)).length;
+  return getChoiceMultipleOutcome([q], { [q.id]: studentAns }).score;
 };
 interface LiveSession { id: string; studentId: string; studentName: string; quizId: string; quizTitle: string; answeredCount: number; totalQ: number; lastUpdate: number; isCheating: boolean; progressPct: number; }
 
@@ -5253,27 +5336,23 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // PHÂN TÍCH LỖI THEO DẠNG CÂU HỎI (toàn trung tâm + theo học viên)
   const errorAnalytics = useMemo(() => {
     const typeLabel = (q: QuizQuestion) => q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion');
-    const isOk = (q: QuizQuestion, sAns: any) => {
-      if (q.type === 'CHOICE' || q.type === 'MATCHING') return sAns === q.correctAnswer;
-      if (q.type === 'CHOICE_MULTIPLE') { const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]; return sAns !== undefined && sAns !== "" && arr.includes(Number(sAns)); }
-      return String(q.correctAnswer).split('/').map(s => s.trim().toLowerCase()).includes(String(sAns ?? "").trim().toLowerCase());
-    };
     const typeStats: Record<string, { correct: number; total: number }> = {};
     const studentStats: Record<string, { name: string; types: Record<string, { correct: number; total: number }> }> = {};
     (quizResults || []).forEach(r => {
       if (!r || !r.answers) return;
       const quiz = (quizzes || []).find(q => q && q.id === r.quizId);
       if (!quiz || !Array.isArray(quiz.questions)) return;
-      quiz.questions.forEach(q => {
+      const summary = getQuizScoreSummary(quiz, r.answers || {});
+      summary.groups.forEach((group: any) => {
+        const q = group.questions[0];
         if (!q) return;
         const label = typeLabel(q);
-        const ok = isOk(q, r.answers[q.id]);
         if (!typeStats[label]) typeStats[label] = { correct: 0, total: 0 };
-        typeStats[label].total++; if (ok) typeStats[label].correct++;
+        typeStats[label].total += group.total; typeStats[label].correct += group.score;
         if (!studentStats[r.studentId]) studentStats[r.studentId] = { name: r.studentName, types: {} };
         const stt = studentStats[r.studentId].types;
         if (!stt[label]) stt[label] = { correct: 0, total: 0 };
-        stt[label].total++; if (ok) stt[label].correct++;
+        stt[label].total += group.total; stt[label].correct += group.score;
       });
     });
     const centerTypes = Object.entries(typeStats)
@@ -5311,35 +5390,34 @@ const applyWorkspaceSnapshot = (snap: any) => {
       let details = "";
       let wrongCount = 0;
       if (quiz && Array.isArray(quiz.questions)) {
-        const isOk = (q: QuizQuestion, sAns: any) => {
-          if (q.type === 'CHOICE' || q.type === 'MATCHING') return sAns === q.correctAnswer;
-          if (q.type === 'CHOICE_MULTIPLE') { const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]; return sAns !== undefined && sAns !== "" && arr.includes(Number(sAns)); }
-          return String(q.correctAnswer).split('/').map(s => s.trim().toLowerCase()).includes(String(sAns ?? "").trim().toLowerCase());
-        };
         const stripTags = (s: any) => String(s ?? "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
         const g: Record<string, { c: number; t: number }> = {};
         const wrongLines: string[] = [];
-        quiz.questions.forEach((q, i) => {
+        const summary = getQuizScoreSummary(quiz, r.answers || {});
+        summary.groups.forEach((group: any) => {
+          const q = group.questions[0];
           const label = q.subType || q.type;
-          const sAns = r.answers?.[q.id];
           if (!g[label]) g[label] = { c: 0, t: 0 };
-          g[label].t++;
-          if (isOk(q, sAns)) { g[label].c++; return; }
-          wrongCount++;
+          g[label].t += group.total;
+          g[label].c += group.score;
+          if (group.isFullyCorrect) return;
+          wrongCount += group.total - group.score;
           let stu = "", cor = "";
-          if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+          if (group.isChoiceMultiple) {
+            stu = group.multiple.selected.length ? group.multiple.selected.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ") : "(trống)";
+            cor = group.multiple.correct.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
+          } else {
+            const sAns = r.answers?.[q.id];
+            if (q.type === 'CHOICE' || q.type === 'MATCHING') {
             stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(q.options?.[Number(sAns)] ?? sAns);
             cor = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
-          } else if (q.type === 'CHOICE_MULTIPLE') {
-            const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-            stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(q.options?.[Number(sAns)] ?? sAns);
-            cor = arr.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
-          } else {
-            stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(sAns);
-            cor = stripTags(q.correctAnswer);
+            } else {
+              stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(sAns);
+              cor = stripTags(q.correctAnswer);
+            }
           }
           if (wrongLines.length < 30)
-            wrongLines.push(`#${i + 1} [${label}] HV: "${stu.slice(0, 70)}" | Đúng: "${cor.slice(0, 70)}"`);
+            wrongLines.push(`#${getQuizQuestionLabel(quiz.questions, q)} [${label}] HV: "${stu.slice(0, 70)}" | Đúng: "${cor.slice(0, 70)}"`);
         });
         weak = Object.entries(g).map(([k, v]) => `${k}: ${v.c}/${v.t}`).join(", ");
         details = wrongLines.join("\n");
@@ -5380,7 +5458,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .trim();
       const optStr = (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
-      const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null;
+      const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
         const headingFor = (value: any) => (q.options || []).find((opt: any) => {
           const label = (String(opt).match(/^\s*([ivxlcdm]+)[\.)\s]/i) || [])[1];
@@ -5394,7 +5472,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
       } else if (q.type === 'CHOICE_MULTIPLE') {
         const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
         correctStr = arr.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
-        stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
+        const selected = normalizeChoiceMultipleIndexes(studentAnsRaw);
+        stuStr = blank ? "(trống)" : selected.map(index => stripTags(q.options?.[index] ?? index)).join(" / ");
       } else {
         correctStr = stripTags(q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
@@ -5687,11 +5766,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const me = findMe();
     if (!me || vocabGenLoading) return;
     const stripTags = (s: any) => String(s ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-    const isOk = (q: QuizQuestion, sAns: any) => {
-      if (q.type === 'CHOICE' || q.type === 'MATCHING') return sAns === q.correctAnswer;
-      if (q.type === 'CHOICE_MULTIPLE') { const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]; return sAns !== undefined && sAns !== "" && arr.includes(Number(sAns)); }
-      return String(q.correctAnswer).split('/').map(x => x.trim().toLowerCase()).includes(String(sAns ?? "").trim().toLowerCase());
-    };
     const myRes = quizResults.filter(r => r.studentId === me.id);
     if (myRes.length === 0) { alert("Bạn chưa làm đề nào để trích từ vựng."); return; }
     setVocabGenLoading(true);
@@ -5712,9 +5786,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const secs = Array.isArray((quiz as any).sections) ? (quiz as any).sections : [];
         if (secs.length) secs.forEach((s: any) => { passages += " " + stripTags(s?.passage); });
         else passages += " " + stripTags(quiz.passage);
+        const wrongQuestionIds = new Set(
+          getQuizScoreSummary(quiz, r.answers || {}).groups
+            .filter((group: any) => !group.isFullyCorrect)
+            .flatMap((group: any) => group.questions.map((question: any) => question.id))
+        );
         (quiz.questions || []).forEach(q => {
           qtext += " " + stripTags(q.text) + " " + stripTags(q.groupContext);
-          if (!isOk(q, r.answers?.[q.id])) wrongCtx += " " + stripTags(q.text) + " " + stripTags(q.groupContext);
+          if (wrongQuestionIds.has(q.id)) wrongCtx += " " + stripTags(q.text) + " " + stripTags(q.groupContext);
         });
       }
       // Transcript trước (giàu phrasal verb, không bị cắt mất), rồi bài đọc, rồi câu hỏi.
@@ -6407,24 +6486,44 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const qz = quizzes.find(x => x.id === r.quizId);
       if (!qz) { alert('Không tìm thấy dữ liệu đề gốc!'); return; }
       const strip = (t: any) => String(t).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      const rows: (string|number)[][] = qz.questions.map((q, i) => {
-          const options = q.options || [];
-          let correctDisplay: any = q.correctAnswer;
-          let studentDisplay: any = (r.answers && r.answers[q.id] !== undefined) ? r.answers[q.id] : '';
-          let isCorrect = 'Sai';
-          if (q.type === 'CHOICE' || q.type === 'MATCHING') {
-              correctDisplay = options[q.correctAnswer as number] || q.correctAnswer;
-              studentDisplay = (r.answers && r.answers[q.id] !== undefined) ? (options[r.answers[q.id] as number] || '') : '';
-              if (r.answers && r.answers[q.id] === q.correctAnswer) isCorrect = 'Đúng';
-          } else {
-              const sAns = String(studentDisplay).trim().toLowerCase();
-              const correctStrs = String(q.correctAnswer).split('/').map((s: string) => s.trim().toLowerCase());
-              if (correctStrs.includes(sAns)) isCorrect = 'Đúng';
+      const scoreSummary = getQuizScoreSummary(qz, r.answers || {});
+      const optionText = (question: any, indexes: number[]) => indexes
+        .map(index => strip(question.options?.[index] ?? index))
+        .join(' / ');
+      const rows: (string|number)[][] = scoreSummary.groups.map((group: any) => {
+          const question = group.questions[0];
+          const lastQuestion = group.questions[group.questions.length - 1];
+          const start = getQuizQuestionNumber(qz.questions, question.id);
+          const end = getQuizQuestionNumber(qz.questions, lastQuestion.id) + getQuestionPointCount(lastQuestion) - 1;
+          const questionLabel = end > start ? `${start}-${end}` : start;
+          if (group.isChoiceMultiple) {
+              const outcome = group.multiple;
+              const result = outcome.isFullyCorrect
+                ? 'Đúng'
+                : outcome.score > 0
+                  ? `Đúng một phần (${outcome.score}/${outcome.total})`
+                  : 'Sai';
+              return [
+                questionLabel,
+                group.questions.map((item: any) => strip(item.text)).filter(Boolean).join(' / '),
+                optionText(question, outcome.correct),
+                optionText(question, outcome.selected),
+                result,
+              ];
           }
-          return [i+1, strip(q.text), strip(correctDisplay), strip(studentDisplay), isCorrect];
+          const answer = r.answers?.[question.id];
+          const options = question.options || [];
+          const correctDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+            ? options[question.correctAnswer as number] || question.correctAnswer
+            : question.correctAnswer;
+          const studentDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+            ? (answer !== undefined ? options[answer as number] || answer : '')
+            : answer ?? '';
+          return [questionLabel, strip(question.text), strip(correctDisplay), strip(studentDisplay), group.isFullyCorrect ? 'Đúng' : 'Sai'];
       });
       const cols = [{header:'Câu', width:6},{header:'Nội dung câu hỏi', width:50},{header:'Đáp án đúng', width:22},{header:'Học viên trả lời', width:22},{header:'Kết quả', width:10}];
-      downloadXLSX(`CHITIET_${r.studentName}_${r.quizTitle}.xlsx`, 'Chi tiết', cols, rows, `${r.studentName} — ${r.quizTitle} (${r.score}/${r.total}, Band ${r.band})`);
+      const liveBand = getIeltsBand(scoreSummary.score, scoreSummary.total, qz.type);
+      downloadXLSX(`CHITIET_${r.studentName}_${r.quizTitle}.xlsx`, 'Chi tiết', cols, rows, `${r.studentName} — ${r.quizTitle} (${scoreSummary.score}/${scoreSummary.total}, Band ${liveBand})`);
   };
 
   // Xuất PDF báo cáo tiến độ — TẢI THẲNG file .pdf (html2pdf = html2canvas + jsPDF). Render trong iframe
@@ -6791,25 +6890,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (!qz) return;
       const nxResults = quizResults.map(r => {
           if (r.quizId !== quizId) return r;
-          let newScore = 0;
-          qz.questions.forEach((q) => {
-              const studentAns = r.answers[q.id];
-              if (q.type === "CHOICE" || q.type === "MATCHING") { 
-                      if (studentAns === q.correctAnswer) newScore++; 
-                  } 
-                  else if (q.type === "CHOICE_MULTIPLE") {
-                      newScore += getChoiceMultipleScore(q, studentAns);
-                  }
-                  else {
-                      if (studentAns !== undefined && studentAns !== null) {
-                          const sAns = String(studentAns).trim().toLowerCase();
-                          const cA = String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase());
-                          if (cA.includes(sAns)) newScore++;
-                      }
-                  }
-          });
-          const totalPoints = getQuizPointTotal(qz);
-          return {...r, score: newScore, total: totalPoints, band: getIeltsBand(newScore, totalPoints, qz.type)};
+          const summary = getQuizScoreSummary(qz, r.answers || {});
+          return {...r, score: summary.score, total: summary.total, band: getIeltsBand(summary.score, summary.total, qz.type)};
       });
       setQuizResults(nxResults); syncData({quizResults: nxResults});
       alert("Successfully recalculated all past attempts!");
@@ -6832,24 +6914,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const state = latestExamState.current;
       if (!state.activeExam) return;
 
-      let score = 0;
-      const totalQ = getQuizPointTotal(state.activeExam);
-      state.activeExam.questions.forEach((q) => {
-          const studentAns = state.examAnswers[q.id];
-          if (q.type === "CHOICE" || q.type === "MATCHING") { 
-                  if (studentAns === q.correctAnswer) score++; 
-              } 
-              else if (q.type === "CHOICE_MULTIPLE") {
-                  score += getChoiceMultipleScore(q, studentAns);
-              }
-              else {
-                  if (studentAns !== undefined && studentAns !== null) {
-                      const sAns = String(studentAns).trim().toLowerCase();
-                      const correctStrs = String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase());
-                      if (correctStrs.includes(sAns)) score++;
-                  }
-              }
-      });
+      const scoreSummary = getQuizScoreSummary(state.activeExam, state.examAnswers);
+      const score = scoreSummary.score;
+      const totalQ = scoreSummary.total;
 
       const band = getIeltsBand(score, totalQ, state.activeExam.type);
 
