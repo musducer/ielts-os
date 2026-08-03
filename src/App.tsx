@@ -9233,6 +9233,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
                       .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
                       .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
+                      /* Map / plan labelling: image and answer matrix stay visible together. */
+                      .idp-map-plan-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(0, .94fr); gap: 20px; align-items: start; }
+                      .idp-map-plan-visual { position: sticky; top: 10px; min-width: 0; border: 1px solid var(--eborder); background: var(--epanel); padding: 12px; box-sizing: border-box; }
+                      .idp-map-plan-image { display: block; line-height: 0; }
+                      .idp-map-plan-image img { display: block; width: 100% !important; max-width: 100% !important; height: auto !important; max-height: min(64vh, 640px); object-fit: contain; margin: 0 auto !important; }
+                      .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 1px solid var(--eborder); background: var(--ecard); }
+                      .idp-map-plan-answers .idp-matching-table { min-width: 500px; margin: 0; }
+                      .idp-map-plan-answers .idp-matching-table th { min-width: 34px; padding: 8px 7px; }
+                      .idp-map-plan-answers .idp-matching-table td { padding: 9px 7px; }
+                      .idp-map-plan-answers .idp-matching-table th:first-child { min-width: 155px; }
+                      .idp-map-plan-answers .idp-matching-table td:first-child { min-width: 155px; }
+                      .idp-map-plan-answers .idp-matching-legend { display: none; }
+                      @media (max-width: 767px) {
+                        .idp-map-plan-layout { display: block; }
+                        .idp-map-plan-visual { position: static; margin-bottom: 14px; padding: 10px; }
+                        .idp-map-plan-image img { max-height: none; }
+                      }
 
                       /* Hình 6: Drag-drop 2-column layout */
                       .idp-dragdrop-workspace { display: flex; gap: 24px; align-items: flex-start; }
@@ -9819,14 +9836,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   })() : "";
                   
                   const isHtmlEmpty = (htmlStr: string) => !htmlStr || (!htmlStr.includes('<img') && htmlStr.replace(/<[^>]*>?/gm, '').replace(/ /g, '').trim() === '');
-                  const showInstruction = !isHtmlEmpty(group.instruction);
+                   let showInstruction = !isHtmlEmpty(group.instruction);
+                   const hasMapPlanVisual = (value: string) => /<img\b|https?:\/\/[^\s<>"']+/i.test(value || "");
+                   const stripMapPlanVisual = (value: string) => String(value || "")
+                       .replace(/<img\b[^>]*>/gi, "")
+                       .replace(/https?:\/\/[^\s<>"']+/gi, "")
+                       .replace(/<p>\s*<\/p>/gi, "")
+                       .trim();
 
                   // CHỈ HIỂN THỊ CONTEXT Ở CỘT CU HỎI NẾU:
                   // 1. Đang ở layout 1 cột (Listening/Part 1) HOẶC
                   // 2. Form 2 cột nhưng câu hỏi có đoạn văn CONTEXT PHỤ (khác với bài đọc chính đã ở cột trái)
-                  const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
-                  const mainPassage = activeExam?.sections ? activeExam.sections[currentSectionIndex]?.passage : (activeExam.passage || visibleGroups[0]?.context || "");
-                  const showContext = !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage);
+                   const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+                   const mapPlanSourceField = hasMapPlanVisual(group.context) ? "groupContext" : (hasMapPlanVisual(group.instruction) ? "instruction" : "");
+                   const isMapPlanMatching = isListeningLayout && isMatchingGroup && !!mapPlanSourceField;
+                   const mapPlanSource = mapPlanSourceField === "groupContext" ? group.context : group.instruction;
+                   const mapPlanImageHtml = (() => {
+                       if (!isMapPlanMatching) return "";
+                       const imageTags = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
+                       if (imageTags.length) return sanitizeRichHtml(imageTags.join(""));
+                       const url = String(mapPlanSource || "").match(/https?:\/\/[^\s<>"']+/i)?.[0];
+                       return url ? `<img src="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" alt="Map or plan" />` : "";
+                   })();
+                   const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
+                   showInstruction = !isHtmlEmpty(displayInstruction);
+                   const mainPassage = activeExam?.sections ? activeExam.sections[currentSectionIndex]?.passage : (activeExam.passage || visibleGroups[0]?.context || "");
+                   const showContext = !isMapPlanMatching && !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage);
 
                   // ĐàFIX: Tự động tính toán Header "Questions X-Y" chuẩn IDP
                   const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === group.questions[0].id) + 1;
@@ -9838,8 +9873,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const hasHeaderInContext = (group.context || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
                   const shouldShowAutoHeader = !hasHeaderInInstruction && !hasHeaderInContext;
 
-                  const renderFlowChart = () => (
-                      <div className="idp-flowchart-panel">
+                   const renderFlowChart = () => (
+                       <div className="idp-flowchart-panel">
                           {group.questions.map((q, flowIdx) => {
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
                               const rawText = q.text || "";
@@ -9876,17 +9911,60 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   </React.Fragment>
                               );
                           })}
-                      </div>
-                  );
+                       </div>
+                   );
 
-                  return (
+                   const renderMatchingTable = () => (
+                       <>
+                           <table className="idp-matching-table">
+                               <thead>
+                                   <tr>
+                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 200, padding: '8px 12px'}}>Question</th>
+                                       {(group.questions[0].options || []).map((_: any, i: any) => <th key={i}>{String.fromCharCode(65 + i)}</th>)}
+                                   </tr>
+                               </thead>
+                               <tbody>
+                                   {group.questions.map((q) => {
+                                       const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
+                                       return (
+                                           <tr id={`question-${q.id}`} key={q.id}>
+                                               <td style={{ verticalAlign: 'middle' }}>
+                                                   <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+                                                       <span style={{border: '1px solid #ccc', padding: '2px 6px', fontSize: 12, background: '#fff', borderRadius: 2, flexShrink: 0}}>{qGlobalIdx}</span>
+                                                       <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                                   </div>
+                                               </td>
+                                               {(group.questions[0].options || []).map((_: any, i: any) => (
+                                                   <td key={i} style={{background: '#fff', textAlign: 'center', verticalAlign: 'middle'}}>
+                                                       <input type="radio" aria-label={`Question ${qGlobalIdx}, option ${String.fromCharCode(65 + i)}`} checked={examAnswers[q.id] === i} onChange={() => { handleAnswerChange(q.id, i); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} style={{width: 18, height: 18, accentColor: idpC.blueAccent, cursor: 'pointer', margin: '0 auto', display: 'block'}} />
+                                                   </td>
+                                               ))}
+                                           </tr>
+                                       );
+                                   })}
+                               </tbody>
+                           </table>
+                           {!isInfoMatching && (
+                               <div className="idp-matching-legend">
+                                   {(group.questions[0].options || []).map((opt: string, i: number) => (
+                                       <div key={i} className="idp-matching-legend-item">
+                                           <span className="idp-matching-legend-key">{String.fromCharCode(65 + i)}</span>
+                                           <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={group.questions[0].id} dataOptIndex={String(i)} html={renderSafeHTML(String(opt).replace(/^\s*[A-Za-z][\.\)]\s*/, ''))} />
+                                       </div>
+                                   ))}
+                               </div>
+                           )}
+                       </>
+                   );
+
+                   return (
                       <div key={group.questions[0].id} style={{marginBottom: 'var(--q-gap)'}}>
                           <div className="question-rubric">
                               {/* Title + Instruction PHẢI là StaticHtmlBlock (memo) — render dangerouslySetInnerHTML thô sẽ bị React
                                   ghi đè ngay khi popup Note/Highlight mở (re-render) -> vùng quét tạm biến mất, không highlight được. */}
                               {shouldShowAutoHeader && <StaticHtmlBlock tagName="h3" className="scorableItemHeadline highlightable-content" html={groupTitle} />}
 
-                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML((isDragDropGroup && dragOptions.length > 0) ? dragCleanInstruction : group.instruction)} />}
+                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML((isDragDropGroup && dragOptions.length > 0) ? dragCleanInstruction : displayInstruction)} />}
                           </div>
                           
                           {showContext && !isWordBankDrag && (
@@ -9918,47 +9996,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           {isWordBankDrag ? null : isFlowChartGroup ? (
                               renderFlowChart()
                           ) : isMatchingGroup && group.questions.length > 0 ? (
-                                                      <div style={{overflowX: 'auto'}}>
-                                                          <table className="idp-matching-table">
-                                                              <thead>
-                                                                  <tr>
-                                                                      <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 200, padding: '8px 12px'}}>Question</th>
-                                                                      {(group.questions[0].options || []).map((_: any, i: any) => <th key={i}>{String.fromCharCode(65 + i)}</th>)}
-                                                                  </tr>
-                                                              </thead>
-                                                              <tbody>
-                                                                  {group.questions.map((q) => {
-                                                                      const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
-                                                                      return (
-                                                                          <tr id={`question-${q.id}`} key={q.id}>
-                                                                              <td style={{ verticalAlign: 'middle' }}>
-                                                                                  <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
-                                                                                      <span style={{border: '1px solid #ccc', padding: '2px 6px', fontSize: 12, background: '#fff', borderRadius: 2, flexShrink: 0}}>{qGlobalIdx}</span>
-                                                                                      <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
-                                                                                  </div>
-                                                                              </td>
-                                                                              {(group.questions[0].options || []).map((_: any, i: any) => (
-                                                                                  <td key={i} style={{background: '#fff', textAlign: 'center', verticalAlign: 'middle'}}>
-                                                                                      <input type="radio" checked={examAnswers[q.id] === i} onChange={() => { handleAnswerChange(q.id, i); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} style={{width: 18, height: 18, accentColor: idpC.blueAccent, cursor: 'pointer', margin: '0 auto', display: 'block'}} />
-                                                                                  </td>
-                                                                              ))}
-                                                                          </tr>
-                                                                      );
-                                                                  })}
-                                                              </tbody>
-                                                          </table>
-                                                          {!isInfoMatching && (
-                                                          <div className="idp-matching-legend">
-                                                              {(group.questions[0].options || []).map((opt: string, i: number) => (
-                                                                  <div key={i} className="idp-matching-legend-item">
-                                                                      <span className="idp-matching-legend-key">{String.fromCharCode(65 + i)}</span>
-                                                                      <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={group.questions[0].id} dataOptIndex={String(i)} html={renderSafeHTML(String(opt).replace(/^\s*[A-Za-z][\.\)]\s*/, ''))} />
-                                                                  </div>
-                                                              ))}
-                                                          </div>
-                                                          )}
-                                                      </div>
-                                                  ) : isDragDropHeadingGroup ? (
+                              isMapPlanMatching ? (
+                                  <div className="idp-map-plan-layout">
+                                      <div className="idp-map-plan-visual">
+                                          <StaticHtmlBlock className="idp-map-plan-image" dataField={mapPlanSourceField} dataQid={group.questions[0]?.id} html={mapPlanImageHtml} />
+                                      </div>
+                                      <div className="idp-map-plan-answers">
+                                          {renderMatchingTable()}
+                                      </div>
+                                  </div>
+                              ) : (
+                                  <div style={{overflowX: 'auto'}}>{renderMatchingTable()}</div>
+                              )
+                          ) : isDragDropHeadingGroup ? (
                                                       (() => {
                                                         const usedIds = new Set(group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean));
                                                         return (
