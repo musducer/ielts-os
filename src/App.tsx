@@ -9234,10 +9234,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
                       .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
                       /* Map / plan labelling: image and answer matrix stay visible together. */
-                      .idp-map-plan-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(0, .94fr); gap: 20px; align-items: start; }
-                      .idp-map-plan-visual { position: sticky; top: 10px; min-width: 0; border: 1px solid var(--eborder); background: var(--epanel); padding: 12px; box-sizing: border-box; }
+                      .idp-map-plan-layout { display: grid; grid-template-columns: minmax(0, 1.26fr) minmax(500px, .94fr); gap: 28px; align-items: start; }
+                      .idp-map-plan-visual { position: sticky; top: 10px; min-width: 0; border: 1px solid var(--eborder); background: var(--epanel); padding: 8px; box-sizing: border-box; }
                       .idp-map-plan-image { display: block; line-height: 0; }
-                      .idp-map-plan-image img { display: block; width: 100% !important; max-width: 100% !important; height: auto !important; max-height: min(64vh, 640px); object-fit: contain; margin: 0 auto !important; }
+                      .idp-map-plan-image img { display: block; width: 100% !important; max-width: 100% !important; height: auto !important; max-height: min(72vh, 760px); object-fit: contain; margin: 0 auto !important; }
                       .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 1px solid var(--eborder); background: var(--ecard); }
                       .idp-map-plan-answers .idp-matching-table { min-width: 500px; margin: 0; }
                       .idp-map-plan-answers .idp-matching-table th { min-width: 34px; padding: 8px 7px; }
@@ -9714,7 +9714,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onDrop={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) { e.preventDefault(); const qId = e.target.dataset.qid; const val = e.dataTransfer.getData("text/plain"); if (qId && val) { handleAnswerChange(qId, val, "DRAG_DROP"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } } }}
                        onClick={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone') && e.target.classList.contains('filled')) { const qId = e.target.dataset.qid; if (qId) handleAnswerChange(qId, ""); } }}>
 
-                      <div style={{ maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 860, margin: '0 auto', padding: "12px 22px 20px" }}>
+                      <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
                                   {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
                                       <div className="idp-section-header">
                                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM5 7.5a1.5 1.5 0 013 0v3a1.5 1.5 0 01-3 0v-3zm6 0a1.5 1.5 0 01-3 0v3a1.5 1.5 0 013 0v-3z" fill="#57606a"/></svg>
