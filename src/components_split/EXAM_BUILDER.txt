@@ -355,6 +355,8 @@
                                                     <option value="Matching Headings">Matching Headings</option>
                                                     <option value="Multiple Choice">Multiple Choice</option>
                                                     <option value="Sentence Completion">Sentence Completion</option>
+                                                    <option value="SUMMARY_DRAG">Summary drag (Reading)</option>
+                                                    <option value="COLUMN_DRAG">Matching 2 columns (Listening)</option>
                                                 </select>
                                             </div>
                                             <div style={{display: 'flex', gap: 7}}>
@@ -467,6 +469,46 @@
                                                 </div>
                                             </div>
                                             );
+                                        })() : (grp.groupType === 'DRAG_DROP' && q.subType === 'COLUMN_DRAG') ? (() => {
+                                            const rawOptions = (q.options || []).map((option: string) => String(option).replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean);
+                                            const writeOptions = (raw: string) => {
+                                                const options = raw.split(/\r?\n/).map((line: string) => line.replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean);
+                                                updateGroup((qItem: any) => ({ ...qItem, options }));
+                                            };
+                                            return <div>
+                                                <div style={{background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '18px 20px', marginBottom: 18}}>
+                                                    <div style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="link" size={13} />Listening matching 2 columns</div>
+                                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12}}>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Left column title
+                                                            <input value={q.leftTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, leftTitle: e.target.value}))} placeholder="Activities" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Right column title
+                                                            <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Benefits" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.12fr) minmax(260px, .88fr)', gap:20, alignItems:'start'}}>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <div style={{...ebEyebrow, marginBottom:14, display:'flex'}}><Ico name="edit" size={13} />Left-side statements and answers</div>
+                                                        <div style={{display:'grid', gap:10}}>
+                                                            {grp.questions.map((qItem:any, offset:number) => (
+                                                                <div key={qItem.id} style={{display:'grid', gridTemplateColumns:'34px minmax(0, 1fr) 150px', gap:8, alignItems:'center'}}>
+                                                                    <span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>{qIndex + offset + 1}</span>
+                                                                    <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,text:e.target.value}:qIt)} placeholder="Statement" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} />
+                                                                    <select value={String(qItem.correctAnswer || '')} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,correctAnswer:e.target.value}:qIt)} style={{padding:'9px 8px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}}>
+                                                                        <option value="">Correct option</option>
+                                                                        {rawOptions.map((option:string, index:number)=><option key={index} value={option}>{String.fromCharCode(65 + index)}. {option}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <label style={{...ebEyebrow, marginBottom:10, display:'flex'}}><Ico name="edit" size={13} />Right-side options, one per line</label>
+                                                        <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'broadens practical experience\nchance to publicise own work'} style={{width:'100%', minHeight:170, boxSizing:'border-box', resize:'vertical', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, font: '500 14px/1.45 ' + EB.fBody}} />
+                                                    </div>
+                                                </div>
+                                            </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
                                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>

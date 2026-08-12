@@ -1573,7 +1573,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 };
 
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -3212,6 +3212,7 @@ export default function IeltsSupremeOS() {
   const [resultSearch, setResultSearch] = useState("");
   const [printBlankSheet, setPrintBlankSheet] = useState(false);
   const [hardLocked, setHardLocked] = useState(false);
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [sebGuideQuiz, setSebGuideQuiz] = useState<Quiz | null>(null);
   const [screenshotFlash, setScreenshotFlash] = useState(false);
   const screenshotFlashRef = useRef<number | null>(null);
@@ -3788,6 +3789,7 @@ export default function IeltsSupremeOS() {
   const timeAlertDismissRef = useRef<number | null>(null);
   const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
+  const securityIncidentRef = useRef(0);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
 
   const dismissExamTimeAlert = () => {
@@ -4565,6 +4567,63 @@ const applyWorkspaceSnapshot = (snap: any) => {
   useEffect(() => {
       latestExamState.current = { activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep };
   }, [activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep]);
+
+  // Client-side deterrence for student accounts. It deliberately does not use a
+  // debugger loop: that pattern freezes legitimate devices and is trivially bypassed.
+  useEffect(() => {
+    if (userRole !== "STUDENT") return;
+    const blockContextMenu = (event: MouseEvent) => event.preventDefault();
+    const blockShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const blocked = event.key === "F12"
+        || ((event.ctrlKey || event.metaKey) && ["u", "s"].includes(key))
+        || ((event.ctrlKey || event.metaKey) && event.shiftKey && ["i", "j", "c"].includes(key));
+      if (!blocked) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("contextmenu", blockContextMenu, true);
+    window.addEventListener("keydown", blockShortcut, true);
+    return () => {
+      window.removeEventListener("contextmenu", blockContextMenu, true);
+      window.removeEventListener("keydown", blockShortcut, true);
+    };
+  }, [userRole]);
+
+  useEffect(() => {
+    const isProtectedExam = userRole === "STUDENT" && !!activeExam && !isPreview && !isPracticeQuiz(activeExam);
+    if (!isProtectedExam) return;
+    let consecutiveDimensionSignals = 0;
+    const recordDevToolsIncident = () => {
+      const now = Date.now();
+      if (now - securityIncidentRef.current < 12000) return;
+      securityIncidentRef.current = now;
+      setSecurityNotice("A security tool was detected. Your test has been paused and this event was recorded.");
+      setHardLocked(true);
+      setExamCheatCount(count => count + 1);
+      setSystemLogs(prev => [{
+        id: `security_${now}`,
+        errorType: "DEVTOOLS_OPENED",
+        message: "Student security guard detected a developer-tools signal during an exam.",
+        context: JSON.stringify({ quizId: activeExam.id, email: currentUser?.email || "Unknown" }),
+        timestamp: new Date().toLocaleString("vi-VN"),
+        email: currentUser?.email || "Unknown"
+      }, ...prev].slice(0, 50));
+    };
+    const inspectDimensions = () => {
+      const widthGap = Math.max(0, window.outerWidth - window.innerWidth);
+      const heightGap = Math.max(0, window.outerHeight - window.innerHeight);
+      if (widthGap > 180 || heightGap > 180) consecutiveDimensionSignals += 1;
+      else consecutiveDimensionSignals = 0;
+      if (consecutiveDimensionSignals >= 2) recordDevToolsIncident();
+    };
+    const timer = window.setInterval(inspectDimensions, 2000);
+    window.addEventListener("resize", inspectDimensions);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("resize", inspectDimensions);
+    };
+  }, [activeExam?.id, currentUser?.email, isPreview, userRole]);
 
   // FIX: Sync editingQuizRef với editingQuiz state
   useEffect(() => {
@@ -8938,7 +8997,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    }}>
                   
                   {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""}
+                      <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
+                          onContextMenu={(event: any) => event.preventDefault()}
+                          onDragStart={(event: any) => event.preventDefault()}
                           onEnded={handleExamAudioEnded}
                           onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
                           onPlaying={handleExamAudioPlaying}
@@ -9270,16 +9331,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wordbank-item:active { cursor: grabbing; }
                       .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
-                      /* ===== KÉO-THẢ NỐI 2 CỘT (compact, chuẩn IDP) — cột trái kho tag, cột phải mục có ô thả ===== */
-                      .idp-match2 { display: flex; gap: 40px; align-items: flex-start; margin-top: 4px; }
-                      .idp-match2-bank { flex: 0 0 auto; min-width: 150px; max-width: 300px; display: flex; flex-direction: column; gap: 6px; }
-                      /* Cột mục = lưới 2 cột: nhãn co theo nội dung (fit-content -> ngắn thì bó sát, câu dài thì tự xuống dòng),
-                         ô thả nằm SÁT ngay sau nhãn (không phí khoảng trắng). justify-content:start dồn về trái, kho tag ở xa phải. */
-                      .idp-match2-items { flex: 1; min-width: 0; display: grid; grid-template-columns: fit-content(46%) minmax(150px, 300px); column-gap: 18px; row-gap: 8px; align-items: center; justify-content: start; }
+                      /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
+                      .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(240px, .85fr); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
+                      .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+                      .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 10px; align-items: center; }
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
                       /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
                       .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
-                      .idp-match2-tag { text-align: center; }
+                      .idp-match2-tag { display: flex; align-items: flex-start; gap: 8px; text-align: left; }
+                      .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
                       .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 6px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
                       .idp-match2-tag:hover { border-color: var(--eblue); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
@@ -9287,6 +9347,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
+                      @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-drag-summary { line-height: 2.2; }
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
                       .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
@@ -9325,10 +9386,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                   {hardLocked && !isPreview && !isPractice && (
                       <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(215, 58, 73, 0.95)', zIndex: 999999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
-                          <h1 style={{fontSize: 40, fontWeight: 900, margin: 0, textAlign: 'center'}}>YOU HAVE LEFT THE EXAM SCREEN!</h1>
-                          <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center'}}>The system has recorded violations ({examCheatCount}/3). Please type <b>RETURN</b> into the box below to unlock your exam.</p>
+                          <h1 style={{fontSize: 40, fontWeight: 900, margin: 0, textAlign: 'center'}}>{securityNotice ? "SECURITY CHECK REQUIRED" : "YOU HAVE LEFT THE EXAM SCREEN!"}</h1>
+                          <p style={{fontSize: 18, maxWidth: 600, textAlign: 'center'}}>{securityNotice || `The system has recorded violations (${examCheatCount}/3). Please type RETURN into the box below to unlock your exam.`}</p>
                           <input value={unlockKey} onChange={e => setUnlockKey(e.target.value)} placeholder="Type here..." style={{width: 300, background: '#fff', color: '#000', fontSize: 18, textAlign: 'center', marginTop: 20}} />
-                          {unlockKey === "RETURN" && <button onClick={() => { setHardLocked(false); setUnlockKey(""); }} style={{background: '#000', color: '#fff', padding: '15px 30px', fontSize: 18, marginTop: 20}}>UNLOCK</button>}
+                          {unlockKey === "RETURN" && <button onClick={() => { setHardLocked(false); setSecurityNotice(null); setUnlockKey(""); }} style={{background: '#000', color: '#fff', padding: '15px 30px', fontSize: 18, marginTop: 20}}>UNLOCK</button>}
                       </div>
                   )}
 
@@ -9808,8 +9869,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       return plain.split(/\n+/).map(s => s.trim()).filter(Boolean)
                           .filter(s => s.length <= 28 && /[a-zA-Z]/.test(s) && !/^(questions?|choose|write|complete|match|which|what|who|list of)/i.test(s) && !/\d/.test(s));
                   })();
-                  const dragBankLabel = dragLabels[0] || "Options";   // cột trái = kho tag
-                  const dragItemsLabel = dragLabels[1] || "";          // cột phải = các mục có ô thả
+                  // Prefer explicit Builder/parser labels; retain the old instruction-line fallback.
+                  const dragBankLabel = String(group.questions.find((q: any) => q.rightTitle)?.rightTitle || dragLabels[0] || "").trim();
+                  const dragItemsLabel = String(group.questions.find((q: any) => q.leftTitle)?.leftTitle || dragLabels[1] || "").trim();
                   // ẨN 2 dòng nhãn bằng CSS class, KHÔNG xoá khỏi HTML — nếu xoá, học sinh highlight vào instruction
                   // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
                   let dragCleanInstruction = group.instruction || "";
@@ -9819,8 +9881,20 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
                   const headingOptions = isDragDropHeadingGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
-                  // WORD-BANK (tóm tắt kéo-thả): nhóm DRAG_DROP có đoạn context + danh sách từ -> render kiểu IELTS Mate
-                  const isWordBankDrag = isDragDropGroup && !!group.context && dragOptions.length > 0;
+                  // SUMMARY_DRAG contains numbered blanks inside a shared paragraph.
+                  // COLUMN_DRAG is Listening matching: standalone rows at left, options at right.
+                  const groupQuestionNumbers = group.questions.map((q: any) => {
+                      const overall = (activeExam?.questions || []).findIndex((x: any) => x.id === q.id);
+                      return overall >= 0 ? overall + 1 : currentSectionQuestions.findIndex((x: any) => x.id === q.id) + 1;
+                  }).filter((n: number) => n > 0);
+                  const explicitDragSubType = String(group.questions.find((q: any) => q.subType)?.subType || "").toUpperCase();
+                  const contextSlotLines = String(group.context || "").replace(/<\/?(?:div|p|br)[^>]*>/gi, "\n").split(/\n+/).map((line: string) => line.replace(/<[^>]+>/g, "").trim()).filter(Boolean);
+                  const markedContextLines = contextSlotLines.filter((line: string) => /\[\d+\]/.test(line));
+                  const hasSummarySlots = markedContextLines.length > 0
+                      && groupQuestionNumbers.some((n: number) => new RegExp(`\\[${n}\\]`).test(group.context))
+                      && !markedContextLines.every((line: string) => /^\[\d+\]/.test(line));
+                  const isWordBankDrag = isDragDropGroup && dragOptions.length > 0
+                      && (explicitDragSubType === "SUMMARY_DRAG" || (!explicitDragSubType && hasSummarySlots));
                   const wordBankSummaryHtml = isWordBankDrag ? (() => {
                       let html = renderSafeHTML(group.context);
                       html = html.replace(/\[(\d+)\]/g, (m: string, num: string) => {
@@ -10046,10 +10120,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           return (
                                                           <div className="idp-match2">
                                                               {/* CỘT TRÁI: các mục có ô thả (chuẩn hình 2: Fossil categories / Points made) */}
-                                                              <div className="idp-match2-items" style={{gridTemplateColumns: `fit-content(46%) ${groupZoneW}px`}}>
+                                                              <div className="idp-match2-items" style={{gridTemplateColumns: `minmax(0, 1fr) ${groupZoneW}px`}}>
                                                                   {dragItemsLabel && <div className="idp-match2-h">{dragItemsLabel}</div>}
                                                                   {group.questions.map((q:any) => {
-                                                                      const gi = (activeExam.questions || []).findIndex((x:any)=>x.id===q.id)+1;
+                                                                      const gi = groupQuestionNumbers[group.questions.indexOf(q)] || group.questions.indexOf(q) + 1;
                                                                       const val = examAnswers[q.id] as string;
                                                                       return (
                                                                           <React.Fragment key={q.id}>
@@ -10061,9 +10135,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                               </div>
                                                               {/* CỘT PHẢI: kho tag (Features / Theorists) */}
                                                               <div className="idp-match2-bank">
-                                                                  <div className="idp-match2-h">{dragBankLabel}</div>
+                                                                  {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
-                                                                      <div key={idx} className="idp-match2-tag" draggable onDragStart={(e:any) => { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); }}>{opt}</div>
+                                                                      <div key={idx} className="idp-match2-tag" draggable onDragStart={(e:any) => { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); }}>
+                                                                          <span className="idp-match2-key">{String.fromCharCode(65 + dragOptions.indexOf(opt))}</span>
+                                                                          <span>{opt}</span>
+                                                                      </div>
                                                                   ))}
                                                                   {bankWords.length === 0 && <div className="idp-match2-empty">—</div>}
                                                               </div>
@@ -12537,6 +12614,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="Matching Headings">Matching Headings</option>
                                                     <option value="Multiple Choice">Multiple Choice</option>
                                                     <option value="Sentence Completion">Sentence Completion</option>
+                                                    <option value="SUMMARY_DRAG">Summary drag (Reading)</option>
+                                                    <option value="COLUMN_DRAG">Matching 2 columns (Listening)</option>
                                                 </select>
                                             </div>
                                             <div style={{display: 'flex', gap: 7}}>
@@ -12649,6 +12728,46 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 </div>
                                             </div>
                                             );
+                                        })() : (grp.groupType === 'DRAG_DROP' && q.subType === 'COLUMN_DRAG') ? (() => {
+                                            const rawOptions = (q.options || []).map((option: string) => String(option).replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean);
+                                            const writeOptions = (raw: string) => {
+                                                const options = raw.split(/\r?\n/).map((line: string) => line.replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean);
+                                                updateGroup((qItem: any) => ({ ...qItem, options }));
+                                            };
+                                            return <div>
+                                                <div style={{background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '18px 20px', marginBottom: 18}}>
+                                                    <div style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="link" size={13} />Listening matching 2 columns</div>
+                                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12}}>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Left column title
+                                                            <input value={q.leftTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, leftTitle: e.target.value}))} placeholder="Activities" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Right column title
+                                                            <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Benefits" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.12fr) minmax(260px, .88fr)', gap:20, alignItems:'start'}}>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <div style={{...ebEyebrow, marginBottom:14, display:'flex'}}><Ico name="edit" size={13} />Left-side statements and answers</div>
+                                                        <div style={{display:'grid', gap:10}}>
+                                                            {grp.questions.map((qItem:any, offset:number) => (
+                                                                <div key={qItem.id} style={{display:'grid', gridTemplateColumns:'34px minmax(0, 1fr) 150px', gap:8, alignItems:'center'}}>
+                                                                    <span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>{qIndex + offset + 1}</span>
+                                                                    <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,text:e.target.value}:qIt)} placeholder="Statement" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} />
+                                                                    <select value={String(qItem.correctAnswer || '')} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,correctAnswer:e.target.value}:qIt)} style={{padding:'9px 8px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}}>
+                                                                        <option value="">Correct option</option>
+                                                                        {rawOptions.map((option:string, index:number)=><option key={index} value={option}>{String.fromCharCode(65 + index)}. {option}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <label style={{...ebEyebrow, marginBottom:10, display:'flex'}}><Ico name="edit" size={13} />Right-side options, one per line</label>
+                                                        <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'broadens practical experience\nchance to publicise own work'} style={{width:'100%', minHeight:170, boxSizing:'border-box', resize:'vertical', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, font: '500 14px/1.45 ' + EB.fBody}} />
+                                                    </div>
+                                                </div>
+                                            </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
                                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>

@@ -155,6 +155,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     accumulated_instruction = ""
     group_context = ""
     pre_question_options = []
+    left_title = ""
+    right_title = ""
+    instruction_labels = []
     in_context = False
     
     for h_line, t_line in zip(html_lines, text_lines):
@@ -164,6 +167,17 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             continue
         if "[/CONTEXT]" in t_upper:
             in_context = False
+            continue
+
+        # Explicit, portable authoring syntax for two-column drag matching.
+        # Keep these structural labels out of the visible instruction block.
+        left_match = re.match(r'^\s*\[LEFT_TITLE\]\s*(.*)$', t_line, re.IGNORECASE)
+        right_match = re.match(r'^\s*\[RIGHT_TITLE\]\s*(.*)$', t_line, re.IGNORECASE)
+        if left_match:
+            left_title = left_match.group(1).strip()
+            continue
+        if right_match:
+            right_title = right_match.group(1).strip()
             continue
         
         if in_context:
@@ -182,6 +196,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             if is_option(t_line):
                 pre_question_options.append(t_line)
                 continue
+            if (len(t_line) <= 48 and re.search(r'[A-Za-z]', t_line)
+                    and not re.match(r'^(?:questions?|choose|write|complete|match|which|what|who|how|list of)\b', t_line, re.IGNORECASE)):
+                instruction_labels.append(t_line.strip())
             accumulated_instruction += f"<div>{h_line}</div>"
             continue
 
@@ -205,6 +222,15 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
                 current_q["text"] += f" <div>{h_line}</div>"
 
     if current_q: questions_in_block.append(current_q)
+
+    # A Listening column match normally introduces the option-bank title first
+    # (e.g. Benefits), then the left-side list title (e.g. Activities).
+    # Explicit [LEFT_TITLE]/[RIGHT_TITLE] always win.
+    if block_type == "DRAG" and instruction_labels:
+        if not right_title:
+            right_title = instruction_labels[0]
+        if not left_title and len(instruction_labels) > 1:
+            left_title = instruction_labels[-1]
     
     # Chia sẻ options cho các câu trong nhóm
     shared_options = []
@@ -220,6 +246,15 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         elif "flow-chart" in lower_txt or "flowchart" in lower_txt: sub_t = "FLOWCHART"
         elif "summary" in lower_txt: sub_t = "SUMMARY"
         elif "note" in lower_txt: sub_t = "NOTES"
+        if q["type"] == "DRAG":
+            # Summary drag has numbered placeholders embedded in a continuous
+            # context. Independent numbered rows are the Listening two-column
+            # matching form, even when both share the DRAG source block.
+            context_lines = [re.sub(r'<[^>]+>', '', line).strip()
+                             for line in re.findall(r'<div>(.*?)</div>', q["groupContext"] or "", flags=re.DOTALL)]
+            marked_lines = [line for line in context_lines if re.search(r'\[\d+\]', line)]
+            is_independent_rows = len(marked_lines) > 0 and all(re.match(r'^\s*\[\d+\]', line) for line in marked_lines)
+            sub_t = "SUMMARY_DRAG" if marked_lines and not is_independent_rows else "COLUMN_DRAG"
         
         is_tfng = RE_TFNG.search(lower_txt) or "true/false/not given" in lower_txt
         is_ynng = RE_YNNG.search(lower_txt) or "yes/no/not given" in lower_txt
@@ -299,6 +334,8 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             "subType": sub_t, 
             "instruction": q["instruction"], 
             "groupContext": q["groupContext"],
+            "leftTitle": left_title,
+            "rightTitle": right_title,
             "text": q["text"], 
             "options": q["options"] if q["options"] else [],
             "correctAnswer": final_correct_answer

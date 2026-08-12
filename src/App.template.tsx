@@ -1573,7 +1573,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 };
 
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -3212,6 +3212,7 @@ export default function IeltsSupremeOS() {
   const [resultSearch, setResultSearch] = useState("");
   const [printBlankSheet, setPrintBlankSheet] = useState(false);
   const [hardLocked, setHardLocked] = useState(false);
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [sebGuideQuiz, setSebGuideQuiz] = useState<Quiz | null>(null);
   const [screenshotFlash, setScreenshotFlash] = useState(false);
   const screenshotFlashRef = useRef<number | null>(null);
@@ -3788,6 +3789,7 @@ export default function IeltsSupremeOS() {
   const timeAlertDismissRef = useRef<number | null>(null);
   const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
+  const securityIncidentRef = useRef(0);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
 
   const dismissExamTimeAlert = () => {
@@ -4565,6 +4567,63 @@ const applyWorkspaceSnapshot = (snap: any) => {
   useEffect(() => {
       latestExamState.current = { activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep };
   }, [activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep]);
+
+  // Client-side deterrence for student accounts. It deliberately does not use a
+  // debugger loop: that pattern freezes legitimate devices and is trivially bypassed.
+  useEffect(() => {
+    if (userRole !== "STUDENT") return;
+    const blockContextMenu = (event: MouseEvent) => event.preventDefault();
+    const blockShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const blocked = event.key === "F12"
+        || ((event.ctrlKey || event.metaKey) && ["u", "s"].includes(key))
+        || ((event.ctrlKey || event.metaKey) && event.shiftKey && ["i", "j", "c"].includes(key));
+      if (!blocked) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("contextmenu", blockContextMenu, true);
+    window.addEventListener("keydown", blockShortcut, true);
+    return () => {
+      window.removeEventListener("contextmenu", blockContextMenu, true);
+      window.removeEventListener("keydown", blockShortcut, true);
+    };
+  }, [userRole]);
+
+  useEffect(() => {
+    const isProtectedExam = userRole === "STUDENT" && !!activeExam && !isPreview && !isPracticeQuiz(activeExam);
+    if (!isProtectedExam) return;
+    let consecutiveDimensionSignals = 0;
+    const recordDevToolsIncident = () => {
+      const now = Date.now();
+      if (now - securityIncidentRef.current < 12000) return;
+      securityIncidentRef.current = now;
+      setSecurityNotice("A security tool was detected. Your test has been paused and this event was recorded.");
+      setHardLocked(true);
+      setExamCheatCount(count => count + 1);
+      setSystemLogs(prev => [{
+        id: `security_${now}`,
+        errorType: "DEVTOOLS_OPENED",
+        message: "Student security guard detected a developer-tools signal during an exam.",
+        context: JSON.stringify({ quizId: activeExam.id, email: currentUser?.email || "Unknown" }),
+        timestamp: new Date().toLocaleString("vi-VN"),
+        email: currentUser?.email || "Unknown"
+      }, ...prev].slice(0, 50));
+    };
+    const inspectDimensions = () => {
+      const widthGap = Math.max(0, window.outerWidth - window.innerWidth);
+      const heightGap = Math.max(0, window.outerHeight - window.innerHeight);
+      if (widthGap > 180 || heightGap > 180) consecutiveDimensionSignals += 1;
+      else consecutiveDimensionSignals = 0;
+      if (consecutiveDimensionSignals >= 2) recordDevToolsIncident();
+    };
+    const timer = window.setInterval(inspectDimensions, 2000);
+    window.addEventListener("resize", inspectDimensions);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("resize", inspectDimensions);
+    };
+  }, [activeExam?.id, currentUser?.email, isPreview, userRole]);
 
   // FIX: Sync editingQuizRef với editingQuiz state
   useEffect(() => {
