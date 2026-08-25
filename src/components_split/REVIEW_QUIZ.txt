@@ -209,15 +209,18 @@
           const accepted = String(q.correctAnswer ?? '').split('/').map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
           return { blank, given, expected: String(q.correctAnswer ?? '').split('/')[0].trim(), correct: !blank && accepted.includes(given.toLocaleLowerCase()) };
       };
+      // Legacy tests are not consistent about subType: the same Notes block can
+      // arrive as SENTENCE, NOTES, or no subtype at all. The numbered shared
+      // context is the reliable signal for every inline completion form.
+      const rvCompletionContext = (q: any) => String(q.groupContext || '');
       const rvIsInlineListeningCompletion = (q: any) => rvActiveIsListening
-          && q.type === 'BLANK'
-          && ['SUMMARY', 'NOTES', 'FLOWCHART'].includes(String(q.subType || '').toUpperCase())
-          && /\[\d+\]/.test(String(q.groupContext || ''));
+          && ['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
+          && /\[\d+\]/.test(rvCompletionContext(q));
       const rvRenderListeningCompletionGroup = (seed: any) => {
           const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
               rvSectionOf(candidate) === rvActiveIdx
               && rvIsInlineListeningCompletion(candidate)
-              && String(candidate.groupContext || '') === String(seed.groupContext || '')
+              && rvCompletionContext(candidate) === rvCompletionContext(seed)
           );
           if (!groupQuestions.length) return null;
           const selected = groupQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
@@ -231,7 +234,7 @@
           };
           const byNumber = new Map<number, any>();
           groupQuestions.forEach((question: any) => byNumber.set(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id), question));
-          const inlineContext = formatContent(seed.groupContext || '').replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
+          const inlineContext = formatContent(rvCompletionContext(seed)).replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
               const question = byNumber.get(Number(rawNumber));
               if (!question) return token;
               const state = rvCompletionAnswer(question);
@@ -664,7 +667,7 @@
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
                                   && rvIsInlineListeningCompletion(candidate)
-                                  && String(candidate.groupContext || '') === String(q.groupContext || '')
+                                  && rvCompletionContext(candidate) === rvCompletionContext(q)
                               );
                               return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
                           }
