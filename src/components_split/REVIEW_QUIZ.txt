@@ -319,7 +319,7 @@
                   .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
                   .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
                   .rv-completion-explanation b { color: #6d28d9; }
-                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } }
+                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
                   @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } }
               `}</style>
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
@@ -670,6 +670,50 @@
                                   && rvCompletionContext(candidate) === rvCompletionContext(q)
                               );
                               return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
+                          }
+                          if (q.type === "MAP_DRAG") {
+                              const mapUrl = String((q as any).mapImageUrl || "").trim();
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "MAP_DRAG"
+                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                              );
+                              if (alreadyRendered) return null;
+                              const mapQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "MAP_DRAG"
+                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                              );
+                              const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
+                                  || String(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id));
+                              const slots = (q as any).mapSlots || {};
+                              const slotFor = (question: any, index: number) => slots[numberFor(question)] || (question as any).mapSlots?.[numberFor(question)] || {
+                                  x: 50, y: 16 + index * (68 / Math.max(1, mapQuestions.length - 1 || 1)), width: 18, height: 7,
+                              };
+                              return <div key={`map-review-${q.id}`} className="card" style={{marginBottom:20, borderLeft:`5px solid ${C.accent}`}}>
+                                  <div style={{fontWeight:800, marginBottom:8}}>Questions {numberFor(mapQuestions[0])}-{numberFor(mapQuestions[mapQuestions.length - 1])}</div>
+                                  {q.instruction && <div style={{fontSize:14, lineHeight:1.5, marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1fr) minmax(190px, .34fr)', gap:20, alignItems:'start'}} className="rv-map-drag-layout">
+                                      <div style={{position:'relative', overflow:'hidden', border:`1px solid ${C.border}`, background:'#f8fafc'}}>
+                                          {mapUrl ? <img src={mapUrl} alt="Map labelling diagram" style={{display:'block', width:'100%', height:'auto'}} /> : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
+                                          {mapUrl && mapQuestions.map((question: any, index: number) => {
+                                              const slot = slotFor(question, index);
+                                              const answer = reviewQuiz.result.answers?.[question.id];
+                                              const given = String(answer || '').trim();
+                                              const expected = String(question.correctAnswer || '').split('/')[0].trim();
+                                              const correct = !!given && String(question.correctAnswer || '').split('/').map((value:string)=>value.trim().toLowerCase()).includes(given.toLowerCase());
+                                              return <div key={question.id} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, minWidth:56, minHeight:28, transform:'translate(-50%,-50%)', boxSizing:'border-box', padding:'4px 6px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', fontSize:11, fontWeight:700, lineHeight:1.2, border:`2px solid ${correct ? C.succ : C.err}`, background:correct ? '#ecfdf5' : '#fff1f2', color:correct ? '#166534' : '#b91c1c'}}>
+                                                  <span style={{position:'absolute', top:-15, left:0, fontSize:10, color:'#334155', background:'#fff', padding:'1px 3px'}}>#{numberFor(question)}</span>
+                                                  <span>{given || 'No answer'}</span>{!correct && <span style={{color:'#166534', textDecoration:'underline', marginTop:2}}>{expected}</span>}
+                                              </div>;
+                                          })}
+                                      </div>
+                                      <div style={{border:`1px solid ${C.border}`, padding:12, background:C.bg}}>
+                                          <div style={{fontSize:11, fontWeight:800, letterSpacing:'.08em', textTransform:'uppercase', color:C.sub, marginBottom:8}}>Answer choices</div>
+                                          {(q.options || []).map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} style={{padding:'7px 9px', marginBottom:6, border:`1px solid ${C.border}`, fontSize:13, lineHeight:1.35}}><b style={{color:C.accent, marginRight:7}}>{String.fromCharCode(65+optionIndex)}</b>{option}</div>)}
+                                      </div>
+                                  </div>
+                              </div>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
                           if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;

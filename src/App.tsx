@@ -1572,8 +1572,9 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   });
 };
 
-type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
+type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG";
+interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -3129,6 +3130,7 @@ export default function IeltsSupremeOS() {
   const [studyFlipped, setStudyFlipped] = useState(false);
 
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
+  const [mapDragEditorSelection, setMapDragEditorSelection] = useState<string>("");
   const editingQuizRef = useRef<Quiz | null>(null); // FIX: ref để tránh stale closure trong saveQuiz
   const [keyEditingQuiz, setKeyEditingQuiz] = useState<Quiz | null>(null);
   const [activeExam, setActiveExam] = useState<Quiz | null>(null);
@@ -8174,7 +8176,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
                   .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
                   .rv-completion-explanation b { color: #6d28d9; }
-                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } }
+                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
                   @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } }
               `}</style>
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
@@ -8525,6 +8527,50 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   && rvCompletionContext(candidate) === rvCompletionContext(q)
                               );
                               return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
+                          }
+                          if (q.type === "MAP_DRAG") {
+                              const mapUrl = String((q as any).mapImageUrl || "").trim();
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "MAP_DRAG"
+                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                              );
+                              if (alreadyRendered) return null;
+                              const mapQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "MAP_DRAG"
+                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                              );
+                              const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
+                                  || String(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id));
+                              const slots = (q as any).mapSlots || {};
+                              const slotFor = (question: any, index: number) => slots[numberFor(question)] || (question as any).mapSlots?.[numberFor(question)] || {
+                                  x: 50, y: 16 + index * (68 / Math.max(1, mapQuestions.length - 1 || 1)), width: 18, height: 7,
+                              };
+                              return <div key={`map-review-${q.id}`} className="card" style={{marginBottom:20, borderLeft:`5px solid ${C.accent}`}}>
+                                  <div style={{fontWeight:800, marginBottom:8}}>Questions {numberFor(mapQuestions[0])}-{numberFor(mapQuestions[mapQuestions.length - 1])}</div>
+                                  {q.instruction && <div style={{fontSize:14, lineHeight:1.5, marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1fr) minmax(190px, .34fr)', gap:20, alignItems:'start'}} className="rv-map-drag-layout">
+                                      <div style={{position:'relative', overflow:'hidden', border:`1px solid ${C.border}`, background:'#f8fafc'}}>
+                                          {mapUrl ? <img src={mapUrl} alt="Map labelling diagram" style={{display:'block', width:'100%', height:'auto'}} /> : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
+                                          {mapUrl && mapQuestions.map((question: any, index: number) => {
+                                              const slot = slotFor(question, index);
+                                              const answer = reviewQuiz.result.answers?.[question.id];
+                                              const given = String(answer || '').trim();
+                                              const expected = String(question.correctAnswer || '').split('/')[0].trim();
+                                              const correct = !!given && String(question.correctAnswer || '').split('/').map((value:string)=>value.trim().toLowerCase()).includes(given.toLowerCase());
+                                              return <div key={question.id} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, minWidth:56, minHeight:28, transform:'translate(-50%,-50%)', boxSizing:'border-box', padding:'4px 6px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', fontSize:11, fontWeight:700, lineHeight:1.2, border:`2px solid ${correct ? C.succ : C.err}`, background:correct ? '#ecfdf5' : '#fff1f2', color:correct ? '#166534' : '#b91c1c'}}>
+                                                  <span style={{position:'absolute', top:-15, left:0, fontSize:10, color:'#334155', background:'#fff', padding:'1px 3px'}}>#{numberFor(question)}</span>
+                                                  <span>{given || 'No answer'}</span>{!correct && <span style={{color:'#166534', textDecoration:'underline', marginTop:2}}>{expected}</span>}
+                                              </div>;
+                                          })}
+                                      </div>
+                                      <div style={{border:`1px solid ${C.border}`, padding:12, background:C.bg}}>
+                                          <div style={{fontSize:11, fontWeight:800, letterSpacing:'.08em', textTransform:'uppercase', color:C.sub, marginBottom:8}}>Answer choices</div>
+                                          {(q.options || []).map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} style={{padding:'7px 9px', marginBottom:6, border:`1px solid ${C.border}`, fontSize:13, lineHeight:1.35}}><b style={{color:C.accent, marginRight:7}}>{String.fromCharCode(65+optionIndex)}</b>{option}</div>)}
+                                      </div>
+                                  </div>
+                              </div>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
                           if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
@@ -9504,10 +9550,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-plan-answers .idp-matching-table th:first-child { min-width: 155px; }
                       .idp-map-plan-answers .idp-matching-table td:first-child { min-width: 155px; }
                       .idp-map-plan-answers .idp-matching-legend { display: none; }
+
+                      /* Map labelling type 2: named tags are placed directly on the map. */
+                      .idp-map-drag-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, .34fr); gap:24px; align-items:start; max-width:1180px; }
+                      .idp-map-drag-canvas { position:relative; width:100%; overflow:hidden; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+                      .idp-map-drag-canvas img { display:block; width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; }
+                      .idp-map-drag-slot { position:absolute; transform:translate(-50%, -50%); box-sizing:border-box; min-width:62px; min-height:28px; display:flex; align-items:center; justify-content:center; gap:5px; padding:3px 6px; border:2px dashed #64748b; background:rgba(255,255,255,.88); color:#172033; font:700 13px/1.2 Arial,sans-serif; text-align:center; cursor:pointer; z-index:2; transition:background .15s,border-color .15s,box-shadow .15s; }
+                      .idp-map-drag-slot:hover, .idp-map-drag-slot.is-target { border-color:#0969da; background:#eff6ff; box-shadow:0 0 0 3px rgba(9,105,218,.13); }
+                      .idp-map-drag-slot.is-filled { border-style:solid; border-color:#0969da; background:#e6f0ff; color:#0550ae; font-size:12px; }
+                      .idp-map-drag-slot-number { color:#334155; font-weight:800; white-space:nowrap; }
+                      .idp-map-drag-clear { width:16px; height:16px; border:0; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center; background:#0759a1; color:#fff; font:700 13px/1 Arial,sans-serif; cursor:pointer; flex:0 0 auto; }
+                      .idp-map-drag-bank { border:1px solid var(--eborder); background:var(--ecard); padding:13px; }
+                      .idp-map-drag-bank-title { margin:0 0 10px; color:var(--esub); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+                      .idp-map-drag-option { width:100%; box-sizing:border-box; display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:9px 10px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#172033; font:600 13px/1.35 Arial,sans-serif; text-align:left; cursor:grab; user-select:none; transition:transform .15s,box-shadow .15s,border-color .15s,opacity .15s; }
+                      .idp-map-drag-option:hover, .idp-map-drag-option.is-selected { border-color:#0969da; box-shadow:0 3px 10px rgba(9,105,218,.15); transform:translateY(-1px); }
+                      .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
+                      .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
                       @media (max-width: 767px) {
                         .idp-map-plan-layout { display: block; }
                         .idp-map-plan-visual { position: static; margin-bottom: 14px; padding: 10px; }
                         .idp-map-plan-image img { max-height: none; }
+                        .idp-map-drag-layout { grid-template-columns:1fr; gap:14px; }
+                        .idp-map-drag-bank { order:-1; }
+                        .idp-map-drag-canvas { overflow:visible; }
+                        .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
                       }
 
                       /* Hình 6: Drag-drop 2-column layout */
@@ -9991,20 +10057,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           ? (activeExam.sections[currentSectionIndex]?.questions || [])
                           : (activeExam?.questions || []);
                           
-                      const visibleGroups: { context: string; instruction: string; questions: any[] }[] = [];
-                      let tempGroup: { context: string; instruction: string; questions: any[] } | null = null;
+                      const visibleGroups: { context: string; instruction: string; mapKey: string; questions: any[] }[] = [];
+                      let tempGroup: { context: string; instruction: string; mapKey: string; questions: any[] } | null = null;
 
                       currentSectionQuestions.forEach((q: any) => {
                           const ctx = q.groupContext || "";
                           const ins = q.instruction || "";
+                          const mapKey = q.type === "MAP_DRAG" ? String(q.mapImageUrl || "") : "";
                           // Nếu groupContext có nội dung mới, TÁCH NHÓM MỚI. Nếu rỗng, vẫn gộp vào nhóm cũ để không bị rời rạc
                           const sameContext = !tempGroup || ctx === "" || tempGroup.context === ctx;
                           // Instruction can appear only on the first question of a contiguous group.
                           // Keep following empty-instruction questions in that group so 29-34 stays together.
                           const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "");
-                          if (!tempGroup || !sameContext || !sameInstruction) {
+                          const sameMap = !tempGroup || mapKey === tempGroup.mapKey;
+                          if (!tempGroup || !sameContext || !sameInstruction || !sameMap) {
                               if (tempGroup) visibleGroups.push(tempGroup);
-                              tempGroup = { context: ctx, instruction: ins, questions: [q] };
+                              tempGroup = { context: ctx, instruction: ins, mapKey, questions: [q] };
                           } else {
                               if (!tempGroup.instruction && ins) tempGroup.instruction = ins;
                               tempGroup.questions.push(q);
@@ -10059,6 +10127,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               return Array.from(ids);
                           })();
                           const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
+                          const isMapDragGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "MAP_DRAG");
                   const isFlowChartGroup = false;
                   const dragOptions = isDragDropGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
                   // Nhãn 2 cột kéo-thả: rút các dòng nhãn ngắn trong instruction (vd "Attractions", "Areas of the festival").
@@ -10233,6 +10302,59 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        </>
                    );
 
+                   const renderMapDrag = () => {
+                       const sourceQuestion = group.questions[0] as any;
+                       const mapImageUrl = String(sourceQuestion.mapImageUrl || "").trim();
+                       const rawOptions: string[] = (sourceQuestion.options || []).map((option: any) => String(option).trim()).filter(Boolean);
+                       const assigned = group.questions.map((question: any) => String(examAnswers[question.id] || "")).filter(Boolean);
+                       const reuseTags = group.questions.length > rawOptions.length;
+                       const mapQuestionNumber = (question: any) => String(question.text || "").match(/\d+/)?.[0]
+                           || String((activeExam!.questions || []).findIndex((item: any) => item.id === question.id) + 1);
+                       const getSlot = (question: any, index: number) => {
+                           const number = mapQuestionNumber(question);
+                           const slots = question.mapSlots || sourceQuestion.mapSlots || {};
+                           return slots[number] || slots[question.id] || {
+                               questionNumber: Number(number), x: 50, y: 16 + index * (68 / Math.max(1, group.questions.length - 1 || 1)), width: 18, height: 7,
+                           };
+                       };
+                       return (
+                           <div className="idp-map-drag-layout">
+                               <div className="idp-map-drag-canvas" aria-label="Interactive map">
+                                   {mapImageUrl ? <img src={mapImageUrl} alt="Map labelling diagram" draggable={false} /> : <div style={{padding:32, color:'var(--esub)', textAlign:'center'}}>Map image has not been added yet.</div>}
+                                   {mapImageUrl && group.questions.map((question: any, index: number) => {
+                                       const slot = getSlot(question, index);
+                                       const answer = String(examAnswers[question.id] || "");
+                                       const number = mapQuestionNumber(question);
+                                       const width = Math.max(8, Math.min(48, Number(slot.width || 18)));
+                                       const height = Math.max(4, Math.min(18, Number(slot.height || 7)));
+                                       return (
+                                           <div key={question.id} id={`question-${question.id}`} className={`idp-map-drag-slot ${answer ? 'is-filled' : ''} ${selectedDragAnswer ? 'is-target' : ''}`}
+                                               style={{left:`${slot.x}%`, top:`${slot.y}%`, width:`${width}%`, height:`${height}%`}}
+                                               onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(question.id, readDroppedAnswer(event), true); }}
+                                               onClick={() => { if (answer) handleAnswerChange(question.id, ""); else commitDraggedAnswer(question.id, selectedDragAnswer, true); }}
+                                               title={answer ? 'Click to clear this answer' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}>
+                                               {answer ? <><span>{answer}</span><button type="button" className="idp-map-drag-clear" aria-label={`Clear answer for question ${number}`} onClick={(event: any) => { event.stopPropagation(); handleAnswerChange(question.id, ""); }}>×</button></> : <span className="idp-map-drag-slot-number">{number}</span>}
+                                           </div>
+                                       );
+                                   })}
+                               </div>
+                               <aside className="idp-map-drag-bank" aria-label="Map answer choices">
+                                   <div className="idp-map-drag-bank-title">Options</div>
+                                   {rawOptions.map((option, index) => {
+                                       const used = !reuseTags && assigned.includes(option);
+                                       return <button key={`${option}-${index}`} type="button" draggable={!used}
+                                           className={`idp-map-drag-option ${used ? 'is-used' : ''} ${selectedDragAnswer === option ? 'is-selected' : ''}`}
+                                           onClick={() => { if (!used) setSelectedDragAnswer(option); }}
+                                           onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
+                                           <span className="idp-map-drag-option-key">{String.fromCharCode(65 + index)}</span><span>{option}</span>
+                                       </button>;
+                                   })}
+                               </aside>
+                           </div>
+                       );
+                   };
+
                    return (
                       <div key={group.questions[0].id} style={{marginBottom: 'var(--q-gap)'}}>
                           <div className="question-rubric">
@@ -10270,7 +10392,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               </div>
                           )}
 
-                          {isWordBankDrag ? null : isFlowChartGroup ? (
+                          {isMapDragGroup ? renderMapDrag() : isWordBankDrag ? null : isFlowChartGroup ? (
                               renderFlowChart()
                           ) : isMatchingGroup && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
@@ -12495,14 +12617,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 const builderGroups: any[] = [];
                 for (let i = 0; i < qs.length; i++) {
                     const q = qs[i];
-                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING') {
+                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG') {
                         let j = i + 1;
                         const sharedQs = [q];
                         // FIX "phân thân": chỉ gộp khi CÙNG groupContext + instruction (khớp logic đề thi),
                         // nếu không flow-chart sẽ nuốt notes/summary và edit lan sang cả nhóm.
                         while (j < qs.length && qs[j].type === q.type
                                && (qs[j].groupContext || "") === (q.groupContext || "")
-                               && (qs[j].instruction || "") === (q.instruction || "")) {
+                               && (qs[j].instruction || "") === (q.instruction || "")
+                               && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))) {
                             if (q.type === 'CHOICE_MULTIPLE' && JSON.stringify(qs[j].options) !== JSON.stringify(q.options)) break;
                             sharedQs.push(qs[j]);
                             j++;
@@ -12811,6 +12934,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="BLANK">{t('eb_opt_blank')}</option>
                                                     <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
                                                     <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
+                                                    <option value="MAP_DRAG">Map labelling (drag onto map)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
                                                 </select>
                                                 <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
@@ -12974,6 +13098,56 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'broadens practical experience\nchance to publicise own work'} style={{width:'100%', minHeight:170, boxSizing:'border-box', resize:'vertical', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, font: '500 14px/1.45 ' + EB.fBody}} />
                                                     </div>
                                                 </div>
+                                            </div>;
+                                        })() : grp.groupType === 'MAP_DRAG' ? (() => {
+                                            const mapSource: any = grp.questions[0];
+                                            const mapUrl = String(mapSource.mapImageUrl || '');
+                                            const mapSlots: Record<string, any> = mapSource.mapSlots || {};
+                                            const mapNumber = (question: any, offset: number) => String(question.text || '').match(/\d+/)?.[0] || String(qIndex + offset + 1);
+                                            const mapNumbers = grp.questions.map((question: any, offset: number) => mapNumber(question, offset));
+                                            const activeSlot = mapNumbers.includes(mapDragEditorSelection) ? mapDragEditorSelection : mapNumbers[0];
+                                            const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+                                            const updateMap = (patch: any) => updateGroup((item: any) => ({ ...item, ...patch }));
+                                            const setSlots = (slots: Record<string, any>) => updateMap({ mapSlots: slots });
+                                            const slotAt = (number: string, index: number) => mapSlots[number] || { questionNumber: Number(number), x: 50, y: 17 + index * (66 / Math.max(1, mapNumbers.length - 1 || 1)), width: 18, height: 7 };
+                                            const moveSlot = (number: string, event: any, resize = false) => {
+                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-map-drag-canvas') as HTMLElement | null;
+                                                if (!canvas) return;
+                                                const bounds = canvas.getBoundingClientRect();
+                                                const move = (pointer: PointerEvent) => {
+                                                    const current = slotAt(number, mapNumbers.indexOf(number));
+                                                    const x = ((pointer.clientX - bounds.left) / bounds.width) * 100;
+                                                    const y = ((pointer.clientY - bounds.top) / bounds.height) * 100;
+                                                    const next = resize
+                                                        ? { ...current, width: clamp(Math.abs(x - current.x) * 2, 8, 52), height: clamp(Math.abs(y - current.y) * 2, 4, 20) }
+                                                        : { ...current, x: clamp(x, 0, 100), y: clamp(y, 0, 100) };
+                                                    setSlots({ ...mapSlots, [number]: next });
+                                                };
+                                                event.preventDefault();
+                                                move(event.nativeEvent as PointerEvent);
+                                                const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+                                                window.addEventListener('pointermove', move);
+                                                window.addEventListener('pointerup', stop, { once: true });
+                                            };
+                                            const options = (mapSource.options || []).map((option: any) => String(option));
+                                            return <div style={{display:'grid', gap:18}}>
+                                                <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1fr) minmax(210px, .4fr)', gap:14}}>
+                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={mapUrl} onChange={(event:any) => updateMap({mapImageUrl:event.target.value})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
+                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Pin question<select value={activeSlot || ''} onChange={(event:any) => setMapDragEditorSelection(event.target.value)} style={{display:'block', width:'100%', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:700}}>{mapNumbers.map((number:string) => <option key={number} value={number}>Question {number}</option>)}</select></label>
+                                                </div>
+                                                <div className="eb-map-drag-canvas" onClick={(event:any) => {
+                                                    if (!mapUrl || !activeSlot || (event.target as HTMLElement).closest('.eb-map-slot')) return;
+                                                    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                                                    const current = slotAt(activeSlot, mapNumbers.indexOf(activeSlot));
+                                                    setSlots({ ...mapSlots, [activeSlot]: {...current, x:clamp(((event.clientX-bounds.left)/bounds.width)*100,0,100), y:clamp(((event.clientY-bounds.top)/bounds.height)*100,0,100)} });
+                                                }} style={{position:'relative', minHeight:mapUrl ? 0 : 170, overflow:'hidden', border:`1px dashed ${EB.line}`, background:EB.wash, cursor:mapUrl ? 'crosshair' : 'default'}}>
+                                                    {mapUrl ? <img src={mapUrl} alt="Map slot editor" draggable={false} style={{display:'block', width:'100%', maxHeight:560, objectFit:'contain'}} /> : <div style={{padding:46, textAlign:'center', color:EB.sub}}>Paste the map image URL to pin the answer slots.</div>}
+                                                    {mapUrl && mapNumbers.map((number:string, index:number) => { const slot=slotAt(number,index); return <div key={number} className="eb-map-slot" onPointerDown={(event:any) => moveSlot(number,event)} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, height:`${slot.height || 7}%`, minWidth:50, minHeight:24, transform:'translate(-50%, -50%)', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box', border:`2px dashed ${number===activeSlot?EB.accent:'#64748b'}`, background:'rgba(255,255,255,.84)', color:EB.ink, fontFamily:EB.fMono, fontWeight:800, cursor:'grab', touchAction:'none', userSelect:'none'}}>{number}<button type="button" title="Drag to resize" onPointerDown={(event:any)=>{event.stopPropagation();moveSlot(number,event,true)}} style={{position:'absolute', right:-6, bottom:-6, width:13, height:13, padding:0, border:'2px solid #fff', borderRadius:'50%', background:EB.accent, cursor:'nwse-resize'}} /></div> })}
+                                                </div>
+                                                <div style={{fontSize:12, color:EB.sub}}>Select a question then click the image to place it. Drag its box to move; drag the dot to resize.</div>
+                                                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(230px, 1fr))', gap:9, background:EB.wash, padding:14, borderRadius:EB.radius}}>{mapNumbers.map((number:string,index:number)=>{const slot=slotAt(number,index); const set=(field:string,value:string)=>setSlots({...mapSlots,[number]:{...slot,[field]:clamp(Number(value)||0,field==='width'?4:0,field==='width'?52:field==='height'?20:100)}}); return <div key={number} style={{display:'grid', gridTemplateColumns:'32px repeat(4,1fr)', gap:5, alignItems:'center', padding:'8px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.sheet}}><button type="button" onClick={()=>setMapDragEditorSelection(number)} style={{border:0, background:'transparent', color:EB.accent, fontWeight:800, cursor:'pointer'}}>#{number}</button>{(['x','y','width','height'] as string[]).map(field=><label key={field} style={{fontSize:9,color:EB.sub,fontWeight:800,textTransform:'uppercase'}}>{field}<input type="number" step="0.1" value={slot[field]} onChange={(event:any)=>set(field,event.target.value)} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:3,padding:'4px',border:`1px solid ${EB.line}`,borderRadius:4,background:EB.wash,color:EB.ink,fontSize:11}} /></label>)}</div>})}</div>
+                                                <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Map options, one per line<textarea value={options.join('\n')} onChange={(event:any)=>updateMap({options:event.target.value.split(/\n+/).map((line:string)=>line.trim()).filter(Boolean)})} placeholder={'Cookery room\nGames room\nKitchen'} style={{display:'block',width:'100%',minHeight:115,boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,resize:'vertical'}} /></label>
+                                                <div style={{display:'grid',gap:8}}>{grp.questions.map((question:any,offset:number)=><label key={question.id} style={{display:'grid',gridTemplateColumns:'70px minmax(0,1fr)',gap:10,alignItems:'center',fontFamily:EB.fMono,fontWeight:800,color:EB.accent}}>#{mapNumber(question,offset)}<input value={String(question.correctAnswer || '')} onChange={(event:any)=>updateGroup((item:any,itemOffset:number)=>itemOffset===offset?{...item,correctAnswer:event.target.value}:item)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,fontFamily:EB.fBody,fontWeight:600}} /></label>)}</div>
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>

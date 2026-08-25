@@ -55,7 +55,7 @@ async def unexpected_api_error(request: Request, exc: Exception):
 
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
-VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER"]
+VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG"]
 
 RE_Q_START = re.compile(r'^(?:Question|Câu)\s+\d+', re.IGNORECASE)
 RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
@@ -138,7 +138,112 @@ def table_to_html(table: Table) -> str:
     html += "</tbody></table>"
     return html
 
+def _map_drag_plain_line(item: Any) -> str:
+    """Preserve authoring syntax while accepting formatted DOCX paragraphs."""
+    if isinstance(item, Paragraph):
+        return re.sub(r'\s+', ' ', item.text or '').strip()
+    return ""
+
+def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
+    """Parse the explicit [MAP_DRAG] authoring block without falling into generic matching."""
+    raw_lines = [_map_drag_plain_line(item) for item in lines]
+    raw_lines = [line for line in raw_lines if line]
+    slots: Dict[str, Dict[str, Any]] = {}
+    options: List[str] = []
+    answers: Dict[str, str] = {}
+    instruction_lines: List[str] = []
+    image_url = ""
+    in_slots = False
+    in_options = False
+    current_question = ""
+
+    slot_re = re.compile(
+        r'^\s*(\d+)\s*:\s*x\s*=\s*([\d.]+)\s*%?\s*,\s*y\s*=\s*([\d.]+)\s*%?'
+        r'(?:\s*,\s*w\s*=\s*([\d.]+)\s*%?)?(?:\s*,\s*h\s*=\s*([\d.]+)\s*%?)?\s*$',
+        re.IGNORECASE,
+    )
+    question_re = re.compile(r'^(\d+)\s*[\.)]\s*(.*)$')
+    url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
+
+    for line in raw_lines:
+        upper = line.upper()
+        if upper == "[SLOTS]":
+            in_slots, in_options = True, False
+            continue
+        if upper == "[/SLOTS]":
+            in_slots = False
+            continue
+        if re.match(r'^OPTIONS\s*:\s*$', line, re.IGNORECASE):
+            in_options, current_question = True, ""
+            continue
+
+        if in_slots:
+            match = slot_re.match(line)
+            if not match:
+                continue
+            number, x, y, width, height = match.groups()
+            x_num, y_num = float(x), float(y)
+            if not (0 <= x_num <= 100 and 0 <= y_num <= 100):
+                continue
+            slots[number] = {
+                "questionNumber": int(number),
+                "x": x_num,
+                "y": y_num,
+                "width": float(width) if width else 18,
+                "height": float(height) if height else 7,
+            }
+            continue
+
+        question_match = question_re.match(line)
+        if question_match and question_match.group(1) in slots:
+            current_question = question_match.group(1)
+            inline_answer = question_match.group(2).strip()
+            if inline_answer.startswith("*"):
+                answers[current_question] = inline_answer.lstrip("*").strip()
+            in_options = False
+            continue
+
+        if current_question:
+            if line.startswith("*"):
+                answers[current_question] = line.lstrip("*").strip()
+            continue
+
+        url_match = url_re.search(line)
+        if url_match and not image_url:
+            image_url = url_match.group(0)
+            continue
+        if in_options:
+            options.append(re.sub(r'^\s*[A-Za-z][\.)]\s*', '', line).strip())
+        else:
+            instruction_lines.append(line)
+
+    # Prefer slot order (the map is the source of truth) and retain answer-only rows.
+    numbers = list(slots.keys()) or list(answers.keys())
+    if not image_url or not numbers:
+        return
+    instruction = "<div>" + "</div><div>".join(html.escape(line) for line in instruction_lines) + "</div>" if instruction_lines else ""
+    shared_slots = {key: value.copy() for key, value in slots.items()}
+    for number in numbers:
+        slot = shared_slots.get(number)
+        if not slot:
+            continue
+        target_questions.append({
+            "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "type": "MAP_DRAG",
+            "subType": "MAP_DRAG",
+            "instruction": instruction,
+            "groupContext": "",
+            "text": f"Question {number}",
+            "options": options.copy(),
+            "correctAnswer": answers.get(number, ""),
+            "mapImageUrl": image_url,
+            "mapSlots": shared_slots,
+        })
+
 def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
+    if block_type == "MAP_DRAG":
+        process_map_drag_block(lines, target_questions)
+        return
     html_lines, text_lines = [], []
     for item in lines:
         if isinstance(item, Paragraph):

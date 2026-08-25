@@ -1572,8 +1572,9 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   });
 };
 
-type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER";
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; }
+type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG";
+interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -3129,6 +3130,7 @@ export default function IeltsSupremeOS() {
   const [studyFlipped, setStudyFlipped] = useState(false);
 
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
+  const [mapDragEditorSelection, setMapDragEditorSelection] = useState<string>("");
   const editingQuizRef = useRef<Quiz | null>(null); // FIX: ref để tránh stale closure trong saveQuiz
   const [keyEditingQuiz, setKeyEditingQuiz] = useState<Quiz | null>(null);
   const [activeExam, setActiveExam] = useState<Quiz | null>(null);
