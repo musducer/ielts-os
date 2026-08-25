@@ -3153,6 +3153,7 @@ export default function IeltsSupremeOS() {
   const [showScratchpad, setShowScratchpad] = useState(false);
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
   const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
+  const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   // Thanh audio DÍNH TRÊN ở màn Review (sao chép layout phòng thi) — khỏi cuộn tìm player
@@ -5657,7 +5658,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
           // Do not score every distractor as a timestamp clue. The question and
           // its shared context are the only safe fallback when the answer text
           // itself is not spoken verbatim (MCQ / matching).
-          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), correctStr].filter(Boolean).join("\n") : "",
+          // Shared group instructions often contain procedural text such as
+          // "You will hear...". They are not answer evidence and previously
+          // pulled MCQ/matching timestamps back to the beginning of a section.
+          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
@@ -6142,6 +6146,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
           }
       };
 
+      // The highlighter replaces the browser selection with .idp-temp-selection
+      // so the annotation menu can remain stable. Preserve normal Ctrl/Cmd+C by
+      // copying that temporary selection when the browser no longer has a range.
+      const handleExamCopy = (e: ClipboardEvent) => {
+          const nativeText = window.getSelection()?.toString().trim() || '';
+          const temporaryText = Array.from(document.querySelectorAll<HTMLElement>(
+              '.highlightable-content .idp-temp-selection'
+          )).map(node => node.innerText || node.textContent || '').join('\n').trim();
+          const text = nativeText || temporaryText;
+          if (!text || !e.clipboardData) return;
+          e.clipboardData.setData('text/plain', text);
+          e.preventDefault();
+      };
+
       document.addEventListener('selectionchange', onSelectionChange);
 
       document.addEventListener('mousedown', handlePointerDown);
@@ -6157,6 +6175,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       document.addEventListener('mousedown', hideMenuOnClick);
       document.addEventListener('touchstart', hideMenuOnClick, { passive: true });
+      document.addEventListener('copy', handleExamCopy, true);
 
       const handleSyncRequest = (e: Event) => {
           const container = e.target as HTMLElement;
@@ -6182,6 +6201,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           document.removeEventListener('visibilitychange', handleTouchCancelOrContext);
           document.removeEventListener('mousedown', hideMenuOnClick);
           document.removeEventListener('touchstart', hideMenuOnClick);
+          document.removeEventListener('copy', handleExamCopy, true);
           document.removeEventListener('highlight-removed', handleSyncRequest);
           clearTempSelection();
       };
@@ -7228,6 +7248,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
+        setReviewActiveQuestionId(null);
         if (questContext) {
           setReviewQuiz(null);
           setPortalTab("quests");

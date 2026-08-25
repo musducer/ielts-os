@@ -320,6 +320,7 @@
           : catalogQuiz;
         setReviewQuiz({quiz: quizForReview as Quiz, result: r});
         setReviewSectionIdx(0);
+        setReviewActiveQuestionId(null);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };

@@ -978,6 +978,7 @@ async def ai_explain(
         question_index if is_listening_item else None,
         timestamp_hints if is_listening_item else "",
         question_count if is_listening_item else None,
+        model_explanation=text if is_listening_item else "",
     ) if is_listening_item else None
     if is_listening_item:
         # Keep the wording honest even if a model falls back to generic reading language.
@@ -1956,6 +1957,11 @@ _TS_RANGE_RE = re.compile(
 _TS_PAREN_CITE_RE = re.compile(r"\((\d{1,2}:\d{2}(?::\d{2})?)\)")
 _TS_BLOCK_RE = re.compile(
     r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)\s*\n?([\s\S]*?)(?=\n\s*\(\d{1,2}:\d{2}(?::\d{2})?\s*-|\Z)")
+_PROCEDURAL_AUDIO_RE = re.compile(
+    r"^(?:you\s+will\s+hear|first\s+you\s+have\s+some\s+time|now\s+you\s+have\s+some\s+time|"
+    r"before\s+you\s+hear|look\s+at\s+questions?|read\s+questions?|turn\s+to\s+questions?)\b",
+    re.I,
+)
 
 
 def _ts_to_sec(a: str, b: str, c) -> int:
@@ -1977,9 +1983,43 @@ def _timestamped_transcript_blocks(context: str):
     return blocks
 
 
+def _is_procedural_audio_block(raw: str) -> bool:
+    """Ignore section directions: they never prove an answer to a review item."""
+    return bool(_PROCEDURAL_AUDIO_RE.search(re.sub(r"\s+", " ", str(raw or "")).strip()))
+
+
+def _evidence_transcript_blocks(context: str):
+    """Use only spoken content, never the generic recorded test directions."""
+    return [block for block in _timestamped_transcript_blocks(context) if not _is_procedural_audio_block(block[1])]
+
+
+def _quoted_audio_anchor_seconds(context: str, explanation: str = ""):
+    """Match a model's verbatim spoken quotation, never its paraphrase, to the transcript."""
+    blocks = _evidence_transcript_blocks(context)
+    if not blocks:
+        return None
+    quotes = []
+    for quote in re.findall(r'["“]([^"”]{12,500})["”]', str(explanation or "")):
+        normalized = _normalized_timestamp_text(quote)
+        if len(normalized.split()) >= 3:
+            quotes.append(normalized)
+    for quote in sorted(set(quotes), key=len, reverse=True):
+        exact = [start for start, _raw, normalized in blocks if quote in normalized]
+        if len(exact) == 1:
+            return exact[0]
+        # Whisper can split one spoken sentence across neighbouring 5-second blocks.
+        spanning = []
+        for idx, (start, _raw, normalized) in enumerate(blocks[:-1]):
+            if quote in (normalized + " " + blocks[idx + 1][2]):
+                spanning.append(start)
+        if len(spanning) == 1:
+            return spanning[0]
+    return None
+
+
 def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, question_index=None):
     """Return only a transcript block that can be tied to the answer text and its listening order."""
-    blocks = [(start, normalized) for start, _raw, normalized in _timestamped_transcript_blocks(context)]
+    blocks = [(start, normalized) for start, _raw, normalized in _evidence_transcript_blocks(context)]
     if not blocks:
         return None
 
@@ -2019,7 +2059,7 @@ def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, que
 
 def _hint_anchor_seconds(context: str, hints: str = "", question_index=None, question_count=None):
     """Find the most relevant real transcript block for non-literal answers such as MCQ/matching."""
-    blocks = [(start, normalized) for start, _raw, normalized in _timestamped_transcript_blocks(context)]
+    blocks = [(start, normalized) for start, _raw, normalized in _evidence_transcript_blocks(context)]
     if not blocks:
         return None
 
@@ -2076,17 +2116,20 @@ def _audio_evidence_excerpt(raw: str, correct: str = "", hints: str = "") -> str
     exact_answer, hint_hits, _ = _score(best)
     # A generic adjacent sentence is not evidence. If no answer phrase or two
     # question-specific clues identify one sentence, retain the verified block.
-    excerpt = best if exact_answer or hint_hits >= min(2, len(hint_terms)) else text
+    hint_threshold = 2 if len(hint_terms) >= 2 else (1 if hint_terms else 999)
+    excerpt = best if exact_answer or hint_hits >= hint_threshold else text
     return excerpt[:700].rsplit(" ", 1)[0].strip() if len(excerpt) > 700 else excerpt
 
 
 def _audio_evidence(context: str, correct: str = "", answer_sequence=None, question_index=None,
-                    timestamp_hints: str = "", question_count=None):
+                    timestamp_hints: str = "", question_count=None, model_explanation: str = ""):
     """Resolve one verified transcript excerpt for the review UI's two evidence controls."""
-    blocks = _timestamped_transcript_blocks(context)
+    blocks = _evidence_transcript_blocks(context)
     if not blocks:
         return None
     anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
+    if anchor is None:
+        anchor = _quoted_audio_anchor_seconds(context, model_explanation)
     if anchor is None:
         anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
     if anchor is None:

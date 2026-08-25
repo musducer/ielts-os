@@ -3153,6 +3153,7 @@ export default function IeltsSupremeOS() {
   const [showScratchpad, setShowScratchpad] = useState(false);
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
   const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
+  const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   // Thanh audio DÍNH TRÊN ở màn Review (sao chép layout phòng thi) — khỏi cuộn tìm player
@@ -5657,7 +5658,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
           // Do not score every distractor as a timestamp clue. The question and
           // its shared context are the only safe fallback when the answer text
           // itself is not spoken verbatim (MCQ / matching).
-          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), correctStr].filter(Boolean).join("\n") : "",
+          // Shared group instructions often contain procedural text such as
+          // "You will hear...". They are not answer evidence and previously
+          // pulled MCQ/matching timestamps back to the beginning of a section.
+          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
@@ -6142,6 +6146,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
           }
       };
 
+      // The highlighter replaces the browser selection with .idp-temp-selection
+      // so the annotation menu can remain stable. Preserve normal Ctrl/Cmd+C by
+      // copying that temporary selection when the browser no longer has a range.
+      const handleExamCopy = (e: ClipboardEvent) => {
+          const nativeText = window.getSelection()?.toString().trim() || '';
+          const temporaryText = Array.from(document.querySelectorAll<HTMLElement>(
+              '.highlightable-content .idp-temp-selection'
+          )).map(node => node.innerText || node.textContent || '').join('\n').trim();
+          const text = nativeText || temporaryText;
+          if (!text || !e.clipboardData) return;
+          e.clipboardData.setData('text/plain', text);
+          e.preventDefault();
+      };
+
       document.addEventListener('selectionchange', onSelectionChange);
 
       document.addEventListener('mousedown', handlePointerDown);
@@ -6157,6 +6175,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       document.addEventListener('mousedown', hideMenuOnClick);
       document.addEventListener('touchstart', hideMenuOnClick, { passive: true });
+      document.addEventListener('copy', handleExamCopy, true);
 
       const handleSyncRequest = (e: Event) => {
           const container = e.target as HTMLElement;
@@ -6182,6 +6201,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           document.removeEventListener('visibilitychange', handleTouchCancelOrContext);
           document.removeEventListener('mousedown', hideMenuOnClick);
           document.removeEventListener('touchstart', hideMenuOnClick);
+          document.removeEventListener('copy', handleExamCopy, true);
           document.removeEventListener('highlight-removed', handleSyncRequest);
           clearTempSelection();
       };
@@ -7228,6 +7248,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
+        setReviewActiveQuestionId(null);
         if (questContext) {
           setReviewQuiz(null);
           setPortalTab("quests");
@@ -8035,6 +8056,77 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" aria-label={`Nghe lại từ ${p.match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0] || 'mốc này'}`} style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
               : <React.Fragment key={pi}>{p}</React.Fragment>);
       };
+      const rvEscapeHtml = (value: any) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      const rvCompletionAnswer = (q: any) => {
+          const raw = reviewQuiz.result.answers?.[q.id];
+          const blank = raw === undefined || raw === null || String(raw).trim() === '';
+          const given = blank ? '' : String(raw).trim();
+          const accepted = String(q.correctAnswer ?? '').split('/').map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
+          return { blank, given, expected: String(q.correctAnswer ?? '').split('/')[0].trim(), correct: !blank && accepted.includes(given.toLocaleLowerCase()) };
+      };
+      const rvIsInlineListeningCompletion = (q: any) => rvActiveIsListening
+          && q.type === 'BLANK'
+          && ['SUMMARY', 'NOTES', 'FLOWCHART'].includes(String(q.subType || '').toUpperCase())
+          && /\[\d+\]/.test(String(q.groupContext || ''));
+      const rvRenderListeningCompletionGroup = (seed: any) => {
+          const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+              rvSectionOf(candidate) === rvActiveIdx
+              && rvIsInlineListeningCompletion(candidate)
+              && String(candidate.groupContext || '') === String(seed.groupContext || '')
+          );
+          if (!groupQuestions.length) return null;
+          const selected = groupQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+              || groupQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
+              || groupQuestions[0];
+          const selectedState = rvCompletionAnswer(selected);
+          const selectQuestion = (question: any) => {
+              setReviewActiveQuestionId(question.id);
+              const evidence = explainMap[question.id]?.audioEvidence;
+              if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
+          };
+          const byNumber = new Map<number, any>();
+          groupQuestions.forEach((question: any) => byNumber.set(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id), question));
+          const inlineContext = formatContent(seed.groupContext || '').replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
+              const question = byNumber.get(Number(rawNumber));
+              if (!question) return token;
+              const state = rvCompletionAnswer(question);
+              const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+              const value = state.blank ? 'No answer' : state.given;
+              return `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-completion-qid="${rvEscapeHtml(question.id)}" title="Question ${rawNumber}: ${rvEscapeHtml(value)}">${rawNumber}. ${rvEscapeHtml(value)}</button>`;
+          });
+          const selectedExplanation = explainMap[selected.id];
+          return (
+              <section key={`listening-completion-${seed.id}`} className="rv-completion-review">
+                  <div className="rv-completion-context" onClick={(event) => {
+                      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-completion-qid]');
+                      const question = groupQuestions.find((candidate: any) => candidate.id === button?.dataset.rvCompletionQid);
+                      if (question) selectQuestion(question);
+                  }} dangerouslySetInnerHTML={{ __html: inlineContext }} />
+                  <div className="rv-completion-nav" aria-label="Completion question navigation">
+                      {groupQuestions.map((question: any) => {
+                          const state = rvCompletionAnswer(question);
+                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                          return <button key={question.id} type="button" onClick={() => selectQuestion(question)} className={`rv-completion-nav-button ${state.correct ? 'correct' : state.blank ? 'blank' : 'wrong'} ${selected.id === question.id ? 'selected' : ''}`}>{number}</button>;
+                      })}
+                  </div>
+                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`}>
+                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                      <div className="rv-completion-detail-answer-row">
+                          <div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div>
+                          <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
+                      </div>
+                      <div className="rv-completion-detail-question" dangerouslySetInnerHTML={{ __html: formatContent(selected.text || '') }} />
+                      {!selectedExplanation ? (
+                          <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button>
+                      ) : selectedExplanation.loading ? (
+                          <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>
+                      ) : (
+                          <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(selectedExplanation.text, selectedExplanation.audioEvidence)}</div>
+                      )}
+                  </div>
+              </section>
+          );
+      };
       return (
           <div style={{ height: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", overflow: "hidden" }}>
               {globalStyles}
@@ -8051,7 +8143,36 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-audio-evidence-actions { display: flex; gap: 5px; flex-shrink: 0; }
                   .rv-audio-evidence-actions button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #a5b4fc; border-radius: 6px; color: #4338ca; background: #fff; cursor: pointer; }
                   .rv-audio-evidence-actions button:hover { background: #e0e7ff; }
+                  .rv-completion-review { margin: 0 0 20px; }
+                  .rv-completion-context { background: #f8fafc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 20px 22px; color: #1e293b; font-size: 15px; line-height: 1.72; }
+                  .rv-completion-context p { margin: 0 0 10px; }
+                  .rv-completion-context p:last-child { margin-bottom: 0; }
+                  .rv-completion-badge { display: inline-flex; align-items: center; max-width: 100%; margin: 1px 3px; padding: 2px 8px; border-radius: 6px; font: 800 12px/1.55 Inter, sans-serif; cursor: pointer; vertical-align: baseline; transition: transform .15s ease, box-shadow .15s ease; }
+                  .rv-completion-badge:hover { transform: translateY(-1px); box-shadow: 0 3px 9px rgba(15,23,42,.12); }
+                  .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
+                  .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
+                  .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
+                  .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
+                  .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
+                  .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
+                  .rv-completion-nav-button.wrong { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
+                  .rv-completion-nav-button.blank { border-color: #fcd34d; color: #92400e; background: #fffbeb; }
+                  .rv-completion-nav-button.selected { outline: 2px solid #4f46e5; outline-offset: 2px; }
+                  .rv-completion-detail { border: 1px solid #dbe3ee; border-left: 4px solid #f59e0b; border-radius: 10px; background: #fff; padding: 17px 18px; color: #1e293b; }
+                  .rv-completion-detail.correct { border-left-color: #10b981; }
+                  .rv-completion-detail.wrong { border-left-color: #ef4444; }
+                  .rv-completion-detail-heading { font-size: 16px; font-weight: 900; margin-bottom: 12px; }
+                  .rv-completion-detail-answer-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+                  .rv-completion-detail-answer-row > div { border-radius: 8px; padding: 9px 11px; background: #f8fafc; }
+                  .rv-completion-detail-answer-row span { display: block; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+                  .rv-completion-detail-answer-row strong { display: block; margin-top: 3px; font-size: 14px; }
+                  .rv-completion-detail-question { margin: 12px 0; color: #475569; font-size: 13px; line-height: 1.5; }
+                  .rv-completion-why { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: #5b47e8; color: #fff; padding: 8px 12px; font-size: 12px; font-weight: 800; cursor: pointer; }
+                  .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
+                  .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
+                  .rv-completion-explanation b { color: #6d28d9; }
                   @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } }
+                  @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } }
               `}</style>
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
                   <div style={{fontWeight: 900, fontSize: 18}}>REVIEW: {reviewQuiz.quiz.title}</div>
@@ -8062,7 +8183,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       {rvSections.map((sec, idx) => {
                           const isActive = rvActiveIdx === idx;
                           return (
-                              <div key={idx} onClick={() => setReviewSectionIdx(idx)} style={{ flexShrink: 0, padding: '12px 22px', cursor: 'pointer', fontWeight: isActive ? 900 : 600, fontSize: 14, color: isActive ? C.accent : C.sub, borderBottom: isActive ? `3px solid ${C.accent}` : '3px solid transparent', transition: '0.15s', whiteSpace: 'nowrap' }}>
+                              <div key={idx} onClick={() => { setReviewSectionIdx(idx); setReviewActiveQuestionId(null); }} style={{ flexShrink: 0, padding: '12px 22px', cursor: 'pointer', fontWeight: isActive ? 900 : 600, fontSize: 14, color: isActive ? C.accent : C.sub, borderBottom: isActive ? `3px solid ${C.accent}` : '3px solid transparent', transition: '0.15s', whiteSpace: 'nowrap' }}>
                                   {rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`}
                               </div>
                           );
@@ -8394,6 +8515,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       
                       {reviewQuiz.quiz.questions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+                          if (rvIsInlineListeningCompletion(q)) {
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  rvSectionOf(candidate) === rvActiveIdx
+                                  && rvIsInlineListeningCompletion(candidate)
+                                  && String(candidate.groupContext || '') === String(q.groupContext || '')
+                              );
+                              return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
+                          }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
                           if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
                           const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
@@ -10911,6 +11040,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           : catalogQuiz;
         setReviewQuiz({quiz: quizForReview as Quiz, result: r});
         setReviewSectionIdx(0);
+        setReviewActiveQuestionId(null);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
