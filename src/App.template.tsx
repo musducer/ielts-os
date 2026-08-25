@@ -3115,7 +3115,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -3179,6 +3179,9 @@ export default function IeltsSupremeOS() {
   const [audioRate, setAudioRate] = useState(1); // tốc độ phát (practice): 1 / 1.25 / 1.5 / 2
   const [audioDur, setAudioDur] = useState(0);   // tổng thời lượng audio
   const [_audioVolume, _setAudioVolume] = useState<number>(1);
+  // Native HTML5 drop events are unreliable inside some Safe Exam Browser builds.
+  // This also supports an accessible click-source, click-destination fallback.
+  const [selectedDragAnswer, setSelectedDragAnswer] = useState<string>("");
   const [meetAudioIssue, setMeetAudioIssue] = useState(false);
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");
@@ -4011,6 +4014,11 @@ export default function IeltsSupremeOS() {
     if (audioPlayRequestRef.current) return;
     audioPlayRequestRef.current = true;
     if (audio.ended) audio.currentTime = 0;
+    // A prior browser/media-session interaction can leave a reused element muted
+    // while its timeline continues. Every explicit Play restores audible output.
+    audio.muted = false;
+    audio.defaultMuted = false;
+    audio.volume = Math.max(0, Math.min(1, _audioVolume));
     audio.playbackRate = rate;
     setManagedAudioLoading();
     try {
@@ -5008,6 +5016,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           setHardLocked(false);
           setGracePeriod(null);
           setExamAnswers({});
+          setSelectedDragAnswer("");
           setSaveStatus("Saved");
       }
   }, [activeExam]);
@@ -5645,11 +5654,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
           answerSequence,
           questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
           questionCount: timestampQuestions.length || undefined,
-          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), optStr].filter(Boolean).join("\n") : "",
+          // Do not score every distractor as a timestamp clue. The question and
+          // its shared context are the only safe fallback when the answer text
+          // itself is not spoken verbatim (MCQ / matching).
+          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), correctStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: data.explanation } }));
+      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: {
+        loading: false,
+        text: data.explanation,
+        audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
+          ? data.audioEvidence
+          : undefined,
+      } }));
       else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
     } catch (e: any) {
       setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));
@@ -6929,6 +6947,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAudioStatus("IDLE");
       setAudioCur(0);
       setAudioDur(0);
+      setSelectedDragAnswer("");
       setPendingAudioResume(null);
       audioPlayRequestRef.current = false;
       

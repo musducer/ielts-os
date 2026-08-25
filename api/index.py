@@ -501,7 +501,14 @@ async def hosted_audio(audio_key: str, filename: str):
             + "?alt=media&token="
             + urllib.parse.quote(token, safe="")
         )
-        return RedirectResponse(target, status_code=302)
+        # Media clients commonly use byte-range requests. A temporary 302 can
+        # cause some browsers to restart the redirected request without Range,
+        # leaving duration unknown or playback silent. 307 preserves the
+        # original GET headers while keeping the Firebase URL out of the DOM.
+        return RedirectResponse(target, status_code=307, headers={
+            "Cache-Control": "private, no-store",
+            "Accept-Ranges": "bytes",
+        })
     except Exception:
         return {"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."}
 
@@ -837,19 +844,14 @@ async def ai_explain(
     is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
     is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
     ts_rule_en = (
-        " TIMESTAMP RULE: the transcript contains time markers like \"(0:21 - 0:33)\" placed BEFORE each block of speech. "
-        "This is an exact evidence task, not a rough location: first find the correct-answer word or phrase in the transcript, "
-        "then scan UPWARD from that exact occurrence and take the NEAREST marker above it. Never choose a later related sentence, "
-        "estimate, average, or use a marker after the answer-bearing words. Include exactly ONE standalone seek marker in the whole "
-        "explanation, formatted only as [mm:ss] or [h:mm:ss] (e.g. marker \"(3:02 - 3:27)\" -> [3:02]); never output a time range. "
-        "If the transcript has no markers, omit the timestamp entirely."
+        " TIMESTAMP RULE: use the timestamped transcript only to reason from the exact answer-bearing utterance. "
+        "Do not print timestamps, ranges, or clickable links; the interface adds verified audio controls separately. "
+        "Never use a later related sentence, an estimate, or a generic opening line as evidence."
     ) if is_listening else ""
     ts_rule_vi = (
-        " LUẬT MỐC THỜI GIAN: transcript có mốc dạng \"(0:21 - 0:33)\" đặt TRƯỚC mỗi khối lời thoại. "
-        "Đây là việc đối chiếu CHÍNH XÁC, không phải chọn vị trí gần đúng: trước hết tìm đúng từ/cụm từ của đáp án trong transcript, "
-        "sau đó dò NGƯỢC LÊN từ đúng chỗ xuất hiện đó và lấy mốc GẦN NHẤT phía trên. Tuyệt đối không lấy một câu liên quan ở phía SAU, "
-        "không ước lượng, không lấy trung bình. Toàn bộ giải thích phải có đúng MỘT mốc để bấm nghe lại, chỉ ở dạng [mm:ss] hoặc "
-        "[h:mm:ss] (vd mốc \"(3:02 - 3:27)\" -> [3:02]); không bao giờ ghi một khoảng thời gian. Transcript không có mốc thì bỏ hẳn timestamp."
+        " LUẬT MỐC THỜI GIAN: dùng transcript có mốc để đối chiếu đúng lời thoại chứa đáp án. "
+        "Không tự in mốc giờ, khoảng giờ hoặc link bấm; giao diện sẽ gắn nút nghe lại đã được kiểm chứng. "
+        "Tuyệt đối không dùng câu liên quan ở phía sau, không ước lượng và không lấy câu mở đầu chung chung làm dẫn chứng."
     ) if is_listening else ""
 
     listening_language_en = (
@@ -929,8 +931,9 @@ async def ai_explain(
             "too broad/narrow/absolute, only a true detail rather than the main point, reversed logic, unsupported inference, or incoherent "
             "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
-            "appear word-for-word in the source. If the student was correct, still explain why the other options lose. End with one short, "
-            "reusable solving habit. Write 5-9 concise but detailed sentences in plain text, with short labels if helpful; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
+            "appear word-for-word in the source. If the student was correct, still explain why the other options lose. "
+            "Be economical: write 3-5 short, high-information sentences (normally under 130 words); group similar distractors instead of repeating yourself. "
+            "End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
         source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
@@ -952,7 +955,7 @@ async def ai_explain(
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Kết thúc bằng một mẹo làm bài ngắn có thể áp dụng lại. Viết 5-9 câu gọn nhưng chi tiết, văn xuôi thuần, có thể dùng nhãn ngắn; không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
+            "Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
         source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
@@ -965,20 +968,17 @@ async def ai_explain(
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
         )
 
-    text, err = _gemini_generate(sys_prompt, user_prompt, 1200)
+    text, err = _gemini_generate(sys_prompt, user_prompt, 800)
     if err:
         return {"success": False, "error": _friendly_err(err, lang)}
-    # HẬU KIỂM: xóa mọi [mm:ss] không khớp mốc thật trong transcript (chống AI bịa/ước lượng).
-    text = _filter_fake_timestamps(
-        text,
+    audio_evidence = _audio_evidence(
         context,
         correct if is_listening_item else "",
-        lang,
         answer_sequence if is_listening_item else None,
         question_index if is_listening_item else None,
         timestamp_hints if is_listening_item else "",
         question_count if is_listening_item else None,
-    )
+    ) if is_listening_item else None
     if is_listening_item:
         # Keep the wording honest even if a model falls back to generic reading language.
         text = re.sub(r"\bsource text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
@@ -1077,7 +1077,7 @@ async def ai_explain(
             text = text.rstrip() + "\n\n" + "\n".join(
                 f"[[EVIDENCE: {quote}]]" for quote in valid_evidence
             )
-    return {"success": True, "explanation": text}
+    return {"success": True, "explanation": text, "audioEvidence": audio_evidence}
 
 
 def _parse_ai_items(text: str):
@@ -1923,7 +1923,7 @@ def _fmt_ts(sec: float) -> str:
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
 
 
-def _segments_to_marked_transcript(segments, block_sec: float = 8.0) -> str:
+def _segments_to_marked_transcript(segments, block_sec: float = 5.0) -> str:
     """Ghép segment Whisper (verbose_json) thành transcript CÓ MỐC THỜI GIAN TUYỆT ĐỐI:
     (m:ss - m:ss)\\ntext... — mốc lấy thẳng từ máy, không phải AI đoán."""
     blocks = []
@@ -1966,11 +1966,20 @@ def _normalized_timestamp_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
-def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, question_index=None):
-    """Return only a transcript block that can be tied to the answer text and its listening order."""
+def _timestamped_transcript_blocks(context: str):
+    """Return real, ordered transcript blocks; never manufacture a time position."""
     blocks = []
     for match in _TS_BLOCK_RE.finditer(context or ""):
-        blocks.append((_ts_to_sec(match.group(1), match.group(2), match.group(3)), _normalized_timestamp_text(match.group(4))))
+        start = _ts_to_sec(match.group(1), match.group(2), match.group(3))
+        raw = re.sub(r"\s+", " ", str(match.group(4) or "")).strip()
+        if raw:
+            blocks.append((start, raw, _normalized_timestamp_text(raw)))
+    return blocks
+
+
+def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, question_index=None):
+    """Return only a transcript block that can be tied to the answer text and its listening order."""
+    blocks = [(start, normalized) for start, _raw, normalized in _timestamped_transcript_blocks(context)]
     if not blocks:
         return None
 
@@ -2010,9 +2019,7 @@ def _answer_anchor_seconds(context: str, correct: str, answer_sequence=None, que
 
 def _hint_anchor_seconds(context: str, hints: str = "", question_index=None, question_count=None):
     """Find the most relevant real transcript block for non-literal answers such as MCQ/matching."""
-    blocks = []
-    for match in _TS_BLOCK_RE.finditer(context or ""):
-        blocks.append((_ts_to_sec(match.group(1), match.group(2), match.group(3)), _normalized_timestamp_text(match.group(4))))
+    blocks = [(start, normalized) for start, _raw, normalized in _timestamped_transcript_blocks(context)]
     if not blocks:
         return None
 
@@ -2022,17 +2029,71 @@ def _hint_anchor_seconds(context: str, hints: str = "", question_index=None, que
     }
     hint_words = [word for word in re.findall(r"[a-z][a-z'-]{2,}", _normalized_timestamp_text(hints)) if word not in stop_words]
     if hint_words:
-        scores = [(sum(1 for word in hint_words if re.search(r"(?:^|\s)" + re.escape(word) + r"(?:\s|$)", block)), sec)
+        unique_words = set(hint_words)
+        scores = [(sum(1 for word in unique_words if re.search(r"(?:^|\s)" + re.escape(word) + r"(?:\s|$)", block)), sec)
                   for sec, block in blocks]
         best_score, best_sec = max(scores, key=lambda item: item[0])
-        if best_score:
+        # One generic keyword is not evidence. Requiring two independent terms
+        # prevents a later, merely related block from becoming a fake timestamp.
+        if best_score >= min(2, len(unique_words)):
             return best_sec
 
-    # Last-resort ordering is still a real audio boundary and beats a missing or invented timestamp.
-    if isinstance(question_index, int) and question_index >= 0:
-        total = question_count if isinstance(question_count, int) and question_count > 0 else len(blocks)
-        fraction = min(1, max(0, (question_index + 0.5) / total))
-        return blocks[min(len(blocks) - 1, int(fraction * len(blocks)))][0]
+    # Do not estimate from question order. A missing timestamp is honest; a wrong
+    # one sends the learner to the wrong moment in the recording.
+    return None
+
+
+def _audio_evidence_excerpt(raw: str, correct: str = "", hints: str = "") -> str:
+    """Return the smallest transcript sentence that proves a listening answer."""
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if not sentences:
+        return text[:700]
+
+    stop_words = {
+        "about", "answer", "choose", "correct", "each", "following", "from", "have", "into", "most", "more", "option",
+        "question", "that", "the", "their", "these", "this", "what", "which", "with", "would", "your", "listening",
+    }
+    answer_terms = {
+        _normalized_timestamp_text(part)
+        for part in re.split(r"\s*(?:/|;|\||\bor\b)\s*", str(correct or ""), flags=re.I)
+    }
+    answer_terms = {term for term in answer_terms if len(term) >= 3 and not term.isdigit()}
+    hint_terms = {
+        word for word in re.findall(r"[a-z][a-z'-]{2,}", _normalized_timestamp_text(hints))
+        if word not in stop_words
+    }
+
+    def _score(sentence: str):
+        normalized = _normalized_timestamp_text(sentence)
+        words = set(normalized.split())
+        exact_answer = sum(1 for term in answer_terms if re.search(r"(?:^|\s)" + re.escape(term) + r"(?:\s|$)", normalized))
+        return (exact_answer, len(words & hint_terms), -len(sentence))
+
+    best = max(sentences, key=_score)
+    exact_answer, hint_hits, _ = _score(best)
+    # A generic adjacent sentence is not evidence. If no answer phrase or two
+    # question-specific clues identify one sentence, retain the verified block.
+    excerpt = best if exact_answer or hint_hits >= min(2, len(hint_terms)) else text
+    return excerpt[:700].rsplit(" ", 1)[0].strip() if len(excerpt) > 700 else excerpt
+
+
+def _audio_evidence(context: str, correct: str = "", answer_sequence=None, question_index=None,
+                    timestamp_hints: str = "", question_count=None):
+    """Resolve one verified transcript excerpt for the review UI's two evidence controls."""
+    blocks = _timestamped_transcript_blocks(context)
+    if not blocks:
+        return None
+    anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
+    if anchor is None:
+        anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
+    if anchor is None:
+        return None
+    for start, raw, _normalized in blocks:
+        if start == anchor:
+            return {"timestamp": _fmt_ts(start), "quote": _audio_evidence_excerpt(raw, correct, timestamp_hints)}
     return None
 
 

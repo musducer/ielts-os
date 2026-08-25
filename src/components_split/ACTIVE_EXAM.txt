@@ -104,6 +104,36 @@
               window.setTimeout(() => ghost.remove(), 0);
           };
 
+          const beginAnswerDrag = (event: any, value: string, label: string) => {
+              const answer = String(value || "");
+              if (!answer) return;
+              setSelectedDragAnswer(answer);
+              const transfer = event?.dataTransfer;
+              if (!transfer) return;
+              transfer.effectAllowed = "copy";
+              // SEB implementations vary in which data type survives a drop.
+              // Keep the standard text type plus an application-specific fallback.
+              transfer.setData("text/plain", answer);
+              transfer.setData("application/x-ielts-answer", answer);
+              setCleanDragImage(event, label);
+          };
+
+          const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false) => {
+              const answer = String(value || selectedDragAnswer || "");
+              if (!qId || !answer) return;
+              handleAnswerChange(qId, answer, "DRAG_DROP");
+              setSelectedDragAnswer("");
+              if (autoAdvance) {
+                  const index = (activeExam!.questions || []).findIndex((question: any) => question.id === qId);
+                  handleAutoScrollNext(index, (activeExam!.questions || []).length);
+              }
+          };
+
+          const readDroppedAnswer = (event: any) =>
+              event?.dataTransfer?.getData("application/x-ielts-answer") ||
+              event?.dataTransfer?.getData("text/plain") ||
+              selectedDragAnswer;
+
           const renderSafeHTML = (raw: string | undefined) => {
               if (!raw) return "";
               return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? sanitizeRichHtml(raw) : formatContent(raw);
@@ -394,10 +424,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
           return (
               <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
-                   onCopy={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Copy function disabled!"); } }}
-                   onCut={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Cut function disabled!"); } }}
-                   onPaste={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Paste function disabled!"); } }}
-                   
                    onContextMenu={(e: any) => {
                        if (isPractice) return;
                        if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
@@ -423,7 +449,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    }}>
                   
                   {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
+                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
                           onContextMenu={(event: any) => event.preventDefault()}
                           onDragStart={(event: any) => event.preventDefault()}
                           onEnded={handleExamAudioEnded}
@@ -439,6 +465,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
                           onLoadedMetadata={(e: any) => {
                               const audio = e.currentTarget as HTMLAudioElement;
+                              audio.muted = false;
+                              audio.defaultMuted = false;
+                              audio.volume = Math.max(0, Math.min(1, _audioVolume));
                               setAudioDur(audio.duration || 0);
                               updateExamMediaSessionPosition(audio);
                               if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
@@ -448,6 +477,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   setPendingAudioResume(null);
                               }
                           }}
+                          onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
                           onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; if ((activeExam as any).audioMode === 'practice') setAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
                           style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
                   )}
@@ -749,6 +779,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
                       .idp-dropzone.filled { border-style: solid; border-color: #0969da; background: #e6f0ff; color: #0550ae; }
                       .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f6ff; }
+                      .idp-wordbank-item.selected, .idp-match2-tag.selected { outline: 2px solid #0969da; outline-offset: 1px; background: #e6f0ff; }
 
                       /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
                       .idp-wordbank { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; background: var(--epanel); border: 1px solid var(--eborder); border-radius: 8px; margin-bottom: 18px; }
@@ -1056,7 +1087,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
-              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (audioStatus === "IDLE" || audioStatus === "LOADING" || ((activeExam as any).audioMode !== 'practice' && audioStatus === "PAUSED")) && (
+              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
                   <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -1118,10 +1149,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                   <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
                                                       <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
                                                       <div
-                                                          onDragOver={(e: any) => e.preventDefault()}
-                                                          onDrop={(e: any) => { e.preventDefault(); const val = e.dataTransfer.getData("text/plain"); if (val) handleAnswerChange(q.id, val, "DRAG_DROP"); }}
-                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); }}
-                                                          title={isFilled ? "Click to clear" : "Drag a heading here"}
+                                                          className={`idp-dropzone ${isFilled ? 'filled' : ''}`}
+                                                          data-qid={q.id}
+                                                          onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+                                                          onDrop={(e: any) => { e.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(e)); }}
+                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer); }}
+                                                          title={isFilled ? "Click to clear" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           {isFilled ? (
                                                               <>
@@ -1197,9 +1230,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            }
                        }}
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
-                       onDragOver={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) e.preventDefault(); }}
-                       onDrop={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) { e.preventDefault(); const qId = e.target.dataset.qid; const val = e.dataTransfer.getData("text/plain"); if (qId && val) { handleAnswerChange(qId, val, "DRAG_DROP"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } } }}
-                       onClick={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone') && e.target.classList.contains('filled')) { const qId = e.target.dataset.qid; if (qId) handleAnswerChange(qId, ""); } }}>
+                       onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+                       onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+                       onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true); } }}
+                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid; if (zone.classList.contains('filled')) { if (qId) handleAnswerChange(qId, ""); } else commitDraggedAnswer(qId, selectedDragAnswer, true); }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
                                   {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
@@ -1481,8 +1515,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
                                           const letter = String.fromCharCode(65 + idx);
                                           return (
-                                              <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''}`} draggable={!used}
-                                                   onDragStart={(e: any) => { if (!used) { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); } }}>
+                                              <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable={!used}
+                                                   onClick={() => { if (!used) setSelectedDragAnswer(String(opt)); }}
+                                                   onDragStart={(e: any) => { if (!used) beginAnswerDrag(e, opt, opt); }}>
                                                   <span className="idp-wb-letter">{letter}</span>
                                                   <span>{opt}</span>
                                               </div>
@@ -1524,8 +1559,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 return (
                                                                   <div key={oIdx}
                                                                     draggable={!isUsed}
-                                                                    onDragStart={(e: any) => { if (!isUsed) { e.dataTransfer.setData("text/plain", optId); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); } }}
-                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)'}}>
+                                                                    onClick={() => { if (!isUsed) setSelectedDragAnswer(optId); }}
+                                                                    onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
+                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
                                                                     <span style={{flexShrink:0, width:28, fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)'}}>{optId}</span>
                                                                     <span style={{flex:1, fontSize:13, lineHeight:1.45, color:'var(--etext)'}} dangerouslySetInnerHTML={{__html: renderSafeHTML(optContent)}} />
@@ -1563,7 +1599,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                               <div className="idp-match2-bank">
                                                                   {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
-                                                                      <div key={idx} className="idp-match2-tag" draggable onDragStart={(e:any) => { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); }}>
+                                                                      <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
+                                                                          onClick={() => setSelectedDragAnswer(String(opt))}
+                                                                          onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
                                                                           <span className="idp-match2-key">{String.fromCharCode(65 + dragOptions.indexOf(opt))}</span>
                                                                           <span>{opt}</span>
                                                                       </div>
@@ -1585,7 +1623,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   </div>
                  {/* THANH AUDIO (chỉ practice) — nằm ngay TRÊN nav bar: play/pause · thời gian · thanh tua · tốc độ */}
-                 {isListening && (activeExam as any).audioMode === 'practice' && ["PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
+                 {isListening && (activeExam as any).audioMode === 'practice' && ["IDLE", "LOADING", "PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
                      const safeCur = Math.min(audioCur, audioDur || 0);
                      const pct = audioDur ? (safeCur / audioDur) * 100 : 0;
                      return (

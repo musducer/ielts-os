@@ -3115,7 +3115,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -3179,6 +3179,9 @@ export default function IeltsSupremeOS() {
   const [audioRate, setAudioRate] = useState(1); // tốc độ phát (practice): 1 / 1.25 / 1.5 / 2
   const [audioDur, setAudioDur] = useState(0);   // tổng thời lượng audio
   const [_audioVolume, _setAudioVolume] = useState<number>(1);
+  // Native HTML5 drop events are unreliable inside some Safe Exam Browser builds.
+  // This also supports an accessible click-source, click-destination fallback.
+  const [selectedDragAnswer, setSelectedDragAnswer] = useState<string>("");
   const [meetAudioIssue, setMeetAudioIssue] = useState(false);
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");
@@ -4011,6 +4014,11 @@ export default function IeltsSupremeOS() {
     if (audioPlayRequestRef.current) return;
     audioPlayRequestRef.current = true;
     if (audio.ended) audio.currentTime = 0;
+    // A prior browser/media-session interaction can leave a reused element muted
+    // while its timeline continues. Every explicit Play restores audible output.
+    audio.muted = false;
+    audio.defaultMuted = false;
+    audio.volume = Math.max(0, Math.min(1, _audioVolume));
     audio.playbackRate = rate;
     setManagedAudioLoading();
     try {
@@ -5008,6 +5016,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           setHardLocked(false);
           setGracePeriod(null);
           setExamAnswers({});
+          setSelectedDragAnswer("");
           setSaveStatus("Saved");
       }
   }, [activeExam]);
@@ -5645,11 +5654,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
           answerSequence,
           questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
           questionCount: timestampQuestions.length || undefined,
-          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), optStr].filter(Boolean).join("\n") : "",
+          // Do not score every distractor as a timestamp clue. The question and
+          // its shared context are the only safe fallback when the answer text
+          // itself is not spoken verbatim (MCQ / matching).
+          timestampHints: isListeningQuestion ? [stripTags(q.text), stripTags(q.groupContext), correctStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: data.explanation } }));
+      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: {
+        loading: false,
+        text: data.explanation,
+        audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
+          ? data.audioEvidence
+          : undefined,
+      } }));
       else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
     } catch (e: any) {
       setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));
@@ -6929,6 +6947,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAudioStatus("IDLE");
       setAudioCur(0);
       setAudioDur(0);
+      setSelectedDragAnswer("");
       setPendingAudioResume(null);
       audioPlayRequestRef.current = false;
       
@@ -7851,6 +7870,38 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setRvAudioCur(secs);
           void requestReviewAudioPlayback();
       };
+      const rvTimestampSeconds = (value: string) => {
+          const units = String(value || '').match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(':').map(Number) || [];
+          return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : -1;
+      };
+      const rvJumpToTranscript = (timestamp: string, quote = '') => {
+          const requested = rvTimestampSeconds(timestamp);
+          if (requested < 0) return;
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-rv-transcript-start]'));
+          const target = blocks.find(block => Number(block.dataset.rvTranscriptStart) === requested)
+              || blocks.filter(block => Number(block.dataset.rvTranscriptStart) <= requested).pop()
+              || blocks[0];
+          if (!target) return;
+          blocks.forEach(block => block.classList.remove('rv-transcript-evidence'));
+          document.querySelectorAll('.rv-transcript-quote').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+          target.classList.add('rv-transcript-evidence');
+          if (quote) {
+              target.setAttribute('data-evidence-quote', quote);
+              const copy = target.querySelector('.rv-transcript-copy');
+              const textNode = copy?.firstChild;
+              const normalizedQuote = String(quote).replace(/\s+/g, ' ').trim();
+              const at = String(copy?.textContent || '').toLocaleLowerCase().indexOf(normalizedQuote.toLocaleLowerCase());
+              if (textNode && at >= 0) {
+                  const range = document.createRange();
+                  range.setStart(textNode, at);
+                  range.setEnd(textNode, at + normalizedQuote.length);
+                  const mark = document.createElement('mark');
+                  mark.className = 'rv-transcript-quote';
+                  try { range.surroundContents(mark); } catch { /* Whole-block highlight is the safe fallback. */ }
+              }
+          }
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
       const rvJumpToEvidence = (quote: string) => {
           const root = document.getElementById('ielts-passage-content');
           if (!root) return;
@@ -7927,7 +7978,29 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
           return new RegExp(escaped, 'i').test(text);
       };
-      const rvRenderExplain = (txt: string) => {
+      const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string }) => {
+          if (rvActiveIsListening) {
+              const cleanText = String(txt || '')
+                  .replace(/\s*[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|â€“|â€”|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/g, '')
+                  .replace(/\n{3,}/g, '\n\n')
+                  .trim();
+              return <>
+                  {cleanText}
+                  {audioEvidence?.quote && audioEvidence?.timestamp && (
+                      <div className="rv-audio-evidence">
+                          <div className="rv-audio-evidence-copy"><span>{audioEvidence.timestamp}</span> {audioEvidence.quote}</div>
+                          <div className="rv-audio-evidence-actions">
+                              <button type="button" title="Show this evidence in the transcript" aria-label="Show evidence in transcript" onClick={() => rvJumpToTranscript(audioEvidence.timestamp, audioEvidence.quote)}>
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+                              </button>
+                              <button type="button" title={`Play audio from ${audioEvidence.timestamp}`} aria-label={`Play audio from ${audioEvidence.timestamp}`} onClick={() => rvSeek(audioEvidence.timestamp)}>
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                              </button>
+                          </div>
+                      </div>
+                  )}
+              </>;
+          }
           const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
           if (evidenceParts.length > 1) {
               return evidenceParts.map((part, pi) => {
@@ -7965,6 +8038,21 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       return (
           <div style={{ height: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", overflow: "hidden" }}>
               {globalStyles}
+              <style>{`
+                  .rv-transcript-block { scroll-margin-top: 18px; border-left: 3px solid transparent; padding: 12px 14px; border-radius: 8px; transition: background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+                  .rv-transcript-block + .rv-transcript-block { margin-top: 10px; }
+                  .rv-transcript-block.rv-transcript-evidence { border-left-color: #f59e0b; background: #fffbeb; box-shadow: 0 0 0 1px rgba(245,158,11,.26); }
+                  .rv-transcript-quote { background:#fde68a; color:inherit; border-radius:3px; padding:0 2px; box-shadow:0 0 0 1px rgba(217,119,6,.26); }
+                  .rv-transcript-time { display: inline-flex; align-items: center; min-width: 54px; font: 700 12px/1 Consolas, monospace; color: #0f766e; background: #ecfdf5; border: 1px solid #99f6e4; border-radius: 999px; padding: 5px 8px; margin-bottom: 7px; }
+                  .rv-transcript-copy { margin: 0; color: #1f2937; font-size: 15px; line-height: 1.72; white-space: pre-wrap; }
+                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
+                  .rv-audio-evidence-copy { flex: 1; font-size: 12.5px; font-style: italic; line-height: 1.45; }
+                  .rv-audio-evidence-copy span { font: 800 11px/1 Consolas, monospace; color: #4338ca; }
+                  .rv-audio-evidence-actions { display: flex; gap: 5px; flex-shrink: 0; }
+                  .rv-audio-evidence-actions button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #a5b4fc; border-radius: 6px; color: #4338ca; background: #fff; cursor: pointer; }
+                  .rv-audio-evidence-actions button:hover { background: #e0e7ff; }
+                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } }
+              `}</style>
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
                   <div style={{fontWeight: 900, fontSize: 18}}>REVIEW: {reviewQuiz.quiz.title}</div>
                   <button onClick={() => setReviewQuiz(null)} style={{background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '8px 20px'}}>Back</button>
@@ -7988,9 +8076,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   const pct = rvAudioDur ? (safeCur / rvAudioDur) * 100 : 0;
                   return (
                       <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 24px', background: C.card, borderBottom: `1px solid ${C.border}`, zIndex: 80 }}>
-                          <audio id="review-audio" ref={audioRef} preload="auto" playsInline src={src}
+                          <audio key={src} id="review-audio" ref={audioRef} preload="auto" playsInline src={src}
                               onContextMenu={(e) => e.preventDefault()}
-                              onLoadedMetadata={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioDur(audio.duration || 0); updateExamMediaSessionPosition(audio); }}
+                              onLoadedMetadata={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; audio.muted = false; audio.defaultMuted = false; audio.volume = Math.max(0, Math.min(1, _audioVolume)); setRvAudioDur(audio.duration || 0); updateExamMediaSessionPosition(audio); }}
+                              onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
                               onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
                               onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
                               onPlaying={handleExamAudioPlaying}
@@ -8099,95 +8188,42 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   })()}
                   {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
                   {rvActiveIsListening && (() => {
-                      let leftCtx = "";
-                      const tr = reviewQuiz.quiz.transcript || "";
+                      const transcriptRaw = reviewQuiz.quiz.transcript || "";
+                      const transcriptText = String(transcriptRaw)
+                          .replace(/<(?:br)\s*\/?\s*>/gi, '\n')
+                          .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
+                          .replace(/<[^>]+>/g, '')
+                          .replace(/&nbsp;/gi, ' ')
+                          .replace(/\r/g, '')
+                          .trim();
+                      const transcriptBlocks = transcriptText
+                          .split(/(?=\(\d{1,2}:\d{2}(?::\d{2})?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\))/)
+                          .map(block => block.trim())
+                          .filter(Boolean)
+                          .map((block, index) => {
+                              const match = block.match(/^\((\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)\)\s*\n?([\s\S]*)$/);
+                              return match
+                                  ? { key: `${match[1]}-${index}`, start: match[1], label: `${match[1]} - ${match[2]}`, text: match[3].trim() }
+                                  : { key: `plain-${index}`, start: '', label: '', text: block };
+                          });
                       const downloadTranscript = () => {
-                          const body = /<[a-z][\s\S]*>/i.test(tr) ? tr : tr.split(/\n+/).map(l => `<p>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`).join('');
+                          const body = /<[a-z][\s\S]*>/i.test(transcriptRaw) ? transcriptRaw : transcriptText.split(/\n+/).map(line => `<p>${line.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`).join('');
                           const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'><head><meta charset='utf-8'><title>Transcript</title></head><body>${body}</body></html>`;
-                          const blob = new Blob(['﻿', html], { type: 'application/msword' });
+                          const blob = new Blob(['\uFEFF', html], { type: 'application/msword' });
                           const url = URL.createObjectURL(blob);
-                          const a = document.createElement('a'); a.href = url; a.download = `${(reviewQuiz.quiz.title || 'transcript').replace(/[^\w-]+/g,'_')}_transcript.doc`;
-                          document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+                          const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${(reviewQuiz.quiz.title || 'transcript').replace(/[^\w-]+/g,'_')}_transcript.doc`;
+                          document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
                       };
-                      let lastBank = "";
                       return (
-                          <div className="rv-qview" style={{ width: '50%', height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px', borderRight: `1px solid ${C.border}`, background: '#fff', color: '#333' }}>
-                              {/* Read-only, TINH GỌN, KHÔNG TRÀN VIỀN: chống overflow bảng/ảnh + thu nhỏ so với phòng thi vì chỉ có nửa màn hình */}
-                              <style>{`
-                                .rv-qview, .rv-qview * { box-sizing: border-box; }
-                                .rv-qview .group-context, .rv-qview .rv-ql-text { overflow-wrap: anywhere; word-break: break-word; }
-                                .rv-qview .group-context { max-width: 100%; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin-bottom: 12px; }
-                                .rv-qview .group-context table { max-width: 100%; border-collapse: collapse; font-size: 12.5px; }
-                                .rv-qview .group-context td, .rv-qview .group-context th { border: 1px solid ${C.border}; padding: 4px 7px; }
-                                .rv-qview .group-context img { max-width: 100%; height: auto; }
-                                .rv-qview .rv-ql { margin-bottom: 13px; }
-                                .rv-qview .rv-ql-head { display: flex; gap: 8px; line-height: 1.5; font-size: 13.5px; }
-                                .rv-qview .rv-ql-num { font-weight: 800; color: ${C.accent}; flex-shrink: 0; min-width: 20px; }
-                                .rv-qview .rv-ql-opts { list-style: none; margin: 6px 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-                                .rv-qview .rv-ql-opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.45; color: #444; }
-                                .rv-qview .rv-ql-mark { flex-shrink: 0; width: 15px; height: 15px; border: 1.5px solid #9aa4b2; margin-top: 1px; }
-                                .rv-qview .rv-ql-mark.round { border-radius: 50%; }
-                                .rv-qview .rv-ql-bank { margin: 6px 0 4px 28px; display: flex; flex-wrap: wrap; gap: 6px; }
-                                .rv-qview .rv-ql-tag { border: 1px solid ${C.border}; border-radius: 5px; padding: 3px 9px; font-size: 12.5px; background: ${C.bg}; color: #333; }
-                                .rv-qview .rv-ql-blank { display: inline-block; min-width: 30px; padding: 0 8px; border-bottom: 1.5px solid #9aa4b2; color: ${C.accent}; font-weight: 700; text-align: center; }
-                              `}</style>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: `2px solid ${C.accent}`, marginBottom: 14, paddingBottom: 10 }}>
-                                  <h2 style={{ margin: 0, color: C.accent, fontSize: 16 }}>{rvHasSections ? `PART ${rvActiveIdx + 1} — QUESTIONS` : 'QUESTIONS'}</h2>
-                                  {tr ? (
-                                      <button onClick={downloadTranscript} style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                                          Transcript (.doc)
-                                      </button>
-                                  ) : null}
+                          <div className="rv-transcript-panel" style={{ width: '50%', height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px 34px', borderRight: `1px solid ${C.border}`, background: '#fff', color: '#333', boxSizing: 'border-box' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: `2px solid ${C.accent}`, marginBottom: 16, paddingBottom: 10 }}>
+                                  <div><div style={{ fontSize: 16, fontWeight: 900, color: C.accent }}>TRANSCRIPT</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Listening evidence, ordered by the original audio timeline</div></div>
+                                  {transcriptText ? <button onClick={downloadTranscript} title="Download transcript" style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 10px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Transcript (.doc)</button> : null}
                               </div>
-                              {reviewQuiz.quiz.questions.map((q, i) => {
-                                  if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
-                                  const rvGroup = rvGroupByQuestionId.get(q.id);
-                                  if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
-                                  const showCtx = q.groupContext && q.groupContext !== leftCtx;
-                                  if (showCtx) { leftCtx = q.groupContext as string; lastBank = ""; }
-                                  const opts = Array.isArray(q.options) ? q.options : [];
-                                  const isMulti = q.type === 'CHOICE_MULTIPLE';
-                                  const isMCQ = (q.type === 'CHOICE' || isMulti) && opts.length > 0;
-                                  const isBankType = (q.type === 'DRAG_DROP' || q.type === 'MATCHING' || q.type === 'DRAG_DROP_HEADING') && opts.length > 0;
-                                  // Kho lựa chọn (matching/drag-drop) DÙNG CHUNG cả nhóm -> chỉ hiện MỘT lần khi options đổi.
-                                  const bankKey = isBankType ? JSON.stringify(opts) : "";
-                                  const showBank = isBankType && bankKey !== lastBank;
-                                  if (showBank) lastBank = bankKey;
-                                  // Câu là ô trống inline trong form/context -> đã hiện trong group-context, không lặp text.
-                                  const displayLabel = rvGroup ? rvGroupQuestionLabel(rvGroup) : `${i + 1}`;
-                                  const textInCtx = showCtx || (leftCtx && (leftCtx as string).indexOf(`[${i + 1}]`) !== -1);
-                                  return (
-                                      <React.Fragment key={q.id}>
-                                          {showCtx && <div className="group-context" dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />}
-                                          {showBank && (
-                                              <div className="rv-ql-bank">
-                                                  {opts.map((o: any, oi: number) => <span key={oi} className="rv-ql-tag">{String(o).replace(/^\s*[A-Za-z][\.\)]\s*/, '')}</span>)}
-                                              </div>
-                                          )}
-                                          {!textInCtx && (
-                                              <div className="rv-ql">
-                                                  <div className="rv-ql-head">
-                                                      <span className="rv-ql-num">{displayLabel}.</span>
-                                                      <span className="rv-ql-text" dangerouslySetInnerHTML={{ __html: formatContent(q.text || "") }} />
-                                                  </div>
-                                                  {isMCQ && (
-                                                      <ul className="rv-ql-opts">
-                                                          {opts.map((o: any, oi: number) => (
-                                                              <li key={oi} className="rv-ql-opt">
-                                                                  <span className={`rv-ql-mark ${isMulti ? '' : 'round'}`} />
-                                                                  <span dangerouslySetInnerHTML={{ __html: formatContent(String(o).replace(/^\s*[A-Za-z][\.\)]\s*/, '')) }} />
-                                                              </li>
-                                                          ))}
-                                                      </ul>
-                                                  )}
-                                              </div>
-                                          )}
-                                      </React.Fragment>
-                                  );
-                              })}
+                              {transcriptBlocks.length ? transcriptBlocks.map(block => <article key={block.key} id={block.start ? `rv-transcript-${rvTimestampSeconds(block.start)}` : undefined} data-rv-transcript-start={block.start ? rvTimestampSeconds(block.start) : undefined} className="rv-transcript-block">{block.label && <div className="rv-transcript-time">{block.label}</div>}<p className="rv-transcript-copy">{block.text}</p></article>) : <div style={{ padding: '34px 8px', color: C.sub, fontSize: 14, lineHeight: 1.6 }}>Transcript is not available for this test.</div>}
                           </div>
                       );
+
                   })()}
                   <div style={{ flex: 1, minWidth: 0, width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
                       
@@ -8446,7 +8482,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                               <div style={{fontSize: 13, color: C.sub, fontWeight: 600}}><Ico name="refresh" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_loading')}</div>
                                           ) : (
                                               <div style={{background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-line'}}>
-                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text)}
+                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text, explainMap[q.id].audioEvidence)}
                                               </div>
                                           )}
                                       </div>
@@ -8677,6 +8713,36 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               event.dataTransfer.setDragImage(ghost, 16, 16);
               window.setTimeout(() => ghost.remove(), 0);
           };
+
+          const beginAnswerDrag = (event: any, value: string, label: string) => {
+              const answer = String(value || "");
+              if (!answer) return;
+              setSelectedDragAnswer(answer);
+              const transfer = event?.dataTransfer;
+              if (!transfer) return;
+              transfer.effectAllowed = "copy";
+              // SEB implementations vary in which data type survives a drop.
+              // Keep the standard text type plus an application-specific fallback.
+              transfer.setData("text/plain", answer);
+              transfer.setData("application/x-ielts-answer", answer);
+              setCleanDragImage(event, label);
+          };
+
+          const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false) => {
+              const answer = String(value || selectedDragAnswer || "");
+              if (!qId || !answer) return;
+              handleAnswerChange(qId, answer, "DRAG_DROP");
+              setSelectedDragAnswer("");
+              if (autoAdvance) {
+                  const index = (activeExam!.questions || []).findIndex((question: any) => question.id === qId);
+                  handleAutoScrollNext(index, (activeExam!.questions || []).length);
+              }
+          };
+
+          const readDroppedAnswer = (event: any) =>
+              event?.dataTransfer?.getData("application/x-ielts-answer") ||
+              event?.dataTransfer?.getData("text/plain") ||
+              selectedDragAnswer;
 
           const renderSafeHTML = (raw: string | undefined) => {
               if (!raw) return "";
@@ -8968,10 +9034,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
           return (
               <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
-                   onCopy={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Copy function disabled!"); } }}
-                   onCut={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Cut function disabled!"); } }}
-                   onPaste={_e => { if (!isPractice) { _e.preventDefault(); alert("WARNING: Paste function disabled!"); } }}
-                   
                    onContextMenu={(e: any) => {
                        if (isPractice) return;
                        if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
@@ -8997,7 +9059,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    }}>
                   
                   {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
+                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
                           onContextMenu={(event: any) => event.preventDefault()}
                           onDragStart={(event: any) => event.preventDefault()}
                           onEnded={handleExamAudioEnded}
@@ -9013,6 +9075,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
                           onLoadedMetadata={(e: any) => {
                               const audio = e.currentTarget as HTMLAudioElement;
+                              audio.muted = false;
+                              audio.defaultMuted = false;
+                              audio.volume = Math.max(0, Math.min(1, _audioVolume));
                               setAudioDur(audio.duration || 0);
                               updateExamMediaSessionPosition(audio);
                               if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
@@ -9022,6 +9087,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   setPendingAudioResume(null);
                               }
                           }}
+                          onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
                           onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; if ((activeExam as any).audioMode === 'practice') setAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
                           style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
                   )}
@@ -9323,6 +9389,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
                       .idp-dropzone.filled { border-style: solid; border-color: #0969da; background: #e6f0ff; color: #0550ae; }
                       .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f6ff; }
+                      .idp-wordbank-item.selected, .idp-match2-tag.selected { outline: 2px solid #0969da; outline-offset: 1px; background: #e6f0ff; }
 
                       /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
                       .idp-wordbank { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; background: var(--epanel); border: 1px solid var(--eborder); border-radius: 8px; margin-bottom: 18px; }
@@ -9630,7 +9697,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
-              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (audioStatus === "IDLE" || audioStatus === "LOADING" || ((activeExam as any).audioMode !== 'practice' && audioStatus === "PAUSED")) && (
+              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
                   <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -9692,10 +9759,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                   <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
                                                       <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
                                                       <div
-                                                          onDragOver={(e: any) => e.preventDefault()}
-                                                          onDrop={(e: any) => { e.preventDefault(); const val = e.dataTransfer.getData("text/plain"); if (val) handleAnswerChange(q.id, val, "DRAG_DROP"); }}
-                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); }}
-                                                          title={isFilled ? "Click to clear" : "Drag a heading here"}
+                                                          className={`idp-dropzone ${isFilled ? 'filled' : ''}`}
+                                                          data-qid={q.id}
+                                                          onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+                                                          onDrop={(e: any) => { e.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(e)); }}
+                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer); }}
+                                                          title={isFilled ? "Click to clear" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           {isFilled ? (
                                                               <>
@@ -9771,9 +9840,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            }
                        }}
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
-                       onDragOver={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) e.preventDefault(); }}
-                       onDrop={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone')) { e.preventDefault(); const qId = e.target.dataset.qid; const val = e.dataTransfer.getData("text/plain"); if (qId && val) { handleAnswerChange(qId, val, "DRAG_DROP"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } } }}
-                       onClick={(e: any) => { if (e.target && e.target.classList.contains('idp-dropzone') && e.target.classList.contains('filled')) { const qId = e.target.dataset.qid; if (qId) handleAnswerChange(qId, ""); } }}>
+                       onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+                       onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+                       onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true); } }}
+                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid; if (zone.classList.contains('filled')) { if (qId) handleAnswerChange(qId, ""); } else commitDraggedAnswer(qId, selectedDragAnswer, true); }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
                                   {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
@@ -10055,8 +10125,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
                                           const letter = String.fromCharCode(65 + idx);
                                           return (
-                                              <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''}`} draggable={!used}
-                                                   onDragStart={(e: any) => { if (!used) { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); } }}>
+                                              <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable={!used}
+                                                   onClick={() => { if (!used) setSelectedDragAnswer(String(opt)); }}
+                                                   onDragStart={(e: any) => { if (!used) beginAnswerDrag(e, opt, opt); }}>
                                                   <span className="idp-wb-letter">{letter}</span>
                                                   <span>{opt}</span>
                                               </div>
@@ -10098,8 +10169,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 return (
                                                                   <div key={oIdx}
                                                                     draggable={!isUsed}
-                                                                    onDragStart={(e: any) => { if (!isUsed) { e.dataTransfer.setData("text/plain", optId); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); } }}
-                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)'}}>
+                                                                    onClick={() => { if (!isUsed) setSelectedDragAnswer(optId); }}
+                                                                    onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
+                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
                                                                     <span style={{flexShrink:0, width:28, fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)'}}>{optId}</span>
                                                                     <span style={{flex:1, fontSize:13, lineHeight:1.45, color:'var(--etext)'}} dangerouslySetInnerHTML={{__html: renderSafeHTML(optContent)}} />
@@ -10137,7 +10209,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                               <div className="idp-match2-bank">
                                                                   {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
-                                                                      <div key={idx} className="idp-match2-tag" draggable onDragStart={(e:any) => { e.dataTransfer.setData("text/plain", opt); e.dataTransfer.effectAllowed = "copy"; setCleanDragImage(e, opt); }}>
+                                                                      <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
+                                                                          onClick={() => setSelectedDragAnswer(String(opt))}
+                                                                          onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
                                                                           <span className="idp-match2-key">{String.fromCharCode(65 + dragOptions.indexOf(opt))}</span>
                                                                           <span>{opt}</span>
                                                                       </div>
@@ -10159,7 +10233,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   </div>
                  {/* THANH AUDIO (chỉ practice) — nằm ngay TRÊN nav bar: play/pause · thời gian · thanh tua · tốc độ */}
-                 {isListening && (activeExam as any).audioMode === 'practice' && ["PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
+                 {isListening && (activeExam as any).audioMode === 'practice' && ["IDLE", "LOADING", "PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
                      const safeCur = Math.min(audioCur, audioDur || 0);
                      const pct = audioDur ? (safeCur / audioDur) * 100 : 0;
                      return (
