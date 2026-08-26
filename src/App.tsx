@@ -8674,7 +8674,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               let isPartial = false;
                               let correctDisplay: string | number = String(q.correctAnswer);
                               
-                              if (q.type === "CHOICE" || q.type === "MATCHING") {
+                              if (q.type === "CHOICE") {
                                   isCorrect = studentAns === q.correctAnswer;
                                   correctDisplay = q.options ? q.options[q.correctAnswer as number] : String(q.correctAnswer);
                               } else if (q.type === "CHOICE_MULTIPLE") {
