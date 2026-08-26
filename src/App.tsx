@@ -8984,24 +8984,26 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               window.setTimeout(() => ghost.remove(), 0);
           };
 
-          const beginAnswerDrag = (event: any, value: string, label: string) => {
+          const beginAnswerDrag = (event: any, value: string, label: string, sourceQid = "") => {
               const answer = String(value || "");
               if (!answer) return;
               setSelectedDragAnswer(answer);
               const transfer = event?.dataTransfer;
               if (!transfer) return;
-              transfer.effectAllowed = "copy";
+              transfer.effectAllowed = sourceQid ? "move" : "copy";
               // SEB implementations vary in which data type survives a drop.
               // Keep the standard text type plus an application-specific fallback.
               transfer.setData("text/plain", answer);
               transfer.setData("application/x-ielts-answer", answer);
+              if (sourceQid) transfer.setData("application/x-ielts-source-qid", sourceQid);
               setCleanDragImage(event, label);
           };
 
-          const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false) => {
+          const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false, sourceQid = "") => {
               const answer = String(value || selectedDragAnswer || "");
               if (!qId || !answer) return;
               handleAnswerChange(qId, answer, "DRAG_DROP");
+              if (sourceQid && sourceQid !== qId) handleAnswerChange(sourceQid, "", "DRAG_DROP");
               setSelectedDragAnswer("");
               if (autoAdvance) {
                   const index = (activeExam!.questions || []).findIndex((question: any) => question.id === qId);
@@ -9013,6 +9015,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               event?.dataTransfer?.getData("application/x-ielts-answer") ||
               event?.dataTransfer?.getData("text/plain") ||
               selectedDragAnswer;
+
+          const readDraggedSource = (event: any) =>
+              event?.dataTransfer?.getData("application/x-ielts-source-qid") || "";
 
           const renderSafeHTML = (raw: string | undefined) => {
               if (!raw) return "";
@@ -9143,7 +9148,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       })()
                                   )}
                                   {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && (
-                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} title="Kéo đáp án thả vào đây">
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag to another answer box or click to clear" : "Kéo đáp án thả vào đây"}>
                                           {(examAnswers[q.id] as string) || firstGlobalIdx}
                                       </span>
                                   )}
@@ -9650,13 +9655,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* Map labelling type 2: named tags are placed directly on the map. */
                       .idp-map-drag-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, .34fr); gap:24px; align-items:start; max-width:1180px; }
-                      .idp-map-drag-canvas { position:relative; width:100%; overflow:hidden; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
-                      .idp-map-drag-canvas img { display:block; width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; }
-                      .idp-map-drag-slot { position:absolute; transform:translate(-50%, -50%); box-sizing:border-box; min-width:62px; min-height:28px; display:flex; align-items:center; justify-content:center; gap:5px; padding:3px 6px; border:2px dashed #64748b; background:rgba(255,255,255,.88); color:#172033; font:700 13px/1.2 Arial,sans-serif; text-align:center; cursor:pointer; z-index:2; transition:background .15s,border-color .15s,box-shadow .15s; }
+                      .idp-map-drag-canvas { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); text-align:center; }
+                      .idp-map-drag-stage { position:relative; display:inline-block; width:fit-content; max-width:100%; line-height:0; }
+                      .idp-map-drag-stage img { display:block; width:auto; max-width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; }
+                      .idp-map-drag-slot { position:absolute; transform:translate(-50%, -50%); box-sizing:border-box; min-width:62px; min-height:28px; display:flex; align-items:center; justify-content:center; gap:5px; padding:3px 6px; border:2px dashed #64748b; background:rgba(255,255,255,.88); color:#172033; font:700 13px/1.2 Arial,sans-serif; line-height:1.2; text-align:center; cursor:pointer; z-index:2; transition:background .15s,border-color .15s,box-shadow .15s; }
                       .idp-map-drag-slot:hover, .idp-map-drag-slot.is-target { border-color:#0969da; background:#eff6ff; box-shadow:0 0 0 3px rgba(9,105,218,.13); }
                       .idp-map-drag-slot.is-filled { border-style:solid; border-color:#0969da; background:#e6f0ff; color:#0550ae; font-size:12px; }
                       .idp-map-drag-slot-number { color:#334155; font-weight:800; white-space:nowrap; }
-                      .idp-map-drag-clear { width:16px; height:16px; border:0; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center; background:#0759a1; color:#fff; font:700 13px/1 Arial,sans-serif; cursor:pointer; flex:0 0 auto; }
                       .idp-map-drag-bank { border:1px solid var(--eborder); background:var(--ecard); padding:13px; }
                       .idp-map-drag-bank-title { margin:0 0 10px; color:var(--esub); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
                       .idp-map-drag-option { width:100%; box-sizing:border-box; display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:9px 10px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#172033; font:600 13px/1.35 Arial,sans-serif; text-align:left; cursor:grab; user-select:none; transition:transform .15s,box-shadow .15s,border-color .15s,opacity .15s; }
@@ -9669,7 +9674,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         .idp-map-plan-image img { max-height: none; }
                         .idp-map-drag-layout { grid-template-columns:1fr; gap:14px; }
                         .idp-map-drag-bank { order:-1; }
-                        .idp-map-drag-canvas { overflow:visible; }
+                        .idp-map-drag-canvas { overflow:auto; }
                         .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
                       }
 
@@ -10056,10 +10061,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                       <div
                                                           className={`idp-dropzone ${isFilled ? 'filled' : ''}`}
                                                           data-qid={q.id}
+                                                          draggable={isFilled}
+                                                          onDragStart={(e: any) => { if (isFilled) beginAnswerDrag(e, filled, filled, q.id); }}
                                                           onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
-                                                          onDrop={(e: any) => { e.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(e)); }}
+                                                          onDrop={(e: any) => { e.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(e), false, readDraggedSource(e)); }}
                                                           onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer); }}
-                                                          title={isFilled ? "Click to clear" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
+                                                          title={isFilled ? "Drag to another answer box or click to clear" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           {isFilled ? (
                                                               <>
@@ -10137,7 +10144,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true); } }}
+                       onDragStart={(e: any) => { if (e.dataTransfer?.getData("application/x-ielts-source-qid")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
                        onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid; if (zone.classList.contains('filled')) { if (qId) handleAnswerChange(qId, ""); } else commitDraggedAnswer(qId, selectedDragAnswer, true); }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
@@ -10274,7 +10282,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const val = examAnswers[tQ.id];
                           const filled = val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0);
                           const disp = filled ? String(val) : num;
-                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}" data-qid="${tQ.id}" data-num="${num}" style="min-width:${groupZoneW}px">${disp}</span>`;
+                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
                       });
                       return html;
                   })() : "";
@@ -10335,7 +10343,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
                                           onClick={() => { if (!used) setSelectedDragAnswer(option); }}
                                           onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
-                                          <span className="idp-wb-letter">{String.fromCharCode(65 + index)}</span><span>{option}</span>
+                                          <span>{option}</span>
                                       </button>;
                                   })}
                               </div>
@@ -10357,9 +10365,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                            {isDragFlow ? <span
                                                className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''}`}
                                                data-qid={q.id}
-                                               title={isAnsweredFlow ? 'Click to clear this answer' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                               draggable={isAnsweredFlow}
+                                               onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
+                                               title={isAnsweredFlow ? 'Drag to another answer box or click to clear' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
-                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true); }}
+                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
                                                onClick={() => { if (isAnsweredFlow) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer, true); }}
                                            >{isAnsweredFlow ? String(examAnswers[q.id]) : qGlobalIdx}</span> : <input
                                               type="text"
@@ -10451,8 +10461,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        return (
                            <div className="idp-map-drag-layout">
                                <div className="idp-map-drag-canvas" aria-label="Interactive map">
-                                   {mapImageUrl ? <img src={mapImageUrl} alt="Map labelling diagram" draggable={false} /> : <div style={{padding:32, color:'var(--esub)', textAlign:'center'}}>Map image has not been added yet.</div>}
-                                   {mapImageUrl && group.questions.map((question: any, index: number) => {
+                                   {mapImageUrl ? <div className="idp-map-drag-stage">
+                                   <img src={mapImageUrl} alt="Map labelling diagram" draggable={false} />
+                                   {group.questions.map((question: any, index: number) => {
                                        const slot = getSlot(question, index);
                                        const answer = String(examAnswers[question.id] || "");
                                        const number = mapQuestionNumber(question);
@@ -10461,14 +10472,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                        return (
                                            <div key={question.id} id={`question-${question.id}`} className={`idp-map-drag-slot ${answer ? 'is-filled' : ''} ${selectedDragAnswer ? 'is-target' : ''}`}
                                                style={{left:`${slot.x}%`, top:`${slot.y}%`, width:`${width}%`, height:`${height}%`}}
+                                               draggable={!!answer}
+                                               onDragStart={(event: any) => { if (answer) beginAnswerDrag(event, answer, answer, question.id); }}
                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
-                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(question.id, readDroppedAnswer(event), true); }}
+                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(question.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
                                                onClick={() => { if (answer) handleAnswerChange(question.id, ""); else commitDraggedAnswer(question.id, selectedDragAnswer, true); }}
-                                               title={answer ? 'Click to clear this answer' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}>
-                                               {answer ? <><span>{answer}</span><button type="button" className="idp-map-drag-clear" aria-label={`Clear answer for question ${number}`} onClick={(event: any) => { event.stopPropagation(); handleAnswerChange(question.id, ""); }}>×</button></> : <span className="idp-map-drag-slot-number">{number}</span>}
+                                               title={answer ? 'Drag to another answer box or click to clear' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}>
+                                               {answer ? <span>{answer}</span> : <span className="idp-map-drag-slot-number">{number}</span>}
                                            </div>
                                        );
                                    })}
+                                   </div> : <div style={{padding:32, color:'var(--esub)', textAlign:'center'}}>Map image has not been added yet.</div>}
                                </div>
                                <aside className="idp-map-drag-bank" aria-label="Map answer choices">
                                    <div className="idp-map-drag-bank-title">Options</div>
@@ -10478,7 +10492,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                            className={`idp-map-drag-option ${used ? 'is-used' : ''} ${selectedDragAnswer === option ? 'is-selected' : ''}`}
                                            onClick={() => { if (!used) setSelectedDragAnswer(option); }}
                                            onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
-                                           <span className="idp-map-drag-option-key">{String.fromCharCode(65 + index)}</span><span>{option}</span>
+                                           <span>{option}</span>
                                        </button>;
                                    })}
                                </aside>
@@ -10508,12 +10522,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   <div className="idp-wordbank">
                                       {dragOptions.map((opt: string, idx: number) => {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
-                                          const letter = String.fromCharCode(65 + idx);
                                           return (
                                               <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable={!used}
                                                    onClick={() => { if (!used) setSelectedDragAnswer(String(opt)); }}
                                                    onDragStart={(e: any) => { if (!used) beginAnswerDrag(e, opt, opt); }}>
-                                                  <span className="idp-wb-letter">{letter}</span>
                                                   <span>{opt}</span>
                                               </div>
                                           );
@@ -10558,7 +10570,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                     onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
                                                                     style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
-                                                                    <span style={{flexShrink:0, width:28, fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)'}}>{optId}</span>
                                                                     <span style={{flex:1, fontSize:13, lineHeight:1.45, color:'var(--etext)'}} dangerouslySetInnerHTML={{__html: renderSafeHTML(optContent)}} />
                                                                   </div>
                                                                 );
@@ -10585,7 +10596,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id}>{val || gi}</span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag to another answer box or click to clear' : 'Drag an answer here'}>{val || gi}</span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
@@ -10597,7 +10608,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
                                                                           onClick={() => setSelectedDragAnswer(String(opt))}
                                                                           onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
-                                                                          <span className="idp-match2-key">{String.fromCharCode(65 + dragOptions.indexOf(opt))}</span>
                                                                           <span>{opt}</span>
                                                                       </div>
                                                                   ))}
@@ -13244,9 +13254,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             const setSlots = (slots: Record<string, any>) => updateMap({ mapSlots: slots });
                                             const slotAt = (number: string, index: number) => mapSlots[number] || { questionNumber: Number(number), x: 50, y: 17 + index * (66 / Math.max(1, mapNumbers.length - 1 || 1)), width: 18, height: 7 };
                                             const moveSlot = (number: string, event: any, resize = false) => {
-                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-map-drag-canvas') as HTMLElement | null;
-                                                if (!canvas) return;
-                                                const bounds = canvas.getBoundingClientRect();
+                                                const stage = (event.currentTarget as HTMLElement).closest('.eb-map-drag-stage') as HTMLElement | null;
+                                                if (!stage) return;
+                                                const bounds = stage.getBoundingClientRect();
                                                 const move = (pointer: PointerEvent) => {
                                                     const current = slotAt(number, mapNumbers.indexOf(number));
                                                     const x = ((pointer.clientX - bounds.left) / bounds.width) * 100;
@@ -13268,14 +13278,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={mapUrl} onChange={(event:any) => updateMap({mapImageUrl:event.target.value})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
                                                     <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Pin question<select value={activeSlot || ''} onChange={(event:any) => setMapDragEditorSelection(event.target.value)} style={{display:'block', width:'100%', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:700}}>{mapNumbers.map((number:string) => <option key={number} value={number}>Question {number}</option>)}</select></label>
                                                 </div>
-                                                <div className="eb-map-drag-canvas" onClick={(event:any) => {
-                                                    if (!mapUrl || !activeSlot || (event.target as HTMLElement).closest('.eb-map-slot')) return;
-                                                    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
-                                                    const current = slotAt(activeSlot, mapNumbers.indexOf(activeSlot));
-                                                    setSlots({ ...mapSlots, [activeSlot]: {...current, x:clamp(((event.clientX-bounds.left)/bounds.width)*100,0,100), y:clamp(((event.clientY-bounds.top)/bounds.height)*100,0,100)} });
-                                                }} style={{position:'relative', minHeight:mapUrl ? 0 : 170, overflow:'hidden', border:`1px dashed ${EB.line}`, background:EB.wash, cursor:mapUrl ? 'crosshair' : 'default'}}>
-                                                    {mapUrl ? <img src={mapUrl} alt="Map slot editor" draggable={false} style={{display:'block', width:'100%', maxHeight:560, objectFit:'contain'}} /> : <div style={{padding:46, textAlign:'center', color:EB.sub}}>Paste the map image URL to pin the answer slots.</div>}
-                                                    {mapUrl && mapNumbers.map((number:string, index:number) => { const slot=slotAt(number,index); return <div key={number} className="eb-map-slot" onPointerDown={(event:any) => moveSlot(number,event)} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, height:`${slot.height || 7}%`, minWidth:50, minHeight:24, transform:'translate(-50%, -50%)', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box', border:`2px dashed ${number===activeSlot?EB.accent:'#64748b'}`, background:'rgba(255,255,255,.84)', color:EB.ink, fontFamily:EB.fMono, fontWeight:800, cursor:'grab', touchAction:'none', userSelect:'none'}}>{number}<button type="button" title="Drag to resize" onPointerDown={(event:any)=>{event.stopPropagation();moveSlot(number,event,true)}} style={{position:'absolute', right:-6, bottom:-6, width:13, height:13, padding:0, border:'2px solid #fff', borderRadius:'50%', background:EB.accent, cursor:'nwse-resize'}} /></div> })}
+                                                <div className="eb-map-drag-canvas" style={{minHeight:mapUrl ? 0 : 170, overflow:'auto', border:`1px dashed ${EB.line}`, background:EB.wash, textAlign:'center'}}>
+                                                    {mapUrl ? <div className="eb-map-drag-stage" onClick={(event:any) => {
+                                                        if (!activeSlot || (event.target as HTMLElement).closest('.eb-map-slot')) return;
+                                                        const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                                                        const current = slotAt(activeSlot, mapNumbers.indexOf(activeSlot));
+                                                        setSlots({ ...mapSlots, [activeSlot]: {...current, x:clamp(((event.clientX-bounds.left)/bounds.width)*100,0,100), y:clamp(((event.clientY-bounds.top)/bounds.height)*100,0,100)} });
+                                                    }} style={{position:'relative', display:'inline-block', width:'fit-content', maxWidth:'100%', lineHeight:0, cursor:'crosshair'}}>
+                                                        <img src={mapUrl} alt="Map slot editor" draggable={false} style={{display:'block', width:'auto', maxWidth:'100%', height:'auto', maxHeight:560, objectFit:'contain'}} />
+                                                        {mapNumbers.map((number:string, index:number) => { const slot=slotAt(number,index); return <div key={number} className="eb-map-slot" onPointerDown={(event:any) => moveSlot(number,event)} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, height:`${slot.height || 7}%`, minWidth:50, minHeight:24, transform:'translate(-50%, -50%)', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box', border:`2px dashed ${number===activeSlot?EB.accent:'#64748b'}`, background:'rgba(255,255,255,.84)', color:EB.ink, fontFamily:EB.fMono, fontWeight:800, lineHeight:1.2, cursor:'grab', touchAction:'none', userSelect:'none'}}>{number}<button type="button" title="Drag to resize" onPointerDown={(event:any)=>{event.stopPropagation();moveSlot(number,event,true)}} style={{position:'absolute', right:-6, bottom:-6, width:13, height:13, padding:0, border:'2px solid #fff', borderRadius:'50%', background:EB.accent, cursor:'nwse-resize'}} /></div> })}
+                                                    </div> : <div style={{padding:46, textAlign:'center', color:EB.sub}}>Paste the map image URL to pin the answer slots.</div>}
                                                 </div>
                                                 <div style={{fontSize:12, color:EB.sub}}>Select a question then click the image to place it. Drag its box to move; drag the dot to resize.</div>
                                                 <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(230px, 1fr))', gap:9, background:EB.wash, padding:14, borderRadius:EB.radius}}>{mapNumbers.map((number:string,index:number)=>{const slot=slotAt(number,index); const set=(field:string,value:string)=>setSlots({...mapSlots,[number]:{...slot,[field]:clamp(Number(value)||0,field==='width'?4:0,field==='width'?52:field==='height'?20:100)}}); return <div key={number} style={{display:'grid', gridTemplateColumns:'32px repeat(4,1fr)', gap:5, alignItems:'center', padding:'8px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.sheet}}><button type="button" onClick={()=>setMapDragEditorSelection(number)} style={{border:0, background:'transparent', color:EB.accent, fontWeight:800, cursor:'pointer'}}>#{number}</button>{(['x','y','width','height'] as string[]).map(field=><label key={field} style={{fontSize:9,color:EB.sub,fontWeight:800,textTransform:'uppercase'}}>{field}<input type="number" step="0.1" value={slot[field]} onChange={(event:any)=>set(field,event.target.value)} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:3,padding:'4px',border:`1px solid ${EB.line}`,borderRadius:4,background:EB.wash,color:EB.ink,fontSize:11}} /></label>)}</div>})}</div>
