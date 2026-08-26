@@ -213,13 +213,13 @@
       // arrive as SENTENCE, NOTES, or no subtype at all. The numbered shared
       // context is the reliable signal for every inline completion form.
       const rvCompletionContext = (q: any) => String(q.groupContext || '');
-      const rvIsInlineListeningCompletion = (q: any) => rvActiveIsListening
-          && ['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
+      const rvIsInlineCompletion = (q: any) => (['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
+          || (q.type === 'DRAG_DROP' && q.subType === 'SUMMARY_DRAG'))
           && /\[\d+\]/.test(rvCompletionContext(q));
-      const rvRenderListeningCompletionGroup = (seed: any) => {
+      const rvRenderCompletionGroup = (seed: any) => {
           const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
               rvSectionOf(candidate) === rvActiveIdx
-              && rvIsInlineListeningCompletion(candidate)
+              && rvIsInlineCompletion(candidate)
               && rvCompletionContext(candidate) === rvCompletionContext(seed)
           );
           if (!groupQuestions.length) return null;
@@ -244,7 +244,7 @@
           });
           const selectedExplanation = explainMap[selected.id];
           return (
-              <section key={`listening-completion-${seed.id}`} className="rv-completion-review">
+              <section key={`completion-review-${seed.id}`} className="rv-completion-review">
                   <div className="rv-completion-context" onClick={(event) => {
                       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-completion-qid]');
                       const question = groupQuestions.find((candidate: any) => candidate.id === button?.dataset.rvCompletionQid);
@@ -663,25 +663,68 @@
                       
                       {reviewQuiz.quiz.questions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
-                          if (rvIsInlineListeningCompletion(q)) {
+                          if (rvIsInlineCompletion(q)) {
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
-                                  && rvIsInlineListeningCompletion(candidate)
+                                  && rvIsInlineCompletion(candidate)
                                   && rvCompletionContext(candidate) === rvCompletionContext(q)
                               );
-                              return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
+                              return alreadyRendered ? null : rvRenderCompletionGroup(q);
                           }
-                          if (q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") {
+                          if (q.type === "MATCHING") {
+                              const matchKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "MATCHING"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === matchKey
+                              );
+                              if (alreadyRendered) return null;
+                              const matchQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "MATCHING"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === matchKey
+                              );
+                              const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => String(option));
+                              const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
+                              const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
+                              const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
+                              const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || matchQuestions.find((candidate: any) => Number(reviewQuiz.result.answers?.[candidate.id]) !== Number(candidate.correctAnswer))
+                                  || matchQuestions[0];
+                              const renderGrid = <div style={{overflowX:'auto'}}><table className="idp-matching-table" style={{width:'100%', borderCollapse:'collapse'}}><thead><tr><th style={{textAlign:'left', minWidth:180}}>Question</th>{options.map((_:string, optionIndex:number)=><th key={optionIndex}>{String.fromCharCode(65+optionIndex)}</th>)}</tr></thead><tbody>{matchQuestions.map((question:any) => {
+                                  const answer = reviewQuiz.result.answers?.[question.id];
+                                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td><span style={{display:'inline-flex', minWidth:24, height:24, alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, marginRight:8, fontSize:12, fontWeight:800}}>{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td>{options.map((_:string, optionIndex:number) => {
+                                      const correct = Number(question.correctAnswer) === optionIndex;
+                                      const chosen = answer !== undefined && Number(answer) === optionIndex;
+                                      return <td key={optionIndex} style={{textAlign:'center', background:correct ? `${C.succ}16` : chosen ? `${C.err}12` : 'transparent'}}><span title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''} style={{display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:'50%', border:`2px solid ${correct ? C.succ : chosen ? C.err : C.border}`, color:correct ? C.succ : chosen ? C.err : C.sub, fontWeight:900}}>{correct ? '✓' : chosen ? '×' : ''}</span></td>;
+                                  })}</tr>;
+                              })}</tbody></table></div>;
+                              return <section key={`matching-review-${q.id}`} className="rv-completion-review">
+                                  {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
+                                  {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
+                                  <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>
+                              </section>;
+                          }
+                          if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
+                              const dragKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) => candidate.type === "DRAG_DROP" && candidate.subType === "COLUMN_DRAG" && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === dragKey);
+                              if (alreadyRendered) return null;
+                              const dragQuestions = reviewQuiz.quiz.questions.filter((candidate: any) => candidate.type === "DRAG_DROP" && candidate.subType === "COLUMN_DRAG" && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === dragKey);
+                              const selected = dragQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId) || dragQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct) || dragQuestions[0];
+                              return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="idp-match2" style={{gridTemplateColumns:'minmax(0,1fr) minmax(240px,.7fr)'}}>{<div className="idp-match2-items">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(140px,.55fr)',gap:12,alignItems:'center',width:'100%',textAlign:'left',border:0,borderBottom:`1px solid ${C.border}`,background:'transparent',padding:'10px 0',cursor:'pointer',color:C.text}}><span><b style={{marginRight:7,color:C.sub}}>{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-completion-badge rv-completion-${state.correct?'correct':state.blank?'blank':'wrong'}`}>{state.blank?'No answer':state.given}{!state.correct && <small style={{display:'block',marginTop:2}}>Correct: {state.expected}</small>}</span></button>; })}</div>}<aside className="idp-match2-bank">{(q.options || []).map((option:string, optionIndex:number)=><div key={`${option}-${optionIndex}`} className="idp-wordbank-item"><span className="idp-wb-letter">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside></div>
+                                  <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>
+                              </section>;
+                          }
+                          if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
                               const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
-                                  candidate.type === "DRAG_DROP"
-                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
                               if (alreadyRendered) return null;
                               const flowQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
-                                  candidate.type === "DRAG_DROP"
-                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
                               const selected = flowQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
