@@ -55,7 +55,7 @@ async def unexpected_api_error(request: Request, exc: Exception):
 
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
-VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG"]
+VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG"]
 
 RE_Q_START = re.compile(r'^(?:Question|Câu)\s+\d+', re.IGNORECASE)
 RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
@@ -240,9 +240,84 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             "mapSlots": shared_slots,
         })
 
+def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
+    """Parse a flow-chart whose numbered nodes are completed from a drag answer bank.
+
+    Authoring uses [FLOW]/[/FLOW] (or [CONTEXT]/[/CONTEXT]) for the diagram,
+    then an Options: list and the conventional numbered *correct-answer key.
+    """
+    instruction_html: List[str] = []
+    flow_nodes: List[Tuple[str, str]] = []
+    options: List[str] = []
+    answers: Dict[str, str] = {}
+    in_flow = False
+    in_options = False
+    current_answer = ""
+    answer_start = re.compile(r'^(\d+)\s*[\.)]\s*$')
+    marker_re = re.compile(r'\[(\d+)\]')
+
+    for item in lines:
+        if not isinstance(item, Paragraph):
+            continue
+        html_line = paragraph_to_html(item)
+        text_line = re.sub(r'<[^>]+>', '', html_line).strip()
+        if not text_line:
+            continue
+        upper = text_line.upper()
+        if upper in {"[FLOW]", "[CONTEXT]"}:
+            in_flow, in_options, current_answer = True, False, ""
+            continue
+        if upper in {"[/FLOW]", "[/CONTEXT]"}:
+            in_flow = False
+            continue
+        if re.match(r'^OPTIONS\s*:\s*$', text_line, re.IGNORECASE):
+            in_options, current_answer = True, ""
+            continue
+
+        answer_match = answer_start.match(text_line)
+        if answer_match:
+            current_answer, in_options = answer_match.group(1), False
+            continue
+        if current_answer:
+            if text_line.startswith("*"):
+                answers[current_answer] = re.sub(r'^\*+\s*', '', text_line).strip()
+            continue
+
+        markers = marker_re.findall(text_line)
+        if in_flow or markers:
+            for number in markers:
+                if not any(existing_number == number for existing_number, _ in flow_nodes):
+                    flow_nodes.append((number, html_line))
+            continue
+        if in_options:
+            option = re.sub(r'^\s*[A-Za-z][\.)]\s*', '', text_line).strip()
+            if option:
+                options.append(option)
+            continue
+        instruction_html.append(html_line)
+
+    if not flow_nodes:
+        return
+    instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
+    shared_options = list(dict.fromkeys(options))
+    for number, node_html in flow_nodes:
+        target_questions.append({
+            "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "type": "DRAG_DROP",
+            "subType": "FLOWCHART_DRAG",
+            "instruction": instruction,
+            "groupContext": "",
+            "text": node_html,
+            "options": shared_options.copy(),
+            "correctAnswer": answers.get(number, ""),
+        })
+
 def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
     if block_type == "MAP_DRAG":
         process_map_drag_block(lines, target_questions)
+        return
+    if block_type == "FLOW_DRAG":
+        process_flow_drag_block(lines, target_questions)
         return
     html_lines, text_lines = [], []
     for item in lines:
@@ -359,7 +434,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
                              for line in re.findall(r'<div>(.*?)</div>', q["groupContext"] or "", flags=re.DOTALL)]
             marked_lines = [line for line in context_lines if re.search(r'\[\d+\]', line)]
             is_independent_rows = len(marked_lines) > 0 and all(re.match(r'^\s*\[\d+\]', line) for line in marked_lines)
-            sub_t = "SUMMARY_DRAG" if marked_lines and not is_independent_rows else "COLUMN_DRAG"
+            sub_t = "FLOWCHART_DRAG" if "flow-chart" in lower_txt or "flowchart" in lower_txt else ("SUMMARY_DRAG" if marked_lines and not is_independent_rows else "COLUMN_DRAG")
         
         is_tfng = RE_TFNG.search(lower_txt) or "true/false/not given" in lower_txt
         is_ynng = RE_YNNG.search(lower_txt) or "yes/no/not given" in lower_txt

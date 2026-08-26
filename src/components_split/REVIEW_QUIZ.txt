@@ -671,6 +671,55 @@
                               );
                               return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
                           }
+                          if (q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") {
+                              const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "DRAG_DROP"
+                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
+                              );
+                              if (alreadyRendered) return null;
+                              const flowQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "DRAG_DROP"
+                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
+                              );
+                              const selected = flowQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || flowQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
+                                  || flowQuestions[0];
+                              const selectedState = rvCompletionAnswer(selected);
+                              const selectFlowQuestion = (question: any) => {
+                                  setReviewActiveQuestionId(question.id);
+                                  const evidence = explainMap[question.id]?.audioEvidence;
+                                  if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
+                              };
+                              return <section key={`flow-drag-review-${q.id}`} className="rv-completion-review" style={{marginBottom:20}}>
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="rv-flowchart-review" onClick={(event:any) => {
+                                      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
+                                      const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
+                                      if (question) selectFlowQuestion(question);
+                                  }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
+                                      {flowQuestions.map((question: any, index: number) => {
+                                          const state = rvCompletionAnswer(question);
+                                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+                                          const label = state.blank ? 'No answer' : state.given;
+                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
+                                          return <React.Fragment key={question.id}>
+                                              <div className="rv-flowchart-node" style={{border:`1px solid ${state.correct ? C.succ : state.blank ? C.warn : C.err}`, borderRadius:6, background:state.correct ? `${C.succ}0f` : state.blank ? `${C.warn}10` : `${C.err}0d`, padding:'10px 12px', lineHeight:1.45, fontWeight:600}} dangerouslySetInnerHTML={{__html:renderedNode}} />
+                                              {!state.correct && <div style={{textAlign:'center', color:C.succ, fontSize:12, fontWeight:800, margin:'5px 0'}}>Correct answer: {state.expected}</div>}
+                                              {index < flowQuestions.length - 1 && <div style={{width:20, textAlign:'center', fontSize:18, fontWeight:800, lineHeight:1, margin:'5px auto', color:C.text}}>&darr;</div>}
+                                          </React.Fragment>;
+                                      })}
+                                  </div>
+                                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
+                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
+                                      {!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}
+                                  </div>
+                              </section>;
+                          }
                           if (q.type === "MAP_DRAG") {
                               const mapUrl = String((q as any).mapImageUrl || "").trim();
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>

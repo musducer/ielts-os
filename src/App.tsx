@@ -8528,6 +8528,55 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               );
                               return alreadyRendered ? null : rvRenderListeningCompletionGroup(q);
                           }
+                          if (q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") {
+                              const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "DRAG_DROP"
+                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
+                              );
+                              if (alreadyRendered) return null;
+                              const flowQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "DRAG_DROP"
+                                  && candidate.subType === "FLOWCHART_DRAG"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
+                              );
+                              const selected = flowQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || flowQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
+                                  || flowQuestions[0];
+                              const selectedState = rvCompletionAnswer(selected);
+                              const selectFlowQuestion = (question: any) => {
+                                  setReviewActiveQuestionId(question.id);
+                                  const evidence = explainMap[question.id]?.audioEvidence;
+                                  if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
+                              };
+                              return <section key={`flow-drag-review-${q.id}`} className="rv-completion-review" style={{marginBottom:20}}>
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="rv-flowchart-review" onClick={(event:any) => {
+                                      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
+                                      const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
+                                      if (question) selectFlowQuestion(question);
+                                  }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
+                                      {flowQuestions.map((question: any, index: number) => {
+                                          const state = rvCompletionAnswer(question);
+                                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+                                          const label = state.blank ? 'No answer' : state.given;
+                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
+                                          return <React.Fragment key={question.id}>
+                                              <div className="rv-flowchart-node" style={{border:`1px solid ${state.correct ? C.succ : state.blank ? C.warn : C.err}`, borderRadius:6, background:state.correct ? `${C.succ}0f` : state.blank ? `${C.warn}10` : `${C.err}0d`, padding:'10px 12px', lineHeight:1.45, fontWeight:600}} dangerouslySetInnerHTML={{__html:renderedNode}} />
+                                              {!state.correct && <div style={{textAlign:'center', color:C.succ, fontSize:12, fontWeight:800, margin:'5px 0'}}>Correct answer: {state.expected}</div>}
+                                              {index < flowQuestions.length - 1 && <div style={{width:20, textAlign:'center', fontSize:18, fontWeight:800, lineHeight:1, margin:'5px auto', color:C.text}}>&darr;</div>}
+                                          </React.Fragment>;
+                                      })}
+                                  </div>
+                                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
+                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
+                                      {!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}
+                                  </div>
+                              </section>;
+                          }
                           if (q.type === "MAP_DRAG") {
                               const mapUrl = String((q as any).mapImageUrl || "").trim();
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
@@ -9457,6 +9506,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
                       .idp-flowchart-panel { border: 1.5px solid #0969da; border-radius: 8px; padding: 18px 24px; background: var(--ebg); max-width: 680px; margin: 0 auto 18px; }
+                      .idp-flowchart-wrap { max-width: 760px; margin: 0 auto 18px; }
+                      .idp-flowchart-bank { margin: 0 auto 14px; padding: 14px 16px; border: 1px solid var(--eborder); border-radius: 8px; background: var(--epanel); }
+                      .idp-flowchart-bank-label { margin-bottom: 9px; color: var(--esub); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+                      .idp-flowchart-bank-items { display: flex; flex-wrap: wrap; gap: 8px; }
+                      .idp-flowchart-bank .idp-wordbank-item { margin: 0; }
                       .idp-flowchart-node { border: 1px solid #d8dee4; border-radius: 6px; background: rgba(255,255,255,0.65); padding: 10px 12px; line-height: 1.45; font-size: var(--efont); font-weight: 600; color: var(--etext); }
                       .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
                       .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
@@ -10128,7 +10182,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           })();
                           const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
                           const isMapDragGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "MAP_DRAG");
-                  const isFlowChartGroup = false;
+                  const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
+                      q.subType === "FLOWCHART" || q.subType === "FLOWCHART_DRAG"
+                  );
                   const dragOptions = isDragDropGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
                   // Nhãn 2 cột kéo-thả: rút các dòng nhãn ngắn trong instruction (vd "Attractions", "Areas of the festival").
                   const dragLabels = (() => {
@@ -10218,12 +10274,35 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const hasHeaderInContext = (group.context || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
                   const shouldShowAutoHeader = !hasHeaderInInstruction && !hasHeaderInContext;
 
-                   const renderFlowChart = () => (
-                       <div className="idp-flowchart-panel">
+                    const renderFlowChart = () => {
+                        const isDragFlow = group.questions.some((q: any) => q.subType === "FLOWCHART_DRAG");
+                        const flowOptions: string[] = isDragFlow
+                            ? (group.questions.find((q: any) => Array.isArray(q.options) && q.options.length)?.options || []).map((option: any) => String(option).trim()).filter(Boolean)
+                            : [];
+                        const assigned = group.questions.map((q: any) => String(examAnswers[q.id] || "")).filter(Boolean);
+                        const reuseTags = group.questions.length > flowOptions.length;
+                        return (
+                        <div className="idp-flowchart-wrap">
+                          {isDragFlow && <div className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
+                              <div className="idp-flowchart-bank-label">Answer choices</div>
+                              <div className="idp-flowchart-bank-items">
+                                  {flowOptions.map((option: string, index: number) => {
+                                      const used = !reuseTags && assigned.includes(option);
+                                      return <button type="button" key={`${option}-${index}`} draggable={!used}
+                                          className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
+                                          onClick={() => { if (!used) setSelectedDragAnswer(option); }}
+                                          onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
+                                          <span className="idp-wb-letter">{String.fromCharCode(65 + index)}</span><span>{option}</span>
+                                      </button>;
+                                  })}
+                              </div>
+                          </div>}
+                        <div className="idp-flowchart-panel">
                           {group.questions.map((q, flowIdx) => {
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
-                              const rawText = q.text || "";
-                              const blankMatch = rawText.match(/_{2,}|\.{4,}|…|…/);
+                               const rawText = q.text || "";
+                               const flowMarker = rawText.match(/\[\d+\]/);
+                              const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…|…/);
                               const beforeText = blankMatch && blankMatch.index !== undefined ? rawText.slice(0, blankMatch.index) : rawText;
                               const afterText = blankMatch && blankMatch.index !== undefined ? rawText.slice(blankMatch.index + blankMatch[0].length) : "";
                               const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
@@ -10231,8 +10310,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
                                           <span className="idp-flowchart-number">{qGlobalIdx}</span>
-                                          <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
-                                          <input
+                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
+                                           {isDragFlow ? <span
+                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''}`}
+                                               data-qid={q.id}
+                                               title={isAnsweredFlow ? 'Click to clear this answer' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                               onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true); }}
+                                               onClick={() => { if (isAnsweredFlow) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer, true); }}
+                                           >{isAnsweredFlow ? String(examAnswers[q.id]) : qGlobalIdx}</span> : <input
                                               type="text"
                                               className={`idp-inline-input inline-blank-input ${isAnsweredFlow ? 'filled' : ''}`}
                                               data-answer-input="true"
@@ -10249,17 +10335,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
                                               style={{ textAlign: 'center', minWidth: 140 }}
-                                          />
-                                          <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
+                                           />}
+                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
                                       </div>
                                       {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                   </React.Fragment>
                               );
                           })}
-                       </div>
-                   );
+                        </div>
+                        </div>
+                        );
+                    };
 
-                   const renderMatchingTable = () => (
+                    const renderMatchingTable = () => (
                        <>
                            <table className="idp-matching-table">
                                <thead>
@@ -12947,6 +13035,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="Sentence Completion">Sentence Completion</option>
                                                     <option value="SUMMARY_DRAG">Summary drag (Reading)</option>
                                                     <option value="COLUMN_DRAG">Matching 2 columns (Listening)</option>
+                                                    <option value="FLOWCHART">Flow-chart (inline input)</option>
+                                                    <option value="FLOWCHART_DRAG">Flow-chart (drag and drop)</option>
                                                 </select>
                                             </div>
                                             <div style={{display: 'flex', gap: 7}}>
@@ -13148,6 +13238,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(230px, 1fr))', gap:9, background:EB.wash, padding:14, borderRadius:EB.radius}}>{mapNumbers.map((number:string,index:number)=>{const slot=slotAt(number,index); const set=(field:string,value:string)=>setSlots({...mapSlots,[number]:{...slot,[field]:clamp(Number(value)||0,field==='width'?4:0,field==='width'?52:field==='height'?20:100)}}); return <div key={number} style={{display:'grid', gridTemplateColumns:'32px repeat(4,1fr)', gap:5, alignItems:'center', padding:'8px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.sheet}}><button type="button" onClick={()=>setMapDragEditorSelection(number)} style={{border:0, background:'transparent', color:EB.accent, fontWeight:800, cursor:'pointer'}}>#{number}</button>{(['x','y','width','height'] as string[]).map(field=><label key={field} style={{fontSize:9,color:EB.sub,fontWeight:800,textTransform:'uppercase'}}>{field}<input type="number" step="0.1" value={slot[field]} onChange={(event:any)=>set(field,event.target.value)} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:3,padding:'4px',border:`1px solid ${EB.line}`,borderRadius:4,background:EB.wash,color:EB.ink,fontSize:11}} /></label>)}</div>})}</div>
                                                 <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Map options, one per line<textarea value={options.join('\n')} onChange={(event:any)=>updateMap({options:event.target.value.split(/\n+/).map((line:string)=>line.trim()).filter(Boolean)})} placeholder={'Cookery room\nGames room\nKitchen'} style={{display:'block',width:'100%',minHeight:115,boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,resize:'vertical'}} /></label>
                                                 <div style={{display:'grid',gap:8}}>{grp.questions.map((question:any,offset:number)=><label key={question.id} style={{display:'grid',gridTemplateColumns:'70px minmax(0,1fr)',gap:10,alignItems:'center',fontFamily:EB.fMono,fontWeight:800,color:EB.accent}}>#{mapNumber(question,offset)}<input value={String(question.correctAnswer || '')} onChange={(event:any)=>updateGroup((item:any,itemOffset:number)=>itemOffset===offset?{...item,correctAnswer:event.target.value}:item)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,fontFamily:EB.fBody,fontWeight:600}} /></label>)}</div>
+                                            </div>;
+                                        })() : (grp.groupType === 'DRAG_DROP' && q.subType === 'FLOWCHART_DRAG') ? (() => {
+                                            const flowOptions = (q.options || []).map((option: any) => String(option)).filter(Boolean);
+                                            const updateFlow = (patch: any) => updateGroup((item: any) => ({ ...item, ...patch }));
+                                            return <div style={{display:'grid', gap:16}}>
+                                                <div style={{padding:'14px 16px', border:`1px solid ${EB.line}`, borderRadius:EB.radius, background:EB.wash, color:EB.sub, fontSize:13, lineHeight:1.5}}>Each node needs one numbered marker, for example <b style={{color:EB.accent}}>[{qIndex + 1}]</b>. The learner will drag one answer-bank card into that node.</div>
+                                                <label style={{...ebEyebrow, display:'flex'}}><Ico name="edit" size={13} />Flow-chart nodes</label>
+                                                <div style={{display:'grid', gap:9}}>{grp.questions.map((item:any, offset:number) => <div key={item.id} style={{display:'grid', gridTemplateColumns:'46px minmax(0,1fr) minmax(160px,.42fr)', gap:10, alignItems:'center', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, background:EB.sheet}}><span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>#{qIndex + offset + 1}</span><input value={String(item.text || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,text:event.target.value}:entry)} placeholder={`Flow-chart text with [${qIndex + offset + 1}]`} style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /><input value={String(item.correctAnswer || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /></div>)}</div>
+                                                <label style={{...ebEyebrow, display:'flex'}}><Ico name="key" size={13} />Answer bank, one option per line<textarea value={flowOptions.join('\n')} onChange={(event:any)=>updateFlow({options:event.target.value.split(/\r?\n/).map((line:string)=>line.replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean)})} placeholder={'first material\nsecond process\nfinal result'} style={{display:'block',width:'100%',minHeight:125,boxSizing:'border-box',marginTop:8,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,resize:'vertical'}} /></label>
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
