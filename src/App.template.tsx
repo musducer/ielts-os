@@ -3546,6 +3546,10 @@ export default function IeltsSupremeOS() {
   // the next network heartbeat. Coalesce lifecycle-triggered server refreshes on resume.
   const cloudRefreshInFlightRef = useRef(false);
   const lastCloudRefreshAtRef = useRef(0);
+  // Firestore transactions need a live server. Keep every workspace mutation in a
+  // durable, ordered journal so a brief mobile/weak-network outage never requires
+  // a refresh or silently drops an action that is not covered by a specialised queue.
+  const workspaceSyncChainRef = useRef<Promise<unknown>>(Promise.resolve());
   // The old workspace blob remains readable during migration only. Once the
   // dedicated collection is confirmed, it is the sole quiz source on all devices.
   const legacyQuizzesRef = useRef<Quiz[]>([]);
@@ -3599,6 +3603,26 @@ export default function IeltsSupremeOS() {
   };
   const clearPendingCoinOperation = () => {
     try { localStorage.removeItem(pendingCoinOperationKey()); } catch (e) {}
+  };
+  const pendingWorkspaceMutationsKey = () => `ielts_pending_workspace_mutations_${String(currentUser?.email || "user").toLowerCase()}`;
+  const readPendingWorkspaceMutations = (): { id: string; payload: any; createdAt: number }[] => {
+    try {
+      const raw = localStorage.getItem(pendingWorkspaceMutationsKey());
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((entry: any) => entry?.id && entry?.payload && typeof entry.payload === "object")
+        : [];
+    } catch { return []; }
+  };
+  const writePendingWorkspaceMutations = (entries: { id: string; payload: any; createdAt: number }[]) => {
+    try {
+      if (entries.length) localStorage.setItem(pendingWorkspaceMutationsKey(), JSON.stringify(entries));
+      else localStorage.removeItem(pendingWorkspaceMutationsKey());
+    } catch (error) {
+      // IndexedDB still protects Firestore writes when available; never make a UI
+      // action fail merely because a browser has disabled localStorage.
+      console.warn("Unable to persist workspace sync journal:", error);
+    }
   };
   const makeCoinOperation = (studentId: string, delta: number, kind: string, extra: Partial<CoinOperation> = {}): CoinOperation => ({
     id: `coin_${studentId}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
@@ -3812,12 +3836,19 @@ export default function IeltsSupremeOS() {
   const externalPauseTimesRef = useRef<number[]>([]);
   const meetAudioIssueRef = useRef(false);
   const androidAudioCtxRef = useRef<AudioContext | null>(null);
+  const audioProgressPaintRef = useRef({ exam: 0, review: 0 });
+  const audioReloadAttemptsRef = useRef(0);
   const examTimerRef = useRef<number | null>(null);
   const timeAlertDismissRef = useRef<number | null>(null);
   const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
   const forceSubmitExamRef = useRef<(() => void) | null>(null);
   const securityIncidentRef = useRef(0);
   const latestExamState = useRef({ activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep }); 
+
+  useEffect(() => {
+    audioProgressPaintRef.current = { exam: 0, review: 0 };
+    audioReloadAttemptsRef.current = 0;
+  }, [activeExam?.audioUrl, reviewQuiz?.quiz?.audioUrl]);
 
   const dismissExamTimeAlert = () => {
     if (timeAlertDismissRef.current !== null) {
@@ -3875,6 +3906,23 @@ export default function IeltsSupremeOS() {
   const setManagedAudioLoading = () => {
     if (isListeningReviewAudio()) setRvAudioPlaying(false);
     else setAudioStatus("LOADING");
+  };
+
+  // Updating the complete exam application four times per second makes lower-end
+  // laptops stutter exactly when an audio buffer needs CPU time. Keep the native
+  // audio clock authoritative and paint the UI at a calm, predictable cadence.
+  const publishAudioProgress = (audio: HTMLAudioElement, review = false) => {
+    const channel: "exam" | "review" = review ? "review" : "exam";
+    const now = performance.now();
+    const current = Math.max(0, audio.currentTime || 0);
+    if (now - audioProgressPaintRef.current[channel] < 450) {
+      updateExamMediaSessionPosition(audio);
+      return;
+    }
+    audioProgressPaintRef.current[channel] = now;
+    if (review) setRvAudioCur(current);
+    else if ((activeExam as any)?.audioMode === "practice") setAudioCur(current);
+    updateExamMediaSessionPosition(audio);
   };
 
   const getAudioModeLabel = () => {
@@ -4044,6 +4092,13 @@ export default function IeltsSupremeOS() {
     audio.defaultMuted = false;
     audio.volume = Math.max(0, Math.min(1, _audioVolume));
     audio.playbackRate = rate;
+    // Do not download an 80 MB recording during initial render. The explicit user
+    // gesture upgrades buffering, which preserves autoplay permission and lets the
+    // browser's native range loader maintain a healthy playback buffer.
+    audio.preload = "auto";
+    if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+      audio.load();
+    }
     setManagedAudioLoading();
     try {
       await warmAndroidAudioPath();
@@ -4072,6 +4127,7 @@ export default function IeltsSupremeOS() {
     clearExamAudioResumeTimer();
     examAudioShouldPlayRef.current = true;
     examAudioRecoveryAttemptsRef.current = 0;
+    audioReloadAttemptsRef.current = 0;
     recordAudioDiagnostic("playing", audioRef.current);
     if ("mediaSession" in navigator) {
       try { navigator.mediaSession.playbackState = "playing"; } catch { }
@@ -4108,8 +4164,25 @@ export default function IeltsSupremeOS() {
 
   const handleExamAudioError = (error: MediaError | null) => {
     recordAudioDiagnostic("error", audioRef.current, error ? `${error.code}:${error.message || ""}` : "");
-    if (error?.code === MediaError.MEDIA_ERR_ABORTED && examAudioShouldPlayRef.current && audioRef.current) {
-      recoverInterruptedExamAudio(audioRef.current);
+    const audio = audioRef.current;
+    if (examAudioShouldPlayRef.current && audio && !audio.ended
+        && (error?.code === MediaError.MEDIA_ERR_ABORTED || error?.code === MediaError.MEDIA_ERR_NETWORK || error?.code === MediaError.MEDIA_ERR_DECODE)
+        && audioReloadAttemptsRef.current < 3) {
+      const resumeAt = audio.currentTime || 0;
+      audioReloadAttemptsRef.current += 1;
+      // A transient Range/proxy failure must not leave the first Play button dead.
+      // Reloading the same native element retains the browser's autoplay grant.
+      window.setTimeout(() => {
+        if (audioRef.current !== audio || !examAudioShouldPlayRef.current) return;
+        audio.preload = "auto";
+        audio.load();
+        const restoreAndResume = () => {
+          audio.removeEventListener("canplay", restoreAndResume);
+          if (resumeAt > 0 && Number.isFinite(audio.duration)) audio.currentTime = Math.min(resumeAt, Math.max(0, audio.duration - 0.1));
+          recoverInterruptedExamAudio(audio);
+        };
+        audio.addEventListener("canplay", restoreAndResume, { once: true });
+      }, 250 * audioReloadAttemptsRef.current);
       return;
     }
     examAudioShouldPlayRef.current = false;
@@ -4162,9 +4235,14 @@ useEffect(() => {
   }, [_isSepia, _fontSize, _lineHeight, _textAlign, _showLineNumbers, _fontFam]);
 
   useEffect(() => {
-      const clockInt = setInterval(() => setLiveTime(new Date(getRealTime()).toLocaleTimeString('vi-VN')), 1000);
-      return () => clearInterval(clockInt);
-  }, [activeExam, examTimeLeft]);
+      // The live clock only exists on the teacher shell. Updating the root component
+      // every second for every student unnecessarily steals time from the exam UI.
+      if (userRole !== "TEACHER") return;
+      const updateClock = () => setLiveTime(new Date(getRealTime()).toLocaleTimeString('vi-VN'));
+      updateClock();
+      const clockInt = window.setInterval(updateClock, 1000);
+      return () => window.clearInterval(clockInt);
+  }, [userRole]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -4194,6 +4272,9 @@ useEffect(() => {
   const flushOfflineQueue = async () => {
     const email = currentUser?.email;
     if (!email || !navigator.onLine) return;
+    // Replay ordinary teacher/student actions first. Quiz/vocab/result journals below
+    // remain specialised because they have stronger item-level acknowledgement rules.
+    await flushPendingWorkspaceMutations();
     // A quest submission carries both a normal result and append-only unlock state.
     // Replay the durable journal first. Each entry is removed only after its Firestore
     // transaction succeeds, so a false-positive navigator.onLine can never erase a pass.
@@ -4345,9 +4426,11 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
 };
 
 const applyWorkspaceSnapshot = (snap: any) => {
-  // CHỐNG "GIẬT": bỏ qua snapshot từ server khi ĐANG có ghi của chính mình hoặc vừa ghi xong (cửa sổ ngắn).
-  // Lúc này state local đã là nguồn đúng; nếu để snapshot CŨ đè vào thì data vừa xóa sẽ nhấp nháy hiện lại.
-  if (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current) return;
+  // Ignore only Firestore's local/cache echoes while our mutation is in flight.
+  // A server-confirmed update from another device must still be applied immediately;
+  // otherwise a phone can look stale until a manual refresh or later heartbeat.
+  const isUnconfirmedEcho = snap.metadata?.hasPendingWrites || snap.metadata?.fromCache;
+  if (isUnconfirmedEcho && (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current)) return;
   if (snap.exists()) {
     const d = snap.data();
     const pendingCoinOperation = readPendingCoinOperation();
@@ -4453,7 +4536,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const refreshCloudAfterForeground = async () => {
       if (disposed || !currentUser || !navigator.onLine || document.visibilityState === "hidden") return;
       const now = Date.now();
-      if (cloudRefreshInFlightRef.current || now - lastCloudRefreshAtRef.current < 2500) return;
+      if (cloudRefreshInFlightRef.current || now - lastCloudRefreshAtRef.current < 650) return;
 
       cloudRefreshInFlightRef.current = true;
       lastCloudRefreshAtRef.current = now;
@@ -4501,6 +4584,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
     window.addEventListener("focus", handleForeground);
     window.addEventListener("online", handleForeground);
     void refreshCloudAfterForeground();
+    // Mobile browsers can leave a Firestore stream visually alive but stale after a
+    // radio hand-off. This light server nudge only runs in a visible tab.
+    const foregroundHeartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible" && navigator.onLine) void refreshCloudAfterForeground();
+    }, 45000);
 
     return () => {
       disposed = true;
@@ -4512,6 +4600,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       window.removeEventListener("pageshow", handleForeground);
       window.removeEventListener("focus", handleForeground);
       window.removeEventListener("online", handleForeground);
+      window.clearInterval(foregroundHeartbeat);
     };
   }, [currentUser, userRole]);
 
@@ -5075,7 +5164,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     syncData(updatePayload);
   };
 
-  const syncData = async (newData: any) => {
+  const performSyncData = async (newData: any) => {
     // CHỐNG "GIẬT" KHI XÓA: đánh dấu đang có ghi của chính mình. onSnapshot sẽ KHÔNG đè state
     // local trong lúc transaction đang bay (snapshot CŨ còn trong đường truyền sẽ làm data xóa hiện lại).
     const quizDeleteIds = Array.isArray(newData.__quizDeletedIds) ? newData.__quizDeletedIds.map(String) : [];
@@ -7318,6 +7407,41 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if(!confirm(`Delete ${selectedQuizzes.length} selected exams?`)) return;
       const nx = quizzes.filter(q => !selectedQuizzes.includes(q.id));
       setQuizzes(nx); syncData({ quizzes: nx, __quizDeletedIds: selectedQuizzes }); setSelectedQuizzes([]);
+  };
+
+  const syncData = async (newData: any) => {
+    const entry = {
+      id: `workspace_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      payload: newData,
+      createdAt: Date.now(),
+    };
+    writePendingWorkspaceMutations([...readPendingWorkspaceMutations(), entry]);
+
+    const run = async () => {
+      const synced = await performSyncData(newData);
+      if (synced) {
+        writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+      }
+      return synced;
+    };
+    const task = workspaceSyncChainRef.current.then(run, run) as Promise<boolean>;
+    workspaceSyncChainRef.current = task.then(() => undefined, () => undefined);
+    return task;
+  };
+
+  const flushPendingWorkspaceMutations = async () => {
+    if (!navigator.onLine) return;
+    const run = async () => {
+      const pending = readPendingWorkspaceMutations();
+      for (const entry of pending) {
+        const synced = await performSyncData(entry.payload);
+        if (!synced) return;
+        writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+      }
+    };
+    const task = workspaceSyncChainRef.current.then(run, run);
+    workspaceSyncChainRef.current = task.then(() => undefined, () => undefined);
+    await task;
   };
 
   // ==========================================

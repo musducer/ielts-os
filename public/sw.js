@@ -1,5 +1,5 @@
 // IELTS OS service worker — app-shell offline + runtime caching
-const CACHE = "ielts-os-v10";
+const CACHE = "ielts-os-v11";
 const APP_SHELL = ["/", "/index.html", "/favicon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {

@@ -2,6 +2,7 @@
 import io
 import os
 import time
+import asyncio
 import traceback
 import base64
 import urllib.parse
@@ -690,7 +691,14 @@ async def hosted_audio(request: Request, audio_key: str, filename: str):
         client_range = request.headers.get("range")
         if client_range:
             upstream_headers["Range"] = client_range
-        upstream = urllib.request.urlopen(urllib.request.Request(target, headers=upstream_headers), timeout=20)
+        # Opening a large remote audio stream is blocking I/O. Offload just the
+        # connection handshake so one slow 80 MB recording cannot stall other API
+        # requests in the same serverless worker.
+        upstream = await asyncio.to_thread(
+            urllib.request.urlopen,
+            urllib.request.Request(target, headers=upstream_headers),
+            timeout=20,
+        )
         response_headers = {
             "Cache-Control": "private, no-store",
             "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),

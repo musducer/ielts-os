@@ -462,7 +462,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    }}>
                   
                   {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="auto" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
+                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="metadata" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
                           onContextMenu={(event: any) => event.preventDefault()}
                           onDragStart={(event: any) => event.preventDefault()}
                           onEnded={handleExamAudioEnded}
@@ -491,7 +491,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               }
                           }}
                           onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
-                          onTimeUpdate={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; if ((activeExam as any).audioMode === 'practice') setAudioCur(audio.currentTime || 0); updateExamMediaSessionPosition(audio); }}
+                          onTimeUpdate={(e: any) => publishAudioProgress(e.currentTarget as HTMLAudioElement)}
                           style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
                   )}
 
