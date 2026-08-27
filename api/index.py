@@ -5,11 +5,13 @@ import time
 import traceback
 import base64
 import urllib.parse
+import urllib.request
+import urllib.error
 import html
 import zipfile
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -39,7 +41,7 @@ app.add_middleware(
     allow_origin_regex=r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$",
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "Range", "Accept"],
 )
 
 
@@ -669,8 +671,8 @@ def _decode_audio_key(audio_key: str):
         raise ValueError("invalid audio key")
     return storage_path, token
 
-@app.get("/api/audio/{audio_key}/{filename}")
-async def hosted_audio(audio_key: str, filename: str):
+@app.api_route("/api/audio/{audio_key}/{filename}", methods=["GET", "HEAD"])
+async def hosted_audio(request: Request, audio_key: str, filename: str):
     try:
         storage_path, token = _decode_audio_key(audio_key)
         target = (
@@ -681,16 +683,40 @@ async def hosted_audio(audio_key: str, filename: str):
             + "?alt=media&token="
             + urllib.parse.quote(token, safe="")
         )
-        # Media clients commonly use byte-range requests. A temporary 302 can
-        # cause some browsers to restart the redirected request without Range,
-        # leaving duration unknown or playback silent. 307 preserves the
-        # original GET headers while keeping the Firebase URL out of the DOM.
-        return RedirectResponse(target, status_code=307, headers={
+        # Keep the Firebase URL out of the DOM and preserve native byte ranges.
+        # Edge may lose Range after a cross-origin 307 while Meet owns tab audio,
+        # which leaves duration at 0:00 and prevents playback from starting.
+        upstream_headers = {"User-Agent": "Mozilla/5.0"}
+        client_range = request.headers.get("range")
+        if client_range:
+            upstream_headers["Range"] = client_range
+        upstream = urllib.request.urlopen(urllib.request.Request(target, headers=upstream_headers), timeout=20)
+        response_headers = {
             "Cache-Control": "private, no-store",
-            "Accept-Ranges": "bytes",
-        })
+            "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
+        }
+        for header in ("Content-Type", "Content-Length", "Content-Range", "ETag", "Last-Modified"):
+            value = upstream.headers.get(header)
+            if value:
+                response_headers[header] = value
+
+        if request.method == "HEAD":
+            upstream.close()
+            return StreamingResponse(iter(()), status_code=upstream.status, headers=response_headers)
+
+        def stream_audio():
+            try:
+                while chunk := upstream.read(64 * 1024):
+                    yield chunk
+            finally:
+                upstream.close()
+
+        return StreamingResponse(stream_audio(), status_code=upstream.status, headers=response_headers)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:300] if hasattr(exc, "read") else b""
+        return JSONResponse(status_code=exc.code, content={"success": False, "error": "Không thể tải audio an toàn.", "detail": detail.decode("utf-8", "ignore")})
     except Exception:
-        return {"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."}
+        return JSONResponse(status_code=400, content={"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."})
 
 def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""

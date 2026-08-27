@@ -1645,9 +1645,27 @@ const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any>
   };
 };
 
+const resolveDragAnswerText = (question: any, value: any) => {
+  const raw = String(value ?? "").trim();
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (!raw || !options.length) return raw;
+  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
+  if (numeric >= 0 && numeric < options.length) return String(options[numeric]).replace(/<[^>]+>/g, "").trim();
+  if (/^[A-Z]$/i.test(raw)) {
+    const index = raw.toUpperCase().charCodeAt(0) - 65;
+    if (index >= 0 && index < options.length) return String(options[index]).replace(/<[^>]+>/g, "").trim();
+  }
+  return raw;
+};
+
 const isSingleQuestionCorrect = (question: any, answer: any) => {
   if (question?.type === "CHOICE" || question?.type === "MATCHING") return answer === question.correctAnswer;
-  return String(question?.correctAnswer).split("/").map(value => value.trim().toLowerCase()).includes(String(answer ?? "").trim().toLowerCase());
+  const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
+  const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
+  return String(question?.correctAnswer).split("/").map(value => {
+    const candidate = isDrag ? resolveDragAnswerText(question, value) : value;
+    return String(candidate).trim().toLowerCase();
+  }).includes(String(submitted).trim().toLowerCase());
 };
 
 const getQuizScoreSummary = (quizOrQuestions: any, answers: Record<string, any> = {}) => {
@@ -3784,6 +3802,9 @@ export default function IeltsSupremeOS() {
   const [_showQuestionMap, _setShowQuestionMap] = useState(false);
   const [enableTimerBeep, _setEnableTimerBeep] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Some Chromium/SEB builds strip custom DataTransfer MIME types at drop time.
+  // Keep the source slot locally so an already-placed card can still be moved.
+  const dragSourceQuestionRef = useRef<string>("");
   const audioPlayRequestRef = useRef(false);
   const examAudioShouldPlayRef = useRef(false);
   const examAudioResumeTimerRef = useRef<number | null>(null);

@@ -1645,9 +1645,27 @@ const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any>
   };
 };
 
+const resolveDragAnswerText = (question: any, value: any) => {
+  const raw = String(value ?? "").trim();
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (!raw || !options.length) return raw;
+  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
+  if (numeric >= 0 && numeric < options.length) return String(options[numeric]).replace(/<[^>]+>/g, "").trim();
+  if (/^[A-Z]$/i.test(raw)) {
+    const index = raw.toUpperCase().charCodeAt(0) - 65;
+    if (index >= 0 && index < options.length) return String(options[index]).replace(/<[^>]+>/g, "").trim();
+  }
+  return raw;
+};
+
 const isSingleQuestionCorrect = (question: any, answer: any) => {
   if (question?.type === "CHOICE" || question?.type === "MATCHING") return answer === question.correctAnswer;
-  return String(question?.correctAnswer).split("/").map(value => value.trim().toLowerCase()).includes(String(answer ?? "").trim().toLowerCase());
+  const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
+  const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
+  return String(question?.correctAnswer).split("/").map(value => {
+    const candidate = isDrag ? resolveDragAnswerText(question, value) : value;
+    return String(candidate).trim().toLowerCase();
+  }).includes(String(submitted).trim().toLowerCase());
 };
 
 const getQuizScoreSummary = (quizOrQuestions: any, answers: Record<string, any> = {}) => {
@@ -3784,6 +3802,9 @@ export default function IeltsSupremeOS() {
   const [_showQuestionMap, _setShowQuestionMap] = useState(false);
   const [enableTimerBeep, _setEnableTimerBeep] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Some Chromium/SEB builds strip custom DataTransfer MIME types at drop time.
+  // Keep the source slot locally so an already-placed card can still be moved.
+  const dragSourceQuestionRef = useRef<string>("");
   const audioPlayRequestRef = useRef(false);
   const examAudioShouldPlayRef = useRef(false);
   const examAudioResumeTimerRef = useRef<number | null>(null);
@@ -8988,9 +9009,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               const answer = String(value || "");
               if (!answer) return;
               setSelectedDragAnswer(answer);
+              dragSourceQuestionRef.current = sourceQid || "";
               const transfer = event?.dataTransfer;
               if (!transfer) return;
-              transfer.effectAllowed = sourceQid ? "move" : "copy";
+              // Edge/SEB reject a copy drop when the source only allows move.
+              transfer.effectAllowed = sourceQid ? "copyMove" : "copy";
               // SEB implementations vary in which data type survives a drop.
               // Keep the standard text type plus an application-specific fallback.
               transfer.setData("text/plain", answer);
@@ -8999,12 +9022,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               setCleanDragImage(event, label);
           };
 
+          const selectBankAnswer = (value: string) => {
+              dragSourceQuestionRef.current = "";
+              setSelectedDragAnswer(String(value || ""));
+          };
+
           const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false, sourceQid = "") => {
               const answer = String(value || selectedDragAnswer || "");
               if (!qId || !answer) return;
               handleAnswerChange(qId, answer, "DRAG_DROP");
               if (sourceQid && sourceQid !== qId) handleAnswerChange(sourceQid, "", "DRAG_DROP");
               setSelectedDragAnswer("");
+              dragSourceQuestionRef.current = "";
               if (autoAdvance) {
                   const index = (activeExam!.questions || []).findIndex((question: any) => question.id === qId);
                   handleAutoScrollNext(index, (activeExam!.questions || []).length);
@@ -9017,7 +9046,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               selectedDragAnswer;
 
           const readDraggedSource = (event: any) =>
-              event?.dataTransfer?.getData("application/x-ielts-source-qid") || "";
+              event?.dataTransfer?.getData("application/x-ielts-source-qid") || dragSourceQuestionRef.current || "";
 
           const renderSafeHTML = (raw: string | undefined) => {
               if (!raw) return "";
@@ -9148,7 +9177,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       })()
                                   )}
                                   {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && (
-                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag to another answer box or click to clear" : "Kéo đáp án thả vào đây"}>
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Kéo đáp án thả vào đây"}>
                                           {(examAnswers[q.id] as string) || firstGlobalIdx}
                                       </span>
                                   )}
@@ -9654,7 +9683,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-plan-answers .idp-matching-legend { display: none; }
 
                       /* Map labelling type 2: named tags are placed directly on the map. */
-                      .idp-map-drag-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, .34fr); gap:24px; align-items:start; max-width:1180px; }
+                      .idp-map-drag-layout { display:grid; grid-template-columns:minmax(0, 1fr) var(--idp-map-bank-w, 190px); gap:24px; align-items:start; max-width:1180px; }
                       .idp-map-drag-canvas { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); text-align:center; }
                       .idp-map-drag-stage { position:relative; display:inline-block; width:fit-content; max-width:100%; line-height:0; }
                       .idp-map-drag-stage img { display:block; width:auto; max-width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; }
@@ -9662,7 +9691,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-slot:hover, .idp-map-drag-slot.is-target { border-color:#0969da; background:#eff6ff; box-shadow:0 0 0 3px rgba(9,105,218,.13); }
                       .idp-map-drag-slot.is-filled { border-style:solid; border-color:#0969da; background:#e6f0ff; color:#0550ae; font-size:12px; }
                       .idp-map-drag-slot-number { color:#334155; font-weight:800; white-space:nowrap; }
-                      .idp-map-drag-bank { border:1px solid var(--eborder); background:var(--ecard); padding:13px; }
+                      .idp-map-drag-bank { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--eborder); background:var(--ecard); padding:13px; }
                       .idp-map-drag-bank-title { margin:0 0 10px; color:var(--esub); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
                       .idp-map-drag-option { width:100%; box-sizing:border-box; display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:9px 10px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#172033; font:600 13px/1.35 Arial,sans-serif; text-align:left; cursor:grab; user-select:none; transition:transform .15s,box-shadow .15s,border-color .15s,opacity .15s; }
                       .idp-map-drag-option:hover, .idp-map-drag-option.is-selected { border-color:#0969da; box-shadow:0 3px 10px rgba(9,105,218,.15); transform:translateY(-1px); }
@@ -9699,7 +9728,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
                       /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
-                      .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(240px, .85fr); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
+                      .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) var(--idp-drag-bank-w, 240px); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
                       .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
                       .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 10px; align-items: center; }
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
@@ -9714,7 +9743,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
-                      @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
+                      @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-drag-summary { line-height: 2.2; }
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
                       .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
@@ -10064,15 +10093,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           draggable={isFilled}
                                                           onDragStart={(e: any) => { if (isFilled) beginAnswerDrag(e, filled, filled, q.id); }}
                                                           onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
-                                                          onDrop={(e: any) => { e.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(e), false, readDraggedSource(e)); }}
-                                                          onClick={() => { if (isFilled) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer); }}
-                                                          title={isFilled ? "Drag to another answer box or click to clear" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
+                                                          onDrop={(e: any) => { e.preventDefault(); e.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(e), false, readDraggedSource(e)); }}
+                                                          onClick={(e: any) => { e.stopPropagation(); if (isFilled) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(filled); } else commitDraggedAnswer(q.id, selectedDragAnswer, false, dragSourceQuestionRef.current); }}
+                                                          onDoubleClick={(e: any) => { e.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                                          title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           {isFilled ? (
                                                               <>
                                                                   <span style={{fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)', flexShrink:0}}>{filled}</span>
                                                                   <span style={{flex:1, fontSize:12.5, color:'var(--etext)', lineHeight:1.4}} dangerouslySetInnerHTML={{__html: renderSafeHTML(lookupHeading(filled))}} />
-                                                                  <span style={{fontSize:11, color:'var(--esub)', flexShrink:0, opacity:.6}}>&#10005;</span>
                                                               </>
                                                           ) : (
                                                               <span style={{color:'var(--esub)', fontSize:12.5, fontStyle:'italic'}}>Drag heading here</span>
@@ -10144,9 +10173,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDragStart={(e: any) => { if (e.dataTransfer?.getData("application/x-ielts-source-qid")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
                        onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
-                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid; if (zone.classList.contains('filled')) { if (qId) handleAnswerChange(qId, ""); } else commitDraggedAnswer(qId, selectedDragAnswer, true); }}>
+                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(String(zone.textContent || '').trim()); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                       onDoubleClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; const qId = zone?.dataset.qid; if (qId) { handleAnswerChange(qId, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); } }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
                                   {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
@@ -10192,8 +10222,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const _gMaxA = _gAns.length ? Math.max(..._gAns.map(_gVarLen)) : 10;
                           const groupInputW = Math.max(70, Math.min(320, Math.round(_gMaxA * 9) + 30));
                           const _gOpts = ((group.questions.find((q: any) => q.options && q.options.length)?.options) || []).map((o: any) => String(o));
-                          const _gAvgO = _gOpts.length ? _gOpts.reduce((a: number, s: string) => a + s.length, 0) / _gOpts.length : 12;
-                          const groupZoneW = Math.max(80, Math.min(300, Math.round(_gAvgO * 7.2) + 34));
+                          const _gMaxO = _gOpts.length ? Math.max(..._gOpts.map((s: string) => s.replace(/<[^>]+>/g, '').trim().length)) : 12;
+                          // A drop slot and option bank should fit the longest label, not
+                          // consume the entire column because of one wide layout template.
+                          const groupZoneW = Math.max(80, Math.min(300, Math.round(_gMaxO * 7.2) + 34));
+                          const dragBankW = Math.max(142, Math.min(360, Math.round(_gMaxO * 7.25) + 42));
                           const injectedListRaw = group.context ? processedContexts.contexts[group.context]?.injected || [] : [];
                           const safeHtmlRaw = group.context ? (processedContexts.contexts[group.context]?.html || renderSafeHTML(group.context)) : "";
                           const safeHtml = (() => {
@@ -10341,7 +10374,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                       const used = !reuseTags && assigned.includes(option);
                                       return <button type="button" key={`${option}-${index}`} draggable={!used}
                                           className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
-                                          onClick={() => { if (!used) setSelectedDragAnswer(option); }}
+                                          onClick={() => { if (!used) selectBankAnswer(option); }}
                                           onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
                                           <span>{option}</span>
                                       </button>;
@@ -10367,10 +10400,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                data-qid={q.id}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
-                                               title={isAnsweredFlow ? 'Drag to another answer box or click to clear' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                               title={isAnsweredFlow ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
-                                               onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
-                                               onClick={() => { if (isAnsweredFlow) handleAnswerChange(q.id, ""); else commitDraggedAnswer(q.id, selectedDragAnswer, true); }}
+                                               onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                               onClick={(event: any) => { event.stopPropagation(); if (isAnsweredFlow) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(String(examAnswers[q.id])); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                               onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
                                            >{isAnsweredFlow ? String(examAnswers[q.id]) : qGlobalIdx}</span> : <input
                                               type="text"
                                               className={`idp-inline-input inline-blank-input ${isAnsweredFlow ? 'filled' : ''}`}
@@ -10447,6 +10481,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const sourceQuestion = group.questions[0] as any;
                        const mapImageUrl = String(sourceQuestion.mapImageUrl || "").trim();
                        const rawOptions: string[] = (sourceQuestion.options || []).map((option: any) => String(option).trim()).filter(Boolean);
+                       const maxOptionLength = rawOptions.length ? Math.max(...rawOptions.map(option => option.replace(/<[^>]+>/g, '').length)) : 12;
+                       const mapBankWidth = Math.max(142, Math.min(360, Math.round(maxOptionLength * 7.25) + 42));
                        const assigned = group.questions.map((question: any) => String(examAnswers[question.id] || "")).filter(Boolean);
                        const reuseTags = group.questions.length > rawOptions.length;
                        const mapQuestionNumber = (question: any) => String(question.text || "").match(/\d+/)?.[0]
@@ -10459,7 +10495,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            };
                        };
                        return (
-                           <div className="idp-map-drag-layout">
+                           <div className="idp-map-drag-layout" style={{ "--idp-map-bank-w": `${mapBankWidth}px` } as React.CSSProperties}>
                                <div className="idp-map-drag-canvas" aria-label="Interactive map">
                                    {mapImageUrl ? <div className="idp-map-drag-stage">
                                    <img src={mapImageUrl} alt="Map labelling diagram" draggable={false} />
@@ -10476,8 +10512,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                onDragStart={(event: any) => { if (answer) beginAnswerDrag(event, answer, answer, question.id); }}
                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
                                                onDrop={(event: any) => { event.preventDefault(); commitDraggedAnswer(question.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
-                                               onClick={() => { if (answer) handleAnswerChange(question.id, ""); else commitDraggedAnswer(question.id, selectedDragAnswer, true); }}
-                                               title={answer ? 'Drag to another answer box or click to clear' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}>
+                                               onClick={() => { if (answer) { dragSourceQuestionRef.current = question.id; setSelectedDragAnswer(answer); } else commitDraggedAnswer(question.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                               onDoubleClick={() => { handleAnswerChange(question.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                               title={answer ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}>
                                                {answer ? <span>{answer}</span> : <span className="idp-map-drag-slot-number">{number}</span>}
                                            </div>
                                        );
@@ -10490,7 +10527,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                        const used = !reuseTags && assigned.includes(option);
                                        return <button key={`${option}-${index}`} type="button" draggable={!used}
                                            className={`idp-map-drag-option ${used ? 'is-used' : ''} ${selectedDragAnswer === option ? 'is-selected' : ''}`}
-                                           onClick={() => { if (!used) setSelectedDragAnswer(option); }}
+                                           onClick={() => { if (!used) selectBankAnswer(option); }}
                                            onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
                                            <span>{option}</span>
                                        </button>;
@@ -10524,7 +10561,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
                                           return (
                                               <div key={idx} className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable={!used}
-                                                   onClick={() => { if (!used) setSelectedDragAnswer(String(opt)); }}
+                                                   onClick={() => { if (!used) selectBankAnswer(String(opt)); }}
                                                    onDragStart={(e: any) => { if (!used) beginAnswerDrag(e, opt, opt); }}>
                                                   <span>{opt}</span>
                                               </div>
@@ -10566,7 +10603,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 return (
                                                                   <div key={oIdx}
                                                                     draggable={!isUsed}
-                                                                    onClick={() => { if (!isUsed) setSelectedDragAnswer(optId); }}
+                                                                    onClick={() => { if (!isUsed) selectBankAnswer(optId); }}
                                                                     onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
                                                                     style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
@@ -10586,7 +10623,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           const usedWords = group.questions.map(q => examAnswers[q.id] as string).filter(Boolean);
                                                           const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
                                                           return (
-                                                          <div className="idp-match2">
+                                                          <div className="idp-match2" style={{ "--idp-drag-bank-w": `${dragBankW}px` } as React.CSSProperties}>
                                                               {/* CỘT TRÁI: các mục có ô thả (chuẩn hình 2: Fossil categories / Points made) */}
                                                               <div className="idp-match2-items" style={{gridTemplateColumns: `minmax(0, 1fr) ${groupZoneW}px`}}>
                                                                   {dragItemsLabel && <div className="idp-match2-h">{dragItemsLabel}</div>}
@@ -10596,7 +10633,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag to another answer box or click to clear' : 'Drag an answer here'}>{val || gi}</span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
@@ -10606,7 +10643,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                   {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
                                                                       <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
-                                                                          onClick={() => setSelectedDragAnswer(String(opt))}
+                                                                          onClick={() => selectBankAnswer(String(opt))}
                                                                           onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
                                                                           <span>{opt}</span>
                                                                       </div>
