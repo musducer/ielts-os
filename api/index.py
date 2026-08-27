@@ -58,7 +58,7 @@ async def unexpected_api_error(request: Request, exc: Exception):
 
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
-VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG"]
+VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG", "DIAGRAM_LABEL"]
 
 RE_Q_START = re.compile(r'^(?:Question|Câu)\s+\d+', re.IGNORECASE)
 RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
@@ -315,12 +315,119 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
             "correctAnswer": answers.get(number, ""),
         })
 
+
+def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
+    """Parse free-positioned diagram labels without reducing them to a normal summary.
+
+    Authoring contract:
+      [DIAGRAM_LABEL]
+      IMAGE: https://.../diagram.png
+      IMAGE_BOUNDS: x=30, y=8, w=40, h=84
+      [BOX 34 x=68 y=8 w=27 h=29 targetX=57 targetY=27]
+      Network of [34] ______ helps ...
+      [/BOX]
+      [ANSWERS]
+      34. *air
+      [/ANSWERS]
+
+    Box and target coordinates are percentages of one shared canvas. This keeps
+    labels, connectors and the source image aligned at every viewport size.
+    """
+    image_url = ""
+    image_bounds: Dict[str, float] = {"x": 27, "y": 7, "width": 46, "height": 86}
+    boxes: Dict[str, Dict[str, Any]] = {}
+    answers: Dict[str, str] = {}
+    instruction_html: List[str] = []
+    current_box = ""
+    in_answers = False
+    box_re = re.compile(r'^\s*\[BOX\s+(\d+)\s*([^\]]*)\]\s*$', re.IGNORECASE)
+    answer_re = re.compile(r'^\s*(\d+)\s*[.)]\s*\*?\s*(.*)$')
+    prop_re = re.compile(r'\b(x|y|w|h|width|height|targetX|targetY)\s*=\s*([\d.]+)\s*%?', re.IGNORECASE)
+    url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
+
+    def parse_props(raw: str, defaults: Dict[str, float]) -> Dict[str, float]:
+        out = dict(defaults)
+        for key, value in prop_re.findall(raw or ""):
+            normalized = {"w": "width", "h": "height"}.get(key.lower(), key)
+            if normalized in out or normalized in {"x", "y", "width", "height", "targetX", "targetY"}:
+                out[normalized] = max(0, min(100, float(value)))
+        return out
+
+    for item in lines:
+        if not isinstance(item, Paragraph):
+            continue
+        raw = _map_drag_plain_line(item)
+        if not raw:
+            continue
+        upper = raw.upper()
+        if upper == "[ANSWERS]":
+            current_box, in_answers = "", True
+            continue
+        if upper in {"[/ANSWERS]", "[/DIAGRAM_LABEL]"}:
+            in_answers = False
+            continue
+        box_match = box_re.match(raw)
+        if box_match:
+            number, props = box_match.groups()
+            boxes[number] = {
+                **parse_props(props, {"x": 6, "y": 10, "width": 26, "height": 18, "targetX": 50, "targetY": 50}),
+                "questionNumber": int(number),
+                "html": "",
+            }
+            current_box, in_answers = number, False
+            continue
+        if upper == "[/BOX]":
+            current_box = ""
+            continue
+        if raw.upper().startswith("IMAGE:"):
+            found = url_re.search(raw)
+            if found:
+                image_url = found.group(0)
+            continue
+        if raw.upper().startswith("IMAGE_BOUNDS:"):
+            image_bounds = parse_props(raw, image_bounds)
+            continue
+        if in_answers:
+            answer_match = answer_re.match(raw)
+            if answer_match:
+                number, answer = answer_match.groups()
+                if number in boxes:
+                    answers[number] = answer.strip()
+            continue
+        html_line = paragraph_to_html(item)
+        if current_box:
+            boxes[current_box]["html"] += html_line
+        else:
+            instruction_html.append(html_line)
+
+    if not image_url or not boxes:
+        return
+    instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
+    shared_boxes = {key: value.copy() for key, value in boxes.items()}
+    for number, box in shared_boxes.items():
+        target_questions.append({
+            "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "type": "DIAGRAM_LABEL",
+            "subType": "DIAGRAM_LABEL",
+            "instruction": instruction,
+            "groupContext": "",
+            "text": box.get("html") or f"[{number}]",
+            "options": [],
+            "correctAnswer": answers.get(number, ""),
+            "diagramImageUrl": image_url,
+            "diagramImageBounds": image_bounds.copy(),
+            "diagramBoxes": shared_boxes,
+        })
+
 def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
     if block_type == "MAP_DRAG":
         process_map_drag_block(lines, target_questions)
         return
     if block_type == "FLOW_DRAG":
         process_flow_drag_block(lines, target_questions)
+        return
+    if block_type == "DIAGRAM_LABEL":
+        process_diagram_label_block(lines, target_questions)
         return
     html_lines, text_lines = [], []
     for item in lines:

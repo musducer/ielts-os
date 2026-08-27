@@ -347,6 +347,7 @@
                                                     <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
                                                     <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
                                                     <option value="MAP_DRAG">Map labelling (drag onto map)</option>
+                                                    <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
                                                 </select>
                                                 <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
@@ -512,6 +513,42 @@
                                                         <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'broadens practical experience\nchance to publicise own work'} style={{width:'100%', minHeight:170, boxSizing:'border-box', resize:'vertical', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, font: '500 14px/1.45 ' + EB.fBody}} />
                                                     </div>
                                                 </div>
+                                            </div>;
+                                        })() : grp.groupType === 'DIAGRAM_LABEL' ? (() => {
+                                            const source: any = grp.questions[0];
+                                            const imageUrl = String(source.diagramImageUrl || '');
+                                            const boxes: Record<string, any> = source.diagramBoxes || {};
+                                            const questionNumber = (item:any, offset:number) => String(item.text || '').match(/\[(\d+)\]/)?.[1] || String(qIndex + offset + 1);
+                                            const numbers = grp.questions.map(questionNumber);
+                                            const active = numbers.includes(diagramEditorSelection) ? diagramEditorSelection : numbers[0];
+                                            const bounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
+                                            const clamp = (value:number, min:number, max:number) => Math.max(min, Math.min(max, value));
+                                            const boxAt = (number:string, index:number) => boxes[number] || {questionNumber:Number(number), x:index % 2 ? 67 : 6, y:10 + Math.floor(index / 2) * 33, width:27, height:22, targetX:50, targetY:50, html: `[${number}]`};
+                                            const updateDiagram = (patch:any) => updateGroup((item:any) => ({...item, ...patch}));
+                                            const setBoxes = (next:Record<string,any>) => updateDiagram({diagramBoxes:next});
+                                            const moveBox = (number:string, event:any) => {
+                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-diagram-stage') as HTMLElement | null;
+                                                if (!canvas) return;
+                                                const rect = canvas.getBoundingClientRect();
+                                                const move = (pointer:PointerEvent) => {
+                                                    const current = boxAt(number, numbers.indexOf(number));
+                                                    const next = {...current, x:clamp(((pointer.clientX-rect.left)/rect.width)*100, 0, 100), y:clamp(((pointer.clientY-rect.top)/rect.height)*100, 0, 100)};
+                                                    setBoxes({...boxes, [number]:next});
+                                                };
+                                                event.preventDefault(); move(event.nativeEvent as PointerEvent);
+                                                const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
+                                                window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
+                                            };
+                                            return <div style={{display:'grid',gap:16}}>
+                                                <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>A diagram label is a free text box connected to a point on the image. Put <b style={{color:EB.accent}}>[number]</b> exactly where the learner should type.</div>
+                                                <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Diagram image URL<input value={imageUrl} onChange={(event:any)=>updateDiagram({diagramImageUrl:event.target.value})} placeholder="https://.../diagram.png" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
+                                                <div className="eb-diagram-stage" style={{position:'relative',aspectRatio:'3 / 2',overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{if(!active || (event.target as HTMLElement).closest('.eb-diagram-box')) return; const rect=(event.currentTarget as HTMLElement).getBoundingClientRect(); const current=boxAt(active,numbers.indexOf(active)); setBoxes({...boxes,[active]:{...current,targetX:clamp(((event.clientX-rect.left)/rect.width)*100,0,100),targetY:clamp(((event.clientY-rect.top)/rect.height)*100,0,100)}})}}>
+                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}} />}
+                                                    <svg aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{numbers.map((number:string,index:number)=>{const b=boxAt(number,index);return <line key={number} x1={b.x} y1={b.y} x2={b.targetX} y2={b.targetY} stroke={number===active?EB.accent:EB.line} strokeWidth="0.35" />})}</svg>
+                                                    {numbers.map((number:string,index:number)=>{const b=boxAt(number,index);return <div key={number} className="eb-diagram-box" onPointerDown={(event:any)=>moveBox(number,event)} style={{position:'absolute',left:`${b.x}%`,top:`${b.y}%`,width:`${b.width}%`,minWidth:110,minHeight:52,transform:'translate(-50%,-50%)',padding:'8px',boxSizing:'border-box',border:`2px solid ${number===active?EB.accent:EB.line}`,background:'rgba(255,255,255,.94)',color:EB.ink,fontSize:12,lineHeight:1.35,cursor:'grab',touchAction:'none'}}><b style={{color:EB.accent}}>#{number}</b></div>})}
+                                                </div>
+                                                <div style={{fontSize:12,color:EB.sub}}>Select a label below, drag its box to place it, then click the diagram to set its connector point.</div>
+                                                <div style={{display:'grid',gap:10}}>{grp.questions.map((item:any,offset:number)=>{const number=questionNumber(item,offset);const b=boxAt(number,offset);const set=(field:string,value:any)=>setBoxes({...boxes,[number]:{...b,[field]:field==='html'?value:clamp(Number(value)||0,field==='width'?8:0,field==='width'?48:field==='height'?40:100)}});return <div key={item.id} style={{display:'grid',gridTemplateColumns:'48px minmax(0,1fr) minmax(150px,.45fr)',gap:10,alignItems:'start',padding:12,border:`1px solid ${number===active?EB.accent:EB.line}`,borderRadius:EB.radiusSm,background:EB.sheet}}><button type="button" onClick={()=>setDiagramEditorSelection(number)} style={{border:0,background:'transparent',color:EB.accent,fontFamily:EB.fMono,fontWeight:800,cursor:'pointer'}}>#{number}</button><textarea value={String(b.html || item.text || `[${number}]`)} onChange={(event:any)=>{set('html',event.target.value);updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,text:event.target.value}:entry)}} placeholder={`Label text with [${number}]`} style={{minHeight:70,padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,resize:'vertical'}}/><input value={String(item.correctAnswer || '')} onChange={(event:any)=>updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink}} /></div>})}</div>
                                             </div>;
                                         })() : grp.groupType === 'MAP_DRAG' ? (() => {
                                             const mapSource: any = grp.questions[0];

@@ -1572,9 +1572,10 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   });
 };
 
-type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG";
+type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; }
+interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -3149,6 +3150,7 @@ export default function IeltsSupremeOS() {
 
   const [editingQuiz, setEditingQuiz] = useState<Quiz | null>(null);
   const [mapDragEditorSelection, setMapDragEditorSelection] = useState<string>("");
+  const [diagramEditorSelection, setDiagramEditorSelection] = useState<string>("");
   const editingQuizRef = useRef<Quiz | null>(null); // FIX: ref để tránh stale closure trong saveQuiz
   const [keyEditingQuiz, setKeyEditingQuiz] = useState<Quiz | null>(null);
   const [activeExam, setActiveExam] = useState<Quiz | null>(null);
@@ -8765,6 +8767,29 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   </div>
                               </section>;
                           }
+                          if (q.type === "DIAGRAM_LABEL") {
+                              const imageUrl = String((q as any).diagramImageUrl || "").trim();
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              if (alreadyRendered) return null;
+                              const diagramQuestions = reviewQuiz.quiz.questions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              const numberFor = (question:any, index:number) => String(question.text || '').match(/\[(\d+)\]/)?.[1] || String(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id) || index + 1);
+                              const source:any = diagramQuestions[0] || q;
+                              const imageBounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
+                              const boxes = source.diagramBoxes || {};
+                              const boxFor = (question:any,index:number) => boxes[numberFor(question,index)] || (question.diagramBoxes || {})[numberFor(question,index)] || {x:index%2?69:15,y:14+Math.floor(index/2)*34,width:27,height:22,targetX:50,targetY:50};
+                              const selected = diagramQuestions.find((candidate:any) => candidate.id === reviewActiveQuestionId) || diagramQuestions.find((candidate:any) => !rvCompletionAnswer(candidate).correct) || diagramQuestions[0];
+                              return <section key={`diagram-review-${q.id}`} className="rv-completion-review">
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
+                                      <div style={{position:'relative',minWidth:720,aspectRatio:'3 / 2',background:'#fff'}}>
+                                          {imageUrl && <img src={imageUrl} alt="Diagram" draggable={false} style={{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
+                                          <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);return <line key={question.id} x1={box.x} y1={box.y} x2={box.targetX ?? 50} y2={box.targetY ?? 50} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke"/>})}</svg>
+                                          {diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);const raw=String(question.text || `[${number}]`);const marker=new RegExp(`\\[${number.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')}\\]`);const parts=raw.split(marker);const badge=<span style={{display:'inline-block',margin:'0 4px',padding:'2px 5px',borderRadius:3,border:`1px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.correct?`${C.succ}14`:state.blank?`${C.warn}12`:`${C.err}12`,color:state.correct?C.succ:state.blank?C.warn:C.err,fontWeight:800,whiteSpace:'nowrap'}}>{number}. {state.blank?'No answer':state.given}{!state.correct && <small style={{marginLeft:4,color:C.succ}}>→ {state.expected}</small>}</span>;return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||27}%`,minHeight:`${box.height||16}%`,transform:'translate(-50%,-50%)',padding:'12px 14px',boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:'#fff',color:C.text,textAlign:'left',fontSize:14,lineHeight:1.4,cursor:'pointer'}}>{parts.length>1?<><span dangerouslySetInnerHTML={{__html:formatContent(parts[0])}}/>{badge}<span dangerouslySetInnerHTML={{__html:formatContent(parts.slice(1).join(`[${number}]`))}}/></>:<>{badge}<span dangerouslySetInnerHTML={{__html:formatContent(raw)}}/></>}</button>})}
+                                      </div>
+                                  </div>
+                                  {selected && <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>}
+                              </section>;
+                          }
                           if (q.type === "MAP_DRAG") {
                               const mapUrl = String((q as any).mapImageUrl || "").trim();
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
@@ -9821,6 +9846,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-option:hover, .idp-map-drag-option.is-selected { border-color:#0969da; box-shadow:0 3px 10px rgba(9,105,218,.15); transform:translateY(-1px); }
                       .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
                       .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
+                      /* Diagram labelling: one responsive coordinate canvas, with labels allowed outside the artwork. */
+                      .idp-diagram-wrap { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+                      .idp-diagram-stage { position:relative; width:100%; min-width:720px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
+                      .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
+                      .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+                      .idp-diagram-box { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:rgba(255,255,255,.97); color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
+                      .idp-diagram-box p, .idp-diagram-box div { margin:0; }
+                      .idp-diagram-input { display:inline-block; width:clamp(76px, 15vw, 145px); min-width:0; margin:0 4px; padding:1px 5px 2px; border:0; border-bottom:2px solid #111827; border-radius:0; background:#fff; color:#111827; font:700 15px/1.35 Arial,sans-serif; text-align:center; vertical-align:baseline; box-shadow:none; }
+                      .idp-diagram-input:focus { outline:none; border-bottom-color:#0969da; background:#eff6ff; }
+                      .idp-diagram-num { font-weight:800; color:#111827; margin-right:3px; }
                       @media (max-width: 767px) {
                         .idp-map-plan-layout { display: block; }
                         .idp-map-plan-visual { position: static; margin-bottom: 14px; padding: 10px; }
@@ -9829,6 +9864,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         .idp-map-drag-bank { order:-1; }
                         .idp-map-drag-canvas { overflow:auto; }
                         .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
+                        .idp-diagram-wrap { overflow:auto; }
+                        .idp-diagram-stage { min-width:660px; }
                       }
 
                       /* Hình 6: Drag-drop 2-column layout */
@@ -10390,6 +10427,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           })();
                           const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
                           const isMapDragGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "MAP_DRAG");
+                          const isDiagramLabelGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "DIAGRAM_LABEL");
                   const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
                       q.subType === "FLOWCHART" || q.subType === "FLOWCHART_DRAG"
                   );
@@ -10661,6 +10699,36 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        );
                    };
 
+                   const renderDiagramLabels = () => {
+                       const source: any = group.questions[0];
+                       const imageUrl = String(source.diagramImageUrl || "").trim();
+                       const imageBounds = { x: 27, y: 7, width: 46, height: 86, ...(source.diagramImageBounds || {}) };
+                       const boxes = source.diagramBoxes || {};
+                       const numberFor = (question: any, index: number) => String(question.text || "").match(/\[(\d+)\]/)?.[1]
+                           || String((activeExam!.questions || []).findIndex((item: any) => item.id === question.id) + 1 || index + 1);
+                       const boxFor = (question: any, index: number) => boxes[numberFor(question, index)] || (question.diagramBoxes || {})[numberFor(question, index)] || {
+                           x: index % 2 ? 69 : 15, y: 14 + Math.floor(index / 2) * 34, width: 27, height: 22, targetX: 50, targetY: 50,
+                       };
+                       const escape = (value: string) => value.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char] || char));
+                       const renderBox = (question: any, index: number) => {
+                           const number = numberFor(question, index);
+                           const raw = String(question.text || `[${number}]`);
+                           const marker = new RegExp(`\\[${number.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\]`);
+                           const pieces = raw.split(marker);
+                           const input = <input id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} />;
+                           return <>{pieces.length > 1 ? <><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces[0])} />{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces.slice(1).join(`[${number}]`))} /></> : <><span className="idp-diagram-num">{number}</span>{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(raw)} /></>}</>;
+                       };
+                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
+                           <div className="idp-diagram-stage">
+                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={{left:`${imageBounds.x}%`, top:`${imageBounds.y}%`, width:`${imageBounds.width}%`, height:`${imageBounds.height}%`}} /> : <div style={{padding:36, color:'var(--esub)', textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                                   {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); return <line key={question.id} x1={box.x} y1={box.y} x2={box.targetX ?? 50} y2={box.targetY ?? 50} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />; })}
+                               </svg>
+                               {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); return <div key={question.id} className="idp-diagram-box" style={{left:`${box.x}%`, top:`${box.y}%`, width:`${box.width || 27}%`, minHeight:`${box.height || 16}%`}}>{renderBox(question,index)}</div>; })}
+                           </div>
+                       </div>;
+                   };
+
                    return (
                       <div key={group.questions[0].id} style={{marginBottom: 'var(--q-gap)'}}>
                           <div className="question-rubric">
@@ -10696,7 +10764,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               </div>
                           )}
 
-                          {isMapDragGroup ? renderMapDrag() : isWordBankDrag ? null : isFlowChartGroup ? (
+                          {isDiagramLabelGroup ? renderDiagramLabels() : isMapDragGroup ? renderMapDrag() : isWordBankDrag ? null : isFlowChartGroup ? (
                               renderFlowChart()
                           ) : isMatchingGroup && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
@@ -13237,6 +13305,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
                                                     <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
                                                     <option value="MAP_DRAG">Map labelling (drag onto map)</option>
+                                                    <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
                                                 </select>
                                                 <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
@@ -13402,6 +13471,42 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'broadens practical experience\nchance to publicise own work'} style={{width:'100%', minHeight:170, boxSizing:'border-box', resize:'vertical', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, font: '500 14px/1.45 ' + EB.fBody}} />
                                                     </div>
                                                 </div>
+                                            </div>;
+                                        })() : grp.groupType === 'DIAGRAM_LABEL' ? (() => {
+                                            const source: any = grp.questions[0];
+                                            const imageUrl = String(source.diagramImageUrl || '');
+                                            const boxes: Record<string, any> = source.diagramBoxes || {};
+                                            const questionNumber = (item:any, offset:number) => String(item.text || '').match(/\[(\d+)\]/)?.[1] || String(qIndex + offset + 1);
+                                            const numbers = grp.questions.map(questionNumber);
+                                            const active = numbers.includes(diagramEditorSelection) ? diagramEditorSelection : numbers[0];
+                                            const bounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
+                                            const clamp = (value:number, min:number, max:number) => Math.max(min, Math.min(max, value));
+                                            const boxAt = (number:string, index:number) => boxes[number] || {questionNumber:Number(number), x:index % 2 ? 67 : 6, y:10 + Math.floor(index / 2) * 33, width:27, height:22, targetX:50, targetY:50, html: `[${number}]`};
+                                            const updateDiagram = (patch:any) => updateGroup((item:any) => ({...item, ...patch}));
+                                            const setBoxes = (next:Record<string,any>) => updateDiagram({diagramBoxes:next});
+                                            const moveBox = (number:string, event:any) => {
+                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-diagram-stage') as HTMLElement | null;
+                                                if (!canvas) return;
+                                                const rect = canvas.getBoundingClientRect();
+                                                const move = (pointer:PointerEvent) => {
+                                                    const current = boxAt(number, numbers.indexOf(number));
+                                                    const next = {...current, x:clamp(((pointer.clientX-rect.left)/rect.width)*100, 0, 100), y:clamp(((pointer.clientY-rect.top)/rect.height)*100, 0, 100)};
+                                                    setBoxes({...boxes, [number]:next});
+                                                };
+                                                event.preventDefault(); move(event.nativeEvent as PointerEvent);
+                                                const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
+                                                window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
+                                            };
+                                            return <div style={{display:'grid',gap:16}}>
+                                                <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>A diagram label is a free text box connected to a point on the image. Put <b style={{color:EB.accent}}>[number]</b> exactly where the learner should type.</div>
+                                                <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Diagram image URL<input value={imageUrl} onChange={(event:any)=>updateDiagram({diagramImageUrl:event.target.value})} placeholder="https://.../diagram.png" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
+                                                <div className="eb-diagram-stage" style={{position:'relative',aspectRatio:'3 / 2',overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{if(!active || (event.target as HTMLElement).closest('.eb-diagram-box')) return; const rect=(event.currentTarget as HTMLElement).getBoundingClientRect(); const current=boxAt(active,numbers.indexOf(active)); setBoxes({...boxes,[active]:{...current,targetX:clamp(((event.clientX-rect.left)/rect.width)*100,0,100),targetY:clamp(((event.clientY-rect.top)/rect.height)*100,0,100)}})}}>
+                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}} />}
+                                                    <svg aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{numbers.map((number:string,index:number)=>{const b=boxAt(number,index);return <line key={number} x1={b.x} y1={b.y} x2={b.targetX} y2={b.targetY} stroke={number===active?EB.accent:EB.line} strokeWidth="0.35" />})}</svg>
+                                                    {numbers.map((number:string,index:number)=>{const b=boxAt(number,index);return <div key={number} className="eb-diagram-box" onPointerDown={(event:any)=>moveBox(number,event)} style={{position:'absolute',left:`${b.x}%`,top:`${b.y}%`,width:`${b.width}%`,minWidth:110,minHeight:52,transform:'translate(-50%,-50%)',padding:'8px',boxSizing:'border-box',border:`2px solid ${number===active?EB.accent:EB.line}`,background:'rgba(255,255,255,.94)',color:EB.ink,fontSize:12,lineHeight:1.35,cursor:'grab',touchAction:'none'}}><b style={{color:EB.accent}}>#{number}</b></div>})}
+                                                </div>
+                                                <div style={{fontSize:12,color:EB.sub}}>Select a label below, drag its box to place it, then click the diagram to set its connector point.</div>
+                                                <div style={{display:'grid',gap:10}}>{grp.questions.map((item:any,offset:number)=>{const number=questionNumber(item,offset);const b=boxAt(number,offset);const set=(field:string,value:any)=>setBoxes({...boxes,[number]:{...b,[field]:field==='html'?value:clamp(Number(value)||0,field==='width'?8:0,field==='width'?48:field==='height'?40:100)}});return <div key={item.id} style={{display:'grid',gridTemplateColumns:'48px minmax(0,1fr) minmax(150px,.45fr)',gap:10,alignItems:'start',padding:12,border:`1px solid ${number===active?EB.accent:EB.line}`,borderRadius:EB.radiusSm,background:EB.sheet}}><button type="button" onClick={()=>setDiagramEditorSelection(number)} style={{border:0,background:'transparent',color:EB.accent,fontFamily:EB.fMono,fontWeight:800,cursor:'pointer'}}>#{number}</button><textarea value={String(b.html || item.text || `[${number}]`)} onChange={(event:any)=>{set('html',event.target.value);updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,text:event.target.value}:entry)}} placeholder={`Label text with [${number}]`} style={{minHeight:70,padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,resize:'vertical'}}/><input value={String(item.correctAnswer || '')} onChange={(event:any)=>updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink}} /></div>})}</div>
                                             </div>;
                                         })() : grp.groupType === 'MAP_DRAG' ? (() => {
                                             const mapSource: any = grp.questions[0];
