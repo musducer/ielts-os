@@ -806,6 +806,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-diagram-input { display:inline-block; width:clamp(76px, 15vw, 145px); min-width:0; margin:0 4px; padding:1px 5px 2px; border:0; border-bottom:2px solid #111827; border-radius:0; background:#fff; color:#111827; font:700 15px/1.35 Arial,sans-serif; text-align:center; vertical-align:baseline; box-shadow:none; }
                       .idp-diagram-input:focus { outline:none; border-bottom-color:#0969da; background:#eff6ff; }
                       .idp-diagram-num { font-weight:800; color:#111827; margin-right:3px; }
+                      .idp-diagram-overlay-input { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; margin:0; padding:0 3px; border:0; border-bottom:2px solid #111827; border-radius:0; background:rgba(255,255,255,.08); color:#111827; font:700 15px/1.2 Arial,sans-serif; text-align:center; z-index:3; }
+                      .idp-diagram-overlay-input:focus { outline:2px solid #0969da; outline-offset:2px; background:rgba(239,246,255,.78); }
                       @media (max-width: 767px) {
                         .idp-map-plan-layout { display: block; }
                         .idp-map-plan-visual { position: static; margin-bottom: 14px; padding: 10px; }
@@ -1652,6 +1654,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const renderDiagramLabels = () => {
                        const source: any = group.questions[0];
                        const imageUrl = String(source.diagramImageUrl || "").trim();
+                       const isOverlayDiagram = String(source.diagramImageMode || "").toUpperCase() === "OVERLAY";
+                       const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
                        const imageBounds = { x: 27, y: 7, width: 46, height: 86, ...(source.diagramImageBounds || {}) };
                        const boxes = source.diagramBoxes || {};
                        const numberFor = (question: any, index: number) => String(question.text || "").match(/\[(\d+)\]/)?.[1]
@@ -1669,12 +1673,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            return <>{pieces.length > 1 ? <><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces[0])} />{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces.slice(1).join(`[${number}]`))} /></> : <><span className="idp-diagram-num">{number}</span>{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(raw)} /></>}</>;
                        };
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
-                           <div className="idp-diagram-stage">
-                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={{left:`${imageBounds.x}%`, top:`${imageBounds.y}%`, width:`${imageBounds.width}%`, height:`${imageBounds.height}%`}} /> : <div style={{padding:36, color:'var(--esub)', textAlign:'center'}}>Diagram image has not been added yet.</div>}
-                               <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                           <div className="idp-diagram-stage" style={{aspectRatio:diagramAspectRatio}}>
+                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isOverlayDiagram ? {left:'0%',top:'0%',width:'100%',height:'100%'} : {left:`${imageBounds.x}%`, top:`${imageBounds.y}%`, width:`${imageBounds.width}%`, height:`${imageBounds.height}%`}} /> : <div style={{padding:36, color:'var(--esub)', textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                                    {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); return <line key={question.id} x1={box.x} y1={box.y} x2={box.targetX ?? 50} y2={box.targetY ?? 50} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />; })}
-                               </svg>
-                               {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); return <div key={question.id} className="idp-diagram-box" style={{left:`${box.x}%`, top:`${box.y}%`, width:`${box.width || 27}%`, minHeight:`${box.height || 16}%`}}>{renderBox(question,index)}</div>; })}
+                               </svg>}
+                               {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); const number=numberFor(question,index); return isOverlayDiagram ? <input key={question.id} id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} /> : <div key={question.id} className="idp-diagram-box" style={{left:`${box.x}%`, top:`${box.y}%`, width:`${box.width || 27}%`, minHeight:`${box.height || 16}%`}}>{renderBox(question,index)}</div>; })}
                            </div>
                        </div>;
                    };

@@ -156,6 +156,8 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
     answers: Dict[str, str] = {}
     instruction_lines: List[str] = []
     image_url = ""
+    image_mode = "BOXES"
+    image_aspect_ratio = ""
     in_slots = False
     in_options = False
     current_question = ""
@@ -384,6 +386,12 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             if found:
                 image_url = found.group(0)
             continue
+        if raw.upper().startswith("IMAGE_MODE:"):
+            image_mode = "OVERLAY" if "OVERLAY" in raw.upper() else "BOXES"
+            continue
+        if raw.upper().startswith("IMAGE_ASPECT_RATIO:"):
+            image_aspect_ratio = raw.split(":", 1)[1].strip()
+            continue
         if raw.upper().startswith("IMAGE_BOUNDS:"):
             image_bounds = parse_props(raw, image_bounds)
             continue
@@ -415,6 +423,8 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             "options": [],
             "correctAnswer": answers.get(number, ""),
             "diagramImageUrl": image_url,
+            "diagramImageMode": image_mode,
+            "diagramImageAspectRatio": image_aspect_ratio,
             "diagramImageBounds": image_bounds.copy(),
             "diagramBoxes": shared_boxes,
         })
