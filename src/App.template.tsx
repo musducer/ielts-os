@@ -3357,6 +3357,10 @@ export default function IeltsSupremeOS() {
   // Native HTML5 drop events are unreliable inside some Safe Exam Browser builds.
   // This also supports an accessible click-source, click-destination fallback.
   const [selectedDragAnswer, setSelectedDragAnswer] = useState<string>("");
+  // Matching Headings carries a canonical Roman answer plus its human-readable
+  // label. Keep it out of the generic drag state used by maps/flows/matching.
+  const [selectedHeadingDrag, setSelectedHeadingDrag] = useState<{ id: string; text: string; sourceQid: string } | null>(null);
+  const [headingLabelByQuestion, setHeadingLabelByQuestion] = useState<Record<string, { id: string; text: string }>>({});
   const [meetAudioIssue, setMeetAudioIssue] = useState(false);
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");

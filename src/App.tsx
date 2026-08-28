@@ -3357,6 +3357,10 @@ export default function IeltsSupremeOS() {
   // Native HTML5 drop events are unreliable inside some Safe Exam Browser builds.
   // This also supports an accessible click-source, click-destination fallback.
   const [selectedDragAnswer, setSelectedDragAnswer] = useState<string>("");
+  // Matching Headings carries a canonical Roman answer plus its human-readable
+  // label. Keep it out of the generic drag state used by maps/flows/matching.
+  const [selectedHeadingDrag, setSelectedHeadingDrag] = useState<{ id: string; text: string; sourceQid: string } | null>(null);
+  const [headingLabelByQuestion, setHeadingLabelByQuestion] = useState<Record<string, { id: string; text: string }>>({});
   const [meetAudioIssue, setMeetAudioIssue] = useState(false);
   const [audioDiagLog, setAudioDiagLog] = useState<string[]>([]);
   const [audioDiagText, setAudioDiagText] = useState("");
@@ -9376,6 +9380,66 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const readDraggedSource = (event: any) =>
               event?.dataTransfer?.getData("application/x-ielts-source-qid") || dragSourceQuestionRef.current || "";
 
+          // Matching Headings is deliberately isolated from the generic DnD
+          // pipeline. Generic drags carry only a raw answer string, whereas a
+          // heading must carry both its scoring id (Roman numeral) and label.
+          const normalizeHeadingPayload = (value: any, text = "", sourceQid = "") => ({
+              id: normalizeHeadingId(value),
+              text: headingPlainText(text),
+              sourceQid: String(sourceQid || ""),
+          });
+
+          const beginHeadingDrag = (event: any, payload: { id: string; text: string }, sourceQid = "") => {
+              const heading = normalizeHeadingPayload(payload?.id, payload?.text, sourceQid);
+              if (!heading.id) return;
+              setSelectedHeadingDrag(heading);
+              const transfer = event?.dataTransfer;
+              if (!transfer) return;
+              transfer.effectAllowed = sourceQid ? "copyMove" : "copy";
+              transfer.setData("text/plain", heading.id);
+              transfer.setData("application/x-ielts-heading-id", heading.id);
+              transfer.setData("application/x-ielts-heading-label", heading.text);
+              if (sourceQid) transfer.setData("application/x-ielts-heading-source", sourceQid);
+              setCleanDragImage(event, `${heading.id}. ${heading.text}`);
+          };
+
+          const readDroppedHeading = (event: any) => {
+              const transfer = event?.dataTransfer;
+              const id = transfer?.getData("application/x-ielts-heading-id") || selectedHeadingDrag?.id || "";
+              const text = transfer?.getData("application/x-ielts-heading-label") || selectedHeadingDrag?.text || "";
+              const sourceQid = transfer?.getData("application/x-ielts-heading-source") || selectedHeadingDrag?.sourceQid || "";
+              return normalizeHeadingPayload(id, text, sourceQid);
+          };
+
+          const placeHeading = (qId: string | undefined, payload: { id: string; text: string; sourceQid: string }) => {
+              if (!qId || !payload?.id) return;
+              const heading = normalizeHeadingPayload(payload.id, payload.text, payload.sourceQid);
+              handleAnswerChange(qId, heading.id, "DRAG_DROP_HEADING");
+              setHeadingLabelByQuestion((previous) => ({
+                  ...previous,
+                  [qId]: { id: heading.id, text: heading.text },
+              }));
+              if (heading.sourceQid && heading.sourceQid !== qId) {
+                  handleAnswerChange(heading.sourceQid, "", "DRAG_DROP_HEADING");
+                  setHeadingLabelByQuestion((previous) => {
+                      const next = { ...previous };
+                      delete next[heading.sourceQid];
+                      return next;
+                  });
+              }
+              setSelectedHeadingDrag(null);
+          };
+
+          const clearHeading = (qId: string) => {
+              handleAnswerChange(qId, "", "DRAG_DROP_HEADING");
+              setHeadingLabelByQuestion((previous) => {
+                  const next = { ...previous };
+                  delete next[qId];
+                  return next;
+              });
+              if (selectedHeadingDrag?.sourceQid === qId) setSelectedHeadingDrag(null);
+          };
+
           const renderSafeHTML = (raw: string | undefined) => {
               if (!raw) return "";
               return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? sanitizeRichHtml(raw) : formatContent(raw);
@@ -10443,7 +10507,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
                                           const assignedHeading = lookupHeading(filled, q);
-                                          const assignedHeadingText = headingPlainText(assignedHeading?.text);
+                                          const cachedHeading = headingLabelByQuestion[q.id];
+                                          const displayedHeading = cachedHeading?.id === headingAnswerId(filled)
+                                              ? cachedHeading
+                                              : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) };
+                                          const assignedHeadingText = headingPlainText(displayedHeading.text);
                                           return (
                                               <React.Fragment key={q.id}>
                                               <div className="idp-heading-slot-render notranslate" translate="no">
@@ -10453,14 +10521,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           className={`idp-dropzone ${isFilled ? 'filled' : ''}`}
                                                           data-qid={q.id}
                                                           draggable={isFilled}
-                                                          onDragStart={(e: any) => { if (isFilled) beginAnswerDrag(e, filled, filled, q.id); }}
+                                                          onDragStart={(e: any) => { if (isFilled) beginHeadingDrag(e, displayedHeading, q.id); }}
                                                           onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
-                                                          onDrop={(e: any) => { e.preventDefault(); e.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(e), false, readDraggedSource(e)); }}
-                                                          onClick={(e: any) => { e.stopPropagation(); if (isFilled) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(filled); } else commitDraggedAnswer(q.id, selectedDragAnswer, false, dragSourceQuestionRef.current); }}
-                                                          onDoubleClick={(e: any) => { e.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
-                                                          title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
+                                                          onDrop={(e: any) => { e.preventDefault(); e.stopPropagation(); placeHeading(q.id, readDroppedHeading(e)); }}
+                                                          onClick={(e: any) => { e.stopPropagation(); if (isFilled) setSelectedHeadingDrag({ ...displayedHeading, sourceQid: q.id }); else if (selectedHeadingDrag) placeHeading(q.id, selectedHeadingDrag); }}
+                                                          onDoubleClick={(e: any) => { e.stopPropagation(); clearHeading(q.id); }}
+                                                          title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || headingAnswerId(filled)}{isFilled ? '.' : ''}</span>
+                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{displayedHeading.id}{isFilled ? '.' : ''}</span>
                                                           <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || headingPlainText(filled)) : 'Drag heading here'}</span>
                                                       </div>
                                                   </div>
@@ -10989,7 +11057,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               )
                           ) : isDragDropHeadingGroup ? (
                                                       (() => {
-                                                        const usedIds = new Set(group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean));
+                                                        const usedIds = new Set(group.questions.map((q: any) => normalizeHeadingId(examAnswers[q.id])).filter(Boolean));
                                                         return (
                                                           <div className="mh-heading-tray notranslate" translate="no" style={{display:'flex', flexDirection:'column', gap:0}}>
                                                             <div style={{marginBottom:18}}>
@@ -11004,9 +11072,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                     className="notranslate"
                                                                     translate="no"
                                                                     draggable={!isUsed}
-                                                                    onClick={() => { if (!isUsed) selectBankAnswer(optId); }}
-                                                                    onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
-                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
+                                                                    onClick={() => { if (!isUsed) setSelectedHeadingDrag({ id: optId, text: headingPlainText(optContent), sourceQid: '' }); }}
+                                                                    onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}
+                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedHeadingDrag?.id === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
                                                                     <span style={{fontStyle:'italic',fontWeight:800,fontSize:13,color:'var(--eblue)',minWidth:24,flexShrink:0}}>{optId}.</span>
                                                                     <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} style={{flex:1,fontSize:13,lineHeight:1.45,color:'var(--etext)'}} />
