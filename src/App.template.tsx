@@ -1575,7 +1575,18 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
 interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; }
+interface DiagramTextBox {
+  id: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  targetX?: number;
+  targetY?: number;
+  text: string;
+  anchor?: "top-left" | "center";
+}
+interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
 
@@ -1716,6 +1727,69 @@ const getQuizQuestionLabel = (questions: any[] = [], q: any) => {
   const start = getQuizQuestionNumber(questions, q?.id);
   const end = start + getQuestionPointCount(q) - 1;
   return end > start ? `${start}-${end}` : `${start}`;
+};
+
+const toRomanNumeral = (value: number) => {
+  let number = Math.max(1, Math.floor(Number(value) || 1));
+  const lookup: Array<[number, string]> = [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]];
+  let result = "";
+  lookup.forEach(([unit, roman]) => {
+    while (number >= unit) { result += roman; number -= unit; }
+  });
+  return result;
+};
+
+const getHeadingOptionMeta = (option: any, index: number) => {
+  const raw = typeof option === "string" ? option : String(option?.text || "");
+  const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
+  return {
+    id: (match?.[1] || toRomanNumeral(index + 1)).toLowerCase(),
+    text: match?.[2] ?? raw,
+  };
+};
+
+const getDiagramQuestionNumber = (question: any, index: number, allQuestions: any[] = []) =>
+  String(question?.text || "").match(/\[(\d+)\]/)?.[1]
+  || String(getQuizQuestionNumber(allQuestions, question?.id) || index + 1);
+
+const getDiagramTextBoxes = (questions: any[] = [], allQuestions: any[] = []): DiagramTextBox[] => {
+  const source = questions[0] || {};
+  if (Array.isArray(source.diagramTextBoxes) && source.diagramTextBoxes.length) {
+    return source.diagramTextBoxes.map((box: any, index: number) => ({
+      id: String(box?.id || `diagram-box-${index + 1}`),
+      x: Number(box?.x) || 0,
+      y: Number(box?.y) || 0,
+      width: Number(box?.width) || 26,
+      height: Number(box?.height) || 16,
+      targetX: Number.isFinite(Number(box?.targetX)) ? Number(box.targetX) : undefined,
+      targetY: Number.isFinite(Number(box?.targetY)) ? Number(box.targetY) : undefined,
+      text: String(box?.text ?? box?.html ?? ""),
+      anchor: box?.anchor === "center" ? "center" : "top-left",
+    }));
+  }
+  const legacy = source.diagramBoxes || {};
+  return Object.entries(legacy).map(([number, rawBox]: [string, any], index: number) => {
+    const question = questions.find((item: any, itemIndex: number) => getDiagramQuestionNumber(item, itemIndex, allQuestions) === number);
+    return {
+      id: `diagram-box-${number || index + 1}`,
+      x: Number(rawBox?.x) || 0,
+      y: Number(rawBox?.y) || 0,
+      width: Number(rawBox?.width) || 27,
+      height: Number(rawBox?.height) || 16,
+      targetX: Number.isFinite(Number(rawBox?.targetX)) ? Number(rawBox.targetX) : undefined,
+      targetY: Number.isFinite(Number(rawBox?.targetY)) ? Number(rawBox.targetY) : undefined,
+      text: String(rawBox?.html || question?.text || `[${number}]`),
+      anchor: "center",
+    };
+  });
+};
+
+const getDiagramGapWidth = (question: any) => {
+  const variants = Array.isArray(question?.correctAnswer)
+    ? question.correctAnswer
+    : String(question?.correctAnswer ?? "").split("/");
+  const maxLength = variants.reduce((max: number, answer: any) => Math.max(max, String(answer || "").trim().length), 0);
+  return `${Math.min(28, Math.max(8, maxLength + 3))}ch`;
 };
 
 const getChoiceMultipleScore = (q: any, studentAns: any) => {

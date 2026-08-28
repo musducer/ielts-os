@@ -801,9 +801,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-diagram-stage { position:relative; width:100%; min-width:720px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
                       .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
                       .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
-                      .idp-diagram-box { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:rgba(255,255,255,.97); color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
+                      .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:rgba(255,255,255,.97); color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
                       .idp-diagram-box p, .idp-diagram-box div { margin:0; }
-                      .idp-diagram-input { display:inline-block; width:clamp(76px, 15vw, 145px); min-width:0; margin:0 4px; padding:1px 5px 2px; border:0; border-bottom:2px solid #111827; border-radius:0; background:#fff; color:#111827; font:700 15px/1.35 Arial,sans-serif; text-align:center; vertical-align:baseline; box-shadow:none; }
+                      .idp-diagram-gap { display:inline-flex; align-items:baseline; margin:0 2px; vertical-align:baseline; }
+                      .idp-diagram-input { display:inline-block; min-width:0; max-width:28ch; margin:0 4px; padding:1px 5px 2px; border:0; border-bottom:2px solid #111827; border-radius:0; background:#fff; color:#111827; font:700 15px/1.35 Arial,sans-serif; text-align:center; vertical-align:baseline; box-shadow:none; }
                       .idp-diagram-input:focus { outline:none; border-bottom-color:#0969da; background:#eff6ff; }
                       .idp-diagram-num { font-weight:800; color:#111827; margin-right:3px; }
                       .idp-diagram-overlay-input { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; margin:0; padding:0 3px; border:0; border-bottom:2px solid #111827; border-radius:0; background:rgba(255,255,255,.08); color:#111827; font:700 15px/1.2 Arial,sans-serif; text-align:center; z-index:3; }
@@ -1178,26 +1179,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           if (headingQs.length > 0 && SLOT_RE.test(passageHtml)) {
                               const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
                               const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
-                              const lookupHeading = (roman: string) => {
-                                  const o = hOpts.find((opt: any) => {
-                                      const t = typeof opt === 'string' ? opt : ((opt as any).text || "");
-                                      const m = t.match(/^([ivxlcdmIVXLCDM]+)[.)]\s*/i);
-                                      return m && m[1].toLowerCase() === (roman || "").toLowerCase();
-                                  });
-                                  if (!o) return "";
-                                  const t = typeof o === 'string' ? o : ((o as any).text || "");
-                                  return t.replace(/^[ivxlcdmIVXLCDM]+[.)]\s*/i, '');
-                              };
+                              const headingMeta = hOpts.map((option: any, optionIndex: number) => getHeadingOptionMeta(option, optionIndex));
+                              const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === String(roman || "").toLowerCase());
                               return (
-                                  <div className="highlightable-content idp-text-content" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
+                                  <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
                                       {headingQs.map((q: any, i: number) => {
                                           const letter = String.fromCharCode(65 + i);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
+                                          const assignedHeading = lookupHeading(filled);
                                           return (
                                               <React.Fragment key={q.id}>
-                                              <div className="idp-heading-slot-render">
+                                              <div className="idp-heading-slot-render notranslate" translate="no">
                                                   <div id={`question-${q.id}`} style={{display:'flex', alignItems:'center', gap:10, margin:'22px 0 8px'}}>
                                                       <span style={{flexShrink:0, fontWeight:800, fontSize:15, color:'var(--etext)'}}>{letter}</span>
                                                       <div
@@ -1211,14 +1205,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
                                                           title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          {isFilled ? (
-                                                              <>
-                                                                  <span style={{fontStyle:'italic', fontWeight:700, fontSize:13, color:'var(--eblue)', flexShrink:0}}>{filled}</span>
-                                                                  <span style={{flex:1, fontSize:12.5, color:'var(--etext)', lineHeight:1.4}} dangerouslySetInnerHTML={{__html: renderSafeHTML(lookupHeading(filled))}} />
-                                                              </>
-                                                          ) : (
-                                                              <span style={{color:'var(--esub)', fontSize:12.5, fontStyle:'italic'}}>Drag heading here</span>
-                                                          )}
+                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || filled}{isFilled ? '.' : ''}</span>
+                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || '') : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
                                                       </div>
                                                   </div>
                                               </div>
@@ -1652,33 +1640,41 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    };
 
                    const renderDiagramLabels = () => {
-                       const source: any = group.questions[0];
+                       const source: any = group.questions[0] || {};
                        const imageUrl = String(source.diagramImageUrl || "").trim();
-                       const isOverlayDiagram = String(source.diagramImageMode || "").toUpperCase() === "OVERLAY";
+                       const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOXES")).toUpperCase();
+                       const isOverlayDiagram = imageMode === "OVERLAY";
+                       const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
                        const imageBounds = { x: 27, y: 7, width: 46, height: 86, ...(source.diagramImageBounds || {}) };
-                       const boxes = source.diagramBoxes || {};
-                       const numberFor = (question: any, index: number) => String(question.text || "").match(/\[(\d+)\]/)?.[1]
-                           || String((activeExam!.questions || []).findIndex((item: any) => item.id === question.id) + 1 || index + 1);
-                       const boxFor = (question: any, index: number) => boxes[numberFor(question, index)] || (question.diagramBoxes || {})[numberFor(question, index)] || {
-                           x: index % 2 ? 69 : 15, y: 14 + Math.floor(index / 2) * 34, width: 27, height: 22, targetX: 50, targetY: 50,
+                       const legacyBoxes = source.diagramBoxes || {};
+                       const sectionQuestions = activeExam?.sections ? (activeExam.sections[currentSectionIndex]?.questions || []) : (activeExam?.questions || []);
+                       const numberFor = (question: any, index: number) => getDiagramQuestionNumber(question, index, sectionQuestions);
+                       const questionByNumber = new Map(group.questions.map((question: any, index: number) => [numberFor(question, index), question]));
+                       const textBoxes = getDiagramTextBoxes(group.questions, sectionQuestions);
+                       const legacyBoxFor = (question: any, index: number) => legacyBoxes[numberFor(question, index)] || (question.diagramBoxes || {})[numberFor(question, index)] || {
+                           x: 50, y: 16 + index * (62 / Math.max(1, group.questions.length - 1 || 1)), width: 14, height: 5,
                        };
-                       const escape = (value: string) => value.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char] || char));
-                       const renderBox = (question: any, index: number) => {
-                           const number = numberFor(question, index);
-                           const raw = String(question.text || `[${number}]`);
-                           const marker = new RegExp(`\\[${number.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\]`);
-                           const pieces = raw.split(marker);
-                           const input = <input id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} />;
-                           return <>{pieces.length > 1 ? <><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces[0])} />{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(pieces.slice(1).join(`[${number}]`))} /></> : <><span className="idp-diagram-num">{number}</span>{input}<StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={question.id} html={renderSafeHTML(raw)} /></>}</>;
+                       const toDiagramText = (value: any) => String(value || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ");
+                       const renderGap = (number: string, key: string) => {
+                           const question = questionByNumber.get(number);
+                           if (!question) return <span key={key}>[{number}]</span>;
+                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
                        };
+                       const renderBoxText = (box: DiagramTextBox) => toDiagramText(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
+                           const marker = part.match(/^\[(\d+)\]$/);
+                           return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`}>{part}</span>;
+                       });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
                            <div className="idp-diagram-stage" style={{aspectRatio:diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isOverlayDiagram ? {left:'0%',top:'0%',width:'100%',height:'100%'} : {left:`${imageBounds.x}%`, top:`${imageBounds.y}%`, width:`${imageBounds.width}%`, height:`${imageBounds.height}%`}} /> : <div style={{padding:36, color:'var(--esub)', textAlign:'center'}}>Diagram image has not been added yet.</div>}
-                               {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                                   {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); return <line key={question.id} x1={box.x} y1={box.y} x2={box.targetX ?? 50} y2={box.targetY ?? 50} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />; })}
-                               </svg>}
-                               {group.questions.map((question:any, index:number) => { const box=boxFor(question,index); const number=numberFor(question,index); return isOverlayDiagram ? <input key={question.id} id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} /> : <div key={question.id} className="idp-diagram-box" style={{left:`${box.x}%`, top:`${box.y}%`, width:`${box.width || 27}%`, minHeight:`${box.height || 16}%`}}>{renderBox(question,index)}</div>; })}
+                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? {left:'0%',top:'0%',width:'100%',height:'100%'} : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{textBoxes.map((box: DiagramTextBox) => {
+                                   if (!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
+                                   const x1 = box.anchor === "center" ? Number(box.x) : Number(box.x) + (Number(box.width) || 26) / 2;
+                                   const y1 = box.anchor === "center" ? Number(box.y) : Number(box.y) + (Number(box.height) || 16) / 2;
+                                   return <line key={`diagram-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />;
+                               })}</svg>}
+                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
                    };
@@ -1737,23 +1733,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                       (() => {
                                                         const usedIds = new Set(group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean));
                                                         return (
-                                                          <div className="mh-heading-tray" style={{display:'flex', flexDirection:'column', gap:0}}>
+                                                          <div className="mh-heading-tray notranslate" translate="no" style={{display:'flex', flexDirection:'column', gap:0}}>
                                                             <div style={{marginBottom:18}}>
                                                               <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
                                                               {headingOptions.map((opt: any, oIdx: number) => {
-                                                                const optText = typeof opt === 'string' ? opt : ((opt as any).text || "");
-                                                                const mm = optText.match(/^([ivxlcdmIVXLCDM]+)[.)]\s*(.*)/i);
-                                                                const optId = mm ? mm[1].toLowerCase() : optText.split(' ')[0].toLowerCase();
-                                                                const optContent = mm ? mm[2] : optText;
+                                                                const heading = getHeadingOptionMeta(opt, oIdx);
+                                                                const optId = heading.id;
+                                                                const optContent = heading.text;
                                                                 const isUsed = usedIds.has(optId);
                                                                 return (
-                                                                  <div key={oIdx}
+                                                                  <div key={`heading-option-${optId}`}
+                                                                    className="notranslate"
+                                                                    translate="no"
                                                                     draggable={!isUsed}
                                                                     onClick={() => { if (!isUsed) selectBankAnswer(optId); }}
                                                                     onDragStart={(e: any) => { if (!isUsed) beginAnswerDrag(e, optId, `${optId}. ${optContent.replace(/<[^>]+>/g, ' ')}`); }}
                                                                     style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedDragAnswer === optId ? '2px solid var(--eblue)' : 'none'}}>
                                                                     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
-                                                                    <span style={{flex:1, fontSize:13, lineHeight:1.45, color:'var(--etext)'}} dangerouslySetInnerHTML={{__html: renderSafeHTML(optContent)}} />
+                                                                    <span style={{fontStyle:'italic',fontWeight:800,fontSize:13,color:'var(--eblue)',minWidth:24,flexShrink:0}}>{optId}.</span>
+                                                                    <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} style={{flex:1,fontSize:13,lineHeight:1.45,color:'var(--etext)'}} />
                                                                   </div>
                                                                 );
                                                               })}

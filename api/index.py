@@ -156,8 +156,6 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
     answers: Dict[str, str] = {}
     instruction_lines: List[str] = []
     image_url = ""
-    image_mode = "BOXES"
-    image_aspect_ratio = ""
     in_slots = False
     in_options = False
     current_question = ""
@@ -325,8 +323,8 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
       [DIAGRAM_LABEL]
       IMAGE: https://.../diagram.png
       IMAGE_BOUNDS: x=30, y=8, w=40, h=84
-      [BOX 34 x=68 y=8 w=27 h=29 targetX=57 targetY=27]
-      Network of [34] ______ helps ...
+      [BOX network x=68 y=8 w=27 h=29 targetX=57 targetY=27]
+      Network of [34] ______ helps to provide a constant [35] ______ supply.
       [/BOX]
       [ANSWERS]
       34. *air
@@ -336,13 +334,15 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
     labels, connectors and the source image aligned at every viewport size.
     """
     image_url = ""
+    image_mode = ""
+    image_aspect_ratio = ""
     image_bounds: Dict[str, float] = {"x": 27, "y": 7, "width": 46, "height": 86}
     boxes: Dict[str, Dict[str, Any]] = {}
     answers: Dict[str, str] = {}
     instruction_html: List[str] = []
     current_box = ""
     in_answers = False
-    box_re = re.compile(r'^\s*\[BOX\s+(\d+)\s*([^\]]*)\]\s*$', re.IGNORECASE)
+    box_re = re.compile(r'^\s*\[BOX\s+([A-Za-z0-9_-]+)\s*([^\]]*)\]\s*$', re.IGNORECASE)
     answer_re = re.compile(r'^\s*(\d+)\s*[.)]\s*\*?\s*(.*)$')
     prop_re = re.compile(r'\b(x|y|w|h|width|height|targetX|targetY)\s*=\s*([\d.]+)\s*%?', re.IGNORECASE)
     url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
@@ -370,13 +370,19 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             continue
         box_match = box_re.match(raw)
         if box_match:
-            number, props = box_match.groups()
-            boxes[number] = {
-                **parse_props(props, {"x": 6, "y": 10, "width": 26, "height": 18, "targetX": 50, "targetY": 50}),
-                "questionNumber": int(number),
-                "html": "",
+            box_id, props = box_match.groups()
+            anchor_match = re.search(r'\banchor\s*=\s*(top-left|center)\b', props or "", re.IGNORECASE)
+            anchor = anchor_match.group(1).lower() if anchor_match else ("center" if box_id.isdigit() else "top-left")
+            box_defaults = {"x": 6, "y": 10, "width": 26, "height": 18}
+            if anchor == "center":
+                box_defaults.update({"targetX": 50, "targetY": 50})
+            boxes[box_id] = {
+                **parse_props(props, box_defaults),
+                "id": box_id,
+                "text": "",
+                "anchor": anchor,
             }
-            current_box, in_answers = number, False
+            current_box, in_answers = box_id, False
             continue
         if upper == "[/BOX]":
             current_box = ""
@@ -387,7 +393,8 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
                 image_url = found.group(0)
             continue
         if raw.upper().startswith("IMAGE_MODE:"):
-            image_mode = "OVERLAY" if "OVERLAY" in raw.upper() else "BOXES"
+            requested_mode = raw.split(":", 1)[1].strip().upper().replace("-", "_")
+            image_mode = requested_mode if requested_mode in {"OVERLAY", "BOXES", "TEXT_BOXES"} else "TEXT_BOXES"
             continue
         if raw.upper().startswith("IMAGE_ASPECT_RATIO:"):
             image_aspect_ratio = raw.split(":", 1)[1].strip()
@@ -399,34 +406,52 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             answer_match = answer_re.match(raw)
             if answer_match:
                 number, answer = answer_match.groups()
-                if number in boxes:
-                    answers[number] = answer.strip()
+                answers[number] = answer.strip()
             continue
         html_line = paragraph_to_html(item)
         if current_box:
-            boxes[current_box]["html"] += html_line
+            boxes[current_box]["text"] += ("\n" if boxes[current_box]["text"] else "") + html_line
         else:
             instruction_html.append(html_line)
 
     if not image_url or not boxes:
         return
     instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
-    shared_boxes = {key: value.copy() for key, value in boxes.items()}
-    for number, box in shared_boxes.items():
+    if not image_mode:
+        image_mode = "BOXES" if all(box_id.isdigit() for box_id in boxes) else "TEXT_BOXES"
+    shared_text_boxes = [value.copy() for value in boxes.values()]
+    marker_order: List[str] = []
+    legacy_boxes: Dict[str, Dict[str, Any]] = {}
+    for box in shared_text_boxes:
+        markers = re.findall(r'\[(\d+)\]', box.get("text", ""))
+        if not markers and str(box.get("id", "")).isdigit():
+            markers = [str(box["id"])]
+            box["text"] = box.get("text") or f"[{box['id']}]"
+        for number in markers:
+            if number not in marker_order:
+                marker_order.append(number)
+            legacy_boxes[number] = {
+                **{key: value for key, value in box.items() if key not in {"id", "text", "anchor"}},
+                "questionNumber": int(number),
+                "html": box.get("text", ""),
+            }
+    marker_order.sort(key=lambda value: int(value))
+    for number in marker_order:
         target_questions.append({
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
             "type": "DIAGRAM_LABEL",
             "subType": "DIAGRAM_LABEL",
             "instruction": instruction,
             "groupContext": "",
-            "text": box.get("html") or f"[{number}]",
+            "text": f"[{number}]",
             "options": [],
             "correctAnswer": answers.get(number, ""),
             "diagramImageUrl": image_url,
             "diagramImageMode": image_mode,
             "diagramImageAspectRatio": image_aspect_ratio,
             "diagramImageBounds": image_bounds.copy(),
-            "diagramBoxes": shared_boxes,
+            "diagramBoxes": {key: value.copy() for key, value in legacy_boxes.items()},
+            "diagramTextBoxes": [box.copy() for box in shared_text_boxes],
         })
 
 def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
