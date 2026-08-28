@@ -1745,11 +1745,18 @@ const normalizeHeadingId = (value: any) => String(value ?? "")
   .toLowerCase();
 
 const getHeadingOptionMeta = (option: any, index: number) => {
-  // Options normally arrive as "iv. Heading text", but retain compatible
-  // fallbacks for older/imported records which use a structured option shape.
-  const raw = typeof option === "string"
-    ? option
-    : String(option?.text ?? option?.content ?? option?.label ?? option?.value ?? "");
+  // Imported heading options can retain the Roman numeral in `text` and the
+  // actual label in `label`/`value`. Always prefer the richest text source.
+  const candidates = typeof option === "string"
+    ? [option]
+    : [option?.text, option?.content, option?.label, option?.value]
+      .filter((value) => value !== null && value !== undefined)
+      .map(String);
+  const raw = candidates.reduce((best, candidate) =>
+    candidate.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length > best.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length
+      ? candidate
+      : best,
+  candidates[0] || "");
   const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
   return {
     id: normalizeHeadingId(match?.[1] || option?.id || toRomanNumeral(index + 1)),

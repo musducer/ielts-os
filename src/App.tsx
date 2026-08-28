@@ -1745,11 +1745,18 @@ const normalizeHeadingId = (value: any) => String(value ?? "")
   .toLowerCase();
 
 const getHeadingOptionMeta = (option: any, index: number) => {
-  // Options normally arrive as "iv. Heading text", but retain compatible
-  // fallbacks for older/imported records which use a structured option shape.
-  const raw = typeof option === "string"
-    ? option
-    : String(option?.text ?? option?.content ?? option?.label ?? option?.value ?? "");
+  // Imported heading options can retain the Roman numeral in `text` and the
+  // actual label in `label`/`value`. Always prefer the richest text source.
+  const candidates = typeof option === "string"
+    ? [option]
+    : [option?.text, option?.content, option?.label, option?.value]
+      .filter((value) => value !== null && value !== undefined)
+      .map(String);
+  const raw = candidates.reduce((best, candidate) =>
+    candidate.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length > best.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length
+      ? candidate
+      : best,
+  candidates[0] || "");
   const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
   return {
     id: normalizeHeadingId(match?.[1] || option?.id || toRomanNumeral(index + 1)),
@@ -9984,7 +9991,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-diagram-stage { position:relative; width:100%; min-width:720px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
                       .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
                       .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
-                      .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:rgba(255,255,255,.97); color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
+                      .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:#fff; color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
                       .idp-diagram-box p, .idp-diagram-box div { margin:0; }
                       .idp-diagram-gap { display:inline-flex; align-items:baseline; margin:0 2px; vertical-align:baseline; }
                       .idp-diagram-input { display:inline-block; min-width:0; max-width:28ch; margin:0 4px; padding:1px 5px 2px; border:0; border-bottom:2px solid #111827; border-radius:0; background:#fff; color:#111827; font:700 15px/1.35 Arial,sans-serif; text-align:center; vertical-align:baseline; box-shadow:none; }
@@ -10872,7 +10879,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`} dangerouslySetInnerHTML={{__html: sanitizeRichHtml(part)}} />;
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
-                           <div className="idp-diagram-stage" style={letDiagramImageDefineAspect ? undefined : {aspectRatio:diagramAspectRatio}}>
+                           <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
                                {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{textBoxes.map((box: DiagramTextBox) => {
                                    if (!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
