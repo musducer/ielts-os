@@ -1739,11 +1739,20 @@ const toRomanNumeral = (value: number) => {
   return result;
 };
 
+const normalizeHeadingId = (value: any) => String(value ?? "")
+  .trim()
+  .replace(/^\s*([ivxlcdm]+)[.)]?\s*$/i, "$1")
+  .toLowerCase();
+
 const getHeadingOptionMeta = (option: any, index: number) => {
-  const raw = typeof option === "string" ? option : String(option?.text || "");
+  // Options normally arrive as "iv. Heading text", but retain compatible
+  // fallbacks for older/imported records which use a structured option shape.
+  const raw = typeof option === "string"
+    ? option
+    : String(option?.text ?? option?.content ?? option?.label ?? option?.value ?? "");
   const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
   return {
-    id: (match?.[1] || toRomanNumeral(index + 1)).toLowerCase(),
+    id: normalizeHeadingId(match?.[1] || option?.id || toRomanNumeral(index + 1)),
     text: match?.[2] ?? raw,
   };
 };
@@ -10336,7 +10345,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
                               const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
                               const headingMeta = hOpts.map((option: any, optionIndex: number) => getHeadingOptionMeta(option, optionIndex));
-                              const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === String(roman || "").toLowerCase());
+                              const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === normalizeHeadingId(roman));
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
@@ -10361,8 +10370,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
                                                           title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || filled}{isFilled ? '.' : ''}</span>
-                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || '') : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
+                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || normalizeHeadingId(filled)}{isFilled ? '.' : ''}</span>
+                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || String(filled || '')) : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
                                                       </div>
                                                   </div>
                                               </div>
@@ -13095,7 +13104,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 const builderGroups: any[] = [];
                 for (let i = 0; i < qs.length; i++) {
                     const q = qs[i];
-                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG') {
+                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG' || q.type === 'DIAGRAM_LABEL') {
                         let j = i + 1;
                         const sharedQs = [q];
                         // FIX "phân thân": chỉ gộp khi CÙNG groupContext + instruction (khớp logic đề thi),
@@ -13103,7 +13112,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         while (j < qs.length && qs[j].type === q.type
                                && (qs[j].groupContext || "") === (q.groupContext || "")
                                && (qs[j].instruction || "") === (q.instruction || "")
-                               && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))) {
+                               && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))
+                               && (q.type !== 'DIAGRAM_LABEL' || String(qs[j].diagramImageUrl || '') === String(q.diagramImageUrl || ''))) {
                             if (q.type === 'CHOICE_MULTIPLE' && JSON.stringify(qs[j].options) !== JSON.stringify(q.options)) break;
                             sharedQs.push(qs[j]);
                             j++;
@@ -13283,8 +13293,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     const firstNo = getQuizQuestionNumber(editingQuiz.questions || [], firstQ?.id);
                                     const lastNo = getQuizQuestionNumber(editingQuiz.questions || [], lastQ?.id) + getQuestionPointCount(lastQ) - 1;
                                     const navTitle = lastNo > firstNo ? `${firstNo}–${lastNo}` : `${firstNo}`;
-                                    const typeIcon = grp.groupType === 'BLANK' ? <Ico name="edit" size={14} /> : grp.groupType === 'MATCHING' ? <Ico name="link" size={14} /> : grp.groupType === 'DRAG_DROP' ? <Ico name="pointer" size={14} /> : grp.groupType === 'CHOICE_MULTIPLE' ? <Ico name="checkSquare" size={14} /> : <Ico name="radio" size={14} />;
-                                    const typeLabel = grp.groupType === 'BLANK' ? t('eb_type_blank') : grp.groupType === 'MATCHING' ? t('eb_type_match') : grp.groupType === 'DRAG_DROP' ? t('eb_type_drag') : grp.groupType === 'CHOICE_MULTIPLE' ? t('eb_type_multi') : t('eb_type_choice');
+                                    const typeIcon = grp.groupType === 'BLANK' ? <Ico name="edit" size={14} /> : grp.groupType === 'MATCHING' ? <Ico name="link" size={14} /> : grp.groupType === 'DRAG_DROP' ? <Ico name="pointer" size={14} /> : grp.groupType === 'DIAGRAM_LABEL' ? <Ico name="image" size={14} /> : grp.groupType === 'CHOICE_MULTIPLE' ? <Ico name="checkSquare" size={14} /> : <Ico name="radio" size={14} />;
+                                    const typeLabel = grp.groupType === 'BLANK' ? t('eb_type_blank') : grp.groupType === 'MATCHING' ? t('eb_type_match') : grp.groupType === 'DRAG_DROP' ? t('eb_type_drag') : grp.groupType === 'DIAGRAM_LABEL' ? 'Diagram labelling' : grp.groupType === 'CHOICE_MULTIPLE' ? t('eb_type_multi') : t('eb_type_choice');
                                     return (
                                     <div key={'nav-' + qIndex} className="ebx-nav" onClick={() => { const el = document.getElementById(`builder-q-${qIndex}`); if (el) { el.scrollIntoView({behavior: 'smooth', block: 'center'}); el.style.transition = 'box-shadow .3s'; el.style.boxShadow = `inset 3px 0 0 ${C.accent}`; setTimeout(() => { el.style.boxShadow = 'none'; }, 1400); } }} style={{display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: EB.radiusSm, cursor: 'pointer', marginBottom: 2}}>
                                         <span style={{fontFamily: EB.fMono, fontSize: 13, fontWeight: 700, color: EB.sub, minWidth: 34}}>{navTitle}</span>

@@ -1180,7 +1180,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
                               const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
                               const headingMeta = hOpts.map((option: any, optionIndex: number) => getHeadingOptionMeta(option, optionIndex));
-                              const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === String(roman || "").toLowerCase());
+                              const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === normalizeHeadingId(roman));
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
@@ -1205,8 +1205,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
                                                           title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || filled}{isFilled ? '.' : ''}</span>
-                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || '') : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
+                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || normalizeHeadingId(filled)}{isFilled ? '.' : ''}</span>
+                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || String(filled || '')) : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
                                                       </div>
                                                   </div>
                                               </div>

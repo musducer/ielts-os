@@ -1739,11 +1739,20 @@ const toRomanNumeral = (value: number) => {
   return result;
 };
 
+const normalizeHeadingId = (value: any) => String(value ?? "")
+  .trim()
+  .replace(/^\s*([ivxlcdm]+)[.)]?\s*$/i, "$1")
+  .toLowerCase();
+
 const getHeadingOptionMeta = (option: any, index: number) => {
-  const raw = typeof option === "string" ? option : String(option?.text || "");
+  // Options normally arrive as "iv. Heading text", but retain compatible
+  // fallbacks for older/imported records which use a structured option shape.
+  const raw = typeof option === "string"
+    ? option
+    : String(option?.text ?? option?.content ?? option?.label ?? option?.value ?? "");
   const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
   return {
-    id: (match?.[1] || toRomanNumeral(index + 1)).toLowerCase(),
+    id: normalizeHeadingId(match?.[1] || option?.id || toRomanNumeral(index + 1)),
     text: match?.[2] ?? raw,
   };
 };
