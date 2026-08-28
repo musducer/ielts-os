@@ -1744,18 +1744,31 @@ const normalizeHeadingId = (value: any) => String(value ?? "")
   .replace(/^\s*([ivxlcdm]+)[.)]?(?:\s+.*)?$/i, "$1")
   .toLowerCase();
 
+const headingPlainText = (value: any) => String(value ?? "")
+  .replace(/<[^>]*>/g, " ")
+  .replace(/&nbsp;/gi, " ")
+  .replace(/&amp;/gi, "&")
+  .replace(/\s+/g, " ")
+  .trim();
+
 const getHeadingOptionMeta = (option: any, index: number) => {
-  // Imports use several schemas: { id: 0, text: "i", label: "..." },
-  // { value: "i. ..." }, and plain strings. Resolve the Roman key separately
-  // from the richest visible label so a slot can never degrade to only "i".
-  const candidates = typeof option === "string"
+  // Heading imports have evolved through several schemas. Keep the identifier
+  // separate from the human label so `{ id: 0, text: 'i', label: '...' }`
+  // cannot degrade to just `i` once it is placed in a passage slot.
+  const fields = typeof option === "string"
     ? [option]
-    : [option?.text, option?.content, option?.label, option?.value, option?.roman, option?.code]
-      .filter((value) => value !== null && value !== undefined)
-      .map(String);
-  const codedCandidate = candidates.find((candidate) => /^\s*[ivxlcdm]+(?:[.)]|\s|$)/i.test(candidate));
-  const codeMatch = codedCandidate?.match(/^\s*([ivxlcdm]+)(?:[.)]\s*|\s+)?(.*)$/i);
-  const explicitId = [option?.roman, option?.code, option?.id]
+    : [
+      option?.label, option?.heading, option?.title, option?.content,
+      option?.description, option?.name, option?.value, option?.text,
+      option?.roman, option?.key, option?.code,
+    ];
+  const candidates = fields
+    .filter((value) => value !== null && value !== undefined)
+    .map(headingPlainText)
+    .filter(Boolean);
+  const codedCandidate = candidates.find((candidate) => /^\s*[ivxlcdm]+(?:[.)]\s*|\s+)/i.test(candidate));
+  const codeMatch = codedCandidate?.match(/^\s*([ivxlcdm]+)(?:[.)]\s*|\s+)(.*)$/i);
+  const explicitId = [option?.roman, option?.key, option?.code, option?.id]
     .map((value) => String(value ?? "").trim())
     .find((value) => /^[ivxlcdm]+$/i.test(value));
   const label = candidates
@@ -1764,8 +1777,27 @@ const getHeadingOptionMeta = (option: any, index: number) => {
     .reduce((best, candidate) => candidate.length > best.length ? candidate : best, "");
   return {
     id: normalizeHeadingId(codeMatch?.[1] || explicitId || toRomanNumeral(index + 1)),
-    text: label || codeMatch?.[2] || candidates[0] || "",
+    text: label || codeMatch?.[2] || "",
   };
+};
+
+const getHeadingCatalog = (questions: any[] = []) => {
+  const catalog = new Map<string, { id: string; text: string }>();
+  questions.forEach((question: any) => {
+    const optionLists = [
+      question?.options, question?.headingOptions, question?.headings,
+      question?.metadata?.headingOptions, question?.metadata?.headings,
+    ];
+    optionLists.forEach((options: any) => {
+      if (!Array.isArray(options)) return;
+      options.forEach((option: any, index: number) => {
+        const meta = getHeadingOptionMeta(option, index);
+        const prior = catalog.get(meta.id);
+        if (!prior || meta.text.length > prior.text.length) catalog.set(meta.id, meta);
+      });
+    });
+  });
+  return catalog;
 };
 
 const getDiagramQuestionNumber = (question: any, index: number, allQuestions: any[] = []) =>
@@ -5763,12 +5795,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
-        const headingFor = (value: any) => (q.options || []).find((opt: any) => {
-          const label = (String(opt).match(/^\s*([ivxlcdm]+)[\.)\s]/i) || [])[1];
-          return !!label && label.toLowerCase() === String(value ?? '').trim().toLowerCase();
-        });
-        correctStr = stripTags(headingFor(q.correctAnswer) ?? q.correctAnswer);
-        stuStr = blank ? "(trống)" : stripTags(headingFor(studentAnsRaw) ?? studentAnsRaw);
+        const headingCatalog = getHeadingCatalog([q]);
+        const headingFor = (value: any) => headingCatalog.get(normalizeHeadingId(value));
+        const headingLabel = (value: any) => {
+          const heading = headingFor(value);
+          const id = heading?.id || normalizeHeadingId(value);
+          return heading?.text ? `${id}. ${headingPlainText(heading.text)}` : String(value ?? "");
+        };
+        correctStr = headingLabel(q.correctAnswer);
+        stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
       } else if (q.type === 'CHOICE' || q.type === 'MATCHING') {
         correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);

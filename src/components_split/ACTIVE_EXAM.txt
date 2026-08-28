@@ -1193,20 +1193,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ...(activeExam?.questions || []),
                                   ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
                               ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
-                              // Sections and the top-level question list can contain different
-                              // copies of a heading option. Merge by Roman ID and retain the
-                              // longest label, never the bare "ii" placeholder.
-                              const headingById = new Map<string, any>();
-                              allHeadingQuestions.forEach((question: any) => (question.options || []).forEach((option: any, optionIndex: number) => {
-                                  const meta = getHeadingOptionMeta(option, optionIndex);
-                                  const prior = headingById.get(meta.id);
-                                  if (!prior || String(meta.text || "").replace(/<[^>]+>/g, "").trim().length > String(prior.text || "").replace(/<[^>]+>/g, "").trim().length) headingById.set(meta.id, meta);
-                              }));
+                              // Both panes resolve from the same normalized catalog. Old imports
+                              // can keep labels in headingOptions/headings rather than options.
+                              const headingById = getHeadingCatalog(allHeadingQuestions);
                               const headingAnswerId = (value: any) => {
                                   const explicitRoman = String(value || "").match(/^\s*([ivxlcdm]+)\b/i)?.[1];
                                   return normalizeHeadingId(explicitRoman || value);
                               };
-                              const lookupHeading = (value: any) => headingById.get(headingAnswerId(value));
+                              const lookupHeading = (value: any, question: any) => {
+                                  const id = headingAnswerId(value);
+                                  // Prefer this paragraph's exact option object; this guarantees
+                                  // the slot mirrors the wording visible in the heading tray.
+                                  return getHeadingCatalog([question]).get(id) || headingById.get(id);
+                              };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
@@ -1214,7 +1213,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const letter = String.fromCharCode(65 + i);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
-                                          const assignedHeading = lookupHeading(filled);
+                                          const assignedHeading = lookupHeading(filled, q);
+                                          const assignedHeadingText = headingPlainText(assignedHeading?.text);
                                           return (
                                               <React.Fragment key={q.id}>
                                               <div className="idp-heading-slot-render notranslate" translate="no">
@@ -1232,7 +1232,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || headingAnswerId(filled)}{isFilled ? '.' : ''}</span>
-                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || String(filled || '')) : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || headingPlainText(filled)) : 'Drag heading here'}</span>
                                                       </div>
                                                   </div>
                                               </div>

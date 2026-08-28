@@ -407,16 +407,9 @@
                       const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
                       const hasSlots = headingQs.length > 0 && /\[HEADING_SLOT\]/i.test(passageHtml);
                       const headingOpts: any[] = (headingQs.find((q: any) => q.options && q.options.length)?.options) || [];
-                      const rnorm = (v: any) => String(v ?? "").trim().toLowerCase();
-                      const headingBody = (roman: string) => {
-                          const o = headingOpts.find((opt: any) => {
-                              const tt = typeof opt === 'string' ? opt : (opt.text || "");
-                              const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]/i);
-                              return m && rnorm(m[1]) === rnorm(roman);
-                          });
-                          const tt = o ? (typeof o === 'string' ? o : (o.text || "")) : "";
-                          return tt.replace(/^\s*[ivxlcdm]+[\.\)]\s*/i, '');
-                      };
+                      const headingCatalog = getHeadingCatalog(headingQs);
+                      const rnorm = (v: any) => normalizeHeadingId(v);
+                      const headingBody = (roman: string) => headingPlainText(headingCatalog.get(rnorm(roman))?.text);
                       return (
                       <div style={{ width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", borderRight: `1px solid ${C.border}`, lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
                           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
@@ -427,12 +420,11 @@
                               <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 18, background: C.bg }}>
                                   <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.sub, marginBottom: 8 }}>List of Headings</div>
                                   {headingOpts.map((opt: any, oi: number) => {
-                                      const tt = typeof opt === 'string' ? opt : (opt.text || "");
-                                      const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]\s*(.*)/i);
+                                      const heading = getHeadingOptionMeta(opt, oi);
                                       return (
                                           <div key={oi} style={{ display: 'flex', gap: 10, fontSize: 13.5, lineHeight: 1.5, marginBottom: 5 }}>
-                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{m ? m[1].toLowerCase() : ''}</span>
-                                              <span>{m ? m[2] : tt}</span>
+                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{heading.id}</span>
+                                              <span>{headingPlainText(heading.text)}</span>
                                           </div>
                                       );
                                   })}

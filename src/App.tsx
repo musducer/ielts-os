@@ -1744,18 +1744,31 @@ const normalizeHeadingId = (value: any) => String(value ?? "")
   .replace(/^\s*([ivxlcdm]+)[.)]?(?:\s+.*)?$/i, "$1")
   .toLowerCase();
 
+const headingPlainText = (value: any) => String(value ?? "")
+  .replace(/<[^>]*>/g, " ")
+  .replace(/&nbsp;/gi, " ")
+  .replace(/&amp;/gi, "&")
+  .replace(/\s+/g, " ")
+  .trim();
+
 const getHeadingOptionMeta = (option: any, index: number) => {
-  // Imports use several schemas: { id: 0, text: "i", label: "..." },
-  // { value: "i. ..." }, and plain strings. Resolve the Roman key separately
-  // from the richest visible label so a slot can never degrade to only "i".
-  const candidates = typeof option === "string"
+  // Heading imports have evolved through several schemas. Keep the identifier
+  // separate from the human label so `{ id: 0, text: 'i', label: '...' }`
+  // cannot degrade to just `i` once it is placed in a passage slot.
+  const fields = typeof option === "string"
     ? [option]
-    : [option?.text, option?.content, option?.label, option?.value, option?.roman, option?.code]
-      .filter((value) => value !== null && value !== undefined)
-      .map(String);
-  const codedCandidate = candidates.find((candidate) => /^\s*[ivxlcdm]+(?:[.)]|\s|$)/i.test(candidate));
-  const codeMatch = codedCandidate?.match(/^\s*([ivxlcdm]+)(?:[.)]\s*|\s+)?(.*)$/i);
-  const explicitId = [option?.roman, option?.code, option?.id]
+    : [
+      option?.label, option?.heading, option?.title, option?.content,
+      option?.description, option?.name, option?.value, option?.text,
+      option?.roman, option?.key, option?.code,
+    ];
+  const candidates = fields
+    .filter((value) => value !== null && value !== undefined)
+    .map(headingPlainText)
+    .filter(Boolean);
+  const codedCandidate = candidates.find((candidate) => /^\s*[ivxlcdm]+(?:[.)]\s*|\s+)/i.test(candidate));
+  const codeMatch = codedCandidate?.match(/^\s*([ivxlcdm]+)(?:[.)]\s*|\s+)(.*)$/i);
+  const explicitId = [option?.roman, option?.key, option?.code, option?.id]
     .map((value) => String(value ?? "").trim())
     .find((value) => /^[ivxlcdm]+$/i.test(value));
   const label = candidates
@@ -1764,8 +1777,27 @@ const getHeadingOptionMeta = (option: any, index: number) => {
     .reduce((best, candidate) => candidate.length > best.length ? candidate : best, "");
   return {
     id: normalizeHeadingId(codeMatch?.[1] || explicitId || toRomanNumeral(index + 1)),
-    text: label || codeMatch?.[2] || candidates[0] || "",
+    text: label || codeMatch?.[2] || "",
   };
+};
+
+const getHeadingCatalog = (questions: any[] = []) => {
+  const catalog = new Map<string, { id: string; text: string }>();
+  questions.forEach((question: any) => {
+    const optionLists = [
+      question?.options, question?.headingOptions, question?.headings,
+      question?.metadata?.headingOptions, question?.metadata?.headings,
+    ];
+    optionLists.forEach((options: any) => {
+      if (!Array.isArray(options)) return;
+      options.forEach((option: any, index: number) => {
+        const meta = getHeadingOptionMeta(option, index);
+        const prior = catalog.get(meta.id);
+        if (!prior || meta.text.length > prior.text.length) catalog.set(meta.id, meta);
+      });
+    });
+  });
+  return catalog;
 };
 
 const getDiagramQuestionNumber = (question: any, index: number, allQuestions: any[] = []) =>
@@ -5763,12 +5795,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
-        const headingFor = (value: any) => (q.options || []).find((opt: any) => {
-          const label = (String(opt).match(/^\s*([ivxlcdm]+)[\.)\s]/i) || [])[1];
-          return !!label && label.toLowerCase() === String(value ?? '').trim().toLowerCase();
-        });
-        correctStr = stripTags(headingFor(q.correctAnswer) ?? q.correctAnswer);
-        stuStr = blank ? "(trống)" : stripTags(headingFor(studentAnsRaw) ?? studentAnsRaw);
+        const headingCatalog = getHeadingCatalog([q]);
+        const headingFor = (value: any) => headingCatalog.get(normalizeHeadingId(value));
+        const headingLabel = (value: any) => {
+          const heading = headingFor(value);
+          const id = heading?.id || normalizeHeadingId(value);
+          return heading?.text ? `${id}. ${headingPlainText(heading.text)}` : String(value ?? "");
+        };
+        correctStr = headingLabel(q.correctAnswer);
+        stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
       } else if (q.type === 'CHOICE' || q.type === 'MATCHING') {
         correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
@@ -8531,16 +8566,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
                       const hasSlots = headingQs.length > 0 && /\[HEADING_SLOT\]/i.test(passageHtml);
                       const headingOpts: any[] = (headingQs.find((q: any) => q.options && q.options.length)?.options) || [];
-                      const rnorm = (v: any) => String(v ?? "").trim().toLowerCase();
-                      const headingBody = (roman: string) => {
-                          const o = headingOpts.find((opt: any) => {
-                              const tt = typeof opt === 'string' ? opt : (opt.text || "");
-                              const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]/i);
-                              return m && rnorm(m[1]) === rnorm(roman);
-                          });
-                          const tt = o ? (typeof o === 'string' ? o : (o.text || "")) : "";
-                          return tt.replace(/^\s*[ivxlcdm]+[\.\)]\s*/i, '');
-                      };
+                      const headingCatalog = getHeadingCatalog(headingQs);
+                      const rnorm = (v: any) => normalizeHeadingId(v);
+                      const headingBody = (roman: string) => headingPlainText(headingCatalog.get(rnorm(roman))?.text);
                       return (
                       <div style={{ width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", borderRight: `1px solid ${C.border}`, lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
                           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
@@ -8551,12 +8579,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 18, background: C.bg }}>
                                   <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.sub, marginBottom: 8 }}>List of Headings</div>
                                   {headingOpts.map((opt: any, oi: number) => {
-                                      const tt = typeof opt === 'string' ? opt : (opt.text || "");
-                                      const m = tt.match(/^\s*([ivxlcdm]+)[\.\)]\s*(.*)/i);
+                                      const heading = getHeadingOptionMeta(opt, oi);
                                       return (
                                           <div key={oi} style={{ display: 'flex', gap: 10, fontSize: 13.5, lineHeight: 1.5, marginBottom: 5 }}>
-                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{m ? m[1].toLowerCase() : ''}</span>
-                                              <span>{m ? m[2] : tt}</span>
+                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{heading.id}</span>
+                                              <span>{headingPlainText(heading.text)}</span>
                                           </div>
                                       );
                                   })}
@@ -10395,20 +10422,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ...(activeExam?.questions || []),
                                   ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
                               ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
-                              // Sections and the top-level question list can contain different
-                              // copies of a heading option. Merge by Roman ID and retain the
-                              // longest label, never the bare "ii" placeholder.
-                              const headingById = new Map<string, any>();
-                              allHeadingQuestions.forEach((question: any) => (question.options || []).forEach((option: any, optionIndex: number) => {
-                                  const meta = getHeadingOptionMeta(option, optionIndex);
-                                  const prior = headingById.get(meta.id);
-                                  if (!prior || String(meta.text || "").replace(/<[^>]+>/g, "").trim().length > String(prior.text || "").replace(/<[^>]+>/g, "").trim().length) headingById.set(meta.id, meta);
-                              }));
+                              // Both panes resolve from the same normalized catalog. Old imports
+                              // can keep labels in headingOptions/headings rather than options.
+                              const headingById = getHeadingCatalog(allHeadingQuestions);
                               const headingAnswerId = (value: any) => {
                                   const explicitRoman = String(value || "").match(/^\s*([ivxlcdm]+)\b/i)?.[1];
                                   return normalizeHeadingId(explicitRoman || value);
                               };
-                              const lookupHeading = (value: any) => headingById.get(headingAnswerId(value));
+                              const lookupHeading = (value: any, question: any) => {
+                                  const id = headingAnswerId(value);
+                                  // Prefer this paragraph's exact option object; this guarantees
+                                  // the slot mirrors the wording visible in the heading tray.
+                                  return getHeadingCatalog([question]).get(id) || headingById.get(id);
+                              };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
@@ -10416,7 +10442,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const letter = String.fromCharCode(65 + i);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
-                                          const assignedHeading = lookupHeading(filled);
+                                          const assignedHeading = lookupHeading(filled, q);
+                                          const assignedHeadingText = headingPlainText(assignedHeading?.text);
                                           return (
                                               <React.Fragment key={q.id}>
                                               <div className="idp-heading-slot-render notranslate" translate="no">
@@ -10434,7 +10461,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           title={isFilled ? "Drag or click, then choose another answer box" : selectedDragAnswer ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{assignedHeading?.id || headingAnswerId(filled)}{isFilled ? '.' : ''}</span>
-                                                          <StaticHtmlBlock key={`heading-text-${q.id}`} tagName="span" className="notranslate" html={renderSafeHTML(isFilled ? (assignedHeading?.text || String(filled || '')) : 'Drag heading here')} style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}} />
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || headingPlainText(filled)) : 'Drag heading here'}</span>
                                                       </div>
                                                   </div>
                                               </div>
