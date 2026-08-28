@@ -1745,22 +1745,26 @@ const normalizeHeadingId = (value: any) => String(value ?? "")
   .toLowerCase();
 
 const getHeadingOptionMeta = (option: any, index: number) => {
-  // Imported heading options can retain the Roman numeral in `text` and the
-  // actual label in `label`/`value`. Always prefer the richest text source.
+  // Imports use several schemas: { id: 0, text: "i", label: "..." },
+  // { value: "i. ..." }, and plain strings. Resolve the Roman key separately
+  // from the richest visible label so a slot can never degrade to only "i".
   const candidates = typeof option === "string"
     ? [option]
-    : [option?.text, option?.content, option?.label, option?.value]
+    : [option?.text, option?.content, option?.label, option?.value, option?.roman, option?.code]
       .filter((value) => value !== null && value !== undefined)
       .map(String);
-  const raw = candidates.reduce((best, candidate) =>
-    candidate.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length > best.replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "").trim().length
-      ? candidate
-      : best,
-  candidates[0] || "");
-  const match = raw.match(/^\s*([ivxlcdm]+)[.)]\s*(.*)$/i);
+  const codedCandidate = candidates.find((candidate) => /^\s*[ivxlcdm]+(?:[.)]|\s|$)/i.test(candidate));
+  const codeMatch = codedCandidate?.match(/^\s*([ivxlcdm]+)(?:[.)]\s*|\s+)?(.*)$/i);
+  const explicitId = [option?.roman, option?.code, option?.id]
+    .map((value) => String(value ?? "").trim())
+    .find((value) => /^[ivxlcdm]+$/i.test(value));
+  const label = candidates
+    .map((candidate) => candidate.replace(/^\s*[ivxlcdm]+(?:[.)]\s*|\s+)/i, "").trim())
+    .filter((candidate) => candidate && !/^[ivxlcdm]+$/i.test(candidate))
+    .reduce((best, candidate) => candidate.length > best.length ? candidate : best, "");
   return {
-    id: normalizeHeadingId(match?.[1] || option?.id || toRomanNumeral(index + 1)),
-    text: match?.[2] ?? raw,
+    id: normalizeHeadingId(codeMatch?.[1] || explicitId || toRomanNumeral(index + 1)),
+    text: label || codeMatch?.[2] || candidates[0] || "",
   };
 };
 
