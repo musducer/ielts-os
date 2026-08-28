@@ -1,5 +1,7 @@
 # Parser Conventions
 
+For the complete authoring handbook used by AI DOCX formatters, see [DOCX_FORMATTER_PLAYBOOK.md](DOCX_FORMATTER_PLAYBOOK.md). `api/index.py` remains the source of truth.
+
 ## Listening map labelling
 
 - Mark a map or plan labelling group as `MAP_LABELLING` when its instructions refer to labelling a map or plan.
