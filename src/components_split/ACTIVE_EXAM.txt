@@ -1178,7 +1178,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const SLOT_RE = new RegExp(headingSlotPattern, "i");
                           if (headingQs.length > 0 && SLOT_RE.test(passageHtml)) {
                               const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
-                              const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
+                              // A few older parsed exams retain only the Roman labels in
+                              // sections[].questions, while activeExam.questions keeps the
+                              // full heading labels. Pick the richest copy so the slot and
+                              // the heading tray always show the exact same heading text.
+                              const headingOptionSets = [
+                                  ...headingQs.map((q: any) => q.options || []),
+                                  ...(activeExam?.questions || [])
+                                      .filter((q: any) => q.type === "DRAG_DROP_HEADING")
+                                      .map((q: any) => q.options || []),
+                              ];
+                              const headingSetScore = (options: any[]) => options.reduce((sum, option) => {
+                                  const meta = getHeadingOptionMeta(option, sum);
+                                  return sum + meta.text.replace(/<[^>]+>/g, "").trim().length;
+                              }, 0);
+                              const hOpts = headingOptionSets.reduce((best: any[], candidate: any[]) =>
+                                  headingSetScore(candidate) > headingSetScore(best) ? candidate : best,
+                              []);
                               const headingMeta = hOpts.map((option: any, optionIndex: number) => getHeadingOptionMeta(option, optionIndex));
                               const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === normalizeHeadingId(roman));
                               return (
@@ -1646,6 +1662,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const isOverlayDiagram = imageMode === "OVERLAY";
                        const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
+                       const letDiagramImageDefineAspect = isFullCanvasDiagram && !String(source.diagramImageAspectRatio || "").trim();
                        const imageBounds = { x: 27, y: 7, width: 46, height: 86, ...(source.diagramImageBounds || {}) };
                        const legacyBoxes = source.diagramBoxes || {};
                        const sectionQuestions = activeExam?.sections ? (activeExam.sections[currentSectionIndex]?.questions || []) : (activeExam?.questions || []);
@@ -1655,26 +1672,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const legacyBoxFor = (question: any, index: number) => legacyBoxes[numberFor(question, index)] || (question.diagramBoxes || {})[numberFor(question, index)] || {
                            x: 50, y: 16 + index * (62 / Math.max(1, group.questions.length - 1 || 1)), width: 14, height: 5,
                        };
-                       const toDiagramText = (value: any) => String(value || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ");
+                       // Preserve existing student-highlight/student-note-hl markup inside
+                       // diagram callouts. The blanks are split out below and stay editable.
+                       const toDiagramHtml = (value: any) => String(value || "")
+                           .replace(/<br\s*\/?>/gi, "\n")
+                           .replace(/<\/(?:p|div)>/gi, "\n")
+                           .replace(/<(?:p|div)[^>]*>/gi, "")
+                           .replace(/&nbsp;/gi, " ");
                        const renderGap = (number: string, key: string) => {
                            const question = questionByNumber.get(number);
                            if (!question) return <span key={key}>[{number}]</span>;
-                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
+                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
                        };
-                       const renderBoxText = (box: DiagramTextBox) => toDiagramText(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
+                       const renderBoxText = (box: DiagramTextBox) => toDiagramHtml(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
                            const marker = part.match(/^\[(\d+)\]$/);
-                           return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`}>{part}</span>;
+                           return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`} dangerouslySetInnerHTML={{__html: sanitizeRichHtml(part)}} />;
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
-                           <div className="idp-diagram-stage" style={{aspectRatio:diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? {left:'0%',top:'0%',width:'100%',height:'100%'} : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                           <div className="idp-diagram-stage" style={letDiagramImageDefineAspect ? undefined : {aspectRatio:diagramAspectRatio}}>
+                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{textBoxes.map((box: DiagramTextBox) => {
                                    if (!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
                                    const x1 = box.anchor === "center" ? Number(box.x) : Number(box.x) + (Number(box.width) || 26) / 2;
                                    const y1 = box.anchor === "center" ? Number(box.y) : Number(box.y) + (Number(box.height) || 16) / 2;
                                    return <line key={`diagram-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />;
                                })}</svg>}
-                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
+                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box highlightable-content" data-field={`diagramTextBoxes:${box.id}`} data-qid={source.id} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
                    };
@@ -1953,6 +1976,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      if (secList) secList.forEach((sec: any, si: number) => scanHtml(sec.passage || '', { secIdx: si, qid: null, field: 'passage', optIndex: null, keyBase: `sec${si}` }));
                      else if (activeExam?.passage) scanHtml(activeExam.passage, { secIdx: 0, qid: null, field: 'passage', optIndex: null, keyBase: 'passage' });
                      const seenShared = new Set<string>();
+                     const seenDiagramBoxes = new Set<string>();
                      (activeExam?.questions || []).forEach((q: any) => {
                          const si = Math.max(0, navGroups.findIndex(g => g.questions.some((x: any) => x.id === q.id)));
                          scanHtml(q.text || '', { secIdx: si, qid: q.id, field: 'text', optIndex: null, keyBase: `t${q.id}` });
@@ -1961,6 +1985,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          (q.options || []).forEach((op: any, oi: number) => {
                              const s = String(op || '');
                              if (s.indexOf('student-note-hl') !== -1 && !seenShared.has('o:' + s)) { seenShared.add('o:' + s); scanHtml(s, { secIdx: si, qid: q.id, field: 'options', optIndex: oi, keyBase: `o${q.id}_${oi}` }); }
+                         });
+                         (q.diagramTextBoxes || []).forEach((box: any) => {
+                             const boxId = String(box?.id || '');
+                             const html = String(box?.text || '');
+                             const key = `${q.diagramImageUrl || ''}:${boxId}:${html}`;
+                             if (boxId && html.indexOf('student-note-hl') !== -1 && !seenDiagramBoxes.has(key)) {
+                                 seenDiagramBoxes.add(key);
+                                 scanHtml(html, { secIdx: si, qid: q.id, field: `diagramTextBoxes:${boxId}`, optIndex: null, keyBase: `d${q.id}_${boxId}` });
+                             }
                          });
                      });
                      // LƯỚI AN TOÀN: note đang hiển thị trên DOM nhưng chưa lọt vào state (vd bài đọc) -> vẫn hiện trong panel
@@ -2018,9 +2051,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              return;
                          }
                          const srcQ = (activeExam?.questions || []).find((x: any) => x.id === n.qid);
+                         const diagramField = /^diagramTextBoxes:(.+)$/.exec(n.field);
                          const src = n.field === 'passage'
                              ? (secList ? (secList[n.secIdx]?.passage || '') : (activeExam?.passage || ''))
-                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || ''));
+                             : (diagramField ? String(((srcQ as any)?.diagramTextBoxes || []).find((box: any) => String(box?.id || '') === diagramField[1])?.text || '')
+                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || '')));
                          if (!src) return;
                          _tmp.innerHTML = src;
                          const spans = n.noteId

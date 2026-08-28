@@ -528,6 +528,7 @@
                                             const imageUrl = String(source.diagramImageUrl || '');
                                             const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
+                                            const letDiagramImageDefineAspect = imageMode !== 'BOXES' && !String(source.diagramImageAspectRatio || '').trim();
                                             const textBoxes = getDiagramTextBoxes(grp.questions, editingQuiz.questions || []);
                                             const active = textBoxes.some((box:any) => box.id === diagramEditorSelection) ? diagramEditorSelection : textBoxes[0]?.id;
                                             const bounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
@@ -552,6 +553,24 @@
                                                 const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
                                                 window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
                                             };
+                                            const resizeBox = (boxId:string, event:any, axis:'x'|'y'|'both'='both') => {
+                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-diagram-stage') as HTMLElement | null;
+                                                if (!canvas) return;
+                                                const rect = canvas.getBoundingClientRect();
+                                                const box = textBoxes.find((item:any) => item.id === boxId);
+                                                if (!box) return;
+                                                const startX = event.clientX, startY = event.clientY;
+                                                const originWidth = Number(box.width) || 24, originHeight = Number(box.height) || 10;
+                                                const move = (pointer:PointerEvent) => {
+                                                    const patch:any = {};
+                                                    if (axis !== 'y') patch.width = clamp(originWidth + ((pointer.clientX-startX)/rect.width)*100, 8, 92);
+                                                    if (axis !== 'x') patch.height = clamp(originHeight + ((pointer.clientY-startY)/rect.height)*100, 6, 76);
+                                                    updateBox(boxId, patch);
+                                                };
+                                                event.preventDefault(); event.stopPropagation();
+                                                const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
+                                                window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
+                                            };
                                             const addTextBox = () => {
                                                 const id = `box-${Date.now().toString(36)}`;
                                                 setTextBoxes([...textBoxes, {id,x:8,y:8,width:28,height:16,text:'Label text with [number]',anchor:'top-left'}]);
@@ -564,12 +583,12 @@
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
                                                 </div>
-                                                <div className="eb-diagram-stage" style={{position:'relative',aspectRatio:diagramAspectRatio,overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{
+                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{
                                                     if(!active || (event.target as HTMLElement).closest('.eb-diagram-box')) return;
                                                     const rect=(event.currentTarget as HTMLElement).getBoundingClientRect();
                                                     updateBox(active,{targetX:clamp(((event.clientX-rect.left)/rect.width)*100,0,100),targetY:clamp(((event.clientY-rect.top)/rect.height)*100,0,100)});
                                                 }}>
-                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill'}} />}
+                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:(letDiagramImageDefineAspect?{position:'relative',display:'block',width:'100%',height:'auto'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'contain'})} />}
                                                     <svg aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:any)=>{
                                                         if(!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
                                                         const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||24)/2;
@@ -583,10 +602,13 @@
                                                         return <div key={`diagram-box-${box.id}`} className="eb-diagram-box" onClick={(event:any)=>{event.stopPropagation();setDiagramEditorSelection(box.id)}} onPointerDown={(event:any)=>moveBox(box.id,event)} style={{position:'absolute',left:`${Number(box.x)||0}%`,top:`${Number(box.y)||0}%`,width:`${Number(box.width)||24}%`,minHeight:`${Number(box.height)||10}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',padding:'8px 10px',boxSizing:'border-box',border:`2px solid ${box.id===active?EB.accent:EB.line}`,background:'rgba(255,255,255,.96)',color:EB.ink,fontSize:12,lineHeight:1.35,cursor:'grab',touchAction:'none',boxShadow:box.id===active?`0 0 0 3px ${EB.accentWash}`:'0 4px 14px rgba(15,23,42,.08)'}}>
                                                             <div style={{fontFamily:EB.fMono,fontSize:9,fontWeight:800,color:EB.accent,marginBottom:4}}>{markers.length?markers.map((number:string)=>`#${number}`).join(' · '):box.id}</div>
                                                             <div>{parts.map((part:string,index:number)=>/^\[\d+\]$/.test(part)?<span key={`${box.id}-gap-${index}`} style={{display:'inline-block',minWidth:44,margin:'0 3px',borderBottom:`2px solid ${EB.accent}`,textAlign:'center',fontWeight:800,color:EB.accent}}>{part}</span>:<span key={`${box.id}-text-${index}`}>{part}</span>)}</div>
+                                                            <span title="Drag right edge to resize width" onPointerDown={(event:any)=>resizeBox(box.id,event,'x')} style={{position:'absolute',right:-7,top:'50%',width:12,height:28,transform:'translateY(-50%)',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:8,background:EB.sheet,cursor:'ew-resize',touchAction:'none',zIndex:3}} />
+                                                            <span title="Drag bottom edge to resize height" onPointerDown={(event:any)=>resizeBox(box.id,event,'y')} style={{position:'absolute',bottom:-7,left:'50%',width:28,height:12,transform:'translateX(-50%)',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:8,background:EB.sheet,cursor:'ns-resize',touchAction:'none',zIndex:3}} />
+                                                            <span title="Drag corner to resize" onPointerDown={(event:any)=>resizeBox(box.id,event,'both')} style={{position:'absolute',right:-8,bottom:-8,width:15,height:15,boxSizing:'border-box',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:3,background:EB.sheet,cursor:'nwse-resize',touchAction:'none',zIndex:4}} />
                                                         </div>;
                                                     })}
                                                 </div>
-                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Select it and click the image only when a connector endpoint is needed.</div>
+                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. Select it and click the image only when a connector endpoint is needed.</div>
                                                 <div style={{display:'grid',gap:10}}>{textBoxes.map((box:any)=>{
                                                     const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
                                                     const setNumber=(field:string,value:any)=>updateBox(box.id,{[field]:clamp(Number(value)||0,field==='width'?6:0,field==='width'?90:field==='height'?60:100)});

@@ -1905,6 +1905,10 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         const num = el.getAttribute('data-num');
         el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
     });
+    clone.querySelectorAll('.idp-diagram-input').forEach((el) => {
+        const num = el.getAttribute('data-diagram-number');
+        el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
+    });
     clone.querySelectorAll('.idp-heading-slot-render').forEach((el) => {
         el.replaceWith(document.createTextNode('[HEADING_SLOT]'));
     });
@@ -3151,13 +3155,27 @@ export default function IeltsSupremeOS() {
       const oldCtx = targetQ?.groupContext;
       const oldIns = targetQ?.instruction;
       const oldOptsStr = targetQ?.options ? JSON.stringify(targetQ.options) : null;
+      const diagramTextMatch = /^diagramTextBoxes:(.+)$/.exec(field);
+      const diagramBoxId = diagramTextMatch?.[1] || '';
+      const oldDiagramBoxes = targetQ?.diagramTextBoxes ? JSON.stringify(targetQ.diagramTextBoxes) : null;
+      const oldDiagramImage = String(targetQ?.diagramImageUrl || '');
       const isSharedOptionsType = targetQ?.type === 'CHOICE_MULTIPLE' || targetQ?.type === 'MATCHING';
 
       const applyToQ = (qx: any) => {
           let updated: any = { ...qx };
           let modified = false;
 
-          if (field === 'options' && optIndex !== null && optIndex !== undefined) {
+          if (diagramBoxId) {
+              if (qx.type === 'DIAGRAM_LABEL'
+                  && String(qx.diagramImageUrl || '') === oldDiagramImage
+                  && JSON.stringify(qx.diagramTextBoxes || null) === oldDiagramBoxes) {
+                  const boxes = qx.diagramTextBoxes || [];
+                  if (boxes.some((box: any) => String(box?.id || '') === diagramBoxId)) {
+                      updated.diagramTextBoxes = boxes.map((box: any) => String(box?.id || '') === diagramBoxId ? { ...box, text: cleanHTML } : box);
+                      modified = true;
+                  }
+              }
+          } else if (field === 'options' && optIndex !== null && optIndex !== undefined) {
               if (qx.id === qId || (isSharedOptionsType && qx.type === targetQ?.type && JSON.stringify(qx.options) === oldOptsStr)) {
                   const newOpts = [...(qx.options || [])];
                   newOpts[Number(optIndex)] = cleanHTML;

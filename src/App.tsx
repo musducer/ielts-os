@@ -1905,6 +1905,10 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         const num = el.getAttribute('data-num');
         el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
     });
+    clone.querySelectorAll('.idp-diagram-input').forEach((el) => {
+        const num = el.getAttribute('data-diagram-number');
+        el.replaceWith(document.createTextNode(num && /^\d+$/.test(num) ? `[${num}]` : '___'));
+    });
     clone.querySelectorAll('.idp-heading-slot-render').forEach((el) => {
         el.replaceWith(document.createTextNode('[HEADING_SLOT]'));
     });
@@ -3151,13 +3155,27 @@ export default function IeltsSupremeOS() {
       const oldCtx = targetQ?.groupContext;
       const oldIns = targetQ?.instruction;
       const oldOptsStr = targetQ?.options ? JSON.stringify(targetQ.options) : null;
+      const diagramTextMatch = /^diagramTextBoxes:(.+)$/.exec(field);
+      const diagramBoxId = diagramTextMatch?.[1] || '';
+      const oldDiagramBoxes = targetQ?.diagramTextBoxes ? JSON.stringify(targetQ.diagramTextBoxes) : null;
+      const oldDiagramImage = String(targetQ?.diagramImageUrl || '');
       const isSharedOptionsType = targetQ?.type === 'CHOICE_MULTIPLE' || targetQ?.type === 'MATCHING';
 
       const applyToQ = (qx: any) => {
           let updated: any = { ...qx };
           let modified = false;
 
-          if (field === 'options' && optIndex !== null && optIndex !== undefined) {
+          if (diagramBoxId) {
+              if (qx.type === 'DIAGRAM_LABEL'
+                  && String(qx.diagramImageUrl || '') === oldDiagramImage
+                  && JSON.stringify(qx.diagramTextBoxes || null) === oldDiagramBoxes) {
+                  const boxes = qx.diagramTextBoxes || [];
+                  if (boxes.some((box: any) => String(box?.id || '') === diagramBoxId)) {
+                      updated.diagramTextBoxes = boxes.map((box: any) => String(box?.id || '') === diagramBoxId ? { ...box, text: cleanHTML } : box);
+                      modified = true;
+                  }
+              }
+          } else if (field === 'options' && optIndex !== null && optIndex !== undefined) {
               if (qx.id === qId || (isSharedOptionsType && qx.type === targetQ?.type && JSON.stringify(qx.options) === oldOptsStr)) {
                   const newOpts = [...(qx.options || [])];
                   newOpts[Number(optIndex)] = cleanHTML;
@@ -10343,7 +10361,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const SLOT_RE = new RegExp(headingSlotPattern, "i");
                           if (headingQs.length > 0 && SLOT_RE.test(passageHtml)) {
                               const chunks = passageHtml.split(new RegExp(headingSlotPattern, "gi"));
-                              const hOpts = (headingQs.find((q: any) => q.options && q.options.length) || {}).options || [];
+                              // A few older parsed exams retain only the Roman labels in
+                              // sections[].questions, while activeExam.questions keeps the
+                              // full heading labels. Pick the richest copy so the slot and
+                              // the heading tray always show the exact same heading text.
+                              const headingOptionSets = [
+                                  ...headingQs.map((q: any) => q.options || []),
+                                  ...(activeExam?.questions || [])
+                                      .filter((q: any) => q.type === "DRAG_DROP_HEADING")
+                                      .map((q: any) => q.options || []),
+                              ];
+                              const headingSetScore = (options: any[]) => options.reduce((sum, option) => {
+                                  const meta = getHeadingOptionMeta(option, sum);
+                                  return sum + meta.text.replace(/<[^>]+>/g, "").trim().length;
+                              }, 0);
+                              const hOpts = headingOptionSets.reduce((best: any[], candidate: any[]) =>
+                                  headingSetScore(candidate) > headingSetScore(best) ? candidate : best,
+                              []);
                               const headingMeta = hOpts.map((option: any, optionIndex: number) => getHeadingOptionMeta(option, optionIndex));
                               const lookupHeading = (roman: string) => headingMeta.find((option: any) => option.id === normalizeHeadingId(roman));
                               return (
@@ -10811,6 +10845,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const isOverlayDiagram = imageMode === "OVERLAY";
                        const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
+                       const letDiagramImageDefineAspect = isFullCanvasDiagram && !String(source.diagramImageAspectRatio || "").trim();
                        const imageBounds = { x: 27, y: 7, width: 46, height: 86, ...(source.diagramImageBounds || {}) };
                        const legacyBoxes = source.diagramBoxes || {};
                        const sectionQuestions = activeExam?.sections ? (activeExam.sections[currentSectionIndex]?.questions || []) : (activeExam?.questions || []);
@@ -10820,26 +10855,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const legacyBoxFor = (question: any, index: number) => legacyBoxes[numberFor(question, index)] || (question.diagramBoxes || {})[numberFor(question, index)] || {
                            x: 50, y: 16 + index * (62 / Math.max(1, group.questions.length - 1 || 1)), width: 14, height: 5,
                        };
-                       const toDiagramText = (value: any) => String(value || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/gi, " ");
+                       // Preserve existing student-highlight/student-note-hl markup inside
+                       // diagram callouts. The blanks are split out below and stay editable.
+                       const toDiagramHtml = (value: any) => String(value || "")
+                           .replace(/<br\s*\/?>/gi, "\n")
+                           .replace(/<\/(?:p|div)>/gi, "\n")
+                           .replace(/<(?:p|div)[^>]*>/gi, "")
+                           .replace(/&nbsp;/gi, " ");
                        const renderGap = (number: string, key: string) => {
                            const question = questionByNumber.get(number);
                            if (!question) return <span key={key}>[{number}]</span>;
-                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
+                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
                        };
-                       const renderBoxText = (box: DiagramTextBox) => toDiagramText(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
+                       const renderBoxText = (box: DiagramTextBox) => toDiagramHtml(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
                            const marker = part.match(/^\[(\d+)\]$/);
-                           return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`}>{part}</span>;
+                           return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <span key={`${box.id}-text-${index}`} dangerouslySetInnerHTML={{__html: sanitizeRichHtml(part)}} />;
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
-                           <div className="idp-diagram-stage" style={{aspectRatio:diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? {left:'0%',top:'0%',width:'100%',height:'100%'} : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                           <div className="idp-diagram-stage" style={letDiagramImageDefineAspect ? undefined : {aspectRatio:diagramAspectRatio}}>
+                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {!isOverlayDiagram && <svg className="idp-diagram-connectors" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{textBoxes.map((box: DiagramTextBox) => {
                                    if (!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
                                    const x1 = box.anchor === "center" ? Number(box.x) : Number(box.x) + (Number(box.width) || 26) / 2;
                                    const y1 = box.anchor === "center" ? Number(box.y) : Number(box.y) + (Number(box.height) || 16) / 2;
                                    return <line key={`diagram-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke" />;
                                })}</svg>}
-                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
+                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box highlightable-content" data-field={`diagramTextBoxes:${box.id}`} data-qid={source.id} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
                    };
@@ -11118,6 +11159,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      if (secList) secList.forEach((sec: any, si: number) => scanHtml(sec.passage || '', { secIdx: si, qid: null, field: 'passage', optIndex: null, keyBase: `sec${si}` }));
                      else if (activeExam?.passage) scanHtml(activeExam.passage, { secIdx: 0, qid: null, field: 'passage', optIndex: null, keyBase: 'passage' });
                      const seenShared = new Set<string>();
+                     const seenDiagramBoxes = new Set<string>();
                      (activeExam?.questions || []).forEach((q: any) => {
                          const si = Math.max(0, navGroups.findIndex(g => g.questions.some((x: any) => x.id === q.id)));
                          scanHtml(q.text || '', { secIdx: si, qid: q.id, field: 'text', optIndex: null, keyBase: `t${q.id}` });
@@ -11126,6 +11168,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          (q.options || []).forEach((op: any, oi: number) => {
                              const s = String(op || '');
                              if (s.indexOf('student-note-hl') !== -1 && !seenShared.has('o:' + s)) { seenShared.add('o:' + s); scanHtml(s, { secIdx: si, qid: q.id, field: 'options', optIndex: oi, keyBase: `o${q.id}_${oi}` }); }
+                         });
+                         (q.diagramTextBoxes || []).forEach((box: any) => {
+                             const boxId = String(box?.id || '');
+                             const html = String(box?.text || '');
+                             const key = `${q.diagramImageUrl || ''}:${boxId}:${html}`;
+                             if (boxId && html.indexOf('student-note-hl') !== -1 && !seenDiagramBoxes.has(key)) {
+                                 seenDiagramBoxes.add(key);
+                                 scanHtml(html, { secIdx: si, qid: q.id, field: `diagramTextBoxes:${boxId}`, optIndex: null, keyBase: `d${q.id}_${boxId}` });
+                             }
                          });
                      });
                      // LƯỚI AN TOÀN: note đang hiển thị trên DOM nhưng chưa lọt vào state (vd bài đọc) -> vẫn hiện trong panel
@@ -11183,9 +11234,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              return;
                          }
                          const srcQ = (activeExam?.questions || []).find((x: any) => x.id === n.qid);
+                         const diagramField = /^diagramTextBoxes:(.+)$/.exec(n.field);
                          const src = n.field === 'passage'
                              ? (secList ? (secList[n.secIdx]?.passage || '') : (activeExam?.passage || ''))
-                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || ''));
+                             : (diagramField ? String(((srcQ as any)?.diagramTextBoxes || []).find((box: any) => String(box?.id || '') === diagramField[1])?.text || '')
+                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || '')));
                          if (!src) return;
                          _tmp.innerHTML = src;
                          const spans = n.noteId
@@ -13603,6 +13656,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             const imageUrl = String(source.diagramImageUrl || '');
                                             const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
+                                            const letDiagramImageDefineAspect = imageMode !== 'BOXES' && !String(source.diagramImageAspectRatio || '').trim();
                                             const textBoxes = getDiagramTextBoxes(grp.questions, editingQuiz.questions || []);
                                             const active = textBoxes.some((box:any) => box.id === diagramEditorSelection) ? diagramEditorSelection : textBoxes[0]?.id;
                                             const bounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
@@ -13627,6 +13681,24 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
                                                 window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
                                             };
+                                            const resizeBox = (boxId:string, event:any, axis:'x'|'y'|'both'='both') => {
+                                                const canvas = (event.currentTarget as HTMLElement).closest('.eb-diagram-stage') as HTMLElement | null;
+                                                if (!canvas) return;
+                                                const rect = canvas.getBoundingClientRect();
+                                                const box = textBoxes.find((item:any) => item.id === boxId);
+                                                if (!box) return;
+                                                const startX = event.clientX, startY = event.clientY;
+                                                const originWidth = Number(box.width) || 24, originHeight = Number(box.height) || 10;
+                                                const move = (pointer:PointerEvent) => {
+                                                    const patch:any = {};
+                                                    if (axis !== 'y') patch.width = clamp(originWidth + ((pointer.clientX-startX)/rect.width)*100, 8, 92);
+                                                    if (axis !== 'x') patch.height = clamp(originHeight + ((pointer.clientY-startY)/rect.height)*100, 6, 76);
+                                                    updateBox(boxId, patch);
+                                                };
+                                                event.preventDefault(); event.stopPropagation();
+                                                const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)};
+                                                window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true});
+                                            };
                                             const addTextBox = () => {
                                                 const id = `box-${Date.now().toString(36)}`;
                                                 setTextBoxes([...textBoxes, {id,x:8,y:8,width:28,height:16,text:'Label text with [number]',anchor:'top-left'}]);
@@ -13639,12 +13711,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
                                                 </div>
-                                                <div className="eb-diagram-stage" style={{position:'relative',aspectRatio:diagramAspectRatio,overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{
+                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{
                                                     if(!active || (event.target as HTMLElement).closest('.eb-diagram-box')) return;
                                                     const rect=(event.currentTarget as HTMLElement).getBoundingClientRect();
                                                     updateBox(active,{targetX:clamp(((event.clientX-rect.left)/rect.width)*100,0,100),targetY:clamp(((event.clientY-rect.top)/rect.height)*100,0,100)});
                                                 }}>
-                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill'}} />}
+                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:(letDiagramImageDefineAspect?{position:'relative',display:'block',width:'100%',height:'auto'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'contain'})} />}
                                                     <svg aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:any)=>{
                                                         if(!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
                                                         const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||24)/2;
@@ -13658,10 +13730,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         return <div key={`diagram-box-${box.id}`} className="eb-diagram-box" onClick={(event:any)=>{event.stopPropagation();setDiagramEditorSelection(box.id)}} onPointerDown={(event:any)=>moveBox(box.id,event)} style={{position:'absolute',left:`${Number(box.x)||0}%`,top:`${Number(box.y)||0}%`,width:`${Number(box.width)||24}%`,minHeight:`${Number(box.height)||10}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',padding:'8px 10px',boxSizing:'border-box',border:`2px solid ${box.id===active?EB.accent:EB.line}`,background:'rgba(255,255,255,.96)',color:EB.ink,fontSize:12,lineHeight:1.35,cursor:'grab',touchAction:'none',boxShadow:box.id===active?`0 0 0 3px ${EB.accentWash}`:'0 4px 14px rgba(15,23,42,.08)'}}>
                                                             <div style={{fontFamily:EB.fMono,fontSize:9,fontWeight:800,color:EB.accent,marginBottom:4}}>{markers.length?markers.map((number:string)=>`#${number}`).join(' · '):box.id}</div>
                                                             <div>{parts.map((part:string,index:number)=>/^\[\d+\]$/.test(part)?<span key={`${box.id}-gap-${index}`} style={{display:'inline-block',minWidth:44,margin:'0 3px',borderBottom:`2px solid ${EB.accent}`,textAlign:'center',fontWeight:800,color:EB.accent}}>{part}</span>:<span key={`${box.id}-text-${index}`}>{part}</span>)}</div>
+                                                            <span title="Drag right edge to resize width" onPointerDown={(event:any)=>resizeBox(box.id,event,'x')} style={{position:'absolute',right:-7,top:'50%',width:12,height:28,transform:'translateY(-50%)',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:8,background:EB.sheet,cursor:'ew-resize',touchAction:'none',zIndex:3}} />
+                                                            <span title="Drag bottom edge to resize height" onPointerDown={(event:any)=>resizeBox(box.id,event,'y')} style={{position:'absolute',bottom:-7,left:'50%',width:28,height:12,transform:'translateX(-50%)',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:8,background:EB.sheet,cursor:'ns-resize',touchAction:'none',zIndex:3}} />
+                                                            <span title="Drag corner to resize" onPointerDown={(event:any)=>resizeBox(box.id,event,'both')} style={{position:'absolute',right:-8,bottom:-8,width:15,height:15,boxSizing:'border-box',border:`2px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:3,background:EB.sheet,cursor:'nwse-resize',touchAction:'none',zIndex:4}} />
                                                         </div>;
                                                     })}
                                                 </div>
-                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Select it and click the image only when a connector endpoint is needed.</div>
+                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. Select it and click the image only when a connector endpoint is needed.</div>
                                                 <div style={{display:'grid',gap:10}}>{textBoxes.map((box:any)=>{
                                                     const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
                                                     const setNumber=(field:string,value:any)=>updateBox(box.id,{[field]:clamp(Number(value)||0,field==='width'?6:0,field==='width'?90:field==='height'?60:100)});
