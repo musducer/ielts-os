@@ -1741,7 +1741,7 @@ const toRomanNumeral = (value: number) => {
 
 const normalizeHeadingId = (value: any) => String(value ?? "")
   .trim()
-  .replace(/^\s*([ivxlcdm]+)[.)]?\s*$/i, "$1")
+  .replace(/^\s*([ivxlcdm]+)[.)]?(?:\s+.*)?$/i, "$1")
   .toLowerCase();
 
 const getHeadingOptionMeta = (option: any, index: number) => {
@@ -3162,8 +3162,9 @@ export default function IeltsSupremeOS() {
       const oldCtx = targetQ?.groupContext;
       const oldIns = targetQ?.instruction;
       const oldOptsStr = targetQ?.options ? JSON.stringify(targetQ.options) : null;
-      const diagramTextMatch = /^diagramTextBoxes:(.+)$/.exec(field);
+      const diagramTextMatch = /^diagramTextBoxes:([^:]+)(?::(\d+))?$/.exec(field);
       const diagramBoxId = diagramTextMatch?.[1] || '';
+      const diagramSegmentIndex = diagramTextMatch?.[2] === undefined ? null : Number(diagramTextMatch[2]);
       const oldDiagramBoxes = targetQ?.diagramTextBoxes ? JSON.stringify(targetQ.diagramTextBoxes) : null;
       const oldDiagramImage = String(targetQ?.diagramImageUrl || '');
       const isSharedOptionsType = targetQ?.type === 'CHOICE_MULTIPLE' || targetQ?.type === 'MATCHING';
@@ -3178,7 +3179,14 @@ export default function IeltsSupremeOS() {
                   && JSON.stringify(qx.diagramTextBoxes || null) === oldDiagramBoxes) {
                   const boxes = qx.diagramTextBoxes || [];
                   if (boxes.some((box: any) => String(box?.id || '') === diagramBoxId)) {
-                      updated.diagramTextBoxes = boxes.map((box: any) => String(box?.id || '') === diagramBoxId ? { ...box, text: cleanHTML } : box);
+                      updated.diagramTextBoxes = boxes.map((box: any) => {
+                          if (String(box?.id || '') !== diagramBoxId) return box;
+                          if (diagramSegmentIndex === null) return { ...box, text: cleanHTML };
+                          const parts = String(box?.text || '').split(/(\[\d+\])/g);
+                          if (diagramSegmentIndex < 0 || diagramSegmentIndex >= parts.length) return box;
+                          parts[diagramSegmentIndex] = cleanHTML;
+                          return { ...box, text: parts.join('') };
+                      });
                       modified = true;
                   }
               }

@@ -528,7 +528,9 @@
                                             const imageUrl = String(source.diagramImageUrl || '');
                                             const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
-                                            const letDiagramImageDefineAspect = imageMode !== 'BOXES' && !String(source.diagramImageAspectRatio || '').trim();
+                                            // Keep the authoring canvas on the raw image's intrinsic ratio.
+                                            // This is the same coordinate surface used by ACTIVE_EXAM.
+                                            const letDiagramImageDefineAspect = imageMode !== 'BOXES';
                                             const textBoxes = getDiagramTextBoxes(grp.questions, editingQuiz.questions || []);
                                             const active = textBoxes.some((box:any) => box.id === diagramEditorSelection) ? diagramEditorSelection : textBoxes[0]?.id;
                                             const bounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
@@ -583,18 +585,8 @@
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
                                                 </div>
-                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,cursor:'crosshair'}} onClick={(event:any)=>{
-                                                    if(!active || (event.target as HTMLElement).closest('.eb-diagram-box')) return;
-                                                    const rect=(event.currentTarget as HTMLElement).getBoundingClientRect();
-                                                    updateBox(active,{targetX:clamp(((event.clientX-rect.left)/rect.width)*100,0,100),targetY:clamp(((event.clientY-rect.top)/rect.height)*100,0,100)});
-                                                }}>
+                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash}}>
                                                     {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:(letDiagramImageDefineAspect?{position:'relative',display:'block',width:'100%',height:'auto'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'contain'})} />}
-                                                    <svg aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:any)=>{
-                                                        if(!Number.isFinite(Number(box.targetX)) || !Number.isFinite(Number(box.targetY))) return null;
-                                                        const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||24)/2;
-                                                        const y1=box.anchor==='center'?Number(box.y):Number(box.y)+(Number(box.height)||10)/2;
-                                                        return <line key={`connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke={box.id===active?EB.accent:EB.line} strokeWidth="0.35" />;
-                                                    })}</svg>
                                                     {textBoxes.map((box:any)=>{
                                                         const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
                                                         const previewText=String(box.text||'').replace(/<br\s*\/?>(\r?\n)?/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ');
@@ -608,7 +600,7 @@
                                                         </div>;
                                                     })}
                                                 </div>
-                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. Select it and click the image only when a connector endpoint is needed.</div>
+                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. The exam uses this exact image coordinate surface.</div>
                                                 <div style={{display:'grid',gap:10}}>{textBoxes.map((box:any)=>{
                                                     const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
                                                     const setNumber=(field:string,value:any)=>updateBox(box.id,{[field]:clamp(Number(value)||0,field==='width'?6:0,field==='width'?90:field==='height'?60:100)});
