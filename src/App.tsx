@@ -8236,41 +8236,76 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
           target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       };
-      const rvJumpToEvidence = (quote: string) => {
+      const rvReadingEvidenceNodes = () => {
           const root = document.getElementById('ielts-passage-content');
-          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
-          if (!root || needle.length < 4) return;
-          root.querySelectorAll('.rv-reading-evidence-target, .rv-reading-evidence-located').forEach(node =>
-              node.classList.remove('rv-reading-evidence-target', 'rv-reading-evidence-located')
-          );
-          const candidates = Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote, div'))
-              .filter(node => !node.querySelector('p, li, blockquote'));
-          const target = candidates.find(node => {
-              const copy = (node.textContent || '').replace(/\s+/g, ' ').trim();
-              return copy.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
-          }) || candidates.find(node => {
-              const copy = (node.textContent || '').replace(/\s+/g, ' ').trim();
-              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-              return new RegExp(escaped, 'i').test(copy);
-          });
-          if (!target) return;
-          target.classList.add('rv-reading-evidence-target');
-          target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-          window.setTimeout(() => {
-              target.classList.remove('rv-reading-evidence-target');
-              target.classList.add('rv-reading-evidence-located');
-          }, 1800);
+          return root ? Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote'))
+              .filter(node => (node.textContent || '').trim().length > 0) : [];
       };
-      // Older explanations used normal quotation marks instead of the evidence marker.
-      // Treat an exact passage quote as evidence too, so stored reviews stay useful.
+      const rvJumpToEvidence = (quote: string | string[]) => {
+          const root = document.getElementById('ielts-passage-content');
+          const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || '').replace(/\s+/g, ' ').trim()).filter(value => value.length >= 4);
+          if (!root || !quotes.length) return;
+          root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-mark').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+          let firstTarget: HTMLElement | null = null;
+          quotes.forEach(needle => {
+              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+              const matcher = new RegExp(escaped, 'i');
+              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ''));
+              if (!target) return;
+              if (!firstTarget) firstTarget = target;
+              const match = (target.textContent || '').match(matcher);
+              if (!match || match.index === undefined) return;
+              const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+              const nodes: Array<{ node: Text; start: number; end: number }> = [];
+              let cursor = 0;
+              for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
+                  const length = textNode.data.length;
+                  nodes.push({ node: textNode, start: cursor, end: cursor + length });
+                  cursor += length;
+              }
+              const start = match.index;
+              const end = start + match[0].length;
+              nodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+                  const from = Math.max(start, nodeStart);
+                  const to = Math.min(end, nodeEnd);
+                  if (from >= to || !node.parentNode) return;
+                  const fragment = document.createDocumentFragment();
+                  const localStart = from - nodeStart;
+                  const localEnd = to - nodeStart;
+                  if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
+                  const mark = document.createElement('mark');
+                  mark.className = 'rv-reading-evidence-mark rv-reading-evidence-target';
+                  mark.textContent = node.data.slice(localStart, localEnd);
+                  fragment.appendChild(mark);
+                  if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
+                  node.parentNode.replaceChild(fragment, node);
+              });
+          });
+          const scrollTarget = firstTarget as HTMLElement | null;
+          if (scrollTarget) scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          window.setTimeout(() => root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-target').forEach(mark => {
+              mark.classList.remove('rv-reading-evidence-target');
+              mark.classList.add('rv-reading-evidence-located');
+          }), 1800);
+      };
+      const rvRenderExplanationCopy = (value: string) => {
+          const text = String(value || '').trim();
+          if (!text) return null;
+          let paragraphs = text.split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
+          if (paragraphs.length === 1) {
+              const sentences = paragraphs[0].match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g)?.map(sentence => sentence.trim()).filter(Boolean) || paragraphs;
+              if (sentences.length > 2) paragraphs = Array.from({ length: Math.ceil(sentences.length / 2) }, (_, index) => sentences.slice(index * 2, index * 2 + 2).join(' '));
+          }
+          return <div className="rv-explanation-copy">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>;
+      };
+      // Kept only for parsing legacy stored explanations below. New explanations
+      // never promote ordinary quoted prose to evidence controls.
       const rvCanJumpToEvidence = (quote: string) => {
           const root = document.getElementById('ielts-passage-content');
           const needle = String(quote || '').replace(/\s+/g, ' ').trim();
           if (!root || needle.length < 4) return false;
-          const text = root.textContent || '';
-          if (text.toLocaleLowerCase().includes(needle.toLocaleLowerCase())) return true;
           const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-          return new RegExp(escaped, 'i').test(text);
+          return rvReadingEvidenceNodes().some(node => new RegExp(escaped, 'i').test(node.textContent || ''));
       };
       const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }, audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>) => {
           if (rvActiveIsListening) {
@@ -8283,25 +8318,29 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   : Array.isArray(audioEvidence?.segments) && audioEvidence.segments.length
                   ? audioEvidence.segments
                   : audioEvidence ? [audioEvidence] : [])
-                  .filter((segment, index, all) => segment?.timestamp && segment?.quote && all.findIndex(item => item.timestamp === segment.timestamp) === index)
+                  .filter((segment, index, all) => segment?.timestamp && segment?.quote && all.findIndex(item => item.timestamp === segment.timestamp && item.quote === segment.quote) === index)
                   .slice(0, 3);
+              const primary = segments[0];
               return <>
-                  {cleanText}
-                  {!!segments.length && <div className="rv-audio-evidence-list">
-                      {segments.map((segment, index) => <div className="rv-audio-evidence" key={`${segment.timestamp}-${index}`}>
-                          <div className="rv-audio-evidence-copy"><span>{segment.formattedRange || (segment.endTimestamp ? `${segment.timestamp} - ${segment.endTimestamp}` : segment.timestamp)}</span> {segment.quote}</div>
-                          <div className="rv-audio-evidence-actions">
-                              <button type="button" title="Show this evidence in the transcript" aria-label="Show this evidence in transcript" onClick={() => rvJumpToTranscript(segment.timestamp, segment.quote)}>
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
-                              </button>
-                              <button type="button" title={`Play audio from ${segment.timestamp}`} aria-label={`Play audio from ${segment.timestamp}`} onClick={() => rvSeek(segment.timestamp)}>
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
-                              </button>
-                          </div>
-                      </div>)}
+                  {rvRenderExplanationCopy(cleanText)}
+                  {!!primary && <div className="rv-audio-evidence">
+                      <button type="button" className="rv-audio-evidence-jump" title="Show and play verified evidence" aria-label="Show and play verified evidence" onClick={() => { rvJumpToTranscript(primary.timestamp, primary.quote); rvSeek(primary.timestamp); }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><circle cx="18" cy="18" r="4"/><polyline points="17 16.5 19.5 18 17 19.5"/></svg>
+                          Evidence{segments.length > 1 ? ` (${segments.length})` : ''}
+                      </button>
+                      <div className="rv-audio-evidence-copy"><span>{primary.formattedRange || (primary.endTimestamp ? `${primary.timestamp} - ${primary.endTimestamp}` : primary.timestamp)}</span> {primary.quote}{segments.length > 1 && <small> Also verified: {segments.slice(1).map(segment => segment.formattedRange || segment.timestamp).join(', ')}.</small>}</div>
                   </div>}
               </>;
           }
+          // Reading evidence is deliberately marker-only. AI prose and quotation
+          // marks are explanatory text, not a second source of interactive clues.
+          const source = String(txt || '');
+          const verifiedQuotes = Array.from(source.matchAll(/\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]/gi)).map(match => match[1].trim()).filter(Boolean);
+          const prose = source.replace(/\s*\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]\s*/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+          return <>
+              {rvRenderExplanationCopy(prose)}
+              {!!verifiedQuotes.length && <button type="button" onClick={() => rvJumpToEvidence(verifiedQuotes)} title="Locate the verified evidence in the reading passage" aria-label="Locate verified evidence" className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence{verifiedQuotes.length > 1 ? ` (${verifiedQuotes.length})` : ''}</button>}
+          </>;
           const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
           if (evidenceParts.length > 1) {
               return evidenceParts.map((part, pi) => {
@@ -8420,17 +8459,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-transcript-quote { background:#d1fae5; color:inherit; border-radius:3px; padding:0 2px; box-shadow:0 0 0 1px rgba(5,150,105,.26); }
                   .rv-transcript-time { display: inline-flex; align-items: center; min-width: 54px; font: 700 12px/1 Consolas, monospace; color: #0f766e; background: #ecfdf5; border: 1px solid #99f6e4; border-radius: 999px; padding: 5px 8px; margin-bottom: 7px; }
                   .rv-transcript-copy { margin: 0; color: #1f2937; font-size: 15px; line-height: 1.72; white-space: pre-wrap; }
-                  .rv-audio-evidence-list { display:grid; gap:8px; margin-top:12px; }
-                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 0; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
+                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
                   .rv-audio-evidence-copy { flex: 1; font-size: 12.5px; font-style: italic; line-height: 1.45; }
                   .rv-audio-evidence-copy span { font: 800 11px/1 Consolas, monospace; color: #4338ca; }
-                  .rv-audio-evidence-actions { display: flex; gap: 5px; flex-shrink: 0; }
-                  .rv-audio-evidence-actions button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #a5b4fc; border-radius: 6px; color: #4338ca; background: #fff; cursor: pointer; }
-                  .rv-audio-evidence-actions button:hover { background: #e0e7ff; }
+                  .rv-audio-evidence-copy small { display:block; margin-top:4px; color:#5b5b8e; font-size:11px; font-style:normal; }
+                  .rv-audio-evidence-jump { display:inline-flex; align-items:center; gap:5px; flex:0 0 auto; border:1px solid #a5b4fc; border-radius:7px; color:#4338ca; background:#fff; padding:7px 9px; font:800 11px/1 Inter,sans-serif; cursor:pointer; }
+                  .rv-audio-evidence-jump:hover { background:#e0e7ff; }
                   .rv-reading-evidence-button { display:inline-flex; align-items:center; gap:5px; margin:5px 4px 5px 0; padding:4px 8px; border:1px solid #6ee7b7; border-radius:999px; background:#ecfdf5; color:#047857; font:700 12px/1 Inter,sans-serif; cursor:pointer; }
                   .rv-reading-evidence-button:hover { background:#d1fae5; border-color:#10b981; }
-                  .rv-reading-evidence-target { border-radius:5px; animation:rv-evidence-glow 1.8s ease-out both; }
-                  .rv-reading-evidence-located { box-shadow:inset 0 -2px 0 #10b981; }
+                  .rv-reading-evidence-mark { border-radius:3px; padding:0 1px; color:inherit; background:rgba(16,185,129,.20); box-shadow:inset 0 -2px 0 #10b981; }
+                  .rv-reading-evidence-target { animation:rv-evidence-glow 1.8s ease-out both; }
+                  .rv-reading-evidence-located { background:rgba(16,185,129,.12); }
                   @keyframes rv-evidence-glow { 0% { background:rgba(16,185,129,.30); box-shadow:0 0 0 0 rgba(16,185,129,.55); } 65% { background:rgba(16,185,129,.14); box-shadow:0 0 0 8px rgba(16,185,129,0); } 100% { background:transparent; box-shadow:inset 0 -2px 0 #10b981; } }
                   .rv-completion-review { margin: 0 0 20px; }
                   .rv-completion-context { background: #f8fafc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 20px 22px; color: #1e293b; font-size: 15px; line-height: 1.72; }
@@ -8460,12 +8499,22 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
                   .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
                   .rv-completion-explanation b { color: #6d28d9; }
+                  .rv-explanation-copy { display:grid; gap:10px; margin-top:10px; color:#334155; font-size:13.5px; line-height:1.65; white-space:normal; }
+                  .rv-explanation-copy p { margin:0; }
                   .rv-review-match-grid { display:grid; grid-template-columns:minmax(420px,1fr) minmax(220px,.55fr); gap:20px; align-items:start; }
                   .rv-review-match-list { border:1px solid #dbe3ee; border-radius:10px; overflow:hidden; background:#fff; }
-                  .rv-review-match-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,.62fr); gap:14px; align-items:center; width:100%; padding:13px 15px; text-align:left; color:#1e293b; background:#fff; border:0; border-bottom:1px solid #e2e8f0; cursor:pointer; font:500 14px/1.4 Inter,sans-serif; }
+                  .rv-review-match-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(150px,.55fr); gap:10px; align-items:stretch; width:100%; padding:12px 14px; text-align:left; color:#1e293b; background:#fff; border:0; border-bottom:1px solid #e2e8f0; cursor:pointer; font:500 14px/1.4 Inter,sans-serif; }
                   .rv-review-match-row:last-child { border-bottom:0; }
                   .rv-review-match-row:hover, .rv-review-match-row.is-selected { background:#f8fafc; }
                   .rv-review-match-row.is-selected { box-shadow:inset 3px 0 0 #4f46e5; }
+                  .rv-review-match-prompt { display:flex; align-items:center; min-width:0; }
+                  .rv-review-match-number { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:25px; height:25px; margin-right:8px; border:1px solid #cbd5e1; border-radius:6px; color:#475569; font-size:11px; font-weight:900; }
+                  .rv-review-match-answer { display:grid; align-content:center; gap:3px; min-width:0; border:1px solid #dbe3ee; border-radius:7px; padding:7px 9px; background:#f8fafc; }
+                  .rv-review-match-answer span { color:#64748b; font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+                  .rv-review-match-answer strong { overflow-wrap:anywhere; font-size:12px; line-height:1.3; }
+                  .rv-review-match-answer.correct { border-color:#86efac; background:#ecfdf5; color:#047857; }
+                  .rv-review-match-answer.wrong { border-color:#fca5a5; background:#fef2f2; color:#b91c1c; }
+                  .rv-review-match-answer.blank { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
                   .rv-review-match-bank { border:1px solid #dbe3ee; border-radius:10px; padding:13px; background:#f8fafc; }
                   .rv-review-match-bank-title { margin:0 0 10px; color:#64748b; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
                   .rv-review-match-option { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; margin-bottom:7px; border:1px solid #dbe3ee; border-radius:6px; background:#fff; color:#1e293b; font-size:13px; line-height:1.35; }
@@ -8478,8 +8527,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-map-review-slot { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:92px; min-height:44px; padding:5px 8px; border:2px solid; background:#fff; font:700 12px/1.25 Inter,sans-serif; text-align:center; cursor:pointer; transition:box-shadow .15s, transform .15s; }
                   .rv-map-review-slot:hover, .rv-map-review-slot.is-selected { transform:translate(-50%,-50%) scale(1.04); box-shadow:0 0 0 4px rgba(79,70,229,.16); z-index:3; }
                   .rv-map-review-slot-number { position:absolute; top:-17px; left:0; padding:1px 4px; background:#fff; color:#475569; font-size:10px; font-weight:900; }
-                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-audio-evidence-actions { justify-content: flex-end; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
-                  @media (max-width: 760px) { .rv-review-match-grid { grid-template-columns:1fr; } .rv-review-match-row { grid-template-columns:minmax(0,1fr) minmax(150px,.58fr); } }
+                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
+                  @media (max-width: 760px) { .rv-review-match-grid { grid-template-columns:1fr; } .rv-review-match-row { grid-template-columns:minmax(0,1fr) minmax(130px,.55fr); } .rv-review-match-answer.rv-review-match-correct { grid-column:2; } }
                   @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } }
               `}</style>
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
@@ -8822,6 +8871,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       
                       {reviewQuiz.quiz.questions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+                          // Matching Headings already lives in the passage pane with its
+                          // paragraph slot. Rendering generic option cards here duplicates
+                          // the same heading list for every paragraph.
+                          if (q.type === "DRAG_DROP_HEADING") return null;
                           if (rvIsInlineCompletion(q)) {
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
@@ -8864,15 +8917,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               </section>;
                           }
                           if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
-                              const dragKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) => candidate.type === "DRAG_DROP" && candidate.subType === "COLUMN_DRAG" && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === dragKey);
-                              if (alreadyRendered) return null;
-                              const dragQuestions = reviewQuiz.quiz.questions.filter((candidate: any) => candidate.type === "DRAG_DROP" && candidate.subType === "COLUMN_DRAG" && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === dragKey);
+                              const isSameColumnRun = (candidate: any) => candidate?.type === "DRAG_DROP" && candidate?.subType === "COLUMN_DRAG" && rvSectionOf(candidate) === rvSectionOf(q);
+                              // Some imported DOCX tests leave instruction/groupContext blank on
+                              // individual rows. Their order is the reliable group boundary.
+                              if (i > 0 && isSameColumnRun(reviewQuiz.quiz.questions[i - 1])) return null;
+                              const dragQuestions: any[] = [];
+                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameColumnRun(reviewQuiz.quiz.questions[cursor]); cursor++) dragQuestions.push(reviewQuiz.quiz.questions[cursor]);
                               const selected = dragQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId) || dragQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct) || dragQuestions[0];
                               const selectedState = rvCompletionAnswer(selected);
                               return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-review-match-grid"><div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span><b style={{marginRight:7,color:C.sub}}>{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-completion-badge rv-completion-${state.correct?'correct':state.blank?'blank':'wrong'}`}>{state.blank?'No answer':state.given}{!state.correct && <small style={{display:'block',marginTop:2}}>Correct: {state.expected}</small>}</span></button>; })}</div><aside className="rv-review-match-bank"><div className="rv-review-match-bank-title">Answer choices</div>{(q.options || []).map((option:string, optionIndex:number)=><div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span className="rv-review-match-option-key">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside></div>
+                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
                                   <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
                               </section>;
                           }
@@ -8958,7 +9013,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
                                       </div>
                                   </div>
-                                  {selected && (()=>{const selectedState=rvCompletionAnswer(selected);return <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected, diagramQuestions.indexOf(selected))}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>})()}
+                                  {selected && (()=>{const selectedState=rvCompletionAnswer(selected);return <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected, diagramQuestions.indexOf(selected))}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>})()}
                               </section>;
                           }
                           if (q.type === "MAP_DRAG") {
@@ -8999,7 +9054,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       </div>
                                       <aside className="rv-review-match-bank"><div className="rv-review-match-bank-title">Answer choices</div>{(q.options || []).map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span className="rv-review-match-option-key">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside>
                                   </div></div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
                               </section>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
@@ -9368,9 +9423,20 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Matching Headings is deliberately isolated from the generic DnD
           // pipeline. Generic drags carry only a raw answer string, whereas a
           // heading must carry both its scoring id (Roman numeral) and label.
+          const resolveHeadingText = (value: any, text = "") => {
+              const explicit = headingPlainText(text);
+              if (explicit && !/^[ivxlcdm]+[.)]?$/i.test(explicit)) return explicit;
+              const id = normalizeHeadingId(value);
+              const trayLabel = document.querySelector<HTMLElement>(`[data-heading-id="${id}"]`)?.dataset.headingLabel;
+              if (trayLabel) return headingPlainText(trayLabel);
+              const section = activeExam?.sections?.[currentSectionIndex];
+              const scopedQuestions = section?.questions || activeExam?.questions || [];
+              const catalog = getHeadingCatalog([section, activeExam, ...scopedQuestions]);
+              return headingPlainText(catalog.get(id)?.text);
+          };
           const normalizeHeadingPayload = (value: any, text = "", sourceQid = "") => ({
               id: normalizeHeadingId(value),
-              text: headingPlainText(text),
+              text: resolveHeadingText(value, text),
               sourceQid: String(sourceQid || ""),
           });
 
@@ -10471,8 +10537,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ...(activeExam?.questions || []),
                                   ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
                               ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
+                              // Imports may keep the rich heading list on the section or
+                              // exam record instead of each paragraph question. Include
+                              // those containers, then choose the current section's label
+                              // before any cross-passage fallback.
+                              const headingSources = [
+                                  ...headingQs,
+                                  activeExam?.sections?.[currentSectionIndex],
+                                  activeExam,
+                                  ...allHeadingQuestions,
+                              ];
                               // Both panes resolve from the same normalized catalog. Old imports
                               // can keep labels in headingOptions/headings rather than options.
+                              const sectionHeadingById = getHeadingCatalog(headingSources);
                               const headingById = getHeadingCatalog(allHeadingQuestions);
                               const headingAnswerId = (value: any) => {
                                   const explicitRoman = String(value || "").match(/^\s*([ivxlcdm]+)\b/i)?.[1];
@@ -10482,7 +10559,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   const id = headingAnswerId(value);
                                   // Prefer this paragraph's exact option object; this guarantees
                                   // the slot mirrors the wording visible in the heading tray.
-                                  return getHeadingCatalog([question]).get(id) || headingById.get(id);
+                                  return getHeadingCatalog([question]).get(id)
+                                      || sectionHeadingById.get(id)
+                                      || headingById.get(id);
                               };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
@@ -10493,9 +10572,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const isFilled = !!filled;
                                           const assignedHeading = lookupHeading(filled, q);
                                           const cachedHeading = headingLabelByQuestion[q.id];
-                                          const displayedHeading = cachedHeading?.id === headingAnswerId(filled)
-                                              ? cachedHeading
-                                              : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) };
+                                           const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
+                                               ? cachedHeading
+                                               : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
                                           const assignedHeadingText = headingPlainText(displayedHeading.text);
                                           return (
                                               <React.Fragment key={q.id}>
@@ -11068,6 +11147,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                   <div key={`heading-option-${optId}`}
                                                                     className="notranslate"
                                                                     translate="no"
+                                                                    data-heading-id={optId}
+                                                                    data-heading-label={headingPlainText(optContent)}
                                                                     draggable={!isUsed}
                                                                     onClick={() => { if (!isUsed) setSelectedHeadingDrag({ id: optId, text: headingPlainText(optContent), sourceQid: '' }); }}
                                                                     onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}

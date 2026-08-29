@@ -1369,23 +1369,16 @@ async def ai_explain(
                     break
             return kept
 
-        # The tutor sometimes already gives the exact passage quotation in its
-        # prose. That is the primary evidence, so do not overwrite it with a
-        # second, merely related sentence selected later by another model pass.
-        draft_plain = re.sub(r"\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]", "", text, flags=re.IGNORECASE)
-        draft_norm = _norm_evidence(draft_plain)
-        inline_passage_quotes = [
-            sentence for sentence in re.split(r"(?<=[.!?])\s+|\n+", evidence_passage)
-            if len(_norm_evidence(sentence)) >= 24 and _norm_evidence(sentence) in draft_norm
-        ]
-        has_inline_evidence = bool(inline_passage_quotes)
-
-        valid_evidence = [] if has_inline_evidence else _valid_evidence(text)
-        if not valid_evidence and not has_inline_evidence:
+        # Only explicit, verifier-approved markers are interactive. A sentence
+        # echoed in the tutor's prose can be a chapeau or a related detail, so it
+        # must never silently become clickable evidence.
+        valid_evidence = _valid_evidence(text)
+        if not valid_evidence:
             evidence_prompt = (
                 "You are a strict IELTS reading evidence verifier. Select one to three SHORT, CONTINUOUS, "
                 "word-for-word excerpts from the passage that directly prove the correct answer to this exact item. "
                 "Do not select generic background, a merely related topic sentence, or a sentence that only repeats a keyword. "
+                "Never select a title, chapeau, italic introduction, heading, list label, question wording, or closing summary. "
                 "For an inference, choose the precise premise or premises that logically require the answer. "
                 "Output ONLY markers in this exact form, one per line: [[EVIDENCE: exact passage excerpt]]."
             )
@@ -1406,7 +1399,7 @@ async def ai_explain(
                 }
             }
 
-        if not valid_evidence and not has_inline_evidence:
+        if not valid_evidence:
             query_words = _evidence_words(question) | _evidence_words(correct) | _evidence_words(options)
             candidates = [
                 re.sub(r"\s+", " ", sentence).strip(" -\t\r\n")

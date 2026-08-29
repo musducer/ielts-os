@@ -150,9 +150,20 @@
           // Matching Headings is deliberately isolated from the generic DnD
           // pipeline. Generic drags carry only a raw answer string, whereas a
           // heading must carry both its scoring id (Roman numeral) and label.
+          const resolveHeadingText = (value: any, text = "") => {
+              const explicit = headingPlainText(text);
+              if (explicit && !/^[ivxlcdm]+[.)]?$/i.test(explicit)) return explicit;
+              const id = normalizeHeadingId(value);
+              const trayLabel = document.querySelector<HTMLElement>(`[data-heading-id="${id}"]`)?.dataset.headingLabel;
+              if (trayLabel) return headingPlainText(trayLabel);
+              const section = activeExam?.sections?.[currentSectionIndex];
+              const scopedQuestions = section?.questions || activeExam?.questions || [];
+              const catalog = getHeadingCatalog([section, activeExam, ...scopedQuestions]);
+              return headingPlainText(catalog.get(id)?.text);
+          };
           const normalizeHeadingPayload = (value: any, text = "", sourceQid = "") => ({
               id: normalizeHeadingId(value),
-              text: headingPlainText(text),
+              text: resolveHeadingText(value, text),
               sourceQid: String(sourceQid || ""),
           });
 
@@ -1253,8 +1264,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ...(activeExam?.questions || []),
                                   ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
                               ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
+                              // Imports may keep the rich heading list on the section or
+                              // exam record instead of each paragraph question. Include
+                              // those containers, then choose the current section's label
+                              // before any cross-passage fallback.
+                              const headingSources = [
+                                  ...headingQs,
+                                  activeExam?.sections?.[currentSectionIndex],
+                                  activeExam,
+                                  ...allHeadingQuestions,
+                              ];
                               // Both panes resolve from the same normalized catalog. Old imports
                               // can keep labels in headingOptions/headings rather than options.
+                              const sectionHeadingById = getHeadingCatalog(headingSources);
                               const headingById = getHeadingCatalog(allHeadingQuestions);
                               const headingAnswerId = (value: any) => {
                                   const explicitRoman = String(value || "").match(/^\s*([ivxlcdm]+)\b/i)?.[1];
@@ -1264,7 +1286,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   const id = headingAnswerId(value);
                                   // Prefer this paragraph's exact option object; this guarantees
                                   // the slot mirrors the wording visible in the heading tray.
-                                  return getHeadingCatalog([question]).get(id) || headingById.get(id);
+                                  return getHeadingCatalog([question]).get(id)
+                                      || sectionHeadingById.get(id)
+                                      || headingById.get(id);
                               };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
@@ -1275,9 +1299,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const isFilled = !!filled;
                                           const assignedHeading = lookupHeading(filled, q);
                                           const cachedHeading = headingLabelByQuestion[q.id];
-                                          const displayedHeading = cachedHeading?.id === headingAnswerId(filled)
-                                              ? cachedHeading
-                                              : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) };
+                                           const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
+                                               ? cachedHeading
+                                               : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
                                           const assignedHeadingText = headingPlainText(displayedHeading.text);
                                           return (
                                               <React.Fragment key={q.id}>
@@ -1850,6 +1874,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                   <div key={`heading-option-${optId}`}
                                                                     className="notranslate"
                                                                     translate="no"
+                                                                    data-heading-id={optId}
+                                                                    data-heading-label={headingPlainText(optContent)}
                                                                     draggable={!isUsed}
                                                                     onClick={() => { if (!isUsed) setSelectedHeadingDrag({ id: optId, text: headingPlainText(optContent), sourceQid: '' }); }}
                                                                     onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}
