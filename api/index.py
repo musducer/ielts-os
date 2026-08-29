@@ -1289,7 +1289,7 @@ async def ai_explain(
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
             "appear word-for-word in the source. If the student was correct, still explain why the other options lose. "
             "Be economical: write 3-5 short, high-information sentences (normally under 130 words); group similar distractors instead of repeating yourself. "
-            "End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
+            "For multiple choice, test each distractor against the exact condition, scope and speaker meaning. For map/diagram labels, explain the precise label, location or relationship supplied by the task; never invent a visual detail you cannot verify. For matching, name the exact target clue and why the other links fail. For completion, test grammar, word limit and meaning together. End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
         source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
@@ -1311,7 +1311,7 @@ async def ai_explain(
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
+            "Với trắc nghiệm, đối chiếu từng phương án nhiễu với đúng điều kiện, phạm vi và ý người nói/tác giả. Với map/diagram, chỉ giải thích nhãn, vị trí hoặc quan hệ có trong dữ liệu đề; tuyệt đối không bịa chi tiết thị giác. Với matching, chỉ ra manh mối gắn đúng đối tượng và vì sao các liên kết khác sai. Với completion, kiểm tra đồng thời ngữ pháp, giới hạn từ và nghĩa. Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
         source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
@@ -1327,7 +1327,7 @@ async def ai_explain(
     text, err = _gemini_generate(sys_prompt, user_prompt, 800)
     if err:
         return {"success": False, "error": _friendly_err(err, lang)}
-    audio_evidence = _audio_evidence(
+    audio_evidence_segments = _audio_evidence_segments(
         context,
         correct if is_listening_item else "",
         answer_sequence if is_listening_item else None,
@@ -1335,7 +1335,13 @@ async def ai_explain(
         timestamp_hints if is_listening_item else "",
         question_count if is_listening_item else None,
         model_explanation=text if is_listening_item else "",
-    ) if is_listening_item else None
+    ) if is_listening_item else []
+    # Backward-compatible single control for saved clients; new clients use the
+    # complete verified segment array below.
+    audio_evidence = (
+        {"timestamp": audio_evidence_segments[0]["timestamp"], "quote": audio_evidence_segments[0]["quote"]}
+        if audio_evidence_segments else None
+    )
     if is_listening_item:
         # Keep the wording honest even if a model falls back to generic reading language.
         text = re.sub(r"\bsource text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
@@ -1434,7 +1440,8 @@ async def ai_explain(
             text = text.rstrip() + "\n\n" + "\n".join(
                 f"[[EVIDENCE: {quote}]]" for quote in valid_evidence
             )
-    return {"success": True, "explanation": text, "audioEvidence": audio_evidence}
+    return {"success": True, "explanation": text, "audioEvidence": audio_evidence,
+            "audioEvidenceSegments": audio_evidence_segments}
 
 
 def _parse_ai_items(text: str):
@@ -2312,7 +2319,7 @@ _TS_RANGE_RE = re.compile(
     r"[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]")
 _TS_PAREN_CITE_RE = re.compile(r"\((\d{1,2}:\d{2}(?::\d{2})?)\)")
 _TS_BLOCK_RE = re.compile(
-    r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)\s*\n?([\s\S]*?)(?=\n\s*\(\d{1,2}:\d{2}(?::\d{2})?\s*-|\Z)")
+    r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\)\s*\n?([\s\S]*?)(?=\n\s*\(\d{1,2}:\d{2}(?::\d{2})?\s*-|\Z)")
 _PROCEDURAL_AUDIO_RE = re.compile(
     r"^(?:you\s+will\s+hear|first\s+you\s+have\s+some\s+time|now\s+you\s+have\s+some\s+time|"
     r"before\s+you\s+hear|look\s+at\s+questions?|read\s+questions?|turn\s+to\s+questions?)\b",
@@ -2333,10 +2340,27 @@ def _timestamped_transcript_blocks(context: str):
     blocks = []
     for match in _TS_BLOCK_RE.finditer(context or ""):
         start = _ts_to_sec(match.group(1), match.group(2), match.group(3))
-        raw = re.sub(r"\s+", " ", str(match.group(4) or "")).strip()
+        raw = re.sub(r"\s+", " ", str(match.group(7) or "")).strip()
         if raw:
             blocks.append((start, raw, _normalized_timestamp_text(raw)))
     return blocks
+
+
+def _timestamped_transcript_segments(context: str):
+    """Return original Whisper ranges. Review controls may only seek these real ranges."""
+    segments = []
+    for match in _TS_BLOCK_RE.finditer(context or ""):
+        start = _ts_to_sec(match.group(1), match.group(2), match.group(3))
+        end = _ts_to_sec(match.group(4), match.group(5), match.group(6))
+        raw = re.sub(r"\s+", " ", str(match.group(7) or "")).strip()
+        if raw:
+            segments.append({
+                "start": start,
+                "end": max(start, end),
+                "raw": raw,
+                "normalized": _normalized_timestamp_text(raw),
+            })
+    return segments
 
 
 def _is_procedural_audio_block(raw: str) -> bool:
@@ -2494,6 +2518,75 @@ def _audio_evidence(context: str, correct: str = "", answer_sequence=None, quest
         if start == anchor:
             return {"timestamp": _fmt_ts(start), "quote": _audio_evidence_excerpt(raw, correct, timestamp_hints)}
     return None
+
+
+def _audio_evidence_segments(context: str, correct: str = "", answer_sequence=None, question_index=None,
+                             timestamp_hints: str = "", question_count=None, model_explanation: str = ""):
+    """Produce up to three verified, distinct audio segments for one explanation.
+
+    Every timestamp comes from a persisted Whisper marker. A block must either
+    contain a unique answer anchor or match at least two specific item clues;
+    this deliberately returns fewer controls rather than a plausible-but-wrong
+    later timestamp.
+    """
+    segments = [segment for segment in _timestamped_transcript_segments(context)
+                if not _is_procedural_audio_block(segment["raw"])]
+    if not segments:
+        return []
+
+    anchor = _answer_anchor_seconds(context, correct, answer_sequence, question_index)
+    if anchor is None:
+        anchor = _quoted_audio_anchor_seconds(context, model_explanation)
+    if anchor is None:
+        anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
+
+    stop_words = {
+        "about", "answer", "choose", "correct", "each", "following", "from", "have", "into", "most", "more", "option",
+        "question", "that", "the", "their", "these", "this", "what", "which", "with", "would", "your", "listening",
+    }
+    hint_words = {
+        word for word in re.findall(r"[a-z][a-z'-]{2,}", _normalized_timestamp_text(timestamp_hints))
+        if word not in stop_words
+    }
+    answer_terms = {
+        _normalized_timestamp_text(part)
+        for part in re.split(r"\s*(?:/|;|\||\bor\b)\s*", str(correct or ""), flags=re.I)
+    }
+    answer_terms = {term for term in answer_terms if len(term) >= 3 and not term.isdigit()}
+
+    scored = []
+    for segment in segments:
+        normalized = segment["normalized"]
+        exact_answer = sum(1 for term in answer_terms if re.search(r"(?:^|\s)" + re.escape(term) + r"(?:\s|$)", normalized))
+        clue_hits = len(set(normalized.split()) & hint_words)
+        is_anchor = anchor is not None and segment["start"] == anchor
+        if not (is_anchor or exact_answer or clue_hits >= 2):
+            continue
+        role = "answer evidence" if (is_anchor or exact_answer) else "supporting context"
+        scored.append((is_anchor, exact_answer, clue_hits, segment, role))
+
+    scored.sort(key=lambda item: (not item[0], -item[1], -item[2], item[3]["start"]))
+    chosen = []
+    seen = set()
+    for _is_anchor, _answer_hits, _clue_hits, segment, role in scored:
+        if segment["start"] in seen:
+            continue
+        seen.add(segment["start"])
+        chosen.append({
+            "timestamp": _fmt_ts(segment["start"]),
+            "endTimestamp": _fmt_ts(segment["end"]),
+            "formattedRange": f"{_fmt_ts(segment['start'])} - {_fmt_ts(segment['end'])}",
+            "quote": _audio_evidence_excerpt(segment["raw"], correct, timestamp_hints),
+            "focusCue": "Exact answer cue" if role == "answer evidence" else "Supporting context",
+            "role": role,
+        })
+        if len(chosen) == 3:
+            break
+    def _segment_start(item):
+        units = [int(unit) for unit in str(item["timestamp"]).split(":")]
+        return units[0] * 3600 + units[1] * 60 + units[2] if len(units) == 3 else units[0] * 60 + units[1]
+
+    return sorted(chosen, key=_segment_start)
 
 
 def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: str = "vi", answer_sequence=None,

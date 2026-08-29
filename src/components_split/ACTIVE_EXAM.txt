@@ -1483,7 +1483,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
                   const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
-                  const headingOptions = isDragDropHeadingGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  // A heading answer persists as its Roman id, so the tray must be
+                  // built from the same rich catalog as the passage slot. Imports
+                  // are inconsistent about whether labels live in options,
+                  // headingOptions, headings, or metadata.
+                  const headingOptions = isDragDropHeadingGroup
+                      ? Array.from(getHeadingCatalog([
+                          ...group.questions,
+                          ...(activeExam?.questions || []),
+                          ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
+                      ].filter((question: any) => question.type === "DRAG_DROP_HEADING")).values())
+                      : [];
                   // SUMMARY_DRAG contains numbered blanks inside a shared paragraph.
                   // COLUMN_DRAG is Listening matching: standalone rows at left, options at right.
                   const groupQuestionNumbers = group.questions.map((q: any) => {
@@ -1830,7 +1840,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <div style={{marginBottom:18}}>
                                                               <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
                                                               {headingOptions.map((opt: any, oIdx: number) => {
-                                                                const heading = getHeadingOptionMeta(opt, oIdx);
+                                                                const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
+                                                                  ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
+                                                                  : getHeadingOptionMeta(opt, oIdx);
                                                                 const optId = heading.id;
                                                                 const optContent = heading.text;
                                                                 const isUsed = usedIds.has(optId);

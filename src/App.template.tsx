@@ -1760,6 +1760,7 @@ const getHeadingOptionMeta = (option: any, index: number) => {
     : [
       option?.label, option?.heading, option?.title, option?.content,
       option?.description, option?.name, option?.value, option?.text,
+      option?.headingText, option?.displayText, option?.labelText, option?.answerText,
       option?.roman, option?.key, option?.code,
     ];
   const candidates = fields
@@ -1787,6 +1788,8 @@ const getHeadingCatalog = (questions: any[] = []) => {
     const optionLists = [
       question?.options, question?.headingOptions, question?.headings,
       question?.metadata?.headingOptions, question?.metadata?.headings,
+      question?.headingMap && Object.entries(question.headingMap).map(([id, text]) => ({ id, text })),
+      question?.metadata?.headingMap && Object.entries(question.metadata.headingMap).map(([id, text]) => ({ id, text })),
     ];
     optionLists.forEach((options: any) => {
       if (!Array.isArray(options)) return;
@@ -3287,7 +3290,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -5928,23 +5931,25 @@ const applyWorkspaceSnapshot = (snap: any) => {
           answerSequence,
           questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
           questionCount: timestampQuestions.length || undefined,
-          // Do not score every distractor as a timestamp clue. The question and
-          // its shared context are the only safe fallback when the answer text
-          // itself is not spoken verbatim (MCQ / matching).
-          // Shared group instructions often contain procedural text such as
-          // "You will hear...". They are not answer evidence and previously
-          // pulled MCQ/matching timestamps back to the beginning of a section.
-          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr].filter(Boolean).join("\n") : "",
+          // The backend scores these against real transcript blocks and requires
+          // more than one specific clue before it may expose a seek control.
+          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr, optStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: {
-        loading: false,
-        text: data.explanation,
-        audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
-          ? data.audioEvidence
-          : undefined,
-      } }));
+      if (data.success && data.explanation) {
+        const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
+          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 3)
+          : undefined;
+        setExplainMap(prev => ({ ...prev, [q.id]: {
+          loading: false,
+          text: data.explanation,
+          audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
+            ? { ...data.audioEvidence, segments: audioEvidenceSegments }
+            : undefined,
+          audioEvidenceSegments,
+        } }));
+      }
       else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
     } catch (e: any) {
       setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));

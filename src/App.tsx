@@ -1760,6 +1760,7 @@ const getHeadingOptionMeta = (option: any, index: number) => {
     : [
       option?.label, option?.heading, option?.title, option?.content,
       option?.description, option?.name, option?.value, option?.text,
+      option?.headingText, option?.displayText, option?.labelText, option?.answerText,
       option?.roman, option?.key, option?.code,
     ];
   const candidates = fields
@@ -1787,6 +1788,8 @@ const getHeadingCatalog = (questions: any[] = []) => {
     const optionLists = [
       question?.options, question?.headingOptions, question?.headings,
       question?.metadata?.headingOptions, question?.metadata?.headings,
+      question?.headingMap && Object.entries(question.headingMap).map(([id, text]) => ({ id, text })),
+      question?.metadata?.headingMap && Object.entries(question.metadata.headingMap).map(([id, text]) => ({ id, text })),
     ];
     optionLists.forEach((options: any) => {
       if (!Array.isArray(options)) return;
@@ -3287,7 +3290,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -5928,23 +5931,25 @@ const applyWorkspaceSnapshot = (snap: any) => {
           answerSequence,
           questionIndex: timestampQuestionIndex >= 0 ? timestampQuestionIndex : undefined,
           questionCount: timestampQuestions.length || undefined,
-          // Do not score every distractor as a timestamp clue. The question and
-          // its shared context are the only safe fallback when the answer text
-          // itself is not spoken verbatim (MCQ / matching).
-          // Shared group instructions often contain procedural text such as
-          // "You will hear...". They are not answer evidence and previously
-          // pulled MCQ/matching timestamps back to the beginning of a section.
-          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr].filter(Boolean).join("\n") : "",
+          // The backend scores these against real transcript blocks and requires
+          // more than one specific clue before it may expose a seek control.
+          timestampHints: isListeningQuestion ? [stripTags(q.text), correctStr, optStr].filter(Boolean).join("\n") : "",
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) setExplainMap(prev => ({ ...prev, [q.id]: {
-        loading: false,
-        text: data.explanation,
-        audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
-          ? data.audioEvidence
-          : undefined,
-      } }));
+      if (data.success && data.explanation) {
+        const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
+          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 3)
+          : undefined;
+        setExplainMap(prev => ({ ...prev, [q.id]: {
+          loading: false,
+          text: data.explanation,
+          audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
+            ? { ...data.audioEvidence, segments: audioEvidenceSegments }
+            : undefined,
+          audioEvidenceSegments,
+        } }));
+      }
       else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
     } catch (e: any) {
       setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));
@@ -8233,68 +8238,28 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       };
       const rvJumpToEvidence = (quote: string) => {
           const root = document.getElementById('ielts-passage-content');
-          if (!root) return;
-
-          const markFragment = (raw: string) => {
-              const needle = String(raw || '').replace(/\s+/g, ' ').trim();
-              if (needle.length < 4) return null;
-              // Evidence is cumulative for the whole review session. Reusing an
-              // exact existing hit avoids nested marks when a learner clicks it again.
-              const existing = Array.from(root.querySelectorAll<HTMLElement>('.rv-evidence-hit')).find((mark) =>
-                  (mark.textContent || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase() === needle.toLocaleLowerCase()
-              );
-              if (existing) return existing;
-              const nodes: Array<{ node: Text; start: number; end: number }> = [];
-              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-              let text = '', current: Node | null;
-              while ((current = walker.nextNode())) {
-                  const node = current as Text;
-                  if ((node.parentElement && node.parentElement.closest('.rv-evidence-hit'))) continue;
-                  const start = text.length;
-                  text += node.data;
-                  nodes.push({ node, start, end: text.length });
-              }
-              let matchIndex = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
-              let matchedText = needle;
-              if (matchIndex < 0) {
-                  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-                  const loose = new RegExp(escaped, 'i').exec(text);
-                  if (!loose || loose.index == null) return null;
-                  matchIndex = loose.index;
-                  matchedText = loose[0];
-              }
-              const endIndex = matchIndex + matchedText.length;
-              const startNode = nodes.find((item) => matchIndex >= item.start && matchIndex < item.end);
-              const endNode = nodes.find((item) => endIndex > item.start && endIndex <= item.end);
-              if (!startNode || !endNode) return null;
-              const range = document.createRange();
-              range.setStart(startNode.node, matchIndex - startNode.start);
-              range.setEnd(endNode.node, endIndex - endNode.start);
-              const mark = document.createElement('mark');
-              mark.className = 'rv-evidence-hit';
-              mark.tabIndex = -1;
-              mark.style.cssText = 'background:#fde68a;color:inherit;border-radius:3px;padding:0 2px;box-shadow:0 0 0 2px rgba(245,158,11,.28);transition:background .25s ease;';
-              try {
-                  range.surroundContents(mark);
-              } catch {
-                  const content = range.extractContents();
-                  mark.appendChild(content);
-                  range.insertNode(mark);
-              }
-              return mark;
-          };
-
-          // Never wrap one <mark> across paragraphs: each sentence is located and
-          // highlighted independently, so multi-paragraph evidence remains valid HTML.
-          const fragments = String(quote || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [quote];
-          const marks = fragments.map(markFragment).filter((mark): mark is HTMLElement => !!mark);
-          if (!marks.length && fragments.length > 1) {
-              const single = markFragment(quote);
-              if (single) marks.push(single);
-          }
-          const first = marks[0];
-          if (!first) return;
-          first.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
+          if (!root || needle.length < 4) return;
+          root.querySelectorAll('.rv-reading-evidence-target, .rv-reading-evidence-located').forEach(node =>
+              node.classList.remove('rv-reading-evidence-target', 'rv-reading-evidence-located')
+          );
+          const candidates = Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote, div'))
+              .filter(node => !node.querySelector('p, li, blockquote'));
+          const target = candidates.find(node => {
+              const copy = (node.textContent || '').replace(/\s+/g, ' ').trim();
+              return copy.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+          }) || candidates.find(node => {
+              const copy = (node.textContent || '').replace(/\s+/g, ' ').trim();
+              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+              return new RegExp(escaped, 'i').test(copy);
+          });
+          if (!target) return;
+          target.classList.add('rv-reading-evidence-target');
+          target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          window.setTimeout(() => {
+              target.classList.remove('rv-reading-evidence-target');
+              target.classList.add('rv-reading-evidence-located');
+          }, 1800);
       };
       // Older explanations used normal quotation marks instead of the evidence marker.
       // Treat an exact passage quote as evidence too, so stored reviews stay useful.
@@ -8307,27 +8272,34 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
           return new RegExp(escaped, 'i').test(text);
       };
-      const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string }) => {
+      const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }, audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>) => {
           if (rvActiveIsListening) {
               const cleanText = String(txt || '')
                   .replace(/\s*[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|â€“|â€”|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/g, '')
                   .replace(/\n{3,}/g, '\n\n')
                   .trim();
+              const segments: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> = (Array.isArray(audioEvidenceSegments) && audioEvidenceSegments.length
+                  ? audioEvidenceSegments
+                  : Array.isArray(audioEvidence?.segments) && audioEvidence.segments.length
+                  ? audioEvidence.segments
+                  : audioEvidence ? [audioEvidence] : [])
+                  .filter((segment, index, all) => segment?.timestamp && segment?.quote && all.findIndex(item => item.timestamp === segment.timestamp) === index)
+                  .slice(0, 3);
               return <>
                   {cleanText}
-                  {audioEvidence?.quote && audioEvidence?.timestamp && (
-                      <div className="rv-audio-evidence">
-                          <div className="rv-audio-evidence-copy"><span>{audioEvidence.timestamp}</span> {audioEvidence.quote}</div>
+                  {!!segments.length && <div className="rv-audio-evidence-list">
+                      {segments.map((segment, index) => <div className="rv-audio-evidence" key={`${segment.timestamp}-${index}`}>
+                          <div className="rv-audio-evidence-copy"><span>{segment.formattedRange || (segment.endTimestamp ? `${segment.timestamp} - ${segment.endTimestamp}` : segment.timestamp)}</span> {segment.quote}</div>
                           <div className="rv-audio-evidence-actions">
-                              <button type="button" title="Show this evidence in the transcript" aria-label="Show evidence in transcript" onClick={() => rvJumpToTranscript(audioEvidence.timestamp, audioEvidence.quote)}>
+                              <button type="button" title="Show this evidence in the transcript" aria-label="Show this evidence in transcript" onClick={() => rvJumpToTranscript(segment.timestamp, segment.quote)}>
                                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
                               </button>
-                              <button type="button" title={`Play audio from ${audioEvidence.timestamp}`} aria-label={`Play audio from ${audioEvidence.timestamp}`} onClick={() => rvSeek(audioEvidence.timestamp)}>
+                              <button type="button" title={`Play audio from ${segment.timestamp}`} aria-label={`Play audio from ${segment.timestamp}`} onClick={() => rvSeek(segment.timestamp)}>
                                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
                               </button>
                           </div>
-                      </div>
-                  )}
+                      </div>)}
+                  </div>}
               </>;
           }
           const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
@@ -8336,7 +8308,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   const match = part.match(/^\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]$/i);
                   if (!match) return <React.Fragment key={pi}>{rvRenderExplain(part)}</React.Fragment>;
                   const quote = match[1].trim();
-                  return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Open evidence in the reading passage" aria-label={`Open evidence: ${quote}`} style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 4, padding: '1px 5px', color: '#92400e', fontWeight: 700, cursor: 'pointer', textDecoration: 'none', fontSize: 'inherit', fontFamily: 'inherit', lineHeight: 'inherit' }}>&quot;{quote}&quot;</button>;
+                  return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Locate this evidence in the reading passage" aria-label={`Locate evidence: ${quote}`} className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>;
               });
           }
           const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
@@ -8352,7 +8324,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   if (quoted) {
                       const quote = (quoted[1] || quoted[2] || quoted[3] || '').trim();
                       if (rvCanJumpToEvidence(quote)) {
-                          return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Open evidence in the reading passage" aria-label={`Open evidence: ${quote}`} style={{ background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 4, padding: '1px 5px', color: '#92400e', fontWeight: 700, cursor: 'pointer', textDecoration: 'none', fontSize: 'inherit', fontFamily: 'inherit', lineHeight: 'inherit' }}>&quot;{quote}&quot;</button>;
+                          return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Locate this evidence in the reading passage" aria-label={`Locate evidence: ${quote}`} className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>;
                       }
                       return <React.Fragment key={pi}>{part}</React.Fragment>;
                   }
@@ -8432,7 +8404,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       ) : selectedExplanation.loading ? (
                           <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>
                       ) : (
-                          <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(selectedExplanation.text, selectedExplanation.audioEvidence)}</div>
+                          <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(selectedExplanation.text, selectedExplanation.audioEvidence, selectedExplanation.audioEvidenceSegments)}</div>
                       )}
                   </div>
               </section>
@@ -8444,16 +8416,22 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               <style>{`
                   .rv-transcript-block { scroll-margin-top: 18px; border-left: 3px solid transparent; padding: 12px 14px; border-radius: 8px; transition: background .2s ease, border-color .2s ease, box-shadow .2s ease; }
                   .rv-transcript-block + .rv-transcript-block { margin-top: 10px; }
-                  .rv-transcript-block.rv-transcript-evidence { border-left-color: #f59e0b; background: #fffbeb; box-shadow: 0 0 0 1px rgba(245,158,11,.26); }
-                  .rv-transcript-quote { background:#fde68a; color:inherit; border-radius:3px; padding:0 2px; box-shadow:0 0 0 1px rgba(217,119,6,.26); }
+                  .rv-transcript-block.rv-transcript-evidence { border-left-color: #10b981; background: #ecfdf5; box-shadow: 0 0 0 1px rgba(16,185,129,.26); }
+                  .rv-transcript-quote { background:#d1fae5; color:inherit; border-radius:3px; padding:0 2px; box-shadow:0 0 0 1px rgba(5,150,105,.26); }
                   .rv-transcript-time { display: inline-flex; align-items: center; min-width: 54px; font: 700 12px/1 Consolas, monospace; color: #0f766e; background: #ecfdf5; border: 1px solid #99f6e4; border-radius: 999px; padding: 5px 8px; margin-bottom: 7px; }
                   .rv-transcript-copy { margin: 0; color: #1f2937; font-size: 15px; line-height: 1.72; white-space: pre-wrap; }
-                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
+                  .rv-audio-evidence-list { display:grid; gap:8px; margin-top:12px; }
+                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 0; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
                   .rv-audio-evidence-copy { flex: 1; font-size: 12.5px; font-style: italic; line-height: 1.45; }
                   .rv-audio-evidence-copy span { font: 800 11px/1 Consolas, monospace; color: #4338ca; }
                   .rv-audio-evidence-actions { display: flex; gap: 5px; flex-shrink: 0; }
                   .rv-audio-evidence-actions button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #a5b4fc; border-radius: 6px; color: #4338ca; background: #fff; cursor: pointer; }
                   .rv-audio-evidence-actions button:hover { background: #e0e7ff; }
+                  .rv-reading-evidence-button { display:inline-flex; align-items:center; gap:5px; margin:5px 4px 5px 0; padding:4px 8px; border:1px solid #6ee7b7; border-radius:999px; background:#ecfdf5; color:#047857; font:700 12px/1 Inter,sans-serif; cursor:pointer; }
+                  .rv-reading-evidence-button:hover { background:#d1fae5; border-color:#10b981; }
+                  .rv-reading-evidence-target { border-radius:5px; animation:rv-evidence-glow 1.8s ease-out both; }
+                  .rv-reading-evidence-located { box-shadow:inset 0 -2px 0 #10b981; }
+                  @keyframes rv-evidence-glow { 0% { background:rgba(16,185,129,.30); box-shadow:0 0 0 0 rgba(16,185,129,.55); } 65% { background:rgba(16,185,129,.14); box-shadow:0 0 0 8px rgba(16,185,129,0); } 100% { background:transparent; box-shadow:inset 0 -2px 0 #10b981; } }
                   .rv-completion-review { margin: 0 0 20px; }
                   .rv-completion-context { background: #f8fafc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 20px 22px; color: #1e293b; font-size: 15px; line-height: 1.72; }
                   .rv-completion-context p { margin: 0 0 10px; }
@@ -8569,8 +8547,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
                       const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
                       const hasSlots = headingQs.length > 0 && /\[HEADING_SLOT\]/i.test(passageHtml);
-                      const headingOpts: any[] = (headingQs.find((q: any) => q.options && q.options.length)?.options) || [];
-                      const headingCatalog = getHeadingCatalog(headingQs);
+                      const rvAllHeadingQs = [
+                          ...headingQs,
+                          ...(reviewQuiz.quiz.questions || []),
+                          ...rvSections.flatMap((section: any) => section.questions || []),
+                      ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
+                      const headingCatalog = getHeadingCatalog(rvAllHeadingQs);
+                      const headingOpts = Array.from(headingCatalog.values());
                       const rnorm = (v: any) => normalizeHeadingId(v);
                       const headingBody = (roman: string) => headingPlainText(headingCatalog.get(rnorm(roman))?.text);
                       return (
@@ -8583,7 +8566,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 18, background: C.bg }}>
                                   <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.sub, marginBottom: 8 }}>List of Headings</div>
                                   {headingOpts.map((opt: any, oi: number) => {
-                                      const heading = getHeadingOptionMeta(opt, oi);
+                                      const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
+                                          ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
+                                          : getHeadingOptionMeta(opt, oi);
                                       return (
                                           <div key={oi} style={{ display: 'flex', gap: 10, fontSize: 13.5, lineHeight: 1.5, marginBottom: 5 }}>
                                               <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{heading.id}</span>
@@ -8875,7 +8860,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               return <section key={`matching-review-${q.id}`} className="rv-completion-review">
                                   {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
                                   {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
-                                  <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>
+                                  <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
                               </section>;
                           }
                           if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
@@ -8888,7 +8873,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div className="rv-review-match-grid"><div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span><b style={{marginRight:7,color:C.sub}}>{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-completion-badge rv-completion-${state.correct?'correct':state.blank?'blank':'wrong'}`}>{state.blank?'No answer':state.given}{!state.correct && <small style={{display:'block',marginTop:2}}>Correct: {state.expected}</small>}</span></button>; })}</div><aside className="rv-review-match-bank"><div className="rv-review-match-bank-title">Answer choices</div>{(q.options || []).map((option:string, optionIndex:number)=><div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span className="rv-review-match-option-key">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside></div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
                               </section>;
                           }
                           if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
@@ -8934,7 +8919,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
                                       <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
-                                      {!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence)}</div>}
+                                      {!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}
                                   </div>
                               </section>;
                           }
@@ -10716,7 +10701,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
                   const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
-                  const headingOptions = isDragDropHeadingGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  // A heading answer persists as its Roman id, so the tray must be
+                  // built from the same rich catalog as the passage slot. Imports
+                  // are inconsistent about whether labels live in options,
+                  // headingOptions, headings, or metadata.
+                  const headingOptions = isDragDropHeadingGroup
+                      ? Array.from(getHeadingCatalog([
+                          ...group.questions,
+                          ...(activeExam?.questions || []),
+                          ...((activeExam?.sections || []).flatMap((section: any) => section.questions || [])),
+                      ].filter((question: any) => question.type === "DRAG_DROP_HEADING")).values())
+                      : [];
                   // SUMMARY_DRAG contains numbered blanks inside a shared paragraph.
                   // COLUMN_DRAG is Listening matching: standalone rows at left, options at right.
                   const groupQuestionNumbers = group.questions.map((q: any) => {
@@ -11063,7 +11058,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <div style={{marginBottom:18}}>
                                                               <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
                                                               {headingOptions.map((opt: any, oIdx: number) => {
-                                                                const heading = getHeadingOptionMeta(opt, oIdx);
+                                                                const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
+                                                                  ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
+                                                                  : getHeadingOptionMeta(opt, oIdx);
                                                                 const optId = heading.id;
                                                                 const optContent = heading.text;
                                                                 const isUsed = usedIds.has(optId);
