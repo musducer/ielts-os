@@ -1596,6 +1596,11 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
   // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
   return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
 };
+const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode'> | null | undefined, isPreviewMode = false) =>
+  !!quiz?.audioUrl
+  && !isPreviewMode
+  && !isPracticeQuiz(quiz)
+  && String(quiz.type || "").toLowerCase().includes("listen");
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
@@ -3537,6 +3542,7 @@ export default function IeltsSupremeOS() {
       });
       const dropzones = document.querySelectorAll('.idp-dropzone') as NodeListOf<HTMLElement>;
       dropzones.forEach(dz => {
+        if (dz.closest('.idp-heading-slot-render')) return;
         const qId = dz.getAttribute('data-qid');
         if (!qId) return;
         const stateVal = examAnswers[qId] !== undefined ? String(examAnswers[qId]) : "";
@@ -4289,6 +4295,13 @@ export default function IeltsSupremeOS() {
     examAudioShouldPlayRef.current = true;
     examAudioRecoveryAttemptsRef.current = 0;
     audioReloadAttemptsRef.current = 0;
+    if (activeExam && shouldDelayListeningExamTimer(activeExam, isPreview) && !examStartTime) {
+      const startedAt = getRealTime();
+      setExamStartTime(startedAt);
+      setExamTimeLeft(activeExam.timeLimit * 60);
+      trueEndTimeRef.current = startedAt + activeExam.timeLimit * 60000;
+      latestExamState.current = { ...latestExamState.current, examStartTime: startedAt };
+    }
     recordAudioDiagnostic("playing", audioRef.current);
     if ("mediaSession" in navigator) {
       try { navigator.mediaSession.playbackState = "playing"; } catch { }
@@ -5101,6 +5114,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
             const endMs = parseVNTime(state.activeExam.scheduledEnd);
             if (getRealTime() >= endMs) { setGracePeriod(5); return; }
         }
+
+        if (state.activeExam && shouldDelayListeningExamTimer(state.activeExam, state.isPreview) && !state.examStartTime) {
+            setExamTimeLeft(state.activeExam.timeLimit * 60);
+            return;
+        }
         
         // Tính thời gian thực tế còn lại dựa vào mốc startTime ban đầu
         const exactTimeLeft = Math.floor((trueEndTimeRef.current - getRealTime()) / 1000);
@@ -5802,7 +5820,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
-        const headingCatalog = getHeadingCatalog([q]);
+        const headingCatalog = getHeadingCatalog([
+          q,
+          quiz,
+          ...((quiz as any)?.questions || []),
+          ...(((quiz as any)?.sections || []).flatMap((section: any) => [section, ...(section?.questions || [])])),
+        ]);
         const headingFor = (value: any) => headingCatalog.get(normalizeHeadingId(value));
         const headingLabel = (value: any) => {
           const heading = headingFor(value);
@@ -5939,7 +5962,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const data = await resp.json();
       if (data.success && data.explanation) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
-          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 3)
+          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
           : undefined;
         setExplainMap(prev => ({ ...prev, [q.id]: {
           loading: false,
@@ -5950,9 +5973,23 @@ const applyWorkspaceSnapshot = (snap: any) => {
           audioEvidenceSegments,
         } }));
       }
-      else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
+      else {
+        const message = "" + (data.error || "Could not generate explanation. Please try again.");
+        setExplainMap(prev => {
+          const next = { ...prev };
+          delete next[q.id];
+          return next;
+        });
+        alert(message);
+      }
     } catch (e: any) {
-      setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));
+      const message = "" + (e?.message || String(e));
+      setExplainMap(prev => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
+      alert(message);
     }
   };
 
@@ -7230,11 +7267,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
       const quizToLoad = normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz);
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
+      const now = getRealTime();
+      const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
 
       setExamAnswers({});
       setExamTimeLeft(quizToLoad.timeLimit * 60);
-      setExamStartTime(getRealTime());
-      trueEndTimeRef.current = getRealTime() + quizToLoad.timeLimit * 60000;
+      setExamStartTime(delayTimerUntilAudioPlay ? 0 : now);
+      trueEndTimeRef.current = delayTimerUntilAudioPlay ? 0 : now + quizToLoad.timeLimit * 60000;
+      timeAlertMilestonesRef.current = new Set();
       setGracePeriod(null);
       setHardLocked(false);
       setIsPreview(isPreviewMode);
@@ -7308,7 +7348,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (!me) return;
 
       const endTime = getRealTime();
-      const durationSecs = Math.floor((endTime - examStartTime) / 1000);
+      const effectiveStartTime = examStartTime || endTime;
+      const durationSecs = Math.max(0, Math.floor((endTime - effectiveStartTime) / 1000));
 
       const questContext = state.activeExam.questContext;
       const assignment = questContext
@@ -7323,7 +7364,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const result: QuizResult = {
           id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
           date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
-          startTime: new Date(examStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
+          startTime: new Date(effectiveStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
           scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
           ...(questContext ? {
@@ -8236,25 +8277,42 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
           target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       };
+      const rvNormalizeEvidenceText = (value: any) => String(value || '')
+          .replace(/[“”]/g, '"')
+          .replace(/[‘’]/g, "'")
+          .replace(/[–—]/g, '-')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLocaleLowerCase();
       const rvReadingEvidenceNodes = () => {
           const root = document.getElementById('ielts-passage-content');
-          return root ? Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote'))
-              .filter(node => (node.textContent || '').trim().length > 0) : [];
+          if (!root) return [];
+          const nodes = Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div'))
+              .filter(node => !node.closest('button') && (node.textContent || '').trim().length > 0)
+              .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
+          return [...nodes, root];
       };
       const rvJumpToEvidence = (quote: string | string[]) => {
           const root = document.getElementById('ielts-passage-content');
           const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || '').replace(/\s+/g, ' ').trim()).filter(value => value.length >= 4);
           if (!root || !quotes.length) return;
           root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-mark').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+          root.querySelectorAll<HTMLElement>('.rv-reading-evidence-block').forEach(node => node.classList.remove('rv-reading-evidence-block', 'rv-reading-evidence-target', 'rv-reading-evidence-located'));
+          root.normalize();
           let firstTarget: HTMLElement | null = null;
           quotes.forEach(needle => {
               const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
               const matcher = new RegExp(escaped, 'i');
-              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ''));
+              const normalizedNeedle = rvNormalizeEvidenceText(needle);
+              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ''))
+                  || rvReadingEvidenceNodes().find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
               if (!target) return;
               if (!firstTarget) firstTarget = target;
               const match = (target.textContent || '').match(matcher);
-              if (!match || match.index === undefined) return;
+              if (!match || match.index === undefined) {
+                  target.classList.add('rv-reading-evidence-block', 'rv-reading-evidence-target');
+                  return;
+              }
               const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
               const nodes: Array<{ node: Text; start: number; end: number }> = [];
               let cursor = 0;
@@ -8286,6 +8344,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           window.setTimeout(() => root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-target').forEach(mark => {
               mark.classList.remove('rv-reading-evidence-target');
               mark.classList.add('rv-reading-evidence-located');
+          }), 1800);
+          window.setTimeout(() => root.querySelectorAll<HTMLElement>('.rv-reading-evidence-block.rv-reading-evidence-target').forEach(node => {
+              node.classList.remove('rv-reading-evidence-target');
+              node.classList.add('rv-reading-evidence-located');
           }), 1800);
       };
       const rvRenderExplanationCopy = (value: string) => {
@@ -8320,60 +8382,39 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   : audioEvidence ? [audioEvidence] : [])
                   .filter((segment, index, all) => segment?.timestamp && segment?.quote && all.findIndex(item => item.timestamp === segment.timestamp && item.quote === segment.quote) === index)
                   .slice(0, 3);
-              const primary = segments[0];
+              const primary = segments.find(segment => /answer|exact/i.test(`${segment.role || ''} ${segment.focusCue || ''}`)) || segments[0];
               return <>
                   {rvRenderExplanationCopy(cleanText)}
                   {!!primary && <div className="rv-audio-evidence">
-                      <button type="button" className="rv-audio-evidence-jump" title="Show and play verified evidence" aria-label="Show and play verified evidence" onClick={() => { rvJumpToTranscript(primary.timestamp, primary.quote); rvSeek(primary.timestamp); }}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><circle cx="18" cy="18" r="4"/><polyline points="17 16.5 19.5 18 17 19.5"/></svg>
-                          Evidence{segments.length > 1 ? ` (${segments.length})` : ''}
-                      </button>
-                      <div className="rv-audio-evidence-copy"><span>{primary.formattedRange || (primary.endTimestamp ? `${primary.timestamp} - ${primary.endTimestamp}` : primary.timestamp)}</span> {primary.quote}{segments.length > 1 && <small> Also verified: {segments.slice(1).map(segment => segment.formattedRange || segment.timestamp).join(', ')}.</small>}</div>
+                      <div className="rv-audio-evidence-actions">
+                          <button type="button" className="rv-audio-evidence-jump" title="Locate this line in the transcript" aria-label="Locate this line in the transcript" onClick={() => rvJumpToTranscript(primary.timestamp, primary.quote)}>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+                              Transcript
+                          </button>
+                          <button type="button" className="rv-audio-evidence-jump" title={`Play audio from ${primary.timestamp}`} aria-label={`Play audio from ${primary.timestamp}`} onClick={() => rvSeek(primary.timestamp)}>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>
+                              Audio
+                          </button>
+                      </div>
+                      <div className="rv-audio-evidence-copy"><span>{primary.formattedRange || (primary.endTimestamp ? `${primary.timestamp} - ${primary.endTimestamp}` : primary.timestamp)}</span> {primary.quote}</div>
                   </div>}
               </>;
           }
-          // Reading evidence is deliberately marker-only. AI prose and quotation
-          // marks are explanatory text, not a second source of interactive clues.
+          // Prefer verified markers. Legacy explanations can still expose one
+          // quoted passage excerpt, but only after it is found in the rendered text.
           const source = String(txt || '');
           const verifiedQuotes = Array.from(source.matchAll(/\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]/gi)).map(match => match[1].trim()).filter(Boolean);
+          const legacyQuotes = verifiedQuotes.length ? [] : Array.from(source.matchAll(/"([^"\n]{4,500})"|'([^'\n]{4,500})'|“([^”\n]{4,500})”/g))
+              .map(match => (match[1] || match[2] || match[3] || '').trim())
+              .filter(quote => quote && rvCanJumpToEvidence(quote))
+              .slice(0, 1);
+          const evidenceQuotes = verifiedQuotes.length ? verifiedQuotes.slice(0, 1) : legacyQuotes;
           const prose = source.replace(/\s*\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]\s*/gi, ' ').replace(/\s{2,}/g, ' ').trim();
           return <>
               {rvRenderExplanationCopy(prose)}
-              {!!verifiedQuotes.length && <button type="button" onClick={() => rvJumpToEvidence(verifiedQuotes)} title="Locate the verified evidence in the reading passage" aria-label="Locate verified evidence" className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence{verifiedQuotes.length > 1 ? ` (${verifiedQuotes.length})` : ''}</button>}
+              {!!evidenceQuotes.length && <button type="button" onClick={() => rvJumpToEvidence(evidenceQuotes)} title="Locate the verified evidence in the reading passage" aria-label="Locate verified evidence" className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>}
           </>;
-          const evidenceParts = String(txt || '').split(/(\[\[EVIDENCE:\s*[\s\S]*?\s*\]\])/i);
-          if (evidenceParts.length > 1) {
-              return evidenceParts.map((part, pi) => {
-                  const match = part.match(/^\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]$/i);
-                  if (!match) return <React.Fragment key={pi}>{rvRenderExplain(part)}</React.Fragment>;
-                  const quote = match[1].trim();
-                  return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Locate this evidence in the reading passage" aria-label={`Locate evidence: ${quote}`} className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>;
-              });
-          }
-          const token = /(?:\[|\()\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?(?:\]|\))/;
-          // Backward compatibility: explanations stored before evidence markers used
-          // plain quotation marks. Convert only quotes that really occur in this passage.
-          // Older Vietnamese explanations commonly quote the passage with single
-          // or curly quotation marks. Treat every quote style identically, but
-          // only make it interactive when it is verbatim passage text.
-          const quoteParts = String(txt || '').split(/("[^\n"]{4,500}"|'[^\n']{4,500}'|“[^\n”]{4,500}”)/g);
-          if (quoteParts.length > 1) {
-              return quoteParts.map((part, pi) => {
-                  const quoted = part.match(/^(?:"([^\n"]{4,500})"|'([^\n']{4,500})'|“([^\n”]{4,500})”)$/);
-                  if (quoted) {
-                      const quote = (quoted[1] || quoted[2] || quoted[3] || '').trim();
-                      if (rvCanJumpToEvidence(quote)) {
-                          return <button key={pi} onClick={() => rvJumpToEvidence(quote)} title="Locate this evidence in the reading passage" aria-label={`Locate evidence: ${quote}`} className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>;
-                      }
-                      return <React.Fragment key={pi}>{part}</React.Fragment>;
-                  }
-                  return <React.Fragment key={pi}>{rvRenderExplain(part)}</React.Fragment>;
-              });
-          }
-          const parts = String(txt || '').split(new RegExp(`(${token.source})`, 'g'));
-          return parts.map((p, pi) => token.test(p)
-              ? <button key={pi} onClick={() => rvSeek(p)} title="Bấm để tua audio tới mốc này" aria-label={`Nghe lại từ ${p.match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0] || 'mốc này'}`} style={{ background: 'none', border: 'none', padding: 0, color: '#d97706', fontWeight: 800, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>{p}</button>
-              : <React.Fragment key={pi}>{p}</React.Fragment>);
+
       };
       const rvEscapeHtml = (value: any) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       const rvCompletionAnswer = (q: any) => {
@@ -8390,6 +8431,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvIsInlineCompletion = (q: any) => (['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
           || (q.type === 'DRAG_DROP' && q.subType === 'SUMMARY_DRAG'))
           && /\[\d+\]/.test(rvCompletionContext(q));
+      const rvQuestionBodyHtml = (value: any) => {
+          const plain = headingPlainText(value);
+          if (!plain || /^(?:question\s*)?\d+[.)]?$/.test(plain)) return "";
+          return formatContent(value || "");
+      };
       const rvRenderCompletionGroup = (seed: any) => {
           const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
               rvSectionOf(candidate) === rvActiveIdx
@@ -8417,6 +8463,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-completion-qid="${rvEscapeHtml(question.id)}" title="Question ${rawNumber}: ${rvEscapeHtml(value)}">${rawNumber}. ${rvEscapeHtml(value)}</button>`;
           });
           const selectedExplanation = explainMap[selected.id];
+          const selectedQuestionHtml = rvQuestionBodyHtml(selected.text);
           return (
               <section key={`completion-review-${seed.id}`} className="rv-completion-review">
                   <div className="rv-completion-context" onClick={(event) => {
@@ -8437,7 +8484,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           <div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div>
                           <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
                       </div>
-                      <div className="rv-completion-detail-question" dangerouslySetInnerHTML={{ __html: formatContent(selected.text || '') }} />
+                      {!!selectedQuestionHtml && <div className="rv-completion-detail-question" dangerouslySetInnerHTML={{ __html: selectedQuestionHtml }} />}
                       {!selectedExplanation ? (
                           <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button>
                       ) : selectedExplanation.loading ? (
@@ -8460,6 +8507,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-transcript-time { display: inline-flex; align-items: center; min-width: 54px; font: 700 12px/1 Consolas, monospace; color: #0f766e; background: #ecfdf5; border: 1px solid #99f6e4; border-radius: 999px; padding: 5px 8px; margin-bottom: 7px; }
                   .rv-transcript-copy { margin: 0; color: #1f2937; font-size: 15px; line-height: 1.72; white-space: pre-wrap; }
                   .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
+                  .rv-audio-evidence-actions { display:flex; flex:0 0 auto; gap:6px; flex-wrap:wrap; }
                   .rv-audio-evidence-copy { flex: 1; font-size: 12.5px; font-style: italic; line-height: 1.45; }
                   .rv-audio-evidence-copy span { font: 800 11px/1 Consolas, monospace; color: #4338ca; }
                   .rv-audio-evidence-copy small { display:block; margin-top:4px; color:#5b5b8e; font-size:11px; font-style:normal; }
@@ -8468,6 +8516,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-reading-evidence-button { display:inline-flex; align-items:center; gap:5px; margin:5px 4px 5px 0; padding:4px 8px; border:1px solid #6ee7b7; border-radius:999px; background:#ecfdf5; color:#047857; font:700 12px/1 Inter,sans-serif; cursor:pointer; }
                   .rv-reading-evidence-button:hover { background:#d1fae5; border-color:#10b981; }
                   .rv-reading-evidence-mark { border-radius:3px; padding:0 1px; color:inherit; background:rgba(16,185,129,.20); box-shadow:inset 0 -2px 0 #10b981; }
+                  .rv-reading-evidence-block { border-radius:5px; background:rgba(16,185,129,.10); box-shadow:inset 3px 0 0 #10b981; }
                   .rv-reading-evidence-target { animation:rv-evidence-glow 1.8s ease-out both; }
                   .rv-reading-evidence-located { background:rgba(16,185,129,.12); }
                   @keyframes rv-evidence-glow { 0% { background:rgba(16,185,129,.30); box-shadow:0 0 0 0 rgba(16,185,129,.55); } 65% { background:rgba(16,185,129,.14); box-shadow:0 0 0 8px rgba(16,185,129,0); } 100% { background:transparent; box-shadow:inset 0 -2px 0 #10b981; } }
@@ -8520,6 +8569,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-review-match-option { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; margin-bottom:7px; border:1px solid #dbe3ee; border-radius:6px; background:#fff; color:#1e293b; font-size:13px; line-height:1.35; }
                   .rv-review-match-option:last-child { margin-bottom:0; }
                   .rv-review-match-option-key { flex:0 0 auto; color:#0f766e; font-weight:900; }
+                  .rv-heading-review-grid { display:grid; grid-template-columns:minmax(230px,.45fr) minmax(0,1fr); gap:18px; align-items:start; }
+                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:10px; padding:13px; background:#f8fafc; }
+                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:7px 8px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-size:13px; line-height:1.35; }
+                  .rv-heading-review-option:last-child { border-bottom:0; }
+                  .rv-heading-review-id { flex:0 0 28px; color:#4338ca; font-style:italic; font-weight:900; }
+                  .rv-heading-review-title { padding:10px 14px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
+                  .rv-heading-review-row { grid-template-columns:minmax(0,1fr) minmax(190px,.7fr) minmax(190px,.7fr); }
                   .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
                   .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
                   .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
@@ -8871,10 +8927,79 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       
                       {reviewQuiz.quiz.questions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
-                          // Matching Headings already lives in the passage pane with its
-                          // paragraph slot. Rendering generic option cards here duplicates
-                          // the same heading list for every paragraph.
-                          if (q.type === "DRAG_DROP_HEADING") return null;
+                          if (q.type === "DRAG_DROP_HEADING") {
+                              const headingKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
+                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                                  candidate.type === "DRAG_DROP_HEADING"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
+                              );
+                              if (alreadyRendered) return null;
+                              const headingQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                                  candidate.type === "DRAG_DROP_HEADING"
+                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
+                              );
+                              const headingCatalog = getHeadingCatalog([
+                                  q,
+                                  reviewQuiz.quiz,
+                                  rvSections[rvActiveIdx],
+                                  ...headingQuestions,
+                                  ...(reviewQuiz.quiz.questions || []),
+                                  ...rvSections.flatMap((section: any) => [section, ...(section?.questions || [])]),
+                              ]);
+                              const headingOptions = Array.from(headingCatalog.values());
+                              const headingLabel = (value: any) => {
+                                  const id = normalizeHeadingId(value);
+                                  const text = headingPlainText(headingCatalog.get(id)?.text);
+                                  return text ? `${id}. ${text}` : (id || String(value || ''));
+                              };
+                              const headingState = (question: any) => {
+                                  const raw = reviewQuiz.result.answers?.[question.id];
+                                  const blank = raw === undefined || raw === null || String(raw).trim() === '';
+                                  const givenId = normalizeHeadingId(raw);
+                                  const expectedId = normalizeHeadingId(question.correctAnswer);
+                                  return { blank, given: blank ? 'No answer' : headingLabel(givenId), expected: headingLabel(expectedId), correct: !blank && givenId === expectedId };
+                              };
+                              const selected = headingQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || headingQuestions.find((candidate: any) => !headingState(candidate).correct)
+                                  || headingQuestions[0];
+                              const selectedState = headingState(selected);
+                              const selectedExplanation = explainMap[selected.id];
+                              const firstNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[0]?.id);
+                              const lastNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[headingQuestions.length - 1]?.id);
+                              return <section key={`heading-review-${q.id}`} className="rv-completion-review rv-heading-review">
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="rv-heading-review-grid">
+                                      <aside className="mh-heading-tray notranslate rv-heading-review-bank" translate="no">
+                                          <div className="rv-review-match-bank-title">List of Headings</div>
+                                          {headingOptions.map((heading: any, optionIndex: number) => (
+                                              <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
+                                                  <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
+                                                  <span>{headingPlainText(heading.text)}</span>
+                                              </div>
+                                          ))}
+                                      </aside>
+                                      <div className="rv-review-match-list">
+                                          <div className="rv-heading-review-title">Questions {firstNumber}-{lastNumber}</div>
+                                          {headingQuestions.map((question: any, index: number) => {
+                                              const state = headingState(question);
+                                              const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+                                              const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                              const paraLabel = headingPlainText(question.text).replace(/^paragraph\s+/i, '') || String.fromCharCode(65 + index);
+                                              return <button key={question.id} type="button" onClick={() => setReviewActiveQuestionId(question.id)} className={`rv-review-match-row rv-heading-review-row ${selected.id === question.id ? 'is-selected' : ''}`}>
+                                                  <span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span>Paragraph {paraLabel}</span></span>
+                                                  <span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.given}</strong></span>
+                                                  {!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}
+                                              </button>;
+                                          })}
+                                      </div>
+                                  </div>
+                                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
+                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
+                                      {!selectedExplanation ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : selectedExplanation.loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(selectedExplanation.text || '', selectedExplanation.audioEvidence, selectedExplanation.audioEvidenceSegments)}</div>}
+                                  </div>
+                              </section>;
+                          }
                           if (rvIsInlineCompletion(q)) {
                               const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
@@ -8884,16 +9009,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               return alreadyRendered ? null : rvRenderCompletionGroup(q);
                           }
                           if (q.type === "MATCHING") {
-                              const matchKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
-                                  candidate.type === "MATCHING"
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === matchKey
-                              );
+                              const baseOptions = Array.isArray(q.options) && q.options.length ? q.options : [];
+                              const optionKey = JSON.stringify(baseOptions);
+                              const isSameMatchingRun = (candidate: any) =>
+                                  candidate?.type === "MATCHING"
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                                  && JSON.stringify((Array.isArray(candidate.options) && candidate.options.length ? candidate.options : baseOptions) || []) === optionKey;
+                              const alreadyRendered = i > 0 && isSameMatchingRun(reviewQuiz.quiz.questions[i - 1]);
                               if (alreadyRendered) return null;
-                              const matchQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
-                                  candidate.type === "MATCHING"
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === matchKey
-                              );
+                              const matchQuestions: any[] = [];
+                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameMatchingRun(reviewQuiz.quiz.questions[cursor]); cursor++) {
+                                  matchQuestions.push(reviewQuiz.quiz.questions[cursor]);
+                              }
                               const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => String(option));
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
                               const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
@@ -9097,11 +9224,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               const lab = (otext.match(/^\s*([ivxlcdm]+|[A-Za-z])[\.\)]/i) || [])[1];
                               return { correct: !!lab && rvNorm(q.correctAnswer) === rvNorm(lab), chosen: !!lab && rvNorm(studentAns) === rvNorm(lab) };
                           };
+                          const questionBodyHtml = rvQuestionBodyHtml(q.text);
                           return (
                           <React.Fragment key={q.id}>
                               {showContext && <div className="group-context" dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />}
                               <div className="card" style={{marginBottom: 20, borderLeft: `5px solid ${isCorrect ? C.succ : (isPartial ? C.warn : C.err)}`}}>
-                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}: <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: formatContent(q.text)}} /></div>
+                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}{questionBodyHtml ? ': ' : ''}{questionBodyHtml && <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: questionBodyHtml}} />}</div>
                                   {rvShowOpts ? (
                                       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
                                           {rvOpts.map((o: any, oi: number) => {
@@ -9145,7 +9273,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                               <div style={{fontSize: 13, color: C.sub, fontWeight: 600}}><Ico name="refresh" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_loading')}</div>
                                           ) : (
                                               <div style={{background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-line'}}>
-                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text, explainMap[q.id].audioEvidence)}
+                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text, explainMap[q.id].audioEvidence, explainMap[q.id].audioEvidenceSegments)}
                                               </div>
                                           )}
                                       </div>
@@ -9427,11 +9555,19 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               const explicit = headingPlainText(text);
               if (explicit && !/^[ivxlcdm]+[.)]?$/i.test(explicit)) return explicit;
               const id = normalizeHeadingId(value);
-              const trayLabel = document.querySelector<HTMLElement>(`[data-heading-id="${id}"]`)?.dataset.headingLabel;
+              const trayNode = Array.from(document.querySelectorAll<HTMLElement>('[data-heading-id]'))
+                  .find(node => normalizeHeadingId(node.dataset.headingId) === id);
+              const trayLabel = trayNode?.dataset.headingLabel || (trayNode?.textContent || "").replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "");
               if (trayLabel) return headingPlainText(trayLabel);
               const section = activeExam?.sections?.[currentSectionIndex];
-              const scopedQuestions = section?.questions || activeExam?.questions || [];
-              const catalog = getHeadingCatalog([section, activeExam, ...scopedQuestions]);
+              const scopedQuestions = section?.questions || [];
+              const catalog = getHeadingCatalog([
+                  section,
+                  activeExam,
+                  ...scopedQuestions,
+                  ...(activeExam?.questions || []),
+                  ...((activeExam?.sections || []).flatMap((sec: any) => [sec, ...(sec?.questions || [])])),
+              ]);
               return headingPlainText(catalog.get(id)?.text);
           };
           const normalizeHeadingPayload = (value: any, text = "", sourceQid = "") => ({
@@ -10575,7 +10711,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                            const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
                                                ? cachedHeading
                                                : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
-                                          const assignedHeadingText = headingPlainText(displayedHeading.text);
+                                          const assignedHeadingText = headingPlainText(displayedHeading.text) || resolveHeadingText(filled);
                                           return (
                                               <React.Fragment key={q.id}>
                                               <div className="idp-heading-slot-render notranslate" translate="no">
@@ -10593,7 +10729,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{displayedHeading.id}{isFilled ? '.' : ''}</span>
-                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || headingPlainText(filled)) : 'Drag heading here'}</span>
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : 'Drag heading here'}</span>
                                                       </div>
                                                   </div>
                                               </div>

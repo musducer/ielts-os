@@ -154,11 +154,19 @@
               const explicit = headingPlainText(text);
               if (explicit && !/^[ivxlcdm]+[.)]?$/i.test(explicit)) return explicit;
               const id = normalizeHeadingId(value);
-              const trayLabel = document.querySelector<HTMLElement>(`[data-heading-id="${id}"]`)?.dataset.headingLabel;
+              const trayNode = Array.from(document.querySelectorAll<HTMLElement>('[data-heading-id]'))
+                  .find(node => normalizeHeadingId(node.dataset.headingId) === id);
+              const trayLabel = trayNode?.dataset.headingLabel || (trayNode?.textContent || "").replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "");
               if (trayLabel) return headingPlainText(trayLabel);
               const section = activeExam?.sections?.[currentSectionIndex];
-              const scopedQuestions = section?.questions || activeExam?.questions || [];
-              const catalog = getHeadingCatalog([section, activeExam, ...scopedQuestions]);
+              const scopedQuestions = section?.questions || [];
+              const catalog = getHeadingCatalog([
+                  section,
+                  activeExam,
+                  ...scopedQuestions,
+                  ...(activeExam?.questions || []),
+                  ...((activeExam?.sections || []).flatMap((sec: any) => [sec, ...(sec?.questions || [])])),
+              ]);
               return headingPlainText(catalog.get(id)?.text);
           };
           const normalizeHeadingPayload = (value: any, text = "", sourceQid = "") => ({
@@ -1302,7 +1310,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                            const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
                                                ? cachedHeading
                                                : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
-                                          const assignedHeadingText = headingPlainText(displayedHeading.text);
+                                          const assignedHeadingText = headingPlainText(displayedHeading.text) || resolveHeadingText(filled);
                                           return (
                                               <React.Fragment key={q.id}>
                                               <div className="idp-heading-slot-render notranslate" translate="no">
@@ -1320,7 +1328,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
                                                           style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
                                                           <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{displayedHeading.id}{isFilled ? '.' : ''}</span>
-                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || headingPlainText(filled)) : 'Drag heading here'}</span>
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : 'Drag heading here'}</span>
                                                       </div>
                                                   </div>
                                               </div>

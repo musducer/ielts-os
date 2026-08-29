@@ -2515,7 +2515,7 @@ def _audio_evidence(context: str, correct: str = "", answer_sequence=None, quest
 
 def _audio_evidence_segments(context: str, correct: str = "", answer_sequence=None, question_index=None,
                              timestamp_hints: str = "", question_count=None, model_explanation: str = ""):
-    """Produce up to three verified, distinct audio segments for one explanation.
+    """Produce the single strongest verified audio segment for one explanation.
 
     Every timestamp comes from a persisted Whisper marker. A block must either
     contain a unique answer anchor or match at least two specific item clues;
@@ -2573,7 +2573,7 @@ def _audio_evidence_segments(context: str, correct: str = "", answer_sequence=No
             "focusCue": "Exact answer cue" if role == "answer evidence" else "Supporting context",
             "role": role,
         })
-        if len(chosen) == 3:
+        if len(chosen) == 1:
             break
     def _segment_start(item):
         units = [int(unit) for unit in str(item["timestamp"]).split(":")]
@@ -2596,11 +2596,6 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
         # For MCQ/matching, question wording/options usually identify the spoken block
         # better than a generic model guess such as [0:00].
         answer_anchor = _hint_anchor_seconds(context, timestamp_hints, question_index, question_count)
-    if answer_anchor is None:
-        # Keep the model's chosen location when it is close to a real Whisper boundary.
-        cited = [_ts_to_sec(m.group(1), m.group(2), m.group(3)) for m in _TS_CITE_RE.finditer(answer)]
-        if cited and (cited[0] > min(allowed) or question_index == 0):
-            answer_anchor = min(allowed, key=lambda sec: abs(sec - cited[0]))
     if answer_anchor is None:
         # A fabricated 0:00 is worse than no timestamp at all.
         return _TS_CITE_RE.sub("", answer)

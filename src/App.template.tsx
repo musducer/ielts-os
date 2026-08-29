@@ -1596,6 +1596,11 @@ const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> 
   // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
   return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
 };
+const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode'> | null | undefined, isPreviewMode = false) =>
+  !!quiz?.audioUrl
+  && !isPreviewMode
+  && !isPracticeQuiz(quiz)
+  && String(quiz.type || "").toLowerCase().includes("listen");
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
@@ -3537,6 +3542,7 @@ export default function IeltsSupremeOS() {
       });
       const dropzones = document.querySelectorAll('.idp-dropzone') as NodeListOf<HTMLElement>;
       dropzones.forEach(dz => {
+        if (dz.closest('.idp-heading-slot-render')) return;
         const qId = dz.getAttribute('data-qid');
         if (!qId) return;
         const stateVal = examAnswers[qId] !== undefined ? String(examAnswers[qId]) : "";
@@ -4289,6 +4295,13 @@ export default function IeltsSupremeOS() {
     examAudioShouldPlayRef.current = true;
     examAudioRecoveryAttemptsRef.current = 0;
     audioReloadAttemptsRef.current = 0;
+    if (activeExam && shouldDelayListeningExamTimer(activeExam, isPreview) && !examStartTime) {
+      const startedAt = getRealTime();
+      setExamStartTime(startedAt);
+      setExamTimeLeft(activeExam.timeLimit * 60);
+      trueEndTimeRef.current = startedAt + activeExam.timeLimit * 60000;
+      latestExamState.current = { ...latestExamState.current, examStartTime: startedAt };
+    }
     recordAudioDiagnostic("playing", audioRef.current);
     if ("mediaSession" in navigator) {
       try { navigator.mediaSession.playbackState = "playing"; } catch { }
@@ -5101,6 +5114,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
             const endMs = parseVNTime(state.activeExam.scheduledEnd);
             if (getRealTime() >= endMs) { setGracePeriod(5); return; }
         }
+
+        if (state.activeExam && shouldDelayListeningExamTimer(state.activeExam, state.isPreview) && !state.examStartTime) {
+            setExamTimeLeft(state.activeExam.timeLimit * 60);
+            return;
+        }
         
         // Tính thời gian thực tế còn lại dựa vào mốc startTime ban đầu
         const exactTimeLeft = Math.floor((trueEndTimeRef.current - getRealTime()) / 1000);
@@ -5802,7 +5820,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
-        const headingCatalog = getHeadingCatalog([q]);
+        const headingCatalog = getHeadingCatalog([
+          q,
+          quiz,
+          ...((quiz as any)?.questions || []),
+          ...(((quiz as any)?.sections || []).flatMap((section: any) => [section, ...(section?.questions || [])])),
+        ]);
         const headingFor = (value: any) => headingCatalog.get(normalizeHeadingId(value));
         const headingLabel = (value: any) => {
           const heading = headingFor(value);
@@ -5939,7 +5962,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const data = await resp.json();
       if (data.success && data.explanation) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
-          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 3)
+          ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
           : undefined;
         setExplainMap(prev => ({ ...prev, [q.id]: {
           loading: false,
@@ -5950,9 +5973,23 @@ const applyWorkspaceSnapshot = (snap: any) => {
           audioEvidenceSegments,
         } }));
       }
-      else setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (data.error || "Lỗi") } }));
+      else {
+        const message = "" + (data.error || "Could not generate explanation. Please try again.");
+        setExplainMap(prev => {
+          const next = { ...prev };
+          delete next[q.id];
+          return next;
+        });
+        alert(message);
+      }
     } catch (e: any) {
-      setExplainMap(prev => ({ ...prev, [q.id]: { loading: false, text: "" + (e?.message || String(e)) } }));
+      const message = "" + (e?.message || String(e));
+      setExplainMap(prev => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
+      alert(message);
     }
   };
 
@@ -7230,11 +7267,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
       const quizToLoad = normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz);
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
+      const now = getRealTime();
+      const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
 
       setExamAnswers({});
       setExamTimeLeft(quizToLoad.timeLimit * 60);
-      setExamStartTime(getRealTime());
-      trueEndTimeRef.current = getRealTime() + quizToLoad.timeLimit * 60000;
+      setExamStartTime(delayTimerUntilAudioPlay ? 0 : now);
+      trueEndTimeRef.current = delayTimerUntilAudioPlay ? 0 : now + quizToLoad.timeLimit * 60000;
+      timeAlertMilestonesRef.current = new Set();
       setGracePeriod(null);
       setHardLocked(false);
       setIsPreview(isPreviewMode);
@@ -7308,7 +7348,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (!me) return;
 
       const endTime = getRealTime();
-      const durationSecs = Math.floor((endTime - examStartTime) / 1000);
+      const effectiveStartTime = examStartTime || endTime;
+      const durationSecs = Math.max(0, Math.floor((endTime - effectiveStartTime) / 1000));
 
       const questContext = state.activeExam.questContext;
       const assignment = questContext
@@ -7323,7 +7364,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const result: QuizResult = {
           id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
           date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
-          startTime: new Date(examStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
+          startTime: new Date(effectiveStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
           scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
           ...(questContext ? {
