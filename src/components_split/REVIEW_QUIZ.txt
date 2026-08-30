@@ -6,6 +6,14 @@
       rvSections.forEach((sec, i) => (sec.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
       const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
       const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
+      const rvAllQuestions = Array.isArray(reviewQuiz.quiz.questions) ? reviewQuiz.quiz.questions : [];
+      const rvActiveQuestions = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : rvAllQuestions;
+      const rvQuestionNumber = (question: any, fallbackList: any[] = rvAllQuestions) => {
+          const explicit = Number(question?.questionNumber);
+          if (Number.isFinite(explicit) && explicit > 0) return explicit;
+          const list = fallbackList.length ? fallbackList : (rvActiveQuestions.length ? rvActiveQuestions : rvAllQuestions);
+          return getQuizQuestionNumber(list, question?.id);
+      };
       const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
       const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, reviewQuiz.result.answers || {});
       const rvGroupByQuestionId = new Map<string, any>();
@@ -13,8 +21,8 @@
       const rvGroupQuestionLabel = (group: any) => {
           const first = group.questions[0];
           const last = group.questions[group.questions.length - 1];
-          const start = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], first.id);
-          const end = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], last.id) + getQuestionPointCount(last) - 1;
+          const start = rvQuestionNumber(first);
+          const end = rvQuestionNumber(last) + getQuestionPointCount(last) - 1;
           return end > start ? `${start}-${end}` : `${start}`;
       };
       const rvIsListeningExam = rvType.includes("listen");
@@ -310,13 +318,28 @@
       const rvIsInlineCompletion = (q: any) => (['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
           || (q.type === 'DRAG_DROP' && q.subType === 'SUMMARY_DRAG'))
           && /\[\d+\]/.test(rvCompletionContext(q));
+      const rvIsGroupedReviewQuestion = (question: any) => {
+          const type = String(question?.type || '').toUpperCase();
+          const subType = String(question?.subType || '').toUpperCase();
+          return type === 'MATCHING'
+              || type === 'DRAG_DROP_HEADING'
+              || type === 'MAP_DRAG'
+              || type === 'DIAGRAM_LABEL'
+              || (type === 'DRAG_DROP' && ['COLUMN_DRAG', 'FLOWCHART_DRAG'].includes(subType))
+              || subType === 'FLOWCHART'
+              || rvIsInlineCompletion(question);
+      };
+      const rvGroupedReviewNumbers = new Set<string>();
+      rvActiveQuestions.forEach((question: any) => {
+          if (rvIsGroupedReviewQuestion(question)) rvGroupedReviewNumbers.add(String(rvQuestionNumber(question)));
+      });
       const rvQuestionBodyHtml = (value: any) => {
           const plain = headingPlainText(value);
           if (!plain || /^(?:question\s*)?\d+[.)]?$/.test(plain)) return "";
           return formatContent(value || "");
       };
       const rvRenderCompletionGroup = (seed: any) => {
-          const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+          const groupQuestions = rvActiveQuestions.filter((candidate: any) =>
               rvSectionOf(candidate) === rvActiveIdx
               && rvIsInlineCompletion(candidate)
               && rvCompletionContext(candidate) === rvCompletionContext(seed)
@@ -332,7 +355,7 @@
               if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
           };
           const byNumber = new Map<number, any>();
-          groupQuestions.forEach((question: any) => byNumber.set(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id), question));
+          groupQuestions.forEach((question: any) => byNumber.set(rvQuestionNumber(question), question));
           const inlineContext = formatContent(rvCompletionContext(seed)).replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
               const question = byNumber.get(Number(rawNumber));
               if (!question) return token;
@@ -352,12 +375,12 @@
                   <div className="rv-completion-nav" aria-label="Completion question navigation">
                       {groupQuestions.map((question: any) => {
                           const state = rvCompletionAnswer(question);
-                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                          const number = rvQuestionNumber(question);
                           return <button key={question.id} type="button" onClick={() => selectQuestion(question)} className={`rv-completion-nav-button ${state.correct ? 'correct' : state.blank ? 'blank' : 'wrong'} ${selected.id === question.id ? 'selected' : ''}`}>{number}</button>;
                       })}
                   </div>
                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`}>
-                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                       <div className="rv-completion-detail-answer-row">
                           <div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div>
                           <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
@@ -453,6 +476,30 @@
                   .rv-idp-radio-dot { width: 15px; height: 15px; margin-top: 1px; border-radius: 50%; border: 2px solid #cbd5e1; background: #fff; box-sizing: border-box; }
                   .rv-idp-matching-text-option.correct .rv-idp-radio-dot { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
                   .rv-idp-matching-text-option.wrong .rv-idp-radio-dot { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
+                  .rv-idp-radio-dot.correct { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
+                  .rv-idp-radio-dot.wrong { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
+                  .rv-idp-matching-grid-frame { display:inline-block; min-width:min(100%, 620px); padding:18px 16px 22px; border:1px solid #555; background:#fff; box-sizing:border-box; overflow-x:auto; }
+                  .rv-idp-matching-grid-table { min-width:560px; border:0; border-collapse:collapse; width:100%; font-size:13px; background:#fff; }
+                  .rv-idp-matching-grid-table th, .rv-idp-matching-grid-table td { border:1px solid #111; background:#fff; }
+                  .rv-idp-matching-grid-table th { border-top-color:transparent; padding:9px 12px; text-align:center; font-weight:800; color:#111827; min-width:44px; }
+                  .rv-idp-matching-grid-table th:first-child, .rv-idp-matching-grid-table td:first-child { border-left-color:transparent; }
+                  .rv-idp-matching-grid-table th:last-child, .rv-idp-matching-grid-table td:last-child { border-right-color:transparent; }
+                  .rv-idp-matching-grid-table tr:last-child td { border-bottom-color:transparent; }
+                  .rv-idp-matching-grid-table td { padding:11px 12px; vertical-align:middle; color:#111827; }
+                  .rv-idp-matching-grid-question { min-width:260px; text-align:left; line-height:1.35; }
+                  .rv-idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; margin-right:8px; font-size:13px; font-weight:800; }
+                  .rv-idp-matching-grid-choice { width:48px; text-align:center; cursor:pointer; padding:8px 6px !important; }
+                  .rv-idp-matching-grid-choice.correct { background:#ecfdf5; }
+                  .rv-idp-matching-grid-choice.wrong { background:#fef2f2; }
+                  .rv-idp-matching-grid-choice .rv-idp-radio-dot { margin:0 auto; }
+                  .rv-idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
+                  .rv-idp-matching-feature-title { margin:0 0 6px; color:#111827; font-size:14px; font-weight:700; }
+                  .rv-idp-matching-feature-key { width:auto; border-collapse:collapse; border:0; background:#fff; font-size:13px; }
+                  .rv-idp-matching-feature-key th, .rv-idp-matching-feature-key td { border:1px solid #333; padding:8px 11px; background:#fff; color:#111827; text-align:left; }
+                  .rv-idp-matching-feature-key th { min-width:54px; font-weight:900; }
+                  .rv-idp-matching-feature-key td { min-width:190px; }
+                  .idp-sentence-ending { max-width:780px; }
+                  .idp-sentence-ending-list { display:grid; gap:9px; margin-bottom:14px; }
                   .rv-manual-backdrop { position: fixed; inset: 0; z-index: 250; background: rgba(15,23,42,.42); display: flex; align-items: flex-start; justify-content: flex-end; padding: 76px 22px 22px; }
                   .rv-manual-panel { width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 104px); overflow: auto; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; box-shadow: 0 28px 80px rgba(15,23,42,.28); }
                   .rv-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 18px; border-bottom: 1px solid #e2e8f0; }
@@ -485,13 +532,21 @@
                   .rv-review-match-option { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; margin-bottom:7px; border:1px solid #dbe3ee; border-radius:6px; background:#fff; color:#1e293b; font-size:13px; line-height:1.35; }
                   .rv-review-match-option:last-child { margin-bottom:0; }
                   .rv-review-match-option-key { flex:0 0 auto; color:#0f766e; font-weight:900; }
-                  .rv-heading-review-grid { display:grid; grid-template-columns:minmax(230px,.45fr) minmax(0,1fr); gap:18px; align-items:start; }
-                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:10px; padding:13px; background:#f8fafc; }
-                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:7px 8px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-size:13px; line-height:1.35; }
+                  .rv-heading-review-grid { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:8px; padding:12px 14px; background:#fff; }
+                  .rv-heading-review-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); column-gap:18px; row-gap:0; }
+                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:6px 0; border-bottom:1px solid #edf1f6; color:#1e293b; font-size:12.5px; line-height:1.32; }
                   .rv-heading-review-option:last-child { border-bottom:0; }
-                  .rv-heading-review-id { flex:0 0 28px; color:#4338ca; font-style:italic; font-weight:900; }
-                  .rv-heading-review-title { padding:10px 14px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
-                  .rv-heading-review-row { grid-template-columns:minmax(0,1fr) minmax(190px,.7fr) minmax(190px,.7fr); }
+                  .rv-heading-review-id { flex:0 0 26px; color:#4338ca; font-style:italic; font-weight:900; }
+                  .rv-heading-review-title { padding:9px 12px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
+                  .rv-heading-review-row { grid-template-columns:minmax(120px,.75fr) minmax(0,1fr); gap:8px; padding:9px 12px; }
+                  .rv-heading-review-result { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+                  .rv-heading-pill { display:inline-flex; align-items:center; gap:5px; min-height:26px; border:1px solid #dbe3ee; border-radius:5px; background:#f8fafc; padding:4px 7px; color:#334155; font-size:11px; font-weight:800; line-height:1; white-space:nowrap; }
+                  .rv-heading-pill span { color:#64748b; font-size:9px; letter-spacing:.04em; text-transform:uppercase; }
+                  .rv-heading-pill strong { color:inherit; font-size:12px; font-style:italic; }
+                  .rv-heading-pill.correct { border-color:#86efac; background:#ecfdf5; color:#047857; }
+                  .rv-heading-pill.wrong { border-color:#fca5a5; background:#fef2f2; color:#b91c1c; }
+                  .rv-heading-pill.blank { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
                   .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
                   .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
                   .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
@@ -507,7 +562,7 @@
               {manualExplanationQuestion && (() => {
                   const manual = rvManualExplanationOf(manualExplanationQuestion);
                   if (!manual) return null;
-                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], manualExplanationQuestion.id);
+                  const number = rvQuestionNumber(manualExplanationQuestion);
                   return (
                       <div className="rv-manual-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualExplanationQuestion(null); }}>
                           <section className="rv-manual-panel" role="dialog" aria-modal="true" aria-label={`Teacher explanation for question ${number}`}>
@@ -641,17 +696,19 @@
                                           const para = String.fromCharCode(65 + hi);
                                           const placed = reviewQuiz.result.answers?.[hq.id];
                                           const correct = String(hq.correctAnswer || "");
-                                          const ok = !!placed && rnorm(placed) === rnorm(correct);
+                                          const placedMeta = placed ? resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, placed) : { id: "", text: "" };
+                                          const correctMeta = resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, correct);
+                                          const ok = !!placed && isSingleQuestionCorrect({ ...hq, options: headingOpts }, placed);
                                           return (
                                               <React.Fragment key={hq.id}>
                                                   <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '20px 0 10px', fontSize: 14, lineHeight: 1.4 }}>
                                                       <span style={{ fontWeight: 800, color: C.text, flexShrink: 0 }}>Paragraph {para}</span>
                                                       <span style={{ background: ok ? `${C.succ}1e` : `${C.err}1e`, color: ok ? C.succ : C.err, border: `1px solid ${ok ? C.succ : C.err}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                          Your answer: {placed ? `${String(placed).toLowerCase()} — ${headingBody(String(placed))}` : '—'}
+                                                          Your answer: {placed ? `${placedMeta.id ? `${placedMeta.id} — ` : ''}${headingPlainText(placedMeta.text) || headingPlainText(placed)}` : '—'}
                                                       </span>
                                                       {!ok && (
                                                           <span style={{ background: `${C.accent}1e`, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                              Correct: {correct.toLowerCase()} — {headingBody(correct)}
+                                                              Correct: {correctMeta.id ? `${correctMeta.id} — ` : ''}{headingPlainText(correctMeta.text) || headingBody(correct)}
                                                           </span>
                                                       )}
                                                   </div>
@@ -723,7 +780,7 @@
                            onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
                            onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} />
                   )}
-                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
+                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "28px 24px", background: C.bg }}>
                       
                       {(() => {
                           const rqQuiz = reviewQuiz.quiz;
@@ -890,16 +947,16 @@
                           );
                       })()}
                       
-                      {reviewQuiz.quiz.questions.map((q, i) => {
+                      {rvActiveQuestions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
                           if (q.type === "DRAG_DROP_HEADING") {
                               const headingKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "DRAG_DROP_HEADING"
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
                               );
                               if (alreadyRendered) return null;
-                              const headingQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const headingQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "DRAG_DROP_HEADING"
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
                               );
@@ -912,60 +969,67 @@
                                   ...rvSections.flatMap((section: any) => [section, ...(section?.questions || [])]),
                               ]);
                               const headingOptions = Array.from(headingCatalog.values());
-                              const headingLabel = (value: any) => {
-                                  const id = normalizeHeadingId(value);
-                                  const text = headingPlainText(headingCatalog.get(id)?.text);
-                                  return text ? `${id}. ${text}` : (id || String(value || ''));
+                              const headingLabel = (value: any, question: any) => {
+                                  const meta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, value);
+                                  const id = normalizeHeadingId(meta.id);
+                                  const text = headingPlainText(meta.text);
+                                  return text ? `${id ? `${id}. ` : ''}${text}` : (id || String(value || ''));
                               };
                               const headingState = (question: any) => {
                                   const raw = reviewQuiz.result.answers?.[question.id];
                                   const blank = raw === undefined || raw === null || String(raw).trim() === '';
-                                  const givenId = normalizeHeadingId(raw);
-                                  const expectedId = normalizeHeadingId(question.correctAnswer);
-                                  return { blank, given: blank ? 'No answer' : headingLabel(givenId), expected: headingLabel(expectedId), correct: !blank && givenId === expectedId };
+                                  const givenMeta = blank ? { id: '', text: '' } : resolveHeadingAnswerMeta({ ...question, options: headingOptions }, raw);
+                                  const expectedMeta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, question.correctAnswer);
+                                  const givenId = normalizeHeadingId(givenMeta.id);
+                                  const expectedId = normalizeHeadingId(expectedMeta.id);
+                                  return { blank, givenId, expectedId, given: blank ? 'No answer' : headingLabel(raw, question), expected: headingLabel(question.correctAnswer, question), correct: !blank && isSingleQuestionCorrect({ ...question, options: headingOptions }, raw) };
                               };
                               const selected = headingQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || headingQuestions.find((candidate: any) => !headingState(candidate).correct)
                                   || headingQuestions[0];
                               const selectedState = headingState(selected);
-                              const firstNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[0]?.id);
-                              const lastNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[headingQuestions.length - 1]?.id);
+                              const firstNumber = rvQuestionNumber(headingQuestions[0]);
+                              const lastNumber = rvQuestionNumber(headingQuestions[headingQuestions.length - 1]);
                               return <section key={`heading-review-${q.id}`} className="rv-completion-review rv-heading-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div className="rv-heading-review-grid">
                                       <aside className="mh-heading-tray notranslate rv-heading-review-bank" translate="no">
                                           <div className="rv-review-match-bank-title">List of Headings</div>
-                                          {headingOptions.map((heading: any, optionIndex: number) => (
-                                              <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
-                                                  <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
-                                                  <span>{headingPlainText(heading.text)}</span>
-                                              </div>
-                                          ))}
+                                          <div className="rv-heading-review-options">
+                                              {headingOptions.map((heading: any, optionIndex: number) => (
+                                                  <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
+                                                      <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
+                                                      <span>{headingPlainText(heading.text)}</span>
+                                                  </div>
+                                              ))}
+                                          </div>
                                       </aside>
                                       <div className="rv-review-match-list">
                                           <div className="rv-heading-review-title">Questions {firstNumber}-{lastNumber}</div>
                                           {headingQuestions.map((question: any, index: number) => {
                                               const state = headingState(question);
                                               const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                              const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                              const number = rvQuestionNumber(question);
                                               const paraLabel = headingPlainText(question.text).replace(/^paragraph\s+/i, '') || String.fromCharCode(65 + index);
                                               return <button key={question.id} type="button" onClick={() => setReviewActiveQuestionId(question.id)} className={`rv-review-match-row rv-heading-review-row ${selected.id === question.id ? 'is-selected' : ''}`}>
                                                   <span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span>Paragraph {paraLabel}</span></span>
-                                                  <span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.given}</strong></span>
-                                                  {!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}
+                                                  <span className="rv-heading-review-result">
+                                                      <span className={`rv-heading-pill ${tone}`}><span>Your</span><strong>{state.blank ? '-' : (state.givenId || state.given)}</strong></span>
+                                                      {!state.correct && <span className="rv-heading-pill correct"><span>Correct</span><strong>{state.expectedId || state.expected}</strong></span>}
+                                                  </span>
                                               </button>;
                                           })}
                                       </div>
                                   </div>
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
                                       {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
                               </section>;
                           }
                           if (rvIsInlineCompletion(q)) {
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
                                   && rvIsInlineCompletion(candidate)
                                   && rvCompletionContext(candidate) === rvCompletionContext(q)
@@ -974,38 +1038,55 @@
                           }
                           if (q.type === "MATCHING") {
                               const baseOptions = Array.isArray(q.options) && q.options.length ? q.options : [];
-                              const optionKey = JSON.stringify(baseOptions);
+                              const makeOptionCells = (rawOptions: any[]) => {
+                                  const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                                  return rawOptions.filter((option: any) => String(option ?? "").trim()).map((option: any, optionIndex: number) => ({
+                                      label: matchingOptionLabel(option, optionIndex),
+                                      value: matchingOptionValue(option, optionIndex, infoGrid),
+                                      text: cleanOptionAnswerText(option) || matchingOptionLabel(option, optionIndex),
+                                      infoGrid,
+                                  }));
+                              };
+                              const baseCells = makeOptionCells(baseOptions);
+                              const optionKey = JSON.stringify(baseCells.map(option => `${option.label}:${option.value}`));
+                              const matchingOptionsFor = (candidate: any) => makeOptionCells(Array.isArray(candidate?.options) && candidate.options.length ? candidate.options : baseOptions);
                               const isSameMatchingRun = (candidate: any) =>
                                   candidate?.type === "MATCHING"
                                   && rvSectionOf(candidate) === rvActiveIdx
-                                  && JSON.stringify((Array.isArray(candidate.options) && candidate.options.length ? candidate.options : baseOptions) || []) === optionKey;
-                              const alreadyRendered = i > 0 && isSameMatchingRun(reviewQuiz.quiz.questions[i - 1]);
+                                  && JSON.stringify(matchingOptionsFor(candidate).map(option => `${option.label}:${option.value}`)) === optionKey;
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some(isSameMatchingRun);
                               if (alreadyRendered) return null;
-                              const matchQuestions: any[] = [];
-                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameMatchingRun(reviewQuiz.quiz.questions[cursor]); cursor++) {
-                                  matchQuestions.push(reviewQuiz.quiz.questions[cursor]);
-                              }
-                              const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                              const seenMatchNumbers = new Set<string>();
+                              const matchQuestions: any[] = rvActiveQuestions.filter(isSameMatchingRun).filter((candidate: any) => {
+                                  const numberKey = String(rvQuestionNumber(candidate));
+                                  if (seenMatchNumbers.has(numberKey)) return false;
+                                  seenMatchNumbers.add(numberKey);
+                                  return true;
+                              });
+                              const optionCells = matchingOptionsFor(matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length) || q);
+                              const options = optionCells.map(option => option.value);
+                              const infoGrid = optionCells.every(option => option.infoGrid);
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
                               const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
                               const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
                               const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
                                   || matchQuestions[0];
-                              const renderGrid = <div style={{overflowX:'auto'}}><table className="idp-matching-table rv-idp-matching-text-table" style={{width:'100%', borderCollapse:'collapse'}}><thead><tr><th style={{textAlign:'left', minWidth:180}}>Question</th><th style={{textAlign:'left', minWidth:260}}>Answer</th></tr></thead><tbody>{matchQuestions.map((question:any) => {
+                              const questionColumnTitle = String(matchQuestions.find((candidate: any) => candidate.leftTitle)?.leftTitle || q.leftTitle || '').trim();
+                              const legendTitle = String(matchQuestions.find((candidate: any) => candidate.rightTitle)?.rightTitle || q.rightTitle || '').trim();
+                              const renderGrid = <div style={{overflowX:'auto'}}><div className="rv-idp-matching-grid-frame"><table className="rv-idp-matching-grid-table"><thead><tr><th className="rv-idp-matching-grid-question">{questionColumnTitle}</th>{optionCells.map(option => <th key={`rv-match-head-${option.label}`}>{option.label}</th>)}</tr></thead><tbody>{matchQuestions.map((question:any) => {
                                   const answer = reviewQuiz.result.answers?.[question.id];
-                                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                  const number = rvQuestionNumber(question);
                                   const optionCarrier = { ...question, options };
                                   const chosenText = resolveMatchingAnswerText(optionCarrier, answer);
                                   const correctText = resolveMatchingAnswerText(optionCarrier, question.correctAnswer);
-                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td><span style={{display:'inline-flex', minWidth:24, height:24, alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, marginRight:8, fontSize:12, fontWeight:800}}>{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td><td><div className="rv-idp-matching-text-options">{options.map((optionText:string, optionIndex:number) => {
-                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(optionText);
-                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(optionText);
+                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td className="rv-idp-matching-grid-question"><span className="rv-idp-matching-grid-number">{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td>{optionCells.map((option) => {
+                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(option.value);
+                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(option.value);
                                       const tone = correct ? 'correct' : chosen ? 'wrong' : '';
-                                      return <span key={`${question.id}-${optionIndex}`} className={`rv-idp-matching-text-option ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className="rv-idp-radio-dot" /><span>{optionText}</span></span>;
-                                      return <td key={optionIndex} style={{textAlign:'center', background:correct ? `${C.succ}16` : chosen ? `${C.err}12` : 'transparent'}}><span title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''} style={{display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:'50%', border:`2px solid ${correct ? C.succ : chosen ? C.err : C.border}`, color:correct ? C.succ : chosen ? C.err : C.sub, fontWeight:900}}>{correct ? '✓' : chosen ? '×' : ''}</span></td>;
-                                  })}</div></td></tr>;
-                              })}</tbody></table></div>;
+                                      return <td key={`${question.id}-${option.label}`} className={`rv-idp-matching-grid-choice ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className={`rv-idp-radio-dot ${tone}`} /></td>;
+                                  })}</tr>;
+                              })}</tbody></table></div>{!infoGrid && <div className="rv-idp-matching-feature-wrap">{legendTitle && <div className="rv-idp-matching-feature-title">{legendTitle}</div>}<table className="rv-idp-matching-feature-key"><tbody>{optionCells.map(option => <tr key={`rv-match-key-${option.label}`}><th>{option.label}</th><td>{option.text}</td></tr>)}</tbody></table></div>}</div>;
                               return <section key={`matching-review-${q.id}`} className="rv-completion-review">
                                   {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
                                   {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
@@ -1014,33 +1095,68 @@
                                       const optionCarrier = { ...selected, options };
                                       const selectedOk = isSingleQuestionCorrect(optionCarrier, answer);
                                       const selectedBlank = answer === undefined || answer === null || answer === "";
-                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
+                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
                                   })()}
+                              </section>;
+                          }
+                          if (q.type === "DRAG_DROP" && q.subType === "SENTENCE_ENDING_DRAG") {
+                              const optionKey = JSON.stringify((q.options || []).map((option: any) => cleanOptionAnswerText(option)));
+                              const isSameSentenceRun = (candidate: any) =>
+                                  candidate?.type === "DRAG_DROP"
+                                  && candidate?.subType === "SENTENCE_ENDING_DRAG"
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                                  && JSON.stringify((candidate.options || []).map((option: any) => cleanOptionAnswerText(option))) === optionKey;
+                              if (rvActiveQuestions.slice(0, i).some(isSameSentenceRun)) return null;
+                              const sentenceQuestions = rvActiveQuestions.filter(isSameSentenceRun);
+                              const options = (sentenceQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || q.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                              const selected = sentenceQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || sentenceQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
+                                  || sentenceQuestions[0];
+                              const selectedState = rvCompletionAnswer(selected);
+                              return <section key={`sentence-ending-review-${q.id}`} className="rv-completion-review">
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="idp-sentence-ending">
+                                      <div className="idp-sentence-ending-list">{sentenceQuestions.map((question:any) => {
+                                          const state = rvCompletionAnswer(question);
+                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+                                          const number = rvQuestionNumber(question);
+                                          return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-flowchart-node ${selected.id===question.id?'is-selected':''}`} style={{display:'block',width:'100%',textAlign:'left',border:0,background:'transparent',padding:'0 0 11px',font:'inherit',cursor:'pointer',color:C.text}}>
+                                              <span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /> <span className={`rv-completion-badge rv-completion-${tone}`}>{number}. {state.blank?'No answer':state.given}</span>{!state.correct && <small style={{marginLeft:6,color:C.succ,fontWeight:800}}>Correct: {state.expected}</small>}
+                                          </button>;
+                                      })}</div>
+                                      <div className="rv-review-match-bank" style={{borderRadius:0,background:'#fff'}}><div className="rv-review-match-bank-title">Answer choices</div>{options.map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span>{option}</span></div>)}</div>
+                                  </div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
                               const isSameColumnRun = (candidate: any) => candidate?.type === "DRAG_DROP" && candidate?.subType === "COLUMN_DRAG" && rvSectionOf(candidate) === rvSectionOf(q);
                               // Some imported DOCX tests leave instruction/groupContext blank on
                               // individual rows. Their order is the reliable group boundary.
-                              if (i > 0 && isSameColumnRun(reviewQuiz.quiz.questions[i - 1])) return null;
-                              const dragQuestions: any[] = [];
-                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameColumnRun(reviewQuiz.quiz.questions[cursor]); cursor++) dragQuestions.push(reviewQuiz.quiz.questions[cursor]);
+                              if (rvActiveQuestions.slice(0, i).some(isSameColumnRun)) return null;
+                              const seenDragNumbers = new Set<string>();
+                              const dragQuestions: any[] = rvActiveQuestions.filter(isSameColumnRun).filter((candidate: any) => {
+                                  const numberKey = String(rvQuestionNumber(candidate));
+                                  if (seenDragNumbers.has(numberKey)) return false;
+                                  seenDragNumbers.add(numberKey);
+                                  return true;
+                              });
                               const selected = dragQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId) || dragQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct) || dragQuestions[0];
                               const selectedState = rvCompletionAnswer(selected);
                               return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
+                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=rvQuestionNumber(question); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
                               const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
                               if (alreadyRendered) return null;
-                              const flowQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const flowQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
@@ -1062,7 +1178,7 @@
                                   }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
                                       {flowQuestions.map((question: any, index: number) => {
                                           const state = rvCompletionAnswer(question);
-                                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                          const number = rvQuestionNumber(question);
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
                                           const label = state.blank ? 'No answer' : state.given;
                                           const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
@@ -1074,7 +1190,7 @@
                                       })}
                                   </div>
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
                                       {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
@@ -1082,9 +1198,9 @@
                           }
                           if (q.type === "DIAGRAM_LABEL") {
                               const imageUrl = String((q as any).diagramImageUrl || "").trim();
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
                               if (alreadyRendered) return null;
-                              const diagramQuestions = reviewQuiz.quiz.questions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              const diagramQuestions = rvActiveQuestions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
                               const source:any = diagramQuestions[0] || q;
                               const imageBounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
                               const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOXES")).toUpperCase();
@@ -1092,8 +1208,8 @@
                               const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                               const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
                               const boxes = source.diagramBoxes || {};
-                              const numberFor = (question:any,index:number) => getDiagramQuestionNumber(question,index,reviewQuiz.quiz.questions || []);
-                              const textBoxes = getDiagramTextBoxes(diagramQuestions,reviewQuiz.quiz.questions || []);
+                              const numberFor = (question:any,index:number) => getDiagramQuestionNumber(question,index,rvActiveQuestions);
+                              const textBoxes = getDiagramTextBoxes(diagramQuestions,rvActiveQuestions);
                               const questionByNumber = new Map(diagramQuestions.map((question:any,index:number)=>[numberFor(question,index),question]));
                               const boxFor = (question:any,index:number) => boxes[numberFor(question,index)] || (question.diagramBoxes || {})[numberFor(question,index)] || {x:50,y:16+index*(62/Math.max(1,diagramQuestions.length-1||1)),width:14,height:5};
                               const selected = diagramQuestions.find((candidate:any) => candidate.id === reviewActiveQuestionId) || diagramQuestions.find((candidate:any) => !rvCompletionAnswer(candidate).correct) || diagramQuestions[0];
@@ -1120,19 +1236,19 @@
                           }
                           if (q.type === "MAP_DRAG") {
                               const mapUrl = String((q as any).mapImageUrl || "").trim();
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
                                   && String(candidate.mapImageUrl || "").trim() === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               if (alreadyRendered) return null;
-                              const mapQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const mapQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
                                   && String(candidate.mapImageUrl || "").trim() === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
-                                  || String(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id));
+                                  || String(rvQuestionNumber(question));
                               const slots = (q as any).mapSlots || {};
                               const slotFor = (question: any, index: number) => slots[numberFor(question)] || (question as any).mapSlots?.[numberFor(question)] || {
                                   x: 50, y: 16 + index * (68 / Math.max(1, mapQuestions.length - 1 || 1)), width: 18, height: 7,
@@ -1160,6 +1276,7 @@
                               </section>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
+                          if (!rvIsGroupedReviewQuestion(q) && rvGroupedReviewNumbers.has(String(rvQuestionNumber(q)))) return null;
                           if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
                           const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
                           const studentAns = multiOutcome

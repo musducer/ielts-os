@@ -1588,9 +1588,13 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
+interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; createdAt?: number; updatedAt?: number; }
+interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
+interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; }
+interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1789,7 +1793,7 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
 const normalizeChoiceMultipleIndexes = (value: any): number[] => {
@@ -1855,11 +1859,27 @@ const cleanOptionAnswerText = (value: any) => String(value ?? "")
   .replace(/&nbsp;/gi, " ")
   .replace(/\s+/g, " ")
   .trim()
-  .replace(/^\s*[A-Ka-k][.)]\s*/, "")
+  .replace(/^\s*[A-Ka-k][.)]\s*(?=\S)/, "")
   .replace(/^\s*[A-Ka-k]\s+(?=\S)/, "")
-  .trim();
+  .trim()
+  || String(value ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim().replace(/[.)]$/, "").trim();
 
 const normalizeComparableAnswer = (value: any) => cleanOptionAnswerText(value).toLocaleLowerCase();
+
+const matchingOptionLabel = (option: any, index: number) => {
+  const raw = String(option ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim();
+  const explicit = raw.match(/^\s*([A-Ka-k])(?:[.)]\s*|\s+|$)/)?.[1];
+  return (explicit || String.fromCharCode(65 + index)).toUpperCase();
+};
+
+const isMatchingInfoOptionSet = (options: any[] = []) =>
+  options.length > 0 && options.every(option => /^[A-Ka-k][.)]?$/.test(String(option ?? "").trim()));
+
+const matchingOptionValue = (option: any, index: number, infoGrid = false) => {
+  const label = matchingOptionLabel(option, index);
+  const text = cleanOptionAnswerText(option);
+  return infoGrid ? label : (text || label);
+};
 
 const resolveOptionAnswerText = (question: any, value: any) => {
   const raw = String(value ?? "").trim();
@@ -1889,6 +1909,14 @@ const isSingleQuestionCorrect = (question: any, answer: any) => {
   if (question?.type === "CHOICE") return answer === question.correctAnswer;
   if (question?.type === "MATCHING") {
     return normalizeComparableAnswer(resolveMatchingAnswerText(question, answer)) === normalizeComparableAnswer(resolveMatchingAnswerText(question, question.correctAnswer));
+  }
+  if (question?.type === "DRAG_DROP_HEADING") {
+    const submittedId = normalizeHeadingId(answer);
+    const expectedId = normalizeHeadingId(question.correctAnswer);
+    const idMatches = Boolean(submittedId && expectedId && submittedId === expectedId);
+    const submittedText = resolveHeadingAnswerText(question, answer);
+    const expectedText = resolveHeadingAnswerText(question, question.correctAnswer);
+    return idMatches || (Boolean(submittedText) && normalizeComparableAnswer(submittedText) === normalizeComparableAnswer(expectedText));
   }
   const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
   const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
@@ -2020,6 +2048,27 @@ const getHeadingCatalog = (questions: any[] = []) => {
   });
   return catalog;
 };
+
+const stripHeadingPrefix = (value: any) => headingPlainText(value)
+  .replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "")
+  .trim();
+
+const resolveHeadingAnswerMeta = (question: any, value: any) => {
+  const raw = headingPlainText(value);
+  const catalog = getHeadingCatalog([question]);
+  const id = normalizeHeadingId(raw);
+  const byId = catalog.get(id);
+  if (byId) return byId;
+  const plain = stripHeadingPrefix(raw);
+  const byText = Array.from(catalog.values()).find(heading =>
+    normalizeComparableAnswer(stripHeadingPrefix(heading.text)) === normalizeComparableAnswer(plain)
+  );
+  if (byText) return byText;
+  return { id: /^[ivxlcdm]+$/i.test(id) ? id : "", text: plain || raw };
+};
+
+const resolveHeadingAnswerText = (question: any, value: any) =>
+  resolveHeadingAnswerMeta(question, value).text || stripHeadingPrefix(value);
 
 const getDiagramQuestionNumber = (question: any, index: number, allQuestions: any[] = []) =>
   String(question?.text || "").match(/\[(\d+)\]/)?.[1]
@@ -3397,6 +3446,10 @@ export default function IeltsSupremeOS() {
   const [questProgress, setQuestProgress] = useState<StudentQuestProgress[]>([]);
   const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
   const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
+  const [realExamPackages, setRealExamPackages] = useState<RealExamPackage[]>([]);
+  const [realExamSession, setRealExamSession] = useState<RealExamSession | null>(null);
+  const [realExamInstructionGate, setRealExamInstructionGate] = useState<RealExamInstructionGate | null>(null);
+  const [realExamAudioMuted, setRealExamAudioMuted] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3612,6 +3665,7 @@ export default function IeltsSupremeOS() {
         const [examCurrentQId, setExamCurrentQId] = useState<string>("");
         const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, range: Range, container: HTMLElement} | null>(null);
   const [noteInputMenu, setNoteInputMenu] = useState<{x: number, y: number, range?: Range, container: HTMLElement, existingNode?: HTMLElement, text: string} | null>(null);
+  const [highlightDeleteMenu, setHighlightDeleteMenu] = useState<{x: number, y: number, node: HTMLElement, container: HTMLElement} | null>(null);
   // PANEL NOTES (chuẩn Inspera): mở bằng nút ✎ trên top bar; notesTick ép quét lại DOM notes sau mỗi sửa/xóa.
   const [showNotesPanel, setShowNotesPanel] = useState(false);
   const [notesTick, setNotesTick] = useState(0);
@@ -3689,6 +3743,43 @@ export default function IeltsSupremeOS() {
       document.removeEventListener('beforeinput', blockAcceptedSuggestion, true);
     };
   }, [activeExam?.id]);
+
+  const openHighlightDeleteMenu = (event: any, node: HTMLElement) => {
+      const highlightNode = (node.closest?.('.student-highlight') as HTMLElement | null) || node;
+      const container = highlightNode.closest('.highlightable-content') as HTMLElement | null;
+      if (!container) return;
+      const rect = highlightNode.getBoundingClientRect();
+      setSelectionMenu(null);
+      setNoteInputMenu(null);
+      setHighlightDeleteMenu({
+          x: rect.left + rect.width / 2,
+          y: rect.bottom + 14,
+          node: highlightNode,
+          container,
+      });
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+  };
+
+  const deleteSelectedHighlight = () => {
+      const menu = highlightDeleteMenu;
+      if (!menu?.node || !menu.container) return;
+      const node = menu.node;
+      const parent = node.parentNode;
+      if (!parent) { setHighlightDeleteMenu(null); return; }
+      while (node.firstChild) parent.insertBefore(node.firstChild, node);
+      parent.removeChild(node);
+      parent.normalize();
+      const field = menu.container.getAttribute('data-field');
+      const qId = menu.container.getAttribute('data-qid');
+      const optIndex = menu.container.getAttribute('data-optindex');
+      if (field) {
+          const cleanHTML = serializeHighlightHTML(menu.container);
+          setActiveExam(prev => syncHighlightState(prev, field, qId || "", cleanHTML, optIndex));
+      }
+      setHighlightDeleteMenu(null);
+  };
+
   // =========================================================
   // BẢN VÁ: DOM-SAFE HIGHLIGHT REMOVAL & SỬA GHI CHÚ NOTE
   // =========================================================
@@ -3711,19 +3802,9 @@ export default function IeltsSupremeOS() {
               return;
           }
           
-          // Xử lý Click vào Highlight vàng: Rút ruột và xóa bỏ
-          const isHighlightNode = target && (target.tagName === 'MARK' || target.classList?.contains('idp-highlight') || target.classList?.contains('student-highlight'));
-          if (isHighlightNode) {
-              e.preventDefault(); e.stopPropagation();
-              const parent = target.parentNode;
-              if (!parent) return;
-              const container = target.closest('.highlightable-content');
-
-              while (target.firstChild) parent.insertBefore(target.firstChild, target);
-              parent.removeChild(target);
-              parent.normalize();
-
-              if (container) container.dispatchEvent(new CustomEvent('highlight-removed', { bubbles: true }));
+          const highlightNode = target?.closest?.('.student-highlight, mark.idp-highlight') as HTMLElement | null;
+          if (highlightNode) {
+              openHighlightDeleteMenu(e, highlightNode);
           }
       };
 
@@ -3733,7 +3814,7 @@ export default function IeltsSupremeOS() {
           document.removeEventListener('click', handleSafeHighlightRemoval, true);
           document.removeEventListener('contextmenu', handleSafeHighlightRemoval, true);
       };
-  }, []);
+  }, [highlightDeleteMenu]);
   // Đồng bộ giá trị và khôi phục focus sau mỗi lần examAnswers thay đổi
   useEffect(() => {
     if (!activeExam) return;
@@ -4910,6 +4991,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
+    setRealExamPackages(clean(d.realExamPackages));
     const recoveredQuestProgress = unconfirmedQuestSubmissions.flatMap((entry: any) =>
       Array.isArray(entry?.questProgress) ? entry.questProgress : []
     );
@@ -5083,6 +5165,117 @@ const applyWorkspaceSnapshot = (snap: any) => {
       latestExamState.current = { activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep };
   }, [activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep]);
 
+  useEffect(() => {
+    if (userRole !== "STUDENT" || !loaded || !currentUser?.email || activeExam || realExamSession) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
+      if (!saved?.packageId || !saved?.packageAttemptId || !saved?.testTakerId) return;
+      const pkg = realExamPackages.find(item => item.id === saved.packageId);
+      const completedQuizIds = Array.isArray(saved.completedQuizIds) ? saved.completedQuizIds : [];
+      const finished = pkg?.quizIds?.length && pkg.quizIds.every(id => completedQuizIds.includes(id));
+      if (!pkg || !pkg.active || finished) {
+        persistRealExamSession(null);
+        return;
+      }
+      setRealExamSession({ ...saved, completedQuizIds, startedAt: Number(saved.startedAt) || Date.now() });
+    } catch (error) {}
+  }, [userRole, loaded, currentUser?.email, activeExam, realExamSession, realExamPackages]);
+
+  useEffect(() => {
+    if (!realExamInstructionGate) return;
+    let cancelled = false;
+    let player: any = null;
+    let guardTimer = 0;
+    let maxSeen = 0;
+    const mountPlayer = () => {
+      if (cancelled || player) return;
+      const YT = (window as any).YT;
+      if (!YT?.Player) return;
+      player = new YT.Player("real-exam-youtube-player", {
+        videoId: realExamInstructionGate.videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          iv_load_policy: 3,
+          modestbranding: 1,
+          playsinline: 1,
+          rel: 0,
+        },
+        events: {
+          onReady: (event: any) => {
+            try {
+              if (realExamAudioMuted) event.target.mute?.();
+              else event.target.unMute?.();
+              event.target.playVideo?.();
+            } catch (error) {}
+          },
+          onStateChange: (event: any) => {
+            if (event.data === 0) setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
+          },
+        },
+      });
+      (window as any).__realExamInstructionPlayer = player;
+      guardTimer = window.setInterval(() => {
+        try {
+          const current = Number(player?.getCurrentTime?.()) || 0;
+          const duration = Number(player?.getDuration?.()) || 0;
+          if (current + 0.8 < maxSeen) player?.seekTo?.(maxSeen, true);
+          else maxSeen = Math.max(maxSeen, current);
+          if (duration > 0 && current >= duration - 1.25) {
+            setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
+          }
+        } catch (error) {}
+      }, 500);
+    };
+    if ((window as any).YT?.Player) {
+      mountPlayer();
+    } else {
+      const previousReady = (window as any).onYouTubeIframeAPIReady;
+      (window as any).onYouTubeIframeAPIReady = () => {
+        if (typeof previousReady === "function") previousReady();
+        mountPlayer();
+      };
+      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        const script = document.createElement("script");
+        script.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(script);
+      }
+    }
+    return () => {
+      cancelled = true;
+      if (guardTimer) window.clearInterval(guardTimer);
+      if ((window as any).__realExamInstructionPlayer === player) delete (window as any).__realExamInstructionPlayer;
+      try { player?.destroy?.(); } catch (error) {}
+    };
+  }, [realExamInstructionGate?.nonce, realExamInstructionGate?.videoId]);
+
+  useEffect(() => {
+    if (!realExamInstructionGate) return;
+    try {
+      const player = (window as any).__realExamInstructionPlayer;
+      if (realExamAudioMuted) player?.mute?.();
+      else player?.unMute?.();
+    } catch (error) {}
+  }, [realExamAudioMuted, realExamInstructionGate?.nonce]);
+
+  useEffect(() => {
+    if (userRole !== "STUDENT" || !realExamSession) return;
+    const enforce = () => window.setTimeout(requestRealExamFullscreen, 40);
+    enforce();
+    document.addEventListener("fullscreenchange", enforce);
+    window.addEventListener("focus", enforce);
+    window.addEventListener("click", enforce, true);
+    window.addEventListener("keydown", enforce, true);
+    return () => {
+      document.removeEventListener("fullscreenchange", enforce);
+      window.removeEventListener("focus", enforce);
+      window.removeEventListener("click", enforce, true);
+      window.removeEventListener("keydown", enforce, true);
+    };
+  }, [userRole, realExamSession?.packageAttemptId]);
+
   // Client-side deterrence for student accounts. It deliberately does not use a
   // debugger loop: that pattern freezes legitimate devices and is trivially bypassed.
   useEffect(() => {
@@ -5184,6 +5377,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       setActiveExam(saved.quiz); 
+                      if (saved.quiz?.realExamContext) {
+                          const ctx = saved.quiz.realExamContext;
+                          let savedRealSession: any = null;
+                          try { savedRealSession = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null"); } catch (error) {}
+                          const restoredSession: RealExamSession = {
+                            packageId: ctx.packageId,
+                            packageAttemptId: ctx.packageAttemptId,
+                            testTakerId: ctx.testTakerId,
+                            completedQuizIds: savedRealSession?.packageAttemptId === ctx.packageAttemptId && Array.isArray(savedRealSession.completedQuizIds) ? savedRealSession.completedQuizIds : [],
+                            startedAt: Date.now(),
+                          };
+                          setRealExamSession(restoredSession);
+                          persistRealExamSession(restoredSession);
+                      }
                       setExamAnswers(saved.answers || {});
                       setFlaggedQuestions(saved.flags || []); 
                       setExamStartTime(saved.startTime); 
@@ -6393,7 +6600,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const me = findMe();
     if (!me || vocabGenLoading) return;
     const stripTags = (s: any) => String(s ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-    const myRes = quizResults.filter(r => r.studentId === me.id);
+    const myRes = quizResults.filter(r => r.studentId === me.id && !r.hiddenFromStudent);
     if (myRes.length === 0) { alert("Bạn chưa làm đề nào để trích từ vựng."); return; }
     setVocabGenLoading(true);
     try {
@@ -6634,7 +6841,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       const parent = textNode.parentNode as HTMLElement;
-                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('student-note-hl') && !parent.classList?.contains('idp-temp-selection')) {
+                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('idp-temp-selection')) {
                           const span = document.createElement("span");
                           span.className = 'idp-temp-selection';
                           parent.insertBefore(span, textNode);
@@ -6685,9 +6892,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       const hideMenuOnClick = (e: MouseEvent | TouchEvent) => {
           const target = e.target as HTMLElement;
-          if (!target.closest('.idp-popup-menu') && !target.closest('.idp-note-input-modal') && !target.classList.contains('student-note-hl')) {
+          if (!target.closest('.idp-popup-menu') && !target.closest('.idp-note-input-modal') && !target.closest('.idp-highlight-delete-menu') && !target.classList.contains('student-note-hl')) {
               setSelectionMenu(null);
               setNoteInputMenu(null);
+              setHighlightDeleteMenu(null);
               clearTempSelection();
           }
       };
@@ -7422,6 +7630,192 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
 
+  const realExamSessionKey = (email = currentUser?.email || "") => `ielts_os_real_exam_session_${String(email || "").trim().toLowerCase()}`;
+  const makeRealExamId = () => `realpkg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const makeRealExamAttemptId = () => `realattempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const makeTestTakerId = () => String(Math.floor(100000 + Math.random() * 900000));
+  const quizSkillRank = (quiz: any) => {
+    const type = String(quiz?.type || "").toLowerCase();
+    if (type.includes("listen")) return 0;
+    if (type.includes("read")) return 1;
+    if (type.includes("writ")) return 2;
+    return 99;
+  };
+  const packageQuizzes = (pkg: RealExamPackage | null | undefined) =>
+    (pkg?.quizIds || []).map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
+  const isPackageVisibleToStudent = (pkg: RealExamPackage, student: Student | undefined) => {
+    if (!pkg?.active || !student) return false;
+    if (pkg.audience === "SPECIFIC" && !(pkg.targetStudentIds || []).includes(student.id)) return false;
+    return packageQuizzes(pkg).length === (pkg.quizIds || []).length && (pkg.quizIds || []).length >= 2;
+  };
+  const persistRealExamSession = (session: RealExamSession | null) => {
+    if (!currentUser?.email) return;
+    try {
+      if (session) localStorage.setItem(realExamSessionKey(), JSON.stringify(session));
+      else localStorage.removeItem(realExamSessionKey());
+    } catch (error) {}
+  };
+  const saveRealExamPackage = async (pkg: RealExamPackage) => {
+    const nextPkg: RealExamPackage = {
+      ...pkg,
+      id: pkg.id || makeRealExamId(),
+      title: String(pkg.title || "Real exam package").trim(),
+      quizIds: (pkg.quizIds || []).filter(Boolean),
+      mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
+      updatedAt: Date.now(),
+      createdAt: pkg.createdAt || Date.now(),
+    };
+    const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
+    setRealExamPackages(nx);
+    const saved = await syncData({ realExamPackages: nx });
+    if (!saved) alert("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.");
+    return saved;
+  };
+  const createRealExamPackageFromSelection = async () => {
+    const selected = selectedQuizzes.map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
+    if (selected.length !== 2 && selected.length !== 3) {
+      alert("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).");
+      return;
+    }
+    const ordered = [...selected].sort((a, b) => quizSkillRank(a) - quizSkillRank(b));
+    const ranks = ordered.map(quizSkillRank);
+    const valid = ranks[0] === 0 && ranks[1] === 1 && (ordered.length === 2 || ranks[2] === 2);
+    if (!valid) {
+      alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
+      return;
+    }
+    const title = prompt("Tên gói bài thi thật:", `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`)?.trim();
+    if (!title) return;
+    const passcode = prompt("Pass riêng cho gói này (có thể để trống):", "")?.trim() || "";
+    const pkg: RealExamPackage = {
+      id: makeRealExamId(),
+      title,
+      active: true,
+      mode: ordered.length === 3 ? "LRW" : "LR",
+      quizIds: ordered.map(quiz => quiz.id),
+      passcode,
+      audience: "ALL",
+      targetStudentIds: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await saveRealExamPackage(pkg);
+    setSelectedQuizzes([]);
+  };
+  const deleteRealExamPackage = async (pkgId: string) => {
+    if (!confirm("Xóa gói bài thi thật này?")) return;
+    const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
+    setRealExamPackages(nx);
+    await syncData({ realExamPackages: nx });
+  };
+  const updateRealExamPackage = async (pkg: RealExamPackage, patch: Partial<RealExamPackage>) => {
+    const nx = realExamPackages.map(item => item.id === pkg.id ? { ...item, ...patch, updatedAt: Date.now() } : item);
+    setRealExamPackages(nx);
+    await syncData({ realExamPackages: nx });
+  };
+  const requestRealExamFullscreen = () => {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  };
+  const startRealExamPackage = (pkg: RealExamPackage) => {
+    const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+    if (!isPackageVisibleToStudent(pkg, me)) return;
+    if (pkg.passcode) {
+      const pass = prompt("Enter package passcode:");
+      if (pass !== pkg.passcode) { alert("Passcode is not correct."); return; }
+    }
+    let session: RealExamSession | null = realExamSession?.packageId === pkg.id ? realExamSession : null;
+    if (!session) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
+        if (saved?.packageId === pkg.id) session = saved;
+      } catch (error) {}
+    }
+    session = session || {
+      packageId: pkg.id,
+      packageAttemptId: makeRealExamAttemptId(),
+      testTakerId: makeTestTakerId(),
+      completedQuizIds: [],
+      startedAt: Date.now(),
+    };
+    setRealExamSession(session);
+    persistRealExamSession(session);
+    setPortalTab("exams");
+    requestRealExamFullscreen();
+  };
+  const realExamSkillLabel = (quiz: Quiz | undefined | null) => {
+    const type = String(quiz?.type || "").toLowerCase();
+    if (type.includes("listen")) return "Listening";
+    if (type.includes("read")) return "Reading";
+    if (type.includes("writ")) return "Writing";
+    return String(quiz?.type || "Exam");
+  };
+  const officialInstructionVideoId = (skill: string) => {
+    if (skill === "Listening") return "_O2RHxsAugg";
+    if (skill === "Reading") return "dsCXG9kfRgk";
+    return "";
+  };
+  const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
+    if (!realExamSession || realExamSession.packageId !== pkg.id) return startRealExamPackage(pkg);
+    const nextQuizId = (pkg.quizIds || []).find(id => !realExamSession.completedQuizIds.includes(id));
+    if (quizId !== nextQuizId) {
+      alert("Please wait for the invigilator's instruction and take the tests in order.");
+      return;
+    }
+    const source = quizzesRef.current.find(quiz => quiz.id === quizId);
+    if (!source) { alert("This test is no longer available."); return; }
+    const orderIndex = (pkg.quizIds || []).indexOf(quizId);
+    const launchQuiz: Quiz = {
+      ...source,
+      active: true,
+      maxAttempts: Number.MAX_SAFE_INTEGER,
+      scheduledStart: undefined,
+      scheduledEnd: undefined,
+      passcode: undefined,
+      isLocked: false,
+      practiceMode: false,
+      audioMode: String(source.type || "").toLowerCase().includes("listen") ? "strict" : source.audioMode,
+      realExamContext: {
+        packageId: pkg.id,
+        packageTitle: pkg.title,
+        packageQuizIds: pkg.quizIds,
+        packageAttemptId: realExamSession.packageAttemptId,
+        testTakerId: realExamSession.testTakerId,
+        orderIndex,
+        total: pkg.quizIds.length,
+        isFinal: orderIndex === pkg.quizIds.length - 1,
+      },
+    };
+    startExam(launchQuiz, false, false);
+  };
+  const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
+    const source = quizzesRef.current.find(quiz => quiz.id === quizId);
+    const skill = realExamSkillLabel(source);
+    const videoId = officialInstructionVideoId(skill);
+    if (videoId && realExamSession?.packageId === pkg.id) {
+      setRealExamInstructionGate({
+        packageId: pkg.id,
+        quizId,
+        skill: skill as "Listening" | "Reading",
+        videoId,
+        ready: false,
+        nonce: Date.now(),
+      });
+      requestRealExamFullscreen();
+      return;
+    }
+    launchRealExamPackageQuiz(pkg, quizId);
+  };
+  const confirmRealExamInstructionGate = () => {
+    const gate = realExamInstructionGate;
+    if (!gate?.ready) return;
+    const pkg = realExamPackages.find(item => item.id === gate.packageId);
+    const quizId = gate.quizId;
+    setRealExamInstructionGate(null);
+    if (pkg) window.setTimeout(() => launchRealExamPackageQuiz(pkg, quizId), 0);
+  };
+
   const handleAnswerChange = (questionId: string, answer: any, _type?: string) => {
     // FIX: Sử dụng Functional Update để đảm bảo State mới nhất không bị ghi đè khi gõ nhanh
     setExamAnswers(prev => ({...prev, [questionId]: answer}));
@@ -7452,11 +7846,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
       const isQuestLaunch = Boolean(quiz.questContext);
+      const isRealExamLaunch = Boolean(quiz.realExamContext);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (!isQuestLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (!isQuestLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
           if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -7467,12 +7862,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               }
           }
           
-          if (!isQuestLaunch && quiz.passcode) {
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.passcode) {
               const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
               if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
           }
 
-          if (currentUser && !isQuestLaunch) {
+          if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (myHistory.length >= (quiz.maxAttempts || 1)) {
                   alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
@@ -7642,6 +8037,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const durationSecs = Math.max(0, Math.floor((endTime - effectiveStartTime) / 1000));
 
       const questContext = state.activeExam.questContext;
+      const realExamContext = state.activeExam.realExamContext;
       const assignment = questContext
         ? topicAssignments.find(item => item.id === questContext.topicAssignmentId)
         : undefined;
@@ -7662,6 +8058,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             topicNodeId: questContext.nodeId,
             questPassed,
             questQuestionIds: state.activeExam.questions.map(question => question.id),
+          } : {}),
+          ...(realExamContext ? {
+            hiddenFromStudent: true,
+            realExamPackageId: realExamContext.packageId,
+            realExamPackageTitle: realExamContext.packageTitle,
+            realExamAttemptId: realExamContext.packageAttemptId,
+            realExamOrderIndex: realExamContext.orderIndex,
+            testTakerId: realExamContext.testTakerId,
           } : {}),
       };
 
@@ -7821,6 +8225,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               )), 0);
             });
           }
+      } else if (realExamContext) {
+          submissionMessage = `Test completed. Please wait for the invigilator's instruction.`;
+          setQuizResults(nextResults);
+          if (isOffline || !navigator.onLine) {
+              pushOfflineResult(currentUser?.email, result);
+              submissionMessage += " The result is saved on this device and will sync when the connection returns.";
+          } else {
+              void syncData({ quizResults: [result] });
+          }
       } else {
           let earnedCoins = 50;
           if (state.activeExam.scheduledEnd) {
@@ -7853,7 +8266,40 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
       _setAudioTested(false);
-      if (Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
+      if (!realExamContext && Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
+        if (realExamContext) {
+          const baseSession = realExamSession && realExamSession.packageAttemptId === realExamContext.packageAttemptId
+            ? realExamSession
+            : {
+              packageId: realExamContext.packageId,
+              packageAttemptId: realExamContext.packageAttemptId,
+              testTakerId: realExamContext.testTakerId,
+              completedQuizIds: [],
+              startedAt: Date.now(),
+            };
+          const completedQuizIds = Array.from(new Set([...baseSession.completedQuizIds, state.activeExam.id]));
+          const isPackageDone = realExamContext.packageQuizIds.every(id => completedQuizIds.includes(id));
+          setActiveExam(null); setGracePeriod(null); setHardLocked(false);
+          setManualExplanationQuestion(null);
+          setReviewQuiz(null);
+          setReviewSectionIdx(0);
+          setReviewActiveQuestionId(null);
+          if (isPackageDone) {
+            setRealExamSession(null);
+            persistRealExamSession(null);
+            setPortalTab("home");
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            alert("Real exam package completed. Returning to dashboard.");
+          } else {
+            const nextSession = { ...baseSession, completedQuizIds };
+            setRealExamSession(nextSession);
+            persistRealExamSession(nextSession);
+            setPortalTab("exams");
+            requestRealExamFullscreen();
+            alert(submissionMessage);
+          }
+          return;
+        }
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
@@ -7874,6 +8320,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   forceSubmitExamRef.current = forceSubmitExam;
   const submitExam = (isTimeUp = false) => {
     if (!activeExam) return;
+    if (!isTimeUp && activeExam.realExamContext) return;
     if (!isTimeUp) {
         const timeRatio = examTimeLeft / (activeExam.timeLimit * 60);
         
@@ -8508,6 +8955,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       rvSections.forEach((sec, i) => (sec.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
       const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
       const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
+      const rvAllQuestions = Array.isArray(reviewQuiz.quiz.questions) ? reviewQuiz.quiz.questions : [];
+      const rvActiveQuestions = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : rvAllQuestions;
+      const rvQuestionNumber = (question: any, fallbackList: any[] = rvAllQuestions) => {
+          const explicit = Number(question?.questionNumber);
+          if (Number.isFinite(explicit) && explicit > 0) return explicit;
+          const list = fallbackList.length ? fallbackList : (rvActiveQuestions.length ? rvActiveQuestions : rvAllQuestions);
+          return getQuizQuestionNumber(list, question?.id);
+      };
       const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
       const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, reviewQuiz.result.answers || {});
       const rvGroupByQuestionId = new Map<string, any>();
@@ -8515,8 +8970,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvGroupQuestionLabel = (group: any) => {
           const first = group.questions[0];
           const last = group.questions[group.questions.length - 1];
-          const start = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], first.id);
-          const end = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], last.id) + getQuestionPointCount(last) - 1;
+          const start = rvQuestionNumber(first);
+          const end = rvQuestionNumber(last) + getQuestionPointCount(last) - 1;
           return end > start ? `${start}-${end}` : `${start}`;
       };
       const rvIsListeningExam = rvType.includes("listen");
@@ -8812,13 +9267,28 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvIsInlineCompletion = (q: any) => (['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
           || (q.type === 'DRAG_DROP' && q.subType === 'SUMMARY_DRAG'))
           && /\[\d+\]/.test(rvCompletionContext(q));
+      const rvIsGroupedReviewQuestion = (question: any) => {
+          const type = String(question?.type || '').toUpperCase();
+          const subType = String(question?.subType || '').toUpperCase();
+          return type === 'MATCHING'
+              || type === 'DRAG_DROP_HEADING'
+              || type === 'MAP_DRAG'
+              || type === 'DIAGRAM_LABEL'
+              || (type === 'DRAG_DROP' && ['COLUMN_DRAG', 'FLOWCHART_DRAG'].includes(subType))
+              || subType === 'FLOWCHART'
+              || rvIsInlineCompletion(question);
+      };
+      const rvGroupedReviewNumbers = new Set<string>();
+      rvActiveQuestions.forEach((question: any) => {
+          if (rvIsGroupedReviewQuestion(question)) rvGroupedReviewNumbers.add(String(rvQuestionNumber(question)));
+      });
       const rvQuestionBodyHtml = (value: any) => {
           const plain = headingPlainText(value);
           if (!plain || /^(?:question\s*)?\d+[.)]?$/.test(plain)) return "";
           return formatContent(value || "");
       };
       const rvRenderCompletionGroup = (seed: any) => {
-          const groupQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+          const groupQuestions = rvActiveQuestions.filter((candidate: any) =>
               rvSectionOf(candidate) === rvActiveIdx
               && rvIsInlineCompletion(candidate)
               && rvCompletionContext(candidate) === rvCompletionContext(seed)
@@ -8834,7 +9304,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
           };
           const byNumber = new Map<number, any>();
-          groupQuestions.forEach((question: any) => byNumber.set(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id), question));
+          groupQuestions.forEach((question: any) => byNumber.set(rvQuestionNumber(question), question));
           const inlineContext = formatContent(rvCompletionContext(seed)).replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
               const question = byNumber.get(Number(rawNumber));
               if (!question) return token;
@@ -8854,12 +9324,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   <div className="rv-completion-nav" aria-label="Completion question navigation">
                       {groupQuestions.map((question: any) => {
                           const state = rvCompletionAnswer(question);
-                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                          const number = rvQuestionNumber(question);
                           return <button key={question.id} type="button" onClick={() => selectQuestion(question)} className={`rv-completion-nav-button ${state.correct ? 'correct' : state.blank ? 'blank' : 'wrong'} ${selected.id === question.id ? 'selected' : ''}`}>{number}</button>;
                       })}
                   </div>
                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`}>
-                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                       <div className="rv-completion-detail-answer-row">
                           <div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div>
                           <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
@@ -8955,6 +9425,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-idp-radio-dot { width: 15px; height: 15px; margin-top: 1px; border-radius: 50%; border: 2px solid #cbd5e1; background: #fff; box-sizing: border-box; }
                   .rv-idp-matching-text-option.correct .rv-idp-radio-dot { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
                   .rv-idp-matching-text-option.wrong .rv-idp-radio-dot { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
+                  .rv-idp-radio-dot.correct { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
+                  .rv-idp-radio-dot.wrong { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
+                  .rv-idp-matching-grid-frame { display:inline-block; min-width:min(100%, 620px); padding:18px 16px 22px; border:1px solid #555; background:#fff; box-sizing:border-box; overflow-x:auto; }
+                  .rv-idp-matching-grid-table { min-width:560px; border:0; border-collapse:collapse; width:100%; font-size:13px; background:#fff; }
+                  .rv-idp-matching-grid-table th, .rv-idp-matching-grid-table td { border:1px solid #111; background:#fff; }
+                  .rv-idp-matching-grid-table th { border-top-color:transparent; padding:9px 12px; text-align:center; font-weight:800; color:#111827; min-width:44px; }
+                  .rv-idp-matching-grid-table th:first-child, .rv-idp-matching-grid-table td:first-child { border-left-color:transparent; }
+                  .rv-idp-matching-grid-table th:last-child, .rv-idp-matching-grid-table td:last-child { border-right-color:transparent; }
+                  .rv-idp-matching-grid-table tr:last-child td { border-bottom-color:transparent; }
+                  .rv-idp-matching-grid-table td { padding:11px 12px; vertical-align:middle; color:#111827; }
+                  .rv-idp-matching-grid-question { min-width:260px; text-align:left; line-height:1.35; }
+                  .rv-idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; margin-right:8px; font-size:13px; font-weight:800; }
+                  .rv-idp-matching-grid-choice { width:48px; text-align:center; cursor:pointer; padding:8px 6px !important; }
+                  .rv-idp-matching-grid-choice.correct { background:#ecfdf5; }
+                  .rv-idp-matching-grid-choice.wrong { background:#fef2f2; }
+                  .rv-idp-matching-grid-choice .rv-idp-radio-dot { margin:0 auto; }
+                  .rv-idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
+                  .rv-idp-matching-feature-title { margin:0 0 6px; color:#111827; font-size:14px; font-weight:700; }
+                  .rv-idp-matching-feature-key { width:auto; border-collapse:collapse; border:0; background:#fff; font-size:13px; }
+                  .rv-idp-matching-feature-key th, .rv-idp-matching-feature-key td { border:1px solid #333; padding:8px 11px; background:#fff; color:#111827; text-align:left; }
+                  .rv-idp-matching-feature-key th { min-width:54px; font-weight:900; }
+                  .rv-idp-matching-feature-key td { min-width:190px; }
+                  .idp-sentence-ending { max-width:780px; }
+                  .idp-sentence-ending-list { display:grid; gap:9px; margin-bottom:14px; }
                   .rv-manual-backdrop { position: fixed; inset: 0; z-index: 250; background: rgba(15,23,42,.42); display: flex; align-items: flex-start; justify-content: flex-end; padding: 76px 22px 22px; }
                   .rv-manual-panel { width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 104px); overflow: auto; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; box-shadow: 0 28px 80px rgba(15,23,42,.28); }
                   .rv-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 18px; border-bottom: 1px solid #e2e8f0; }
@@ -8987,13 +9481,21 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-review-match-option { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; margin-bottom:7px; border:1px solid #dbe3ee; border-radius:6px; background:#fff; color:#1e293b; font-size:13px; line-height:1.35; }
                   .rv-review-match-option:last-child { margin-bottom:0; }
                   .rv-review-match-option-key { flex:0 0 auto; color:#0f766e; font-weight:900; }
-                  .rv-heading-review-grid { display:grid; grid-template-columns:minmax(230px,.45fr) minmax(0,1fr); gap:18px; align-items:start; }
-                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:10px; padding:13px; background:#f8fafc; }
-                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:7px 8px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-size:13px; line-height:1.35; }
+                  .rv-heading-review-grid { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:8px; padding:12px 14px; background:#fff; }
+                  .rv-heading-review-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); column-gap:18px; row-gap:0; }
+                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:6px 0; border-bottom:1px solid #edf1f6; color:#1e293b; font-size:12.5px; line-height:1.32; }
                   .rv-heading-review-option:last-child { border-bottom:0; }
-                  .rv-heading-review-id { flex:0 0 28px; color:#4338ca; font-style:italic; font-weight:900; }
-                  .rv-heading-review-title { padding:10px 14px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
-                  .rv-heading-review-row { grid-template-columns:minmax(0,1fr) minmax(190px,.7fr) minmax(190px,.7fr); }
+                  .rv-heading-review-id { flex:0 0 26px; color:#4338ca; font-style:italic; font-weight:900; }
+                  .rv-heading-review-title { padding:9px 12px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
+                  .rv-heading-review-row { grid-template-columns:minmax(120px,.75fr) minmax(0,1fr); gap:8px; padding:9px 12px; }
+                  .rv-heading-review-result { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+                  .rv-heading-pill { display:inline-flex; align-items:center; gap:5px; min-height:26px; border:1px solid #dbe3ee; border-radius:5px; background:#f8fafc; padding:4px 7px; color:#334155; font-size:11px; font-weight:800; line-height:1; white-space:nowrap; }
+                  .rv-heading-pill span { color:#64748b; font-size:9px; letter-spacing:.04em; text-transform:uppercase; }
+                  .rv-heading-pill strong { color:inherit; font-size:12px; font-style:italic; }
+                  .rv-heading-pill.correct { border-color:#86efac; background:#ecfdf5; color:#047857; }
+                  .rv-heading-pill.wrong { border-color:#fca5a5; background:#fef2f2; color:#b91c1c; }
+                  .rv-heading-pill.blank { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
                   .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
                   .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
                   .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
@@ -9009,7 +9511,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               {manualExplanationQuestion && (() => {
                   const manual = rvManualExplanationOf(manualExplanationQuestion);
                   if (!manual) return null;
-                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], manualExplanationQuestion.id);
+                  const number = rvQuestionNumber(manualExplanationQuestion);
                   return (
                       <div className="rv-manual-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualExplanationQuestion(null); }}>
                           <section className="rv-manual-panel" role="dialog" aria-modal="true" aria-label={`Teacher explanation for question ${number}`}>
@@ -9143,17 +9645,19 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           const para = String.fromCharCode(65 + hi);
                                           const placed = reviewQuiz.result.answers?.[hq.id];
                                           const correct = String(hq.correctAnswer || "");
-                                          const ok = !!placed && rnorm(placed) === rnorm(correct);
+                                          const placedMeta = placed ? resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, placed) : { id: "", text: "" };
+                                          const correctMeta = resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, correct);
+                                          const ok = !!placed && isSingleQuestionCorrect({ ...hq, options: headingOpts }, placed);
                                           return (
                                               <React.Fragment key={hq.id}>
                                                   <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '20px 0 10px', fontSize: 14, lineHeight: 1.4 }}>
                                                       <span style={{ fontWeight: 800, color: C.text, flexShrink: 0 }}>Paragraph {para}</span>
                                                       <span style={{ background: ok ? `${C.succ}1e` : `${C.err}1e`, color: ok ? C.succ : C.err, border: `1px solid ${ok ? C.succ : C.err}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                          Your answer: {placed ? `${String(placed).toLowerCase()} — ${headingBody(String(placed))}` : '—'}
+                                                          Your answer: {placed ? `${placedMeta.id ? `${placedMeta.id} — ` : ''}${headingPlainText(placedMeta.text) || headingPlainText(placed)}` : '—'}
                                                       </span>
                                                       {!ok && (
                                                           <span style={{ background: `${C.accent}1e`, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                              Correct: {correct.toLowerCase()} — {headingBody(correct)}
+                                                              Correct: {correctMeta.id ? `${correctMeta.id} — ` : ''}{headingPlainText(correctMeta.text) || headingBody(correct)}
                                                           </span>
                                                       )}
                                                   </div>
@@ -9225,7 +9729,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                            onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
                            onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} />
                   )}
-                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
+                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "28px 24px", background: C.bg }}>
                       
                       {(() => {
                           const rqQuiz = reviewQuiz.quiz;
@@ -9392,16 +9896,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           );
                       })()}
                       
-                      {reviewQuiz.quiz.questions.map((q, i) => {
+                      {rvActiveQuestions.map((q, i) => {
                           if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
                           if (q.type === "DRAG_DROP_HEADING") {
                               const headingKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "DRAG_DROP_HEADING"
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
                               );
                               if (alreadyRendered) return null;
-                              const headingQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const headingQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "DRAG_DROP_HEADING"
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
                               );
@@ -9414,60 +9918,67 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   ...rvSections.flatMap((section: any) => [section, ...(section?.questions || [])]),
                               ]);
                               const headingOptions = Array.from(headingCatalog.values());
-                              const headingLabel = (value: any) => {
-                                  const id = normalizeHeadingId(value);
-                                  const text = headingPlainText(headingCatalog.get(id)?.text);
-                                  return text ? `${id}. ${text}` : (id || String(value || ''));
+                              const headingLabel = (value: any, question: any) => {
+                                  const meta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, value);
+                                  const id = normalizeHeadingId(meta.id);
+                                  const text = headingPlainText(meta.text);
+                                  return text ? `${id ? `${id}. ` : ''}${text}` : (id || String(value || ''));
                               };
                               const headingState = (question: any) => {
                                   const raw = reviewQuiz.result.answers?.[question.id];
                                   const blank = raw === undefined || raw === null || String(raw).trim() === '';
-                                  const givenId = normalizeHeadingId(raw);
-                                  const expectedId = normalizeHeadingId(question.correctAnswer);
-                                  return { blank, given: blank ? 'No answer' : headingLabel(givenId), expected: headingLabel(expectedId), correct: !blank && givenId === expectedId };
+                                  const givenMeta = blank ? { id: '', text: '' } : resolveHeadingAnswerMeta({ ...question, options: headingOptions }, raw);
+                                  const expectedMeta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, question.correctAnswer);
+                                  const givenId = normalizeHeadingId(givenMeta.id);
+                                  const expectedId = normalizeHeadingId(expectedMeta.id);
+                                  return { blank, givenId, expectedId, given: blank ? 'No answer' : headingLabel(raw, question), expected: headingLabel(question.correctAnswer, question), correct: !blank && isSingleQuestionCorrect({ ...question, options: headingOptions }, raw) };
                               };
                               const selected = headingQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || headingQuestions.find((candidate: any) => !headingState(candidate).correct)
                                   || headingQuestions[0];
                               const selectedState = headingState(selected);
-                              const firstNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[0]?.id);
-                              const lastNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[headingQuestions.length - 1]?.id);
+                              const firstNumber = rvQuestionNumber(headingQuestions[0]);
+                              const lastNumber = rvQuestionNumber(headingQuestions[headingQuestions.length - 1]);
                               return <section key={`heading-review-${q.id}`} className="rv-completion-review rv-heading-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div className="rv-heading-review-grid">
                                       <aside className="mh-heading-tray notranslate rv-heading-review-bank" translate="no">
                                           <div className="rv-review-match-bank-title">List of Headings</div>
-                                          {headingOptions.map((heading: any, optionIndex: number) => (
-                                              <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
-                                                  <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
-                                                  <span>{headingPlainText(heading.text)}</span>
-                                              </div>
-                                          ))}
+                                          <div className="rv-heading-review-options">
+                                              {headingOptions.map((heading: any, optionIndex: number) => (
+                                                  <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
+                                                      <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
+                                                      <span>{headingPlainText(heading.text)}</span>
+                                                  </div>
+                                              ))}
+                                          </div>
                                       </aside>
                                       <div className="rv-review-match-list">
                                           <div className="rv-heading-review-title">Questions {firstNumber}-{lastNumber}</div>
                                           {headingQuestions.map((question: any, index: number) => {
                                               const state = headingState(question);
                                               const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                              const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                              const number = rvQuestionNumber(question);
                                               const paraLabel = headingPlainText(question.text).replace(/^paragraph\s+/i, '') || String.fromCharCode(65 + index);
                                               return <button key={question.id} type="button" onClick={() => setReviewActiveQuestionId(question.id)} className={`rv-review-match-row rv-heading-review-row ${selected.id === question.id ? 'is-selected' : ''}`}>
                                                   <span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span>Paragraph {paraLabel}</span></span>
-                                                  <span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.given}</strong></span>
-                                                  {!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}
+                                                  <span className="rv-heading-review-result">
+                                                      <span className={`rv-heading-pill ${tone}`}><span>Your</span><strong>{state.blank ? '-' : (state.givenId || state.given)}</strong></span>
+                                                      {!state.correct && <span className="rv-heading-pill correct"><span>Correct</span><strong>{state.expectedId || state.expected}</strong></span>}
+                                                  </span>
                                               </button>;
                                           })}
                                       </div>
                                   </div>
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
                                       {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
                               </section>;
                           }
                           if (rvIsInlineCompletion(q)) {
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   rvSectionOf(candidate) === rvActiveIdx
                                   && rvIsInlineCompletion(candidate)
                                   && rvCompletionContext(candidate) === rvCompletionContext(q)
@@ -9476,38 +9987,55 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           }
                           if (q.type === "MATCHING") {
                               const baseOptions = Array.isArray(q.options) && q.options.length ? q.options : [];
-                              const optionKey = JSON.stringify(baseOptions);
+                              const makeOptionCells = (rawOptions: any[]) => {
+                                  const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                                  return rawOptions.filter((option: any) => String(option ?? "").trim()).map((option: any, optionIndex: number) => ({
+                                      label: matchingOptionLabel(option, optionIndex),
+                                      value: matchingOptionValue(option, optionIndex, infoGrid),
+                                      text: cleanOptionAnswerText(option) || matchingOptionLabel(option, optionIndex),
+                                      infoGrid,
+                                  }));
+                              };
+                              const baseCells = makeOptionCells(baseOptions);
+                              const optionKey = JSON.stringify(baseCells.map(option => `${option.label}:${option.value}`));
+                              const matchingOptionsFor = (candidate: any) => makeOptionCells(Array.isArray(candidate?.options) && candidate.options.length ? candidate.options : baseOptions);
                               const isSameMatchingRun = (candidate: any) =>
                                   candidate?.type === "MATCHING"
                                   && rvSectionOf(candidate) === rvActiveIdx
-                                  && JSON.stringify((Array.isArray(candidate.options) && candidate.options.length ? candidate.options : baseOptions) || []) === optionKey;
-                              const alreadyRendered = i > 0 && isSameMatchingRun(reviewQuiz.quiz.questions[i - 1]);
+                                  && JSON.stringify(matchingOptionsFor(candidate).map(option => `${option.label}:${option.value}`)) === optionKey;
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some(isSameMatchingRun);
                               if (alreadyRendered) return null;
-                              const matchQuestions: any[] = [];
-                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameMatchingRun(reviewQuiz.quiz.questions[cursor]); cursor++) {
-                                  matchQuestions.push(reviewQuiz.quiz.questions[cursor]);
-                              }
-                              const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                              const seenMatchNumbers = new Set<string>();
+                              const matchQuestions: any[] = rvActiveQuestions.filter(isSameMatchingRun).filter((candidate: any) => {
+                                  const numberKey = String(rvQuestionNumber(candidate));
+                                  if (seenMatchNumbers.has(numberKey)) return false;
+                                  seenMatchNumbers.add(numberKey);
+                                  return true;
+                              });
+                              const optionCells = matchingOptionsFor(matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length) || q);
+                              const options = optionCells.map(option => option.value);
+                              const infoGrid = optionCells.every(option => option.infoGrid);
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
                               const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
                               const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
                               const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
                                   || matchQuestions[0];
-                              const renderGrid = <div style={{overflowX:'auto'}}><table className="idp-matching-table rv-idp-matching-text-table" style={{width:'100%', borderCollapse:'collapse'}}><thead><tr><th style={{textAlign:'left', minWidth:180}}>Question</th><th style={{textAlign:'left', minWidth:260}}>Answer</th></tr></thead><tbody>{matchQuestions.map((question:any) => {
+                              const questionColumnTitle = String(matchQuestions.find((candidate: any) => candidate.leftTitle)?.leftTitle || q.leftTitle || '').trim();
+                              const legendTitle = String(matchQuestions.find((candidate: any) => candidate.rightTitle)?.rightTitle || q.rightTitle || '').trim();
+                              const renderGrid = <div style={{overflowX:'auto'}}><div className="rv-idp-matching-grid-frame"><table className="rv-idp-matching-grid-table"><thead><tr><th className="rv-idp-matching-grid-question">{questionColumnTitle}</th>{optionCells.map(option => <th key={`rv-match-head-${option.label}`}>{option.label}</th>)}</tr></thead><tbody>{matchQuestions.map((question:any) => {
                                   const answer = reviewQuiz.result.answers?.[question.id];
-                                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                  const number = rvQuestionNumber(question);
                                   const optionCarrier = { ...question, options };
                                   const chosenText = resolveMatchingAnswerText(optionCarrier, answer);
                                   const correctText = resolveMatchingAnswerText(optionCarrier, question.correctAnswer);
-                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td><span style={{display:'inline-flex', minWidth:24, height:24, alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, marginRight:8, fontSize:12, fontWeight:800}}>{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td><td><div className="rv-idp-matching-text-options">{options.map((optionText:string, optionIndex:number) => {
-                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(optionText);
-                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(optionText);
+                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td className="rv-idp-matching-grid-question"><span className="rv-idp-matching-grid-number">{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td>{optionCells.map((option) => {
+                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(option.value);
+                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(option.value);
                                       const tone = correct ? 'correct' : chosen ? 'wrong' : '';
-                                      return <span key={`${question.id}-${optionIndex}`} className={`rv-idp-matching-text-option ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className="rv-idp-radio-dot" /><span>{optionText}</span></span>;
-                                      return <td key={optionIndex} style={{textAlign:'center', background:correct ? `${C.succ}16` : chosen ? `${C.err}12` : 'transparent'}}><span title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''} style={{display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:'50%', border:`2px solid ${correct ? C.succ : chosen ? C.err : C.border}`, color:correct ? C.succ : chosen ? C.err : C.sub, fontWeight:900}}>{correct ? '✓' : chosen ? '×' : ''}</span></td>;
-                                  })}</div></td></tr>;
-                              })}</tbody></table></div>;
+                                      return <td key={`${question.id}-${option.label}`} className={`rv-idp-matching-grid-choice ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className={`rv-idp-radio-dot ${tone}`} /></td>;
+                                  })}</tr>;
+                              })}</tbody></table></div>{!infoGrid && <div className="rv-idp-matching-feature-wrap">{legendTitle && <div className="rv-idp-matching-feature-title">{legendTitle}</div>}<table className="rv-idp-matching-feature-key"><tbody>{optionCells.map(option => <tr key={`rv-match-key-${option.label}`}><th>{option.label}</th><td>{option.text}</td></tr>)}</tbody></table></div>}</div>;
                               return <section key={`matching-review-${q.id}`} className="rv-completion-review">
                                   {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
                                   {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
@@ -9516,33 +10044,68 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       const optionCarrier = { ...selected, options };
                                       const selectedOk = isSingleQuestionCorrect(optionCarrier, answer);
                                       const selectedBlank = answer === undefined || answer === null || answer === "";
-                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
+                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
                                   })()}
+                              </section>;
+                          }
+                          if (q.type === "DRAG_DROP" && q.subType === "SENTENCE_ENDING_DRAG") {
+                              const optionKey = JSON.stringify((q.options || []).map((option: any) => cleanOptionAnswerText(option)));
+                              const isSameSentenceRun = (candidate: any) =>
+                                  candidate?.type === "DRAG_DROP"
+                                  && candidate?.subType === "SENTENCE_ENDING_DRAG"
+                                  && rvSectionOf(candidate) === rvActiveIdx
+                                  && JSON.stringify((candidate.options || []).map((option: any) => cleanOptionAnswerText(option))) === optionKey;
+                              if (rvActiveQuestions.slice(0, i).some(isSameSentenceRun)) return null;
+                              const sentenceQuestions = rvActiveQuestions.filter(isSameSentenceRun);
+                              const options = (sentenceQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || q.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                              const selected = sentenceQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
+                                  || sentenceQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
+                                  || sentenceQuestions[0];
+                              const selectedState = rvCompletionAnswer(selected);
+                              return <section key={`sentence-ending-review-${q.id}`} className="rv-completion-review">
+                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  <div className="idp-sentence-ending">
+                                      <div className="idp-sentence-ending-list">{sentenceQuestions.map((question:any) => {
+                                          const state = rvCompletionAnswer(question);
+                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
+                                          const number = rvQuestionNumber(question);
+                                          return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-flowchart-node ${selected.id===question.id?'is-selected':''}`} style={{display:'block',width:'100%',textAlign:'left',border:0,background:'transparent',padding:'0 0 11px',font:'inherit',cursor:'pointer',color:C.text}}>
+                                              <span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /> <span className={`rv-completion-badge rv-completion-${tone}`}>{number}. {state.blank?'No answer':state.given}</span>{!state.correct && <small style={{marginLeft:6,color:C.succ,fontWeight:800}}>Correct: {state.expected}</small>}
+                                          </button>;
+                                      })}</div>
+                                      <div className="rv-review-match-bank" style={{borderRadius:0,background:'#fff'}}><div className="rv-review-match-bank-title">Answer choices</div>{options.map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span>{option}</span></div>)}</div>
+                                  </div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
                               const isSameColumnRun = (candidate: any) => candidate?.type === "DRAG_DROP" && candidate?.subType === "COLUMN_DRAG" && rvSectionOf(candidate) === rvSectionOf(q);
                               // Some imported DOCX tests leave instruction/groupContext blank on
                               // individual rows. Their order is the reliable group boundary.
-                              if (i > 0 && isSameColumnRun(reviewQuiz.quiz.questions[i - 1])) return null;
-                              const dragQuestions: any[] = [];
-                              for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameColumnRun(reviewQuiz.quiz.questions[cursor]); cursor++) dragQuestions.push(reviewQuiz.quiz.questions[cursor]);
+                              if (rvActiveQuestions.slice(0, i).some(isSameColumnRun)) return null;
+                              const seenDragNumbers = new Set<string>();
+                              const dragQuestions: any[] = rvActiveQuestions.filter(isSameColumnRun).filter((candidate: any) => {
+                                  const numberKey = String(rvQuestionNumber(candidate));
+                                  if (seenDragNumbers.has(numberKey)) return false;
+                                  seenDragNumbers.add(numberKey);
+                                  return true;
+                              });
                               const selected = dragQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId) || dragQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct) || dragQuestions[0];
                               const selectedState = rvCompletionAnswer(selected);
                               return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
+                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=rvQuestionNumber(question); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
                               const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
                               if (alreadyRendered) return null;
-                              const flowQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const flowQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
                                   && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
                               );
@@ -9564,7 +10127,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
                                       {flowQuestions.map((question: any, index: number) => {
                                           const state = rvCompletionAnswer(question);
-                                          const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
+                                          const number = rvQuestionNumber(question);
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
                                           const label = state.blank ? 'No answer' : state.given;
                                           const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
@@ -9576,7 +10139,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       })}
                                   </div>
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
+                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
                                       {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
@@ -9584,9 +10147,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           }
                           if (q.type === "DIAGRAM_LABEL") {
                               const imageUrl = String((q as any).diagramImageUrl || "").trim();
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
                               if (alreadyRendered) return null;
-                              const diagramQuestions = reviewQuiz.quiz.questions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
+                              const diagramQuestions = rvActiveQuestions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
                               const source:any = diagramQuestions[0] || q;
                               const imageBounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
                               const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOXES")).toUpperCase();
@@ -9594,8 +10157,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                               const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
                               const boxes = source.diagramBoxes || {};
-                              const numberFor = (question:any,index:number) => getDiagramQuestionNumber(question,index,reviewQuiz.quiz.questions || []);
-                              const textBoxes = getDiagramTextBoxes(diagramQuestions,reviewQuiz.quiz.questions || []);
+                              const numberFor = (question:any,index:number) => getDiagramQuestionNumber(question,index,rvActiveQuestions);
+                              const textBoxes = getDiagramTextBoxes(diagramQuestions,rvActiveQuestions);
                               const questionByNumber = new Map(diagramQuestions.map((question:any,index:number)=>[numberFor(question,index),question]));
                               const boxFor = (question:any,index:number) => boxes[numberFor(question,index)] || (question.diagramBoxes || {})[numberFor(question,index)] || {x:50,y:16+index*(62/Math.max(1,diagramQuestions.length-1||1)),width:14,height:5};
                               const selected = diagramQuestions.find((candidate:any) => candidate.id === reviewActiveQuestionId) || diagramQuestions.find((candidate:any) => !rvCompletionAnswer(candidate).correct) || diagramQuestions[0];
@@ -9622,19 +10185,19 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           }
                           if (q.type === "MAP_DRAG") {
                               const mapUrl = String((q as any).mapImageUrl || "").trim();
-                              const alreadyRendered = reviewQuiz.quiz.questions.slice(0, i).some((candidate: any) =>
+                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
                                   && String(candidate.mapImageUrl || "").trim() === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               if (alreadyRendered) return null;
-                              const mapQuestions = reviewQuiz.quiz.questions.filter((candidate: any) =>
+                              const mapQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
                                   && String(candidate.mapImageUrl || "").trim() === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
-                                  || String(getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id));
+                                  || String(rvQuestionNumber(question));
                               const slots = (q as any).mapSlots || {};
                               const slotFor = (question: any, index: number) => slots[numberFor(question)] || (question as any).mapSlots?.[numberFor(question)] || {
                                   x: 50, y: 16 + index * (68 / Math.max(1, mapQuestions.length - 1 || 1)), width: 18, height: 7,
@@ -9662,6 +10225,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               </section>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
+                          if (!rvIsGroupedReviewQuestion(q) && rvGroupedReviewNumbers.has(String(rvQuestionNumber(q)))) return null;
                           if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
                           const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
                           const studentAns = multiOutcome
@@ -9868,6 +10432,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
+          const formatExamRemaining = (seconds: number) => {
+              const safe = Math.max(0, Math.floor(seconds || 0));
+              const mins = Math.floor(safe / 60);
+              const secs = safe % 60;
+              if (safe <= 300) return `${mins} minutes ${secs} seconds remaining`;
+              return `${mins} minutes remaining`;
+          };
 
           const getNavigatorGroups = () => {
               const qs = activeExam?.questions;
@@ -9925,14 +10496,21 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               if (id) setExamCurrentQId(id);
           };
 
-          // Viền vàng flash mượt đánh dấu câu vừa nhảy tới (cả input inline)
+          // Navigation only gives blue focus to answer gaps/dropzones. MCQ state
+          // is already shown by the footer question square, so no card outline.
           const flashQuestion = (id: string) => {
               const el = findQuestionEl(id);
               if (!el) return;
-              el.classList.remove('idp-q-focus-flash');
-              void el.offsetWidth; // ép reflow để chạy lại animation
-              el.classList.add('idp-q-focus-flash');
-              window.setTimeout(() => el.classList.remove('idp-q-focus-flash'), 1700);
+              const target = el.matches('[data-answer-input], .idp-dropzone, .idp-diagram-input, .idp-diagram-overlay-input')
+                  ? el
+                  : (el.querySelector('[data-answer-input], .idp-dropzone, .idp-diagram-input, .idp-diagram-overlay-input') as HTMLElement | null);
+              if (!target) return;
+              document.querySelectorAll('.exam-content-block .idp-current-gap').forEach((node) => node.classList.remove('idp-current-gap'));
+              target.classList.remove('idp-q-focus-flash');
+              target.classList.add('idp-current-gap');
+              void target.offsetWidth;
+              target.classList.add('idp-q-focus-flash');
+              window.setTimeout(() => target.classList.remove('idp-q-focus-flash'), 1700);
           };
 
           // Chuyển câu trước/sau theo DANH SÁCH CÂU của section đang xem (chạy cả inline input)
@@ -10046,11 +10624,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               const transfer = event?.dataTransfer;
               if (!transfer) return;
               transfer.effectAllowed = sourceQid ? "copyMove" : "copy";
-              transfer.setData("text/plain", heading.id);
+              transfer.setData("text/plain", heading.text || heading.id);
               transfer.setData("application/x-ielts-heading-id", heading.id);
               transfer.setData("application/x-ielts-heading-label", heading.text);
               if (sourceQid) transfer.setData("application/x-ielts-heading-source", sourceQid);
-              setCleanDragImage(event, `${heading.id}. ${heading.text}`);
+              setCleanDragImage(event, heading.text || heading.id);
           };
 
           const readDroppedHeading = (event: any) => {
@@ -10064,7 +10642,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const placeHeading = (qId: string | undefined, payload: { id: string; text: string; sourceQid: string }) => {
               if (!qId || !payload?.id) return;
               const heading = normalizeHeadingPayload(payload.id, payload.text, payload.sourceQid);
-              handleAnswerChange(qId, heading.id, "DRAG_DROP_HEADING");
+              handleAnswerChange(qId, heading.text || heading.id, "DRAG_DROP_HEADING");
               setHeadingLabelByQuestion((previous) => ({
                   ...previous,
                   [qId]: { id: heading.id, text: heading.text },
@@ -10214,11 +10792,16 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       (() => {
                                           const hasBlankInText = (q.text || "").includes("___") || (q.text || "").includes("…") || (q.text || "").includes("____");
                                           return hasBlankInText ? (
-                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
+                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
                                           ) : null;
                                       })()
                                   )}
-                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && (
+                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && examCurrentQId === q.id && (
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''} idp-current-gap`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Drag answer here"}>
+                                          {(examAnswers[q.id] as string) || firstGlobalIdx}
+                                      </span>
+                                  )}
+                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && examCurrentQId !== q.id && (
                                       <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Kéo đáp án thả vào đây"}>
                                           {(examAnswers[q.id] as string) || firstGlobalIdx}
                                       </span>
@@ -10228,7 +10811,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                           
                           <div style={{ marginLeft: (isFillBlank || isDragDrop) ? 0 : 40, marginTop: 8 }}>
                               {q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion && !isInjectedIntoContext && !isInlineInjected && !(q.text || "").includes("___") && !(q.text || "").includes("____") && (
-                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
+                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
                               )}
                               
                               {(q.type === "CHOICE" || isTFNGQuestion || isYNNGQuestion) && (
@@ -10278,7 +10861,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 if ((e.currentTarget as HTMLElement).querySelector('.idp-temp-selection, .student-highlight, .student-note-hl')?.contains(e.target)) return;
                                 const sel = window.getSelection();
                                 if (sel && sel.toString().trim().length > 0) return;
-                                handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length);
+                                handleAnswerChange(q.id, optIndex);
                             }}>
                             {/* Vùng chọn mở rộng ra cả dòng (kể cả text) — quét chữ để highlight vẫn được, chỉ bấm mới tính là chọn */}
                             <input
@@ -10286,7 +10869,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 id={optionId}
                                 name={`q_${q.id}`}
                                 checked={isSelected}
-                                onChange={() => { handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length); }}
+                                onChange={() => { handleAnswerChange(q.id, optIndex); }}
                                 className="idp-mcq-radio"
                             />
                             <StaticHtmlBlock tagName="span" className="highlightable-content idp-mcq-opt" dataField="options" dataQid={q.id} dataOptIndex={String(optIndex)} style={{ color: 'var(--etext)' }} html={renderSafeHTML(cleanOpt)} />
@@ -10382,23 +10965,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
                    onContextMenu={(e: any) => {
                        if (isPractice) return;
-                       if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
-                           e.preventDefault();
-                           const target = e.target as HTMLElement;
-                           const container = target.closest('.highlightable-content');
-                           
-                           target.outerHTML = target.innerHTML;
-                           
-                           if (container) {
-                               const field = container.getAttribute('data-field');
-                               const qId = container.getAttribute('data-qid');
-                               const optIndex = container.getAttribute('data-optindex');
-                               
-                               if (field) {
-                                   const cleanHTML = serializeHighlightHTML(container as HTMLElement);
-                                   setActiveExam(prev => syncHighlightState(prev, field, qId || "", cleanHTML, optIndex));
-                               }
-                           }
+                       if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
+                           openHighlightDeleteMenu(e, (e.target as HTMLElement).closest('.student-highlight') as HTMLElement);
                        } else {
                            e.preventDefault(); 
                        }
@@ -10520,11 +11088,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* ĐàFIX UI CHUẨN: Popup Highlight & Giao diện Tooltip Nhập Ghi Chú */
                       /* POPUP QUÉT CHỮ — sao chép Inspera: 2 nút NGANG [Note | Highlight], icon trên, chữ dưới, vạch chia dọc */
-                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; }
+                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; animation: idpPopupRise .18s cubic-bezier(.2,.82,.2,1) both; }
                       .idp-popup-menu::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.05)); }
                       .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
                       .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
+                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:188px; min-height:150px; border:1px solid #8a8f98; border-radius:8px; background:#fff; color:#2f3338; box-shadow:0 10px 24px rgba(0,0,0,.22); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-14px; left:50%; width:24px; height:24px; background:#fff; border-left:1px solid #8a8f98; border-top:1px solid #8a8f98; transform:translateX(-50%) rotate(45deg); }
+                      .idp-highlight-delete-menu button { position:relative; z-index:1; border:0; background:transparent; color:inherit; cursor:pointer; font:500 22px/1.1 Arial,sans-serif; display:grid; gap:6px; place-items:center; }
+                      .idp-highlight-delete-menu button:hover { color:#111; }
+                      @keyframes idpDeleteRise { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
                       
                       /* THANH AUDIO PRACTICE (trên nav bar) — tối giản IDP: track mảnh, thumb tròn đen, không màu mè */
                       .idp-audio-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 20px; background: var(--epanel); border-top: 1px solid var(--eborder); }
@@ -10554,8 +11127,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-note-link { background: none; border: none; cursor: pointer; font-size: 13px; font-weight: 600; color: #2563eb; padding: 6px 0 0 0; }
                       .idp-note-link:hover { text-decoration: underline; }
                       .idp-note-link.light { color: #fff; }
-                      .idp-note-input-modal { position: absolute; background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 999999; transform: translate(-50%, 10px); border: 1px solid #d1d5db; min-width: 250px; }
+                      .idp-note-input-modal { position: absolute; background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 999999; transform: translate(-50%, 10px); border: 1px solid #d1d5db; min-width: 250px; animation: idpNoteRise .2s cubic-bezier(.2,.82,.2,1) both; }
                       .idp-note-input-modal::before { content: ''; position: absolute; top: -8px; left: 50%; transform: translateX(-50%); border-width: 0 8px 8px; border-style: solid; border-color: transparent transparent #fff transparent; filter: drop-shadow(0 -2px 2px rgba(0,0,0,0.05)); }
+                      @keyframes idpPopupRise { from { opacity: 0; transform: translate(-50%, calc(-100% + 12px)); } to { opacity: 1; transform: translate(-50%, -100%); } }
+                      @keyframes idpNoteRise { from { opacity: 0; transform: translate(-50%, 24px); } to { opacity: 1; transform: translate(-50%, 10px); } }
+                      @media (prefers-reduced-motion: reduce) { .idp-popup-menu, .idp-note-input-modal, .idp-highlight-delete-menu { animation: none; } }
 
                       .idp-section-tab { flex: 1; text-align: center; padding: 12px 5px; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; color: var(--esub); position: relative; }
                       .idp-section-tab.active { border-bottom-color: var(--etext); color: var(--etext); font-weight: 900; background: var(--epanel); }
@@ -10570,6 +11146,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-content-block .highlightable-content .student-highlight, .exam-content-block .highlightable-content .student-highlight *, .exam-content-block .idp-q-text-inline .student-highlight, .exam-content-block .idp-q-text-inline .student-highlight * { background-color: var(--hlbg) !important; color: var(--hlfg) !important; cursor: pointer; }
                       .exam-content-block .highlightable-content .student-note-hl, .exam-content-block .highlightable-content .student-note-hl *, .exam-content-block .idp-q-text-inline .student-note-hl, .exam-content-block .idp-q-text-inline .student-note-hl * { background-color: var(--notebg) !important; color: var(--notefg) !important; cursor: pointer; }
+                      .exam-content-block .highlightable-content .student-note-hl .student-highlight, .exam-content-block .highlightable-content .student-note-hl .student-highlight *, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight * { background-color: #ff66dd !important; color: #000 !important; cursor: pointer; }
                       .exam-content-block .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection * { background-color: #b3d4fc !important; color: #000 !important; }
@@ -10651,7 +11228,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-footer-nav { position: relative; width: 100%; min-height: 52px; max-height: 40vh; background: #fff; border-top: 2px solid #ccc; display: flex; justify-content: space-between; align-items: stretch; z-index: 1000; flex-shrink: 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
                       .idp-nav-squares { display: flex; gap: 8px; padding: 0; flex: 1; align-items: flex-start; height: 100%; flex-wrap: wrap; }
                       /* NAV CHUẨN IELTS: số trần, đã trả lời = gạch chân xanh, câu hiện tại = khung xanh */
-                      .idp-nav-sq { min-width: 26px; height: 30px; padding: 3px 6px 0; border: none; border-top: 2px solid #cbd0d6; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: #1a1a1a; display: flex; justify-content: center; align-items: center; border-radius: 0; flex-shrink: 0; box-sizing: border-box; transition: 0.12s; }
+                      .idp-nav-sq { min-width: 26px; height: 30px; padding: 3px 6px 0; border: none; border-top: 2px solid #cbd0d6; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: #1a1a1a; display: flex; justify-content: center; align-items: center; border-radius: 0; flex-shrink: 0; box-sizing: border-box; transition: 0.12s; white-space: nowrap; }
+                      .idp-nav-sq.wide { min-width: 44px; }
                       .idp-nav-sq.ans { border-top: 2px solid #16a34a; }
                       .idp-nav-sq.cur { border: 1.5px solid #0a66c2; border-radius: 3px; color: #0a66c2; font-weight: 800; }
                       .idp-nav-sq.flagged { border-top: 2px solid #bf8700; color: #7a5200; }
@@ -10672,13 +11250,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
                       .highlight-flash { animation: flashYellow 1.5s; }
                       @keyframes flashYellow { 0%, 100% { background-color: transparent; } 50% { background-color: #fff3cd; } }
-                      /* Quầng vàng đánh dấu câu mũi tên vừa tới — nở quầng sáng mờ ảo rồi tan dần */
-                      .idp-q-focus-flash { animation: qFocusFlash 2.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards; border-radius: 8px; will-change: box-shadow, background-color; }
+                      .idp-current-gap { border-color:#0969da !important; outline:2px solid rgba(9,105,218,.22) !important; outline-offset:1px !important; }
+                      .idp-q-focus-flash { animation: qFocusFlash 1.4s cubic-bezier(0.22, 0.61, 0.36, 1) forwards; will-change: box-shadow, background-color; }
                       @keyframes qFocusFlash {
-                          0%   { box-shadow: 0 0 0 0 rgba(245,158,11,0), 0 0 0 0 rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
-                          14%  { box-shadow: 0 0 18px 6px rgba(245,158,11,0.45), 0 0 0 1px rgba(245,158,11,0.55); background-color: rgba(245,158,11,0.13); }
-                          45%  { box-shadow: 0 0 14px 5px rgba(245,158,11,0.26), 0 0 0 1px rgba(245,158,11,0.30); background-color: rgba(245,158,11,0.07); }
-                          100% { box-shadow: 0 0 26px 10px rgba(245,158,11,0), 0 0 0 1px rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
+                          0%   { box-shadow: 0 0 0 0 rgba(9,105,218,0); background-color: rgba(9,105,218,0); }
+                          20%  { box-shadow: 0 0 0 3px rgba(9,105,218,0.28); background-color: rgba(9,105,218,0.08); }
+                          100% { box-shadow: 0 0 0 0 rgba(9,105,218,0); background-color: rgba(9,105,218,0); }
                       }
                       
                       /* ĐàFIX: Tăng độ ưu tiên CSS (Specificity) cực đại để ghi đè luật transparent của hệ thống */
@@ -10709,26 +11286,34 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* Hình 3: Matching matrix table */
                       .idp-matching-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-                      .idp-matching-table th { background: #f4f5f7; border: 1px solid #ccc; padding: 8px 12px; text-align: center; font-weight: 700; color: #24292f; min-width: 42px; }
-                      .idp-matching-table td { border: 1px solid #ddd; padding: 10px 12px; vertical-align: middle; background: #fff; }
-                      .idp-matching-table td:first-child { background: #fafafa; font-size: 13px; }
-                      .idp-matching-table tbody tr:hover td { background: #f8f9ff; }
-                      .idp-matching-table input[type="radio"] { display: block; margin: 0 auto; width: 17px; height: 17px; cursor: pointer; accent-color: #0969da; }
-                      .idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
-                      .idp-matching-text-option { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid transparent; border-radius: 4px; background: #fff; color: #24292f; font-size: 13px; line-height: 1.35; cursor: pointer; }
-                      .idp-matching-text-option:hover { border-color: #b6d7ff; background: #f6faff; }
-                      .idp-matching-text-option.selected { border-color: #0969da; background: #eef6ff; }
-                      .idp-matching-text-option input[type="radio"] { margin: 1px 0 0; width: 16px; height: 16px; }
-                      .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
-                      .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
-                      .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
+                      .idp-matching-grid-frame { display:inline-block; min-width:min(100%, 620px); padding:18px 16px 22px; border:1px solid #555 !important; background:#fff !important; box-sizing:border-box; overflow-x:auto; }
+                      .idp-matching-grid-table { min-width: 560px; border: 0 !important; background: #fff !important; }
+                      .idp-matching-grid-table th { background: #fff !important; border: 1px solid #111 !important; border-top-color: transparent !important; padding: 9px 12px; text-align: center; font-weight: 700; color: #111827 !important; min-width: 44px; }
+                      .idp-matching-grid-table th:first-child { border-left-color: transparent !important; }
+                      .idp-matching-grid-table th:last-child { border-right-color: transparent !important; }
+                      .idp-matching-grid-table td { border: 1px solid #111 !important; padding: 11px 12px; vertical-align: middle; background: #fff !important; }
+                      .idp-matching-grid-table tr:last-child td { border-bottom-color: transparent !important; }
+                      .idp-matching-grid-table td:first-child { border-left-color: transparent !important; }
+                      .idp-matching-grid-table td:last-child { border-right-color: transparent !important; }
+                      .idp-matching-grid-table .idp-matching-grid-question { text-align: left; font-size: 14px; line-height: 1.35; }
+                      .idp-matching-grid-choice { width: 48px; text-align: center; padding: 8px 6px !important; }
+                      .idp-matching-grid-table tbody tr:hover td { background: #f8fafc; }
+                      .idp-matching-grid-table input[type="radio"] { display: block; margin: 0 auto; width: 14px; height: 14px; cursor: pointer; accent-color: #0969da; }
+                      .idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; font-size:14px; font-weight:800; flex-shrink:0; }
+                      .idp-matching-grid-number.cur { border-color:#0969da; color:#0969da; }
+                      .idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
+                      .idp-matching-feature-title { font-size:14px; font-weight:700; color:#111827; margin:0 0 6px; }
+                      .idp-matching-feature-key { width: auto; border-collapse: collapse; border: 0; background: #fff; font-size: 14px; }
+                      .idp-matching-feature-key th { min-width: 54px; padding: 9px 12px; border: 1px solid #333; background: #fff; text-align: left; font-weight: 800; color: #111827; }
+                      .idp-matching-feature-key td { min-width: 190px; padding: 9px 12px; border: 1px solid #333; background: #fff; color: #111827; }
                       /* Map / plan labelling: image and answer matrix stay visible together. */
                       .idp-map-plan-layout { display: grid; grid-template-columns: minmax(0, 1.26fr) minmax(500px, .94fr); gap: 28px; align-items: start; }
                       .idp-map-plan-visual { position: sticky; top: 10px; min-width: 0; border: 1px solid var(--eborder); background: var(--epanel); padding: 8px; box-sizing: border-box; }
                       .idp-map-plan-image { display: block; line-height: 0; }
                       .idp-map-plan-image img { display: block; width: 100% !important; max-width: 100% !important; height: auto !important; max-height: min(72vh, 760px); object-fit: contain; margin: 0 auto !important; }
-                      .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 1px solid var(--eborder); background: var(--ecard); }
+                      .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 0; background: transparent; }
                       .idp-map-plan-answers .idp-matching-table { min-width: 500px; margin: 0; }
+                      .idp-map-plan-answers .idp-matching-grid-frame { min-width: 500px; }
                       .idp-map-plan-answers .idp-matching-table th { min-width: 34px; padding: 8px 7px; }
                       .idp-map-plan-answers .idp-matching-table td { padding: 9px 7px; }
                       .idp-map-plan-answers .idp-matching-table th:first-child { min-width: 155px; }
@@ -10751,8 +11336,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
                       .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
                       /* Diagram labelling: one responsive coordinate canvas, with labels allowed outside the artwork. */
-                      .idp-diagram-wrap { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
-                      .idp-diagram-stage { position:relative; width:100%; min-width:720px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
+                      .idp-diagram-wrap { width:100%; max-width:min(100%, var(--idp-diagram-max, 860px)); margin:0 auto; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+                      .idp-diagram-stage { position:relative; width:100%; min-width:min(640px, 100%); aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
                       .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
                       .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
                       .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:#fff; color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
@@ -10772,7 +11357,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         .idp-map-drag-canvas { overflow:auto; }
                         .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
                         .idp-diagram-wrap { overflow:auto; }
-                        .idp-diagram-stage { min-width:660px; }
+                        .idp-diagram-stage { min-width:min(600px, 100%); }
                       }
 
                       /* Hình 6: Drag-drop 2-column layout */
@@ -10789,9 +11374,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wordbank-item.selected, .idp-match2-tag.selected { outline: 2px solid #0969da; outline-offset: 1px; background: #e6f0ff; }
 
                       /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
-                      .idp-wordbank { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; background: var(--epanel); border: 1px solid var(--eborder); border-radius: 8px; margin-bottom: 18px; }
-                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--einput); border: 1px solid var(--eborder); border-radius: 6px; cursor: grab; font-size: var(--efont); font-weight: 600; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
-                      .idp-wordbank-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+                      .idp-wordbank { display: flex; flex-wrap: wrap; align-items:center; gap: 7px 8px; padding: 0; background: transparent; border: 0; border-radius: 0; margin: 16px 0 0; }
+                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 4px 9px; background: var(--ecard); border: 1px solid #8a8f98; border-radius: 2px; cursor: grab; font-size: 13px; font-weight: 700; line-height:1.25; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
+                      .idp-wordbank-item:hover { box-shadow: 0 1px 5px rgba(0,0,0,0.12); }
                       .idp-wordbank-item:active { cursor: grabbing; }
                       .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
@@ -10812,6 +11397,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
+                      .idp-sentence-ending { max-width: 780px; }
+                      .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
+                      .idp-sentence-ending-row { display:block; font-size:var(--efont); line-height:1.45; color:var(--etext); }
+                      .idp-sentence-ending-row .idp-dropzone { display:block; margin:4px 0 0; min-height:24px; border:1.5px dashed #0a66c2; background:transparent; border-radius:2px; color:var(--etext); font-weight:800; }
+                      .idp-sentence-ending-row .idp-dropzone.filled { border-style:solid; background:rgba(9,105,218,.06); color:#0550ae; }
+                      .idp-sentence-ending-bank { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
+                      .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
+                      .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
+                      .mh-heading-title { margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
+                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
+                      .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
+                      .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
+                      .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; }
                       .idp-drag-summary { line-height: 2.2; }
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
                       .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
@@ -10819,6 +11417,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* Section header Listening */
                       .idp-section-header { font-size: 12px; font-weight: 700; color: #57606a; text-transform: uppercase; letter-spacing: 0.6px; padding: 0 0 8px 0; margin-bottom: 14px; border-bottom: 2px solid #d1d5db; display: flex; align-items: center; gap: 8px; }
+                      .idp-listening-section-card { width:100%; box-sizing:border-box; margin:0 0 16px; padding:14px 16px; border:1px solid #c9cdd3; border-radius:2px; background:#f3f4ef; color:#111827; }
+                      .idp-listening-section-card div { font-size:14px; font-weight:800; line-height:1.25; margin-bottom:5px; }
+                      .idp-listening-section-card span { display:block; font-size:13px; line-height:1.35; font-weight:500; color:#111827; }
 
                       /* Option letter badge */
                       .idp-opt-letter { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #bbb; font-size: 12px; font-weight: 700; color: #555; flex-shrink: 0; background: #f4f5f7; }
@@ -10883,7 +11484,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       }}>
                           {Array.from({ length: 40 }).map((_, i) => (
                               <div key={i} style={{ transform: 'rotate(-30deg)', fontSize: 15, fontWeight: 900, color: '#000', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                                  CONFIDENTIAL | ID: {students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}
+                                  CONFIDENTIAL | ID: {activeExam.realExamContext ? activeExam.realExamContext.testTakerId : `${students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | ${currentUser?.email}`}
                               </div>
                           ))}
                       </div>
@@ -11008,11 +11609,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                           <img src={examTheme === 'dark' || examTheme === 'yellow' ? "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts-white.svg" : "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg"} alt="IELTS" style={{ height: 26, userSelect: 'none', flexShrink: 0 }} />
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                              <div style={{ fontWeight: 800, fontSize: 16 }}>{students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}</div>
+                              <div style={{ fontWeight: 800, fontSize: 16 }}>{activeExam.realExamContext ? activeExam.realExamContext.testTakerId : `${students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | ${currentUser?.email}`}</div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                                   {(!isPreview) && (
                                       <div className={isTimeRunningOut ? 'pulse-fast' : ''} style={{ fontSize: 13, fontWeight: 600, color: isTimeRunningOut ? '#d32f2f' : 'var(--esub)' }}>
-                                          {Math.floor(examTimeLeft / 60)} minutes remaining
+                                          {formatExamRemaining(examTimeLeft)}
                                       </div>
                                   )}
                                   {/* STRICT: chỉ báo tĩnh "Audio is Playing" (không có thanh tua) */}
@@ -11077,16 +11678,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                  {/* Thanh chọn Passage trên đầu đã bỏ (đề thi IDP thật không có) — chuyển passage bằng thanh review dưới chân. */}
 
-          {/* BANNER PASSAGE FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
-          {(!String(activeExam.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (() => {
+          {/* BANNER SECTION FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
+          {(() => {
               const navG = navGroups[currentSectionIndex];
               const qStart = navG ? navG.startIndex + 1 : 1;
               const qEnd = navG ? navG.startIndex + navG.questions.length : qStart;
-              const label = activeExam.type === "Integrated" ? `PART ${currentSectionIndex + 1}` : `READING PASSAGE ${currentSectionIndex + 1}`;
+              const listeningBanner = String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+              const label = listeningBanner
+                  ? `Part ${currentSectionIndex + 1}`
+                  : (activeExam.type === "Integrated" ? `PART ${currentSectionIndex + 1}` : `READING PASSAGE ${currentSectionIndex + 1}`);
+              const copy = listeningBanner
+                  ? `Listen and answer questions ${qStart}–${qEnd}.`
+                  : `Read the text and answer questions ${qStart}–${qEnd}.`;
               return (
                   <div style={{ flex: 'none', background: 'var(--eboxbg)', padding: '12px 40px', textAlign: 'left', borderBottom: '1px solid var(--eborder)' }}>
                       <div style={{ fontWeight: 800, fontSize: 'calc(var(--efont) + 1px)', color: 'var(--etext)', letterSpacing: '0.01em' }}>{label}</div>
-                      <div style={{ fontSize: 'var(--efont)', color: 'var(--etext)', marginTop: 2 }}>Read the text and answer questions {qStart}–{qEnd}.</div>
+                      <div style={{ fontSize: 'var(--efont)', color: 'var(--etext)', marginTop: 2 }}>{copy}</div>
                   </div>
               );
           })()}
@@ -11095,10 +11702,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(70,70,70,.94) 0 59%, rgba(56,56,56,.94) 59% 100%)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <svg width="96" height="96" viewBox="0 0 24 24" fill="#ffffff" style={{ marginBottom: 18 }}><path d="M12 2.5a9 9 0 0 0-9 9v5.2A2.8 2.8 0 0 0 5.8 19.5h.7a1.5 1.5 0 0 0 1.5-1.5v-4.5a1.5 1.5 0 0 0-1.5-1.5h-1.5v-.5a7 7 0 0 1 14 0v.5h-1.5a1.5 1.5 0 0 0-1.5 1.5V18a1.5 1.5 0 0 0 1.5 1.5h.7A2.8 2.8 0 0 0 21 16.7v-5.2a9 9 0 0 0-9-9z"/></svg>
+                          <svg width="290" height="230" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '52vw' }}>
+                              <path d="M51 130C51 62 93 29 145 29s94 33 94 101" stroke="#fff" strokeWidth="48" strokeLinecap="round" />
+                              <path d="M57 130c8-30 33-42 59-34v79c-27 8-54-9-61-38l-4-7Z" fill="#fff" />
+                              <rect x="98" y="94" width="28" height="112" rx="7" fill="#fff" />
+                              <path d="M233 130c-8-30-33-42-59-34v79c27 8 54-9 61-38l4-7Z" fill="#fff" />
+                              <rect x="164" y="94" width="28" height="112" rx="7" fill="#fff" />
+                          </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
                                   ? 'You will be listening to an audio clip during this test. Practice mode: you may pause, rewind and replay the audio while answering the questions.'
@@ -11161,24 +11774,37 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               };
                               const lookupHeading = (value: any, question: any) => {
                                   const id = headingAnswerId(value);
+                                  const plain = stripHeadingPrefix(value);
                                   // Prefer this paragraph's exact option object; this guarantees
                                   // the slot mirrors the wording visible in the heading tray.
-                                  return getHeadingCatalog([question]).get(id)
+                                  const byId = getHeadingCatalog([question]).get(id)
                                       || sectionHeadingById.get(id)
                                       || headingById.get(id);
+                                  if (byId) return byId;
+                                  const allHeadings = [
+                                      ...Array.from(getHeadingCatalog([question]).values()),
+                                      ...Array.from(sectionHeadingById.values()),
+                                      ...Array.from(headingById.values()),
+                                  ];
+                                  return allHeadings.find((heading: any) =>
+                                      normalizeComparableAnswer(stripHeadingPrefix(heading.text)) === normalizeComparableAnswer(plain)
+                                  );
                               };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
                                       {headingQs.map((q: any, i: number) => {
                                           const letter = String.fromCharCode(65 + i);
+                                          const qNumber = getQuizQuestionNumber(activeExam!.questions || [], q.id);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
                                           const assignedHeading = lookupHeading(filled, q);
                                           const cachedHeading = headingLabelByQuestion[q.id];
-                                           const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
-                                               ? cachedHeading
-                                               : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
+                                           const displayedHeading = assignedHeading
+                                               ? assignedHeading
+                                               : (cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
+                                                  ? cachedHeading
+                                                  : { id: headingAnswerId(filled), text: stripHeadingPrefix(filled) || headingPlainText(cachedHeading?.text) });
                                           const assignedHeadingText = headingPlainText(displayedHeading.text) || resolveHeadingText(filled);
                                           return (
                                               <React.Fragment key={q.id}>
@@ -11195,9 +11821,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onClick={(e: any) => { e.stopPropagation(); if (isFilled) setSelectedHeadingDrag({ ...displayedHeading, sourceQid: q.id }); else if (selectedHeadingDrag) placeHeading(q.id, selectedHeadingDrag); }}
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); clearHeading(q.id); }}
                                                           title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
-                                                          style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{displayedHeading.id}{isFilled ? '.' : ''}</span>
-                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : 'Drag heading here'}</span>
+                                                          style={{flex:1, minHeight:26, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#0a66c2'}`, borderRadius:2, display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'2px 10px', background: isFilled ? 'rgba(26,115,232,0.04)' : 'transparent', cursor: isFilled ? 'pointer' : 'default', transition:'border-color .15s, background .15s'}}>
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:13,color:isFilled?'var(--etext)':'var(--etext)',lineHeight:1.35,fontWeight:isFilled?700:800,textAlign:'center'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : qNumber}</span>
                                                       </div>
                                                   </div>
                                               </div>
@@ -11265,18 +11890,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
                        onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
                        onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(String(zone.textContent || '').trim()); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                        onDoubleClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; const qId = zone?.dataset.qid; if (qId) { handleAnswerChange(qId, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); } }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
-                                  {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                                      <div className="idp-section-header">
-                                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM5 7.5a1.5 1.5 0 013 0v3a1.5 1.5 0 01-3 0v-3zm6 0a1.5 1.5 0 01-3 0v3a1.5 1.5 0 013 0v-3z" fill="#57606a"/></svg>
-                                          {activeExam.type === "Integrated" ? `Part ${currentSectionIndex + 1}` : `Part ${currentSectionIndex + 1}`}
-                                      </div>
-                                  )}
                                   {/* LỌC & RENDER CU HỎI */}
                   {(() => {
                       // ĐàFIX: Gom nhóm câu hỏi trực tiếp từ mảng questions của Tab hiện tại
@@ -11328,7 +11947,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   const tQ = activeExam?.questions?.[tIdx];
                                   if (!tQ) return match;
                                   // PHẢI giống HỆT input của System1 (App.template) để TRƯỚC == SAU highlight.
-                                  return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" data-answer-input="true" placeholder="${num}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${groupInputW}px" />`;
+                                  const currentClass = examCurrentQId === tQ.id ? " idp-current-gap" : "";
+                                  return `<input type="text" class="idp-inline-input inline-blank-input${currentClass}" data-qid="${tQ.id}" data-answer-input="true" placeholder="${num}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${groupInputW}px" />`;
                               });
                               // Flow-chart markers may be sanitized to -&gt; before this point; normalize every standalone marker.
                               const flowArrowHtml = '<img class="idp-flow-arrow" src="/flowchart-arrow-down.png" alt="" aria-hidden="true" />';
@@ -11356,7 +11976,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               }
                               return Array.from(ids);
                           })();
-                          const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
+                          const sentenceEndingPrompt = `${group.instruction || ""} ${group.context || ""}`.toLowerCase();
+                          const isSentenceEndingMatching = group.questions.every(q => q.type === "MATCHING")
+                              && (/(sentence|sentences).{0,80}ending/.test(sentenceEndingPrompt)
+                                  || sentenceEndingPrompt.includes("complete each sentence")
+                                  || sentenceEndingPrompt.includes("move it into the gap"));
+                          const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP") || isSentenceEndingMatching;
                           const isMapDragGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "MAP_DRAG");
                           const isDiagramLabelGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "DIAGRAM_LABEL");
                   const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
@@ -11380,7 +12005,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
                   let dragCleanInstruction = group.instruction || "";
                   dragLabels.forEach(l => { dragCleanInstruction = dragCleanInstruction.split(`<div>${l}</div>`).join(`<div class="idp-draglabel-hide">${l}</div>`); });
-                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING");
+                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
                   // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
                   const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
@@ -11402,12 +12027,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       return overall >= 0 ? overall + 1 : currentSectionQuestions.findIndex((x: any) => x.id === q.id) + 1;
                   }).filter((n: number) => n > 0);
                   const explicitDragSubType = String(group.questions.find((q: any) => q.subType)?.subType || "").toUpperCase();
+                  const isSentenceEndingDrag = isSentenceEndingMatching || explicitDragSubType === "SENTENCE_ENDING_DRAG";
                   const contextSlotLines = String(group.context || "").replace(/<\/?(?:div|p|br)[^>]*>/gi, "\n").split(/\n+/).map((line: string) => line.replace(/<[^>]+>/g, "").trim()).filter(Boolean);
                   const markedContextLines = contextSlotLines.filter((line: string) => /\[\d+\]/.test(line));
                   const hasSummarySlots = markedContextLines.length > 0
                       && groupQuestionNumbers.some((n: number) => new RegExp(`\\[${n}\\]`).test(group.context))
                       && !markedContextLines.every((line: string) => /^\[\d+\]/.test(line));
-                  const isWordBankDrag = isDragDropGroup && dragOptions.length > 0
+                  const isWordBankDrag = isDragDropGroup && !isSentenceEndingDrag && dragOptions.length > 0
                       && (explicitDragSubType === "SUMMARY_DRAG" || (!explicitDragSubType && hasSummarySlots));
                   const wordBankSummaryHtml = isWordBankDrag ? (() => {
                       let html = renderSafeHTML(group.context);
@@ -11418,7 +12044,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const val = examAnswers[tQ.id];
                           const filled = val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0);
                           const disp = filled ? String(val) : num;
-                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
+                          const currentClass = examCurrentQId === tQ.id ? ' idp-current-gap' : '';
+                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}${currentClass}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
                       });
                       return html;
                   })() : "";
@@ -11499,7 +12126,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           <span className="idp-flowchart-number">{qGlobalIdx}</span>
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
                                            {isDragFlow ? <span
-                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''}`}
+                                              className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
@@ -11537,49 +12164,111 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         );
                     };
 
-                    const renderMatchingTable = () => {
-                       const matchingOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                   const renderMatchingTable = () => {
+                       const rawOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).filter((option: any) => String(option ?? "").trim());
+                       const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                       const questionColumnTitle = String(group.questions.find((item: any) => item.leftTitle)?.leftTitle || "").trim();
+                       const legendTitle = String(group.questions.find((item: any) => item.rightTitle)?.rightTitle || "").trim();
+                       const optionCells = rawOptions.map((option: any, index: number) => ({
+                           label: matchingOptionLabel(option, index),
+                           value: matchingOptionValue(option, index, infoGrid),
+                           text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                       }));
                        return (
                        <>
-                           <table className="idp-matching-table">
-                               <thead>
-                                   <tr>
-                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 200, padding: '8px 12px'}}>Question</th>
-                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 260, padding: '8px 12px'}}>Answer</th>
-                                   </tr>
-                               </thead>
-                               <tbody>
-                                   {group.questions.map((q) => {
+                           <div className="idp-matching-grid-frame">
+                               <table className="idp-matching-table idp-matching-grid-table">
+                                   <thead>
+                                       <tr>
+                                           <th style={{textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 260}}>{questionColumnTitle}</th>
+                                           {optionCells.map((option) => <th key={`match-head-${option.label}`}>{option.label}</th>)}
+                                       </tr>
+                                   </thead>
+                                   <tbody>
+                                       {group.questions.map((q) => {
+                                           const qGlobalIdx = getQuizQuestionNumber(activeExam.questions || [], q.id);
+                                           const optionCarrier = { ...q, options: optionCells.map(option => option.value) };
+                                           const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
+                                           const isCurrent = examCurrentQId === q.id;
+                                           return (
+                                               <tr id={`question-${q.id}`} key={q.id}>
+                                                   <td className="idp-matching-grid-question">
+                                                       <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+                                                           <span className={`idp-matching-grid-number ${isCurrent ? 'cur' : ''}`}>{qGlobalIdx}</span>
+                                                           <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                                       </div>
+                                                   </td>
+                                                   {optionCells.map((option) => {
+                                                       const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(option.value);
+                                                       return (
+                                                           <td key={`${q.id}-${option.label}`} className="idp-matching-grid-choice">
+                                                               <input type="radio" aria-label={`Question ${qGlobalIdx}, ${option.label}`} checked={checked} onChange={() => handleAnswerChange(q.id, option.value, "MATCHING")} />
+                                                           </td>
+                                                       );
+                                                   })}
+                                               </tr>
+                                           );
+                                       })}
+                                   </tbody>
+                               </table>
+                           </div>
+                           {!infoGrid && optionCells.length > 0 && (
+                               <div className="idp-matching-feature-wrap">
+                                   {legendTitle && <div className="idp-matching-feature-title">{legendTitle}</div>}
+                                   <table className="idp-matching-feature-key" aria-label={legendTitle || "Matching answer key"}>
+                                       <tbody>
+                                           {optionCells.map((option) => (
+                                               <tr key={`match-key-${option.label}`}>
+                                                   <th>{option.label}</th>
+                                                   <td>{option.text}</td>
+                                               </tr>
+                                           ))}
+                                       </tbody>
+                                   </table>
+                               </div>
+                           )}
+                       </>
+                       );
+                   };
+
+                   const renderSentenceEndingDrag = () => {
+                       const usedValues = group.questions.map((question: any) => resolveMatchingAnswerText({ ...question, options: dragOptions }, examAnswers[question.id])).filter(Boolean);
+                       const bankWords = dragOptions.filter((option: string) => !usedValues.some((value: string) => normalizeComparableAnswer(value) === normalizeComparableAnswer(option)));
+                       return (
+                           <div className="idp-sentence-ending">
+                               <div className="idp-sentence-ending-list">
+                                   {group.questions.map((q: any) => {
                                        const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
-                                       const optionCarrier = { ...q, options: matchingOptions };
-                                       const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
+                                       const rawValue = examAnswers[q.id] as string;
+                                       const val = rawValue ? resolveMatchingAnswerText({ ...q, options: dragOptions }, rawValue) : "";
                                        return (
-                                           <tr id={`question-${q.id}`} key={q.id}>
-                                               <td style={{ verticalAlign: 'middle' }}>
-                                                   <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
-                                                       <span style={{border: '1px solid #ccc', padding: '2px 6px', fontSize: 12, background: '#fff', borderRadius: 2, flexShrink: 0}}>{qGlobalIdx}</span>
-                                                       <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
-                                                   </div>
-                                               </td>
-                                               <td style={{background: '#fff', textAlign: 'left', verticalAlign: 'middle'}}>
-                                                   <div className="idp-matching-text-options">
-                                                       {matchingOptions.map((optionText: string, i: number) => {
-                                                           const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(optionText);
-                                                           return (
-                                                               <label key={`${q.id}-${i}`} className={`idp-matching-text-option ${checked ? 'selected' : ''}`}>
-                                                                   <input type="radio" aria-label={`Question ${qGlobalIdx}, ${optionText}`} checked={checked} onChange={() => { handleAnswerChange(q.id, optionText, "MATCHING"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} />
-                                                                   <span>{optionText}</span>
-                                                               </label>
-                                                           );
-                                                       })}
-                                                   </div>
-                                               </td>
-                                           </tr>
+                                           <div key={q.id} id={`question-${q.id}`} className="idp-sentence-ending-row">
+                                               <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                               <span
+                                                   className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                   data-qid={q.id}
+                                                   draggable={!!val}
+                                                   style={{minWidth: groupZoneW}}
+                                                   onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                   onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                                   onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                                   onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                   onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                               >{val || qGlobalIdx}</span>
+                                           </div>
                                        );
                                    })}
-                               </tbody>
-                           </table>
-                       </>
+                               </div>
+                               <div className="idp-sentence-ending-bank">
+                                   {bankWords.map((opt: string, idx: number) => (
+                                       <div key={`${opt}-${idx}`} className={`idp-sentence-ending-option ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
+                                           onClick={() => selectBankAnswer(String(opt))}
+                                           onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
+                                           {opt}
+                                       </div>
+                                   ))}
+                               </div>
+                           </div>
                        );
                    };
 
@@ -11650,6 +12339,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const isOverlayDiagram = imageMode === "OVERLAY";
                        const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
+                       const diagramMaxWidth = Math.max(520, Math.min(1180, Number(source.diagramMaxWidth || 860) || 860));
                        // TEXT_BOXES coordinates are always percentages of the raw image, never
                        // of an inferred canvas. Builder and exam therefore share one geometry.
                        const letDiagramImageDefineAspect = isFullCanvasDiagram;
@@ -11672,16 +12362,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const renderGap = (number: string, key: string) => {
                            const question = questionByNumber.get(number);
                            if (!question) return <span key={key}>[{number}]</span>;
-                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
+                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
                        };
                        const renderBoxText = (box: DiagramTextBox) => toDiagramHtml(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
                            const marker = part.match(/^\[(\d+)\]$/);
                            return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <StaticHtmlBlock key={`${box.id}-text-${index}`} tagName="span" className="highlightable-content" dataField={`diagramTextBoxes:${box.id}:${index}`} dataQid={source.id} html={sanitizeRichHtml(part)} />;
                        });
-                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
+                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
                                {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
-                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
+                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
                    };
@@ -11705,6 +12395,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           {/* WORD-BANK KÉO-THẢ (chuẩn IELTS Mate): lưới từ phía trên + tóm tắt có ô thả inline */}
                           {isWordBankDrag && (
                               <div style={{marginBottom: 20}}>
+                                  <StaticHtmlBlock className="idp-context-box idp-drag-summary highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}} html={wordBankSummaryHtml} />
                                   <div className="idp-wordbank">
                                       {dragOptions.map((opt: string, idx: number) => {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
@@ -11717,12 +12408,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           );
                                       })}
                                   </div>
-                                  <StaticHtmlBlock className="idp-context-box idp-drag-summary highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}} html={wordBankSummaryHtml} />
                               </div>
                           )}
 
                           {isDiagramLabelGroup ? renderDiagramLabels() : isMapDragGroup ? renderMapDrag() : isWordBankDrag ? null : isFlowChartGroup ? (
                               renderFlowChart()
+                          ) : isSentenceEndingDrag && dragOptions.length > 0 ? (
+                              renderSentenceEndingDrag()
                           ) : isMatchingGroup && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
                                   <div className="idp-map-plan-layout">
@@ -11738,11 +12430,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               )
                           ) : isDragDropHeadingGroup ? (
                                                       (() => {
-                                                        const usedIds = new Set(group.questions.map((q: any) => normalizeHeadingId(examAnswers[q.id])).filter(Boolean));
+                                                        const usedIds = new Set(group.questions.map((q: any) => {
+                                                            const meta = resolveHeadingAnswerMeta({ ...q, options: headingOptions }, examAnswers[q.id]);
+                                                            return meta.id;
+                                                        }).filter(Boolean));
+                                                        const headingListTitle = String(group.questions.find((q: any) => q.rightTitle)?.rightTitle || "List of Headings").trim();
                                                         return (
                                                           <div className="mh-heading-tray notranslate" translate="no" style={{display:'flex', flexDirection:'column', gap:0}}>
                                                             <div style={{marginBottom:18}}>
-                                                              <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
+                                                              <div className="mh-heading-title">{headingListTitle}</div>
                                                               {headingOptions.map((opt: any, oIdx: number) => {
                                                                 const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
                                                                   ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
@@ -11752,22 +12448,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 const isUsed = usedIds.has(optId);
                                                                 return (
                                                                   <div key={`heading-option-${optId}`}
-                                                                    className="notranslate"
+                                                                    className={`mh-heading-option notranslate ${isUsed ? 'is-used' : ''} ${selectedHeadingDrag?.id === optId ? 'selected' : ''}`}
                                                                     translate="no"
                                                                     data-heading-id={optId}
                                                                     data-heading-label={headingPlainText(optContent)}
                                                                     draggable={!isUsed}
                                                                     onClick={() => { if (!isUsed) setSelectedHeadingDrag({ id: optId, text: headingPlainText(optContent), sourceQid: '' }); }}
-                                                                    onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}
-                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedHeadingDrag?.id === optId ? '2px solid var(--eblue)' : 'none'}}>
-                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
-                                                                    <span style={{fontStyle:'italic',fontWeight:800,fontSize:13,color:'var(--eblue)',minWidth:24,flexShrink:0}}>{optId}.</span>
-                                                                    <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} style={{flex:1,fontSize:13,lineHeight:1.45,color:'var(--etext)'}} />
+                                                                    onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}>
+                                                                    <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} />
                                                                   </div>
                                                                 );
                                                               })}
                                                             </div>
-                                                            <div style={{fontSize:11.5, color:'var(--esub)', fontStyle:'italic', marginTop:4, lineHeight:1.5}}>Drag each heading to the box above its matching paragraph in the passage.</div>
                                                           </div>
                                                         );
                                                       })()
@@ -11788,7 +12480,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
@@ -11897,7 +12589,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                      const isFlagged = qIds.some((id: string) => flaggedQuestions?.includes(id));
                                                      const isCur = qIds.includes(curId);
                                                      return (
-                                                         <button key={qIds[0]} className={`idp-nav-sq ${isAns ? 'ans' : ''} ${isFlagged ? 'flagged' : ''} ${isCur ? 'cur' : ''}`}
+                                                         <button key={qIds[0]} className={`idp-nav-sq ${numberLabel.length > 2 ? 'wide' : ''} ${isAns ? 'ans' : ''} ${isFlagged ? 'flagged' : ''} ${isCur ? 'cur' : ''}`}
                                                              onClick={() => {
                                                                  setExamCurrentQId(qIds[0]);
                                                                  const el = findQuestionEl(qIds[0]);
@@ -11917,11 +12609,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          })}
                      </div>
 
-                     <div style={{ display: 'flex', alignItems: 'stretch', flex: 'none', borderLeft: '1px solid var(--eborder)', background: 'var(--ebg)', padding: 0 }}>
-                         <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}>
-                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                         </button>
-                     </div>
+                     {!activeExam.realExamContext && (
+                         <div style={{ display: 'flex', alignItems: 'stretch', flex: 'none', borderLeft: '1px solid var(--eborder)', background: 'var(--ebg)', padding: 0 }}>
+                             <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}>
+                                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                             </button>
+                         </div>
+                     )}
                  </div>
 
                  {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
@@ -11936,6 +12630,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              {/* Icon Inspera 16x16: con trỏ chữ I + vệt highlight dưới chân */}
                              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M6.9 1.5c.9 0 1.3.3 1.6.7.3-.4.7-.7 1.6-.7v1.2c-.7 0-1 .35-1 1v5.6c0 .65.3 1 1 1v1.2c-.9 0-1.3-.3-1.6-.7-.3.4-.7.7-1.6.7v-1.2c.7 0 1-.35 1-1V3.7c0-.65-.3-1-1-1V1.5z"/><rect x="3" y="13" width="10" height="2.2" rx="0.4"/></svg>
                              Highlight
+                         </button>
+                     </div>
+                 )}
+
+                 {highlightDeleteMenu && (
+                     <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
+                         <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
+                             <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+                             <span>Delete<br />Highlight</span>
                          </button>
                      </div>
                  )}
@@ -12190,6 +12893,176 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               );
           }
 
+  if (userRole === "STUDENT" && realExamSession && !activeExam && !pendingExamState && !reviewQuiz) {
+    const pkg = realExamPackages.find(item => item.id === realExamSession.packageId);
+    const exams = packageQuizzes(pkg);
+    const completed = new Set(realExamSession.completedQuizIds || []);
+    const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
+    const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
+    const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
+      ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
+      : `${minutes} minutes`;
+    const finishAndLeave = () => {
+      setRealExamSession(null);
+      persistRealExamSession(null);
+      setPortalTab("home");
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+    const renderRealExamTopBar = () => (
+      <header className="real-exam-top">
+        <div className="real-exam-brand">
+          <img src="https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg" alt="IELTS" />
+          <span>{realExamSession.testTakerId}</span>
+        </div>
+        <div className="real-exam-icons" aria-hidden="true">
+          <span className="real-exam-wifi"><span></span></span>
+          <span className="real-exam-bell"></span>
+          <span className="real-exam-menu"></span>
+        </div>
+      </header>
+    );
+    const renderRealExamBottomBar = () => (
+      <footer className="real-exam-bottom">
+        <span className="real-exam-assessment"></span>
+        <div className="real-exam-bottom-icons">
+          <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
+          <span className="real-exam-battery"></span>
+          <span className="real-exam-wifi small"><span></span></span>
+          <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMuted(value => !value)} title="Audio">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>{realExamAudioMuted ? <><line x1="19" y1="9" x2="15" y2="13"/><line x1="15" y1="9" x2="19" y2="13"/></> : <path d="M15.5 8.5a5 5 0 0 1 0 7"/>}</svg>
+          </button>
+        </div>
+      </footer>
+    );
+    if (realExamInstructionGate && pkg && realExamInstructionGate.packageId === pkg.id) {
+      return (
+        <div className="real-exam-shell">
+          <style>{`
+            .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+            .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
+            .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
+            .real-exam-brand img{height:26px;display:block}
+            .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+            .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
+            .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
+            .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
+            .real-exam-wifi.small{transform:scale(.74);transform-origin:center}
+            .real-exam-bell{width:17px;height:19px;border:2px solid currentColor;border-bottom:0;border-radius:10px 10px 4px 4px;position:relative;display:inline-block}
+            .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
+            .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
+            .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
+            .real-exam-main{flex:1;overflow:auto;padding:26px 18px 78px}
+            .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
+            .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+            .real-exam-video-wrap{width:min(820px,calc(100vw - 48px));margin:0 auto;border:1px solid #b8b8b8;border-radius:4px;background:#fff;padding:20px;box-sizing:border-box}
+            .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#111;overflow:hidden}
+            .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+            .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
+            .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
+            .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+            .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
+            .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
+            .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
+            .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
+            .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
+            .real-exam-audio.is-muted{background:#fff;color:#333}
+            .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
+          `}</style>
+          {renderRealExamTopBar()}
+          <main className="real-exam-main">
+            <section className="real-exam-video-wrap">
+              <h1 style={{margin:"0 0 10px",fontSize:22,lineHeight:1.25}}>{realExamInstructionGate.skill} test information</h1>
+              <p style={{margin:"0 0 16px",fontSize:14,lineHeight:1.45}}>Watch the official IELTS information video to the end, then confirm to enter the test.</p>
+              <div className="real-exam-video-frame"><div id="real-exam-youtube-player" /></div>
+              <button type="button" className="real-exam-start" disabled={!realExamInstructionGate.ready} onClick={confirmRealExamInstructionGate} style={{marginTop:18}}>
+                Confirm and start {realExamInstructionGate.skill}
+              </button>
+            </section>
+          </main>
+          {renderRealExamBottomBar()}
+        </div>
+      );
+    }
+    return (
+      <div className="real-exam-shell">
+        <style>{`
+          .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+          .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
+          .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
+          .real-exam-brand img{height:26px;display:block}
+          .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+          .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
+          .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
+          .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
+          .real-exam-wifi.small{transform:scale(.74);transform-origin:center}
+          .real-exam-bell{width:17px;height:19px;border:2px solid currentColor;border-bottom:0;border-radius:10px 10px 4px 4px;position:relative;display:inline-block}
+          .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
+          .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
+          .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
+          .real-exam-main{flex:1;overflow:auto;padding:18px 18px 78px}
+          .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
+          .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+          .real-exam-check{color:#0b7f22;font-size:24px;font-weight:900}
+          .real-exam-test{padding:18px 20px 20px}
+          .real-exam-test h2{margin:0 0 18px;font-size:22px;line-height:1.15}
+          .real-exam-status{margin:0 0 20px;font-size:14px;font-weight:800;color:#b00020}
+          .real-exam-status.done{color:#0b7f22}
+          .real-exam-timing{margin:0 0 20px;font-size:14px}
+          .real-exam-info{height:52px;border:1px solid #c6c6c6;border-radius:2px;display:flex;align-items:center;padding:0 14px;margin:0 0 14px;gap:12px;box-sizing:border-box;font-size:14px}
+          .real-exam-info b{font-size:20px;line-height:1}
+          .real-exam-info span:last-child{color:#0b7f22;margin-left:4px}
+          .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
+          .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
+          .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+          .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
+          .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
+          .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
+          .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
+          .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
+          .real-exam-audio.is-muted{background:#fff;color:#333}
+          .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
+        `}</style>
+        {globalStyles}
+        {renderRealExamTopBar()}
+        <main className="real-exam-main">
+          {!pkg ? (
+            <section className="real-exam-card" style={{ padding: 24 }}>
+              <h1 style={{ margin: "0 0 10px", fontSize: 24 }}>Package unavailable</h1>
+              <p style={{ margin: "0 0 18px", color: "#4b5563" }}>This real exam package is no longer available.</p>
+              <button onClick={finishAndLeave} style={{ border: "1px solid #111827", background: "#111827", color: "#fff", padding: "10px 18px", fontWeight: 800, cursor: "pointer" }}>Return to dashboard</button>
+            </section>
+          ) : (
+            <>
+              <section className="real-exam-card">
+                <div className="real-exam-card-head">
+                  <span>Pre-test checks</span>
+                  <span className="real-exam-check">✓</span>
+                </div>
+              </section>
+              {exams.map((quiz) => {
+                  const quizDone = completed.has(quiz.id);
+                  const isNext = quiz.id === nextQuizId;
+                  const skill = realExamSkillLabel(quiz);
+                  return (
+                    <section key={quiz.id} className="real-exam-card real-exam-test">
+                      <h2>{skill}</h2>
+                      <p className={`real-exam-status ${quizDone ? "done" : ""}`}>{quizDone ? "Completed" : "Not completed"}</p>
+                      <p className="real-exam-timing">Timing: {formatRealExamTiming(Number(quiz.timeLimit) || 0)}</p>
+                      {isNext && !quizDone && <div className="real-exam-info"><b>⌄</b><span>Test information.</span><span>Confirmed</span></div>}
+                      <button className="real-exam-start" disabled={!isNext || quizDone} onClick={() => startRealExamPackageQuiz(pkg, quiz.id)}>
+                        <span>➜</span> Start {skill}
+                      </button>
+                    </section>
+                  );
+                })}
+            </>
+          )}
+        </main>
+        {renderRealExamBottomBar()}
+      </div>
+    );
+  }
+
       // ==========================================
       // VIEW: STUDENT DASHBOARD
       // ==========================================
@@ -12415,7 +13288,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     };
 
     const myHistory = history.filter(h => h.studentId === me.id);
-    const myQuizResults = quizResults.filter(r => r.studentId === me.id);
+    const myQuizResults = quizResults.filter(r => r.studentId === me.id && !r.hiddenFromStudent);
     // Final UI guard: newest cards stay at the top even if a legacy/server snapshot arrives
     // in Firestore document-ID order (oldest first).
     const vocabCards = newestVocabFirst(Array.isArray(me.vocabNotebook) ? me.vocabNotebook : []);
@@ -12448,11 +13321,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const myTopicAssignments = topicAssignments.filter(assignment =>
       assignment.audience !== "SPECIFIC" || (assignment.targetStudentIds || []).includes(me.id)
     );
+    const myRealExamPackages = realExamPackages.filter((pkg: RealExamPackage) => isPackageVisibleToStudent(pkg, me));
+    const realExamSourceTestIds = new Set(myRealExamPackages.flatMap((pkg: RealExamPackage) => pkg.quizIds || []));
     // A test used as a gated Quest node must not also appear as a free-standing
     // exam card. Otherwise a student could bypass the sequence and see its review.
     const questSourceTestIds = new Set(myTopicAssignments.flatMap(assignment => assignment.nodes.map(node => node.testId)));
     const activeQuizzes = quizzes.filter(q => {
       if (!q.active || questSourceTestIds.has(q.id)) return false;
+      if (realExamSourceTestIds.has(q.id)) return false;
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
@@ -13365,7 +14241,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
             <div style={{display: 'flex', gap: 8, marginTop: 14}}>
               {([
-                { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length },
+                { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length + myRealExamPackages.length },
                 { k: 'results', label: t('exam_tab_results'), n: myQuizResults.filter(Boolean).length },
               ] as const).map(sb => {
                 const on = examRoomTab === sb.k;
@@ -13376,6 +14252,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 );
               })}
             </div>
+            {examRoomTab === "available" && myRealExamPackages.length > 0 && (
+              <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                {myRealExamPackages.map((pkg: RealExamPackage) => {
+                  const exams = packageQuizzes(pkg);
+                  return (
+                    <div key={pkg.id} style={{ background: "#fff", border: "1px solid #c9cdd3", borderLeft: "4px solid #d71920", borderRadius: 2, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 1.1, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Real exam package</div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pkg.title} {pkg.passcode && <Ico name="lock" size={13} color="#6b7280" />}</div>
+                        <div style={{ fontSize: 12, color: "#4b5563", marginTop: 4 }}>{pkg.mode === "LRW" ? "Listening · Reading · Writing" : "Listening · Reading"} · {exams.length} tests · hidden results</div>
+                      </div>
+                      <button onClick={() => startRealExamPackage(pkg)} style={{ background: "#111827", color: "#fff", border: "1px solid #111827", borderRadius: 2, padding: "9px 16px", fontWeight: 900, cursor: "pointer" }}>Enter package</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {examRoomTab === "available" && (
             <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
               {activeQuizzes.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
@@ -13453,7 +14346,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )
               })}
-              {activeQuizzes.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
+              {activeQuizzes.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
             </div>
             )}
 
@@ -13967,7 +14860,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 const builderGroups: any[] = [];
                 for (let i = 0; i < qs.length; i++) {
                     const q = qs[i];
-                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG' || q.type === 'DIAGRAM_LABEL') {
+                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG' || q.type === 'DIAGRAM_LABEL') {
                         let j = i + 1;
                         const sharedQs = [q];
                         // FIX "phân thân": chỉ gộp khi CÙNG groupContext + instruction (khớp logic đề thi),
@@ -13977,7 +14870,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                && (qs[j].instruction || "") === (q.instruction || "")
                                && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))
                                && (q.type !== 'DIAGRAM_LABEL' || String(qs[j].diagramImageUrl || '') === String(q.diagramImageUrl || ''))) {
-                            if (q.type === 'CHOICE_MULTIPLE' && JSON.stringify(qs[j].options) !== JSON.stringify(q.options)) break;
+                            if ((q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING') && JSON.stringify(qs[j].options || []) !== JSON.stringify(q.options || [])) break;
                             sharedQs.push(qs[j]);
                             j++;
                         }
@@ -14392,7 +15285,57 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         </div>
 
                                         {/* NỘI DUNG CHÍNH DỰA THEO TYPE */}
-                                        {grp.groupType === 'DRAG_DROP_HEADING' ? (() => {
+                                        {grp.groupType === 'MATCHING' ? (() => {
+                                            const rawOptions = ((q.options || []) as any[]).map((option: any) => String(option ?? "").trim()).filter(Boolean);
+                                            const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                                            const optionCells = rawOptions.map((option: any, index: number) => ({
+                                                label: matchingOptionLabel(option, index),
+                                                value: matchingOptionValue(option, index, infoGrid),
+                                                text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                                            }));
+                                            const optionValues = optionCells.map(option => option.value);
+                                            const writeOptions = (raw: string) => {
+                                                const options = raw.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+                                                updateGroup((qItem: any) => ({ ...qItem, options }));
+                                            };
+                                            return <div style={{display: 'grid', gap: 18}}>
+                                                <div style={{background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '18px 20px'}}>
+                                                    <div style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="link" size={13} />Matching grid titles</div>
+                                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12}}>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Table left title
+                                                            <input value={q.leftTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, leftTitle: e.target.value}))} placeholder="Optional" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Legend title
+                                                            <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Optional" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.15fr) minmax(250px, .85fr)', gap:18, alignItems:'start'}}>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <div style={{...ebEyebrow, marginBottom:14, display:'flex'}}><Ico name="key" size={13} />Questions and correct answers</div>
+                                                        <div style={{display:'grid', gap:10}}>
+                                                            {grp.questions.map((qItem:any, offset:number) => {
+                                                                const qNo = getQuizQuestionNumber(editingQuiz.questions || [], qItem.id) || qIndex + offset + 1;
+                                                                const currentValue = resolveMatchingAnswerText({ ...qItem, options: optionValues }, qItem.correctAnswer);
+                                                                return (
+                                                                    <div key={qItem.id} style={{display:'grid', gridTemplateColumns:'46px minmax(0, 1fr) minmax(190px, .45fr)', gap:8, alignItems:'center'}}>
+                                                                        <span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>#{qNo}</span>
+                                                                        <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,text:e.target.value}:qIt)} placeholder="Question text" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} />
+                                                                        <select value={currentValue || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,correctAnswer:e.target.value}:qIt)} style={{padding:'9px 8px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}}>
+                                                                            <option value="">Correct option</option>
+                                                                            {optionCells.map((option) => <option key={option.label} value={option.value}>{infoGrid ? option.label : `${option.label}. ${option.text}`}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                    <label style={{display:'grid', gap:8, background:EB.wash, padding:'18px 20px', borderRadius:EB.radius, color:EB.sub, fontSize:12, fontWeight:800}}>Options, one per line
+                                                        <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'A. option text\nB. option text'} style={{width:'100%', minHeight:180, boxSizing:'border-box', padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, resize:'vertical', fontWeight:600}} />
+                                                    </label>
+                                                </div>
+                                            </div>;
+                                        })() : grp.groupType === 'DRAG_DROP_HEADING' ? (() => {
                                             const ROMAN = ['i','ii','iii','iv','v','vi','vii','viii','ix','x','xi','xii','xiii','xiv','xv','xvi','xvii','xviii','xix','xx'];
                                             const srcQ = grp.questions.find((x:any) => x.options && x.options.length) || grp.questions[0];
                                             const heads = ((srcQ as any).options || []).map((o:string) => String(o).replace(/^\s*[ivxlcdm]+[.)]\s*/i, ''));
@@ -14478,6 +15421,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             const imageUrl = String(source.diagramImageUrl || '');
                                             const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
+                                            const diagramMaxWidth = String(source.diagramMaxWidth || '860');
                                             // Keep the authoring canvas on the raw image's intrinsic ratio.
                                             // This is the same coordinate surface used by ACTIVE_EXAM.
                                             const letDiagramImageDefineAspect = imageMode !== 'BOXES';
@@ -14530,9 +15474,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             };
                                             return <div style={{display:'grid',gap:16}}>
                                                 <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>Each label is one free-positioned text box. A box may contain several gaps, for example <b style={{color:EB.accent}}>Network of [34] ... constant [35] supply</b>. Coordinates are percentages of this exact canvas.</div>
-                                                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(190px,.35fr) auto',gap:10,alignItems:'end'}}>
+                                                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(180px,.28fr) minmax(150px,.22fr) auto',gap:10,alignItems:'end'}}>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Diagram image URL<input value={imageUrl} onChange={(event:any)=>updateDiagram({diagramImageUrl:event.target.value})} placeholder="https://.../diagram.png" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
+                                                    <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Max display width<input type="number" min="520" max="1180" step="20" value={diagramMaxWidth} onChange={(event:any)=>updateDiagram({diagramMaxWidth:event.target.value})} placeholder="860" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
                                                 </div>
                                                 <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash}}>
@@ -14942,6 +15887,36 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 </div>
                             )}
 
+                            {realExamPackages.length > 0 && (
+                                <div style={{marginBottom: 34}}>
+                                    <div style={{...ebEyebrow, marginBottom: 15}}>Real exam packages <span style={{fontFamily: EB.fMono}}>({realExamPackages.length})</span></div>
+                                    <div style={{display: 'grid', gap: 10}}>
+                                        {realExamPackages.map((pkg: RealExamPackage) => {
+                                            const exams = packageQuizzes(pkg);
+                                            return (
+                                                <div key={pkg.id} className="ebx-card" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderLeft: `4px solid ${pkg.active ? EB.accent : EB.sub}`, borderRadius: EB.radiusSm, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+                                                    <div style={{minWidth: 0}}>
+                                                        <div style={{fontFamily: EB.fDisplay, fontSize: 17, fontWeight: 700, color: EB.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{pkg.title}</div>
+                                                        <div style={{fontSize: 12.5, color: EB.sub, marginTop: 4}}>{pkg.mode === 'LRW' ? 'Listening · Reading · Writing' : 'Listening · Reading'} · {exams.map(q => q.title).join(' → ')}</div>
+                                                        <div style={{fontSize: 11, color: EB.sub, marginTop: 4}}>Pass: {pkg.passcode ? 'set' : 'none'} · {pkg.active ? 'active' : 'inactive'}</div>
+                                                    </div>
+                                                    <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
+                                                        <button className="ebx-soft" onClick={() => updateRealExamPackage(pkg, { active: !pkg.active })} style={{background: 'transparent', color: pkg.active ? EB.warn : EB.accent, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>{pkg.active ? 'Disable' : 'Enable'}</button>
+                                                        <button className="ebx-soft" onClick={() => {
+                                                            const title = prompt('Tên gói:', pkg.title)?.trim();
+                                                            if (!title) return;
+                                                            const passcode = prompt('Pass riêng (để trống nếu không dùng):', pkg.passcode || '')?.trim() || '';
+                                                            updateRealExamPackage(pkg, { title, passcode });
+                                                        }} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Edit</button>
+                                                        <button className="ebx-soft" onClick={() => deleteRealExamPackage(pkg.id)} style={{background: 'transparent', color: C.err, padding: '7px 12px', fontSize: 12, border: `1px solid ${C.err}33`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Delete</button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* KHU VỰC ĐỀ THI */}
                             <div>
                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
@@ -14957,6 +15932,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             }} style={{background: C.accent, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="folder" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_move_folder')}</button>
                                             <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: C.warn, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="lock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_lock_quiz')}</button>
                                             <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: C.succ, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="unlock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_unlock_quiz')}</button>
+                                            <button onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: '#111827', color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Real package</button>
                                             <button onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: C.err, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="trash" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_delete')}</button>
                                         </div>
                                     )}

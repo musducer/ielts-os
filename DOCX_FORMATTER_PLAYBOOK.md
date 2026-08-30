@@ -2,7 +2,7 @@
 
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
-**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-30 by the commit that updates this changelog.
+**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-31 by the commit that updates this changelog.
 
 **Success condition:** The formatted DOCX parses into the intended sections, question types, visual layout, option bank, and answer keys without manual repair in Exam Builder.
 
@@ -266,6 +266,8 @@ The number of starred lines must match the number requested by the instruction.
 Questions 20-23
 Match each statement with the correct researcher, A-C.
 NB You may use any letter more than once.
+[LEFT_TITLE]
+[RIGHT_TITLE] List of Researchers
 List of Researchers
 A. Professor Alpha
 B. Dr Beta
@@ -279,7 +281,10 @@ C. Mr Gamma
 - Put the complete option bank before the first numbered question.
 - Use one paragraph per option.
 - Matching answer keys may be letters or exact option text, for example *B or *Dr Beta.
-- The parser stores ordinary matching answers as clean option text and the exam UI renders text choices only. Do not rely on A/B/C as the saved answer value.
+- The parser stores ordinary matching-with-text answers as clean option text. The exam UI shows an IELTS-style radio grid with A/B/C columns and a legend table underneath.
+- Use [LEFT_TITLE] for the first table column when the source has a custom heading. Leave it blank if the source first column is blank.
+- Use [RIGHT_TITLE] for the legend heading under the grid, for example List of Researchers, List of options, First invented or used by, etc. Do not hardcode a generic title when the source uses another one.
+- If the source is matching information with letter-only columns and no legend, options may be plain A, B, C, etc.; then the answer remains the letter and no legend table is shown.
 - Do not use this for card-drag tasks; use [DRAG] instead.
 
 ### 4.6 Matching headings: [MATCHING] plus [HEADING_SLOT]
@@ -303,17 +308,17 @@ i. First heading
 ii. Second heading
 iii. Third heading
 27. Paragraph A
-*iii
+*Third heading
 28. Paragraph B
-*i
+*First heading
 ~~~
 
 Rules:
 
 - Put [HEADING_SLOT] immediately before every passage paragraph that needs a heading.
 - Roman heading prefixes must be literal: i., ii., iii.
-- Heading answers are Roman values: *iv, not an index number.
-- Matching headings are the exception to the text-answer rule: they keep Roman numerals as the canonical answer.
+- New formatted DOCX should use the exact heading text as the answer key, not a Roman-only value. The parser still accepts Roman keys such as *iv and maps them to heading text for legacy files.
+- In the live exam UI, heading slots show the question number when empty and the heading text when filled. Roman numerals are not shown inside the passage slot or heading cards.
 - Keep the word heading in the visible instruction so the parser chooses the heading renderer.
 - Do not convert headings into A/B/C options.
 
@@ -411,14 +416,22 @@ Use normal matching when the student chooses a letter in a grid/table beside a m
 Questions 15-20
 Label the map below. Write the correct letter, A-I, next to questions 15-20.
 IMAGE: https://example.com/map.png
-A. Staffroom
-B. Administration
-C. Packing shed
+[LEFT_TITLE]
+A
+B
+C
 15. Staffroom
 *A
 16. Administration
 *B
 ~~~
+
+Rules:
+
+- This is the same IELTS-style radio grid as matching information/features.
+- Use plain letter options (A, B, C...) when the map/plan itself already contains the letter labels and there is no legend table.
+- Do not add a [RIGHT_TITLE] or option-description legend unless the source paper has one.
+- Do not convert this to [MAP_DRAG] unless the student really drags cards onto image slots.
 
 ### 4.10 Map/plan cards dropped onto image slots: [MAP_DRAG]
 
@@ -468,6 +481,7 @@ Questions 34-37
 Label the diagram below.
 Choose ONE WORD ONLY from the passage for each answer.
 IMAGE: https://example.com/diagram.png
+IMAGE_MAX_WIDTH: 860
 IMAGE_MODE: TEXT_BOXES
 IMAGE_ASPECT_RATIO: 1186 / 400
 
@@ -505,6 +519,7 @@ Critical rules:
 - Use descriptive box ids such as network, mound-top, or cellar.
 - x,y,w,h are percentages of the full image, measured from its top-left corner.
 - IMAGE_ASPECT_RATIO must equal the real source pixel ratio. Never estimate it from a Word screenshot.
+- IMAGE_MAX_WIDTH is optional and controls exam display size without changing coordinates. Use it when a diagram is visually too large; 860 is the default, allowed practical range is about 520-1180.
 - IMAGE_MODE: TEXT_BOXES is mandatory for new free-box diagrams.
 - Use separate paragraphs inside a box for required visual line breaks; the parser preserves them.
 - Add targetX and targetY only when an extra connector line is needed. Omit them when the original image already contains its own connector.
@@ -522,7 +537,7 @@ Critical rules:
 5. A map drag task with no valid slots produces no map questions.
 6. A diagram with no valid boxes produces no diagram questions.
 7. Generic answer keys require a leading asterisk. Do not put explanations after it.
-8. For matching headings, retain both passage [HEADING_SLOT] markers and Roman option bank.
+8. For matching headings, retain both passage [HEADING_SLOT] markers and Roman option prefixes, but use heading text as the new answer key.
 9. For every drag task, full option text is safer and required for [DRAG], [FLOW_DRAG], and [MAP_DRAG].
 
 ---
@@ -537,10 +552,11 @@ Critical rules:
 - [ ] Every question has an answer key.
 - [ ] Multiple selection has one starred line per correct option.
 - [ ] Option banks are complete and in original order.
-- [ ] Ordinary matching answers parse to clean option text, not A/B/C labels.
+- [ ] Matching grid has correct [LEFT_TITLE]/[RIGHT_TITLE] when the source table/legend has headings.
+- [ ] Matching features parse to clean option text; letter-only matching information may remain A/B/C.
 - [ ] Drag answer keys use full card text.
 - [ ] Optional [EXPLANATION] lines use straight quotes and valid [mm:ss] timestamps.
-- [ ] Heading tasks use Roman numerals and [HEADING_SLOT].
+- [ ] Heading tasks use [HEADING_SLOT], Roman-prefixed option bank, and heading-text answer keys.
 - [ ] Map/diagram URL is publicly reachable via HTTPS.
 - [ ] Map/diagram coordinates use the original image ratio.
 - [ ] Diagram boxes include visible text beside every gap.
@@ -569,7 +585,7 @@ Verify manually:
 - each emitted type/subtype;
 - option order;
 - all answer values;
-- Roman heading answers;
+- heading-text answers for matching headings;
 - ordinary matching answer text;
 - full-text drag answers;
 - optional manualExplanation raw text, parsed quotes, and parsed timestamps;
@@ -601,6 +617,7 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-08-31**: Updated matching-grid contract: optional [LEFT_TITLE]/[RIGHT_TITLE], feature legends under the radio grid, letter-only info grids without legends, heading-text answer keys for Matching Headings, and optional IMAGE_MAX_WIDTH for diagram display sizing.
 - **2026-08-30**: Added optional [EXPLANATION] grammar for teacher review explanations, parsed quoted evidence, and Listening timestamps.
-- **2026-08-30**: Added backend supplement DOCX import for replacing passages/sections and explanation-only files; ordinary [MATCHING] now stores clean option text while Matching Headings keep Roman numerals.
+- **2026-08-30**: Added backend supplement DOCX import for replacing passages/sections and explanation-only files; ordinary [MATCHING] now stores clean option text, with Matching Headings retaining Roman compatibility for legacy files.
 - **2026-08-28 / c93eee0**: Initial complete handbook. Covers metadata, passages, generic blocks, completions, MCQ, multi-selection, matching headings, two-column drag, flow drag, map drag, and free-box diagram labelling.

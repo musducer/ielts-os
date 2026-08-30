@@ -220,7 +220,7 @@
     };
 
     const myHistory = history.filter(h => h.studentId === me.id);
-    const myQuizResults = quizResults.filter(r => r.studentId === me.id);
+    const myQuizResults = quizResults.filter(r => r.studentId === me.id && !r.hiddenFromStudent);
     // Final UI guard: newest cards stay at the top even if a legacy/server snapshot arrives
     // in Firestore document-ID order (oldest first).
     const vocabCards = newestVocabFirst(Array.isArray(me.vocabNotebook) ? me.vocabNotebook : []);
@@ -253,11 +253,14 @@
     const myTopicAssignments = topicAssignments.filter(assignment =>
       assignment.audience !== "SPECIFIC" || (assignment.targetStudentIds || []).includes(me.id)
     );
+    const myRealExamPackages = realExamPackages.filter((pkg: RealExamPackage) => isPackageVisibleToStudent(pkg, me));
+    const realExamSourceTestIds = new Set(myRealExamPackages.flatMap((pkg: RealExamPackage) => pkg.quizIds || []));
     // A test used as a gated Quest node must not also appear as a free-standing
     // exam card. Otherwise a student could bypass the sequence and see its review.
     const questSourceTestIds = new Set(myTopicAssignments.flatMap(assignment => assignment.nodes.map(node => node.testId)));
     const activeQuizzes = quizzes.filter(q => {
       if (!q.active || questSourceTestIds.has(q.id)) return false;
+      if (realExamSourceTestIds.has(q.id)) return false;
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
@@ -1170,7 +1173,7 @@
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
             <div style={{display: 'flex', gap: 8, marginTop: 14}}>
               {([
-                { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length },
+                { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length + myRealExamPackages.length },
                 { k: 'results', label: t('exam_tab_results'), n: myQuizResults.filter(Boolean).length },
               ] as const).map(sb => {
                 const on = examRoomTab === sb.k;
@@ -1181,6 +1184,23 @@
                 );
               })}
             </div>
+            {examRoomTab === "available" && myRealExamPackages.length > 0 && (
+              <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
+                {myRealExamPackages.map((pkg: RealExamPackage) => {
+                  const exams = packageQuizzes(pkg);
+                  return (
+                    <div key={pkg.id} style={{ background: "#fff", border: "1px solid #c9cdd3", borderLeft: "4px solid #d71920", borderRadius: 2, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 900, letterSpacing: 1.1, textTransform: "uppercase", color: "#6b7280", marginBottom: 4 }}>Real exam package</div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pkg.title} {pkg.passcode && <Ico name="lock" size={13} color="#6b7280" />}</div>
+                        <div style={{ fontSize: 12, color: "#4b5563", marginTop: 4 }}>{pkg.mode === "LRW" ? "Listening · Reading · Writing" : "Listening · Reading"} · {exams.length} tests · hidden results</div>
+                      </div>
+                      <button onClick={() => startRealExamPackage(pkg)} style={{ background: "#111827", color: "#fff", border: "1px solid #111827", borderRadius: 2, padding: "9px 16px", fontWeight: 900, cursor: "pointer" }}>Enter package</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {examRoomTab === "available" && (
             <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
               {activeQuizzes.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
@@ -1258,7 +1278,7 @@
                       </div>
                   )
               })}
-              {activeQuizzes.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
+              {activeQuizzes.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
             </div>
             )}
 

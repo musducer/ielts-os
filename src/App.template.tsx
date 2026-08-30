@@ -1588,9 +1588,13 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
+interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; createdAt?: number; updatedAt?: number; }
+interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
+interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; }
+interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1789,7 +1793,7 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
 const normalizeChoiceMultipleIndexes = (value: any): number[] => {
@@ -1855,11 +1859,27 @@ const cleanOptionAnswerText = (value: any) => String(value ?? "")
   .replace(/&nbsp;/gi, " ")
   .replace(/\s+/g, " ")
   .trim()
-  .replace(/^\s*[A-Ka-k][.)]\s*/, "")
+  .replace(/^\s*[A-Ka-k][.)]\s*(?=\S)/, "")
   .replace(/^\s*[A-Ka-k]\s+(?=\S)/, "")
-  .trim();
+  .trim()
+  || String(value ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim().replace(/[.)]$/, "").trim();
 
 const normalizeComparableAnswer = (value: any) => cleanOptionAnswerText(value).toLocaleLowerCase();
+
+const matchingOptionLabel = (option: any, index: number) => {
+  const raw = String(option ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim();
+  const explicit = raw.match(/^\s*([A-Ka-k])(?:[.)]\s*|\s+|$)/)?.[1];
+  return (explicit || String.fromCharCode(65 + index)).toUpperCase();
+};
+
+const isMatchingInfoOptionSet = (options: any[] = []) =>
+  options.length > 0 && options.every(option => /^[A-Ka-k][.)]?$/.test(String(option ?? "").trim()));
+
+const matchingOptionValue = (option: any, index: number, infoGrid = false) => {
+  const label = matchingOptionLabel(option, index);
+  const text = cleanOptionAnswerText(option);
+  return infoGrid ? label : (text || label);
+};
 
 const resolveOptionAnswerText = (question: any, value: any) => {
   const raw = String(value ?? "").trim();
@@ -1889,6 +1909,14 @@ const isSingleQuestionCorrect = (question: any, answer: any) => {
   if (question?.type === "CHOICE") return answer === question.correctAnswer;
   if (question?.type === "MATCHING") {
     return normalizeComparableAnswer(resolveMatchingAnswerText(question, answer)) === normalizeComparableAnswer(resolveMatchingAnswerText(question, question.correctAnswer));
+  }
+  if (question?.type === "DRAG_DROP_HEADING") {
+    const submittedId = normalizeHeadingId(answer);
+    const expectedId = normalizeHeadingId(question.correctAnswer);
+    const idMatches = Boolean(submittedId && expectedId && submittedId === expectedId);
+    const submittedText = resolveHeadingAnswerText(question, answer);
+    const expectedText = resolveHeadingAnswerText(question, question.correctAnswer);
+    return idMatches || (Boolean(submittedText) && normalizeComparableAnswer(submittedText) === normalizeComparableAnswer(expectedText));
   }
   const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
   const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
@@ -2020,6 +2048,27 @@ const getHeadingCatalog = (questions: any[] = []) => {
   });
   return catalog;
 };
+
+const stripHeadingPrefix = (value: any) => headingPlainText(value)
+  .replace(/^\s*[ivxlcdm]+[.)]?\s*/i, "")
+  .trim();
+
+const resolveHeadingAnswerMeta = (question: any, value: any) => {
+  const raw = headingPlainText(value);
+  const catalog = getHeadingCatalog([question]);
+  const id = normalizeHeadingId(raw);
+  const byId = catalog.get(id);
+  if (byId) return byId;
+  const plain = stripHeadingPrefix(raw);
+  const byText = Array.from(catalog.values()).find(heading =>
+    normalizeComparableAnswer(stripHeadingPrefix(heading.text)) === normalizeComparableAnswer(plain)
+  );
+  if (byText) return byText;
+  return { id: /^[ivxlcdm]+$/i.test(id) ? id : "", text: plain || raw };
+};
+
+const resolveHeadingAnswerText = (question: any, value: any) =>
+  resolveHeadingAnswerMeta(question, value).text || stripHeadingPrefix(value);
 
 const getDiagramQuestionNumber = (question: any, index: number, allQuestions: any[] = []) =>
   String(question?.text || "").match(/\[(\d+)\]/)?.[1]
@@ -3397,6 +3446,10 @@ export default function IeltsSupremeOS() {
   const [questProgress, setQuestProgress] = useState<StudentQuestProgress[]>([]);
   const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
   const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
+  const [realExamPackages, setRealExamPackages] = useState<RealExamPackage[]>([]);
+  const [realExamSession, setRealExamSession] = useState<RealExamSession | null>(null);
+  const [realExamInstructionGate, setRealExamInstructionGate] = useState<RealExamInstructionGate | null>(null);
+  const [realExamAudioMuted, setRealExamAudioMuted] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3612,6 +3665,7 @@ export default function IeltsSupremeOS() {
         const [examCurrentQId, setExamCurrentQId] = useState<string>("");
         const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, range: Range, container: HTMLElement} | null>(null);
   const [noteInputMenu, setNoteInputMenu] = useState<{x: number, y: number, range?: Range, container: HTMLElement, existingNode?: HTMLElement, text: string} | null>(null);
+  const [highlightDeleteMenu, setHighlightDeleteMenu] = useState<{x: number, y: number, node: HTMLElement, container: HTMLElement} | null>(null);
   // PANEL NOTES (chuẩn Inspera): mở bằng nút ✎ trên top bar; notesTick ép quét lại DOM notes sau mỗi sửa/xóa.
   const [showNotesPanel, setShowNotesPanel] = useState(false);
   const [notesTick, setNotesTick] = useState(0);
@@ -3689,6 +3743,43 @@ export default function IeltsSupremeOS() {
       document.removeEventListener('beforeinput', blockAcceptedSuggestion, true);
     };
   }, [activeExam?.id]);
+
+  const openHighlightDeleteMenu = (event: any, node: HTMLElement) => {
+      const highlightNode = (node.closest?.('.student-highlight') as HTMLElement | null) || node;
+      const container = highlightNode.closest('.highlightable-content') as HTMLElement | null;
+      if (!container) return;
+      const rect = highlightNode.getBoundingClientRect();
+      setSelectionMenu(null);
+      setNoteInputMenu(null);
+      setHighlightDeleteMenu({
+          x: rect.left + rect.width / 2,
+          y: rect.bottom + 14,
+          node: highlightNode,
+          container,
+      });
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+  };
+
+  const deleteSelectedHighlight = () => {
+      const menu = highlightDeleteMenu;
+      if (!menu?.node || !menu.container) return;
+      const node = menu.node;
+      const parent = node.parentNode;
+      if (!parent) { setHighlightDeleteMenu(null); return; }
+      while (node.firstChild) parent.insertBefore(node.firstChild, node);
+      parent.removeChild(node);
+      parent.normalize();
+      const field = menu.container.getAttribute('data-field');
+      const qId = menu.container.getAttribute('data-qid');
+      const optIndex = menu.container.getAttribute('data-optindex');
+      if (field) {
+          const cleanHTML = serializeHighlightHTML(menu.container);
+          setActiveExam(prev => syncHighlightState(prev, field, qId || "", cleanHTML, optIndex));
+      }
+      setHighlightDeleteMenu(null);
+  };
+
   // =========================================================
   // BẢN VÁ: DOM-SAFE HIGHLIGHT REMOVAL & SỬA GHI CHÚ NOTE
   // =========================================================
@@ -3711,19 +3802,9 @@ export default function IeltsSupremeOS() {
               return;
           }
           
-          // Xử lý Click vào Highlight vàng: Rút ruột và xóa bỏ
-          const isHighlightNode = target && (target.tagName === 'MARK' || target.classList?.contains('idp-highlight') || target.classList?.contains('student-highlight'));
-          if (isHighlightNode) {
-              e.preventDefault(); e.stopPropagation();
-              const parent = target.parentNode;
-              if (!parent) return;
-              const container = target.closest('.highlightable-content');
-
-              while (target.firstChild) parent.insertBefore(target.firstChild, target);
-              parent.removeChild(target);
-              parent.normalize();
-
-              if (container) container.dispatchEvent(new CustomEvent('highlight-removed', { bubbles: true }));
+          const highlightNode = target?.closest?.('.student-highlight, mark.idp-highlight') as HTMLElement | null;
+          if (highlightNode) {
+              openHighlightDeleteMenu(e, highlightNode);
           }
       };
 
@@ -3733,7 +3814,7 @@ export default function IeltsSupremeOS() {
           document.removeEventListener('click', handleSafeHighlightRemoval, true);
           document.removeEventListener('contextmenu', handleSafeHighlightRemoval, true);
       };
-  }, []);
+  }, [highlightDeleteMenu]);
   // Đồng bộ giá trị và khôi phục focus sau mỗi lần examAnswers thay đổi
   useEffect(() => {
     if (!activeExam) return;
@@ -4910,6 +4991,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
+    setRealExamPackages(clean(d.realExamPackages));
     const recoveredQuestProgress = unconfirmedQuestSubmissions.flatMap((entry: any) =>
       Array.isArray(entry?.questProgress) ? entry.questProgress : []
     );
@@ -5083,6 +5165,117 @@ const applyWorkspaceSnapshot = (snap: any) => {
       latestExamState.current = { activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep };
   }, [activeExam, examAnswers, flaggedQuestions, examCheatCount, qNotes, scratchpadText, isPreview, examStartTime, crossedOptions, currentUser, students, enableTimerBeep]);
 
+  useEffect(() => {
+    if (userRole !== "STUDENT" || !loaded || !currentUser?.email || activeExam || realExamSession) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
+      if (!saved?.packageId || !saved?.packageAttemptId || !saved?.testTakerId) return;
+      const pkg = realExamPackages.find(item => item.id === saved.packageId);
+      const completedQuizIds = Array.isArray(saved.completedQuizIds) ? saved.completedQuizIds : [];
+      const finished = pkg?.quizIds?.length && pkg.quizIds.every(id => completedQuizIds.includes(id));
+      if (!pkg || !pkg.active || finished) {
+        persistRealExamSession(null);
+        return;
+      }
+      setRealExamSession({ ...saved, completedQuizIds, startedAt: Number(saved.startedAt) || Date.now() });
+    } catch (error) {}
+  }, [userRole, loaded, currentUser?.email, activeExam, realExamSession, realExamPackages]);
+
+  useEffect(() => {
+    if (!realExamInstructionGate) return;
+    let cancelled = false;
+    let player: any = null;
+    let guardTimer = 0;
+    let maxSeen = 0;
+    const mountPlayer = () => {
+      if (cancelled || player) return;
+      const YT = (window as any).YT;
+      if (!YT?.Player) return;
+      player = new YT.Player("real-exam-youtube-player", {
+        videoId: realExamInstructionGate.videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          iv_load_policy: 3,
+          modestbranding: 1,
+          playsinline: 1,
+          rel: 0,
+        },
+        events: {
+          onReady: (event: any) => {
+            try {
+              if (realExamAudioMuted) event.target.mute?.();
+              else event.target.unMute?.();
+              event.target.playVideo?.();
+            } catch (error) {}
+          },
+          onStateChange: (event: any) => {
+            if (event.data === 0) setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
+          },
+        },
+      });
+      (window as any).__realExamInstructionPlayer = player;
+      guardTimer = window.setInterval(() => {
+        try {
+          const current = Number(player?.getCurrentTime?.()) || 0;
+          const duration = Number(player?.getDuration?.()) || 0;
+          if (current + 0.8 < maxSeen) player?.seekTo?.(maxSeen, true);
+          else maxSeen = Math.max(maxSeen, current);
+          if (duration > 0 && current >= duration - 1.25) {
+            setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
+          }
+        } catch (error) {}
+      }, 500);
+    };
+    if ((window as any).YT?.Player) {
+      mountPlayer();
+    } else {
+      const previousReady = (window as any).onYouTubeIframeAPIReady;
+      (window as any).onYouTubeIframeAPIReady = () => {
+        if (typeof previousReady === "function") previousReady();
+        mountPlayer();
+      };
+      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        const script = document.createElement("script");
+        script.src = "https://www.youtube.com/iframe_api";
+        document.head.appendChild(script);
+      }
+    }
+    return () => {
+      cancelled = true;
+      if (guardTimer) window.clearInterval(guardTimer);
+      if ((window as any).__realExamInstructionPlayer === player) delete (window as any).__realExamInstructionPlayer;
+      try { player?.destroy?.(); } catch (error) {}
+    };
+  }, [realExamInstructionGate?.nonce, realExamInstructionGate?.videoId]);
+
+  useEffect(() => {
+    if (!realExamInstructionGate) return;
+    try {
+      const player = (window as any).__realExamInstructionPlayer;
+      if (realExamAudioMuted) player?.mute?.();
+      else player?.unMute?.();
+    } catch (error) {}
+  }, [realExamAudioMuted, realExamInstructionGate?.nonce]);
+
+  useEffect(() => {
+    if (userRole !== "STUDENT" || !realExamSession) return;
+    const enforce = () => window.setTimeout(requestRealExamFullscreen, 40);
+    enforce();
+    document.addEventListener("fullscreenchange", enforce);
+    window.addEventListener("focus", enforce);
+    window.addEventListener("click", enforce, true);
+    window.addEventListener("keydown", enforce, true);
+    return () => {
+      document.removeEventListener("fullscreenchange", enforce);
+      window.removeEventListener("focus", enforce);
+      window.removeEventListener("click", enforce, true);
+      window.removeEventListener("keydown", enforce, true);
+    };
+  }, [userRole, realExamSession?.packageAttemptId]);
+
   // Client-side deterrence for student accounts. It deliberately does not use a
   // debugger loop: that pattern freezes legitimate devices and is trivially bypassed.
   useEffect(() => {
@@ -5184,6 +5377,20 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       setActiveExam(saved.quiz); 
+                      if (saved.quiz?.realExamContext) {
+                          const ctx = saved.quiz.realExamContext;
+                          let savedRealSession: any = null;
+                          try { savedRealSession = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null"); } catch (error) {}
+                          const restoredSession: RealExamSession = {
+                            packageId: ctx.packageId,
+                            packageAttemptId: ctx.packageAttemptId,
+                            testTakerId: ctx.testTakerId,
+                            completedQuizIds: savedRealSession?.packageAttemptId === ctx.packageAttemptId && Array.isArray(savedRealSession.completedQuizIds) ? savedRealSession.completedQuizIds : [],
+                            startedAt: Date.now(),
+                          };
+                          setRealExamSession(restoredSession);
+                          persistRealExamSession(restoredSession);
+                      }
                       setExamAnswers(saved.answers || {});
                       setFlaggedQuestions(saved.flags || []); 
                       setExamStartTime(saved.startTime); 
@@ -6393,7 +6600,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const me = findMe();
     if (!me || vocabGenLoading) return;
     const stripTags = (s: any) => String(s ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
-    const myRes = quizResults.filter(r => r.studentId === me.id);
+    const myRes = quizResults.filter(r => r.studentId === me.id && !r.hiddenFromStudent);
     if (myRes.length === 0) { alert("Bạn chưa làm đề nào để trích từ vựng."); return; }
     setVocabGenLoading(true);
     try {
@@ -6634,7 +6841,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       const parent = textNode.parentNode as HTMLElement;
-                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('student-note-hl') && !parent.classList?.contains('idp-temp-selection')) {
+                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('idp-temp-selection')) {
                           const span = document.createElement("span");
                           span.className = 'idp-temp-selection';
                           parent.insertBefore(span, textNode);
@@ -6685,9 +6892,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       const hideMenuOnClick = (e: MouseEvent | TouchEvent) => {
           const target = e.target as HTMLElement;
-          if (!target.closest('.idp-popup-menu') && !target.closest('.idp-note-input-modal') && !target.classList.contains('student-note-hl')) {
+          if (!target.closest('.idp-popup-menu') && !target.closest('.idp-note-input-modal') && !target.closest('.idp-highlight-delete-menu') && !target.classList.contains('student-note-hl')) {
               setSelectionMenu(null);
               setNoteInputMenu(null);
+              setHighlightDeleteMenu(null);
               clearTempSelection();
           }
       };
@@ -7422,6 +7630,192 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
 
+  const realExamSessionKey = (email = currentUser?.email || "") => `ielts_os_real_exam_session_${String(email || "").trim().toLowerCase()}`;
+  const makeRealExamId = () => `realpkg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const makeRealExamAttemptId = () => `realattempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const makeTestTakerId = () => String(Math.floor(100000 + Math.random() * 900000));
+  const quizSkillRank = (quiz: any) => {
+    const type = String(quiz?.type || "").toLowerCase();
+    if (type.includes("listen")) return 0;
+    if (type.includes("read")) return 1;
+    if (type.includes("writ")) return 2;
+    return 99;
+  };
+  const packageQuizzes = (pkg: RealExamPackage | null | undefined) =>
+    (pkg?.quizIds || []).map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
+  const isPackageVisibleToStudent = (pkg: RealExamPackage, student: Student | undefined) => {
+    if (!pkg?.active || !student) return false;
+    if (pkg.audience === "SPECIFIC" && !(pkg.targetStudentIds || []).includes(student.id)) return false;
+    return packageQuizzes(pkg).length === (pkg.quizIds || []).length && (pkg.quizIds || []).length >= 2;
+  };
+  const persistRealExamSession = (session: RealExamSession | null) => {
+    if (!currentUser?.email) return;
+    try {
+      if (session) localStorage.setItem(realExamSessionKey(), JSON.stringify(session));
+      else localStorage.removeItem(realExamSessionKey());
+    } catch (error) {}
+  };
+  const saveRealExamPackage = async (pkg: RealExamPackage) => {
+    const nextPkg: RealExamPackage = {
+      ...pkg,
+      id: pkg.id || makeRealExamId(),
+      title: String(pkg.title || "Real exam package").trim(),
+      quizIds: (pkg.quizIds || []).filter(Boolean),
+      mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
+      updatedAt: Date.now(),
+      createdAt: pkg.createdAt || Date.now(),
+    };
+    const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
+    setRealExamPackages(nx);
+    const saved = await syncData({ realExamPackages: nx });
+    if (!saved) alert("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.");
+    return saved;
+  };
+  const createRealExamPackageFromSelection = async () => {
+    const selected = selectedQuizzes.map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
+    if (selected.length !== 2 && selected.length !== 3) {
+      alert("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).");
+      return;
+    }
+    const ordered = [...selected].sort((a, b) => quizSkillRank(a) - quizSkillRank(b));
+    const ranks = ordered.map(quizSkillRank);
+    const valid = ranks[0] === 0 && ranks[1] === 1 && (ordered.length === 2 || ranks[2] === 2);
+    if (!valid) {
+      alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
+      return;
+    }
+    const title = prompt("Tên gói bài thi thật:", `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`)?.trim();
+    if (!title) return;
+    const passcode = prompt("Pass riêng cho gói này (có thể để trống):", "")?.trim() || "";
+    const pkg: RealExamPackage = {
+      id: makeRealExamId(),
+      title,
+      active: true,
+      mode: ordered.length === 3 ? "LRW" : "LR",
+      quizIds: ordered.map(quiz => quiz.id),
+      passcode,
+      audience: "ALL",
+      targetStudentIds: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await saveRealExamPackage(pkg);
+    setSelectedQuizzes([]);
+  };
+  const deleteRealExamPackage = async (pkgId: string) => {
+    if (!confirm("Xóa gói bài thi thật này?")) return;
+    const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
+    setRealExamPackages(nx);
+    await syncData({ realExamPackages: nx });
+  };
+  const updateRealExamPackage = async (pkg: RealExamPackage, patch: Partial<RealExamPackage>) => {
+    const nx = realExamPackages.map(item => item.id === pkg.id ? { ...item, ...patch, updatedAt: Date.now() } : item);
+    setRealExamPackages(nx);
+    await syncData({ realExamPackages: nx });
+  };
+  const requestRealExamFullscreen = () => {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  };
+  const startRealExamPackage = (pkg: RealExamPackage) => {
+    const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+    if (!isPackageVisibleToStudent(pkg, me)) return;
+    if (pkg.passcode) {
+      const pass = prompt("Enter package passcode:");
+      if (pass !== pkg.passcode) { alert("Passcode is not correct."); return; }
+    }
+    let session: RealExamSession | null = realExamSession?.packageId === pkg.id ? realExamSession : null;
+    if (!session) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
+        if (saved?.packageId === pkg.id) session = saved;
+      } catch (error) {}
+    }
+    session = session || {
+      packageId: pkg.id,
+      packageAttemptId: makeRealExamAttemptId(),
+      testTakerId: makeTestTakerId(),
+      completedQuizIds: [],
+      startedAt: Date.now(),
+    };
+    setRealExamSession(session);
+    persistRealExamSession(session);
+    setPortalTab("exams");
+    requestRealExamFullscreen();
+  };
+  const realExamSkillLabel = (quiz: Quiz | undefined | null) => {
+    const type = String(quiz?.type || "").toLowerCase();
+    if (type.includes("listen")) return "Listening";
+    if (type.includes("read")) return "Reading";
+    if (type.includes("writ")) return "Writing";
+    return String(quiz?.type || "Exam");
+  };
+  const officialInstructionVideoId = (skill: string) => {
+    if (skill === "Listening") return "_O2RHxsAugg";
+    if (skill === "Reading") return "dsCXG9kfRgk";
+    return "";
+  };
+  const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
+    if (!realExamSession || realExamSession.packageId !== pkg.id) return startRealExamPackage(pkg);
+    const nextQuizId = (pkg.quizIds || []).find(id => !realExamSession.completedQuizIds.includes(id));
+    if (quizId !== nextQuizId) {
+      alert("Please wait for the invigilator's instruction and take the tests in order.");
+      return;
+    }
+    const source = quizzesRef.current.find(quiz => quiz.id === quizId);
+    if (!source) { alert("This test is no longer available."); return; }
+    const orderIndex = (pkg.quizIds || []).indexOf(quizId);
+    const launchQuiz: Quiz = {
+      ...source,
+      active: true,
+      maxAttempts: Number.MAX_SAFE_INTEGER,
+      scheduledStart: undefined,
+      scheduledEnd: undefined,
+      passcode: undefined,
+      isLocked: false,
+      practiceMode: false,
+      audioMode: String(source.type || "").toLowerCase().includes("listen") ? "strict" : source.audioMode,
+      realExamContext: {
+        packageId: pkg.id,
+        packageTitle: pkg.title,
+        packageQuizIds: pkg.quizIds,
+        packageAttemptId: realExamSession.packageAttemptId,
+        testTakerId: realExamSession.testTakerId,
+        orderIndex,
+        total: pkg.quizIds.length,
+        isFinal: orderIndex === pkg.quizIds.length - 1,
+      },
+    };
+    startExam(launchQuiz, false, false);
+  };
+  const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
+    const source = quizzesRef.current.find(quiz => quiz.id === quizId);
+    const skill = realExamSkillLabel(source);
+    const videoId = officialInstructionVideoId(skill);
+    if (videoId && realExamSession?.packageId === pkg.id) {
+      setRealExamInstructionGate({
+        packageId: pkg.id,
+        quizId,
+        skill: skill as "Listening" | "Reading",
+        videoId,
+        ready: false,
+        nonce: Date.now(),
+      });
+      requestRealExamFullscreen();
+      return;
+    }
+    launchRealExamPackageQuiz(pkg, quizId);
+  };
+  const confirmRealExamInstructionGate = () => {
+    const gate = realExamInstructionGate;
+    if (!gate?.ready) return;
+    const pkg = realExamPackages.find(item => item.id === gate.packageId);
+    const quizId = gate.quizId;
+    setRealExamInstructionGate(null);
+    if (pkg) window.setTimeout(() => launchRealExamPackageQuiz(pkg, quizId), 0);
+  };
+
   const handleAnswerChange = (questionId: string, answer: any, _type?: string) => {
     // FIX: Sử dụng Functional Update để đảm bảo State mới nhất không bị ghi đè khi gõ nhanh
     setExamAnswers(prev => ({...prev, [questionId]: answer}));
@@ -7452,11 +7846,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
       const isQuestLaunch = Boolean(quiz.questContext);
+      const isRealExamLaunch = Boolean(quiz.realExamContext);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (!isQuestLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (!isQuestLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
           if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -7467,12 +7862,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               }
           }
           
-          if (!isQuestLaunch && quiz.passcode) {
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.passcode) {
               const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
               if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
           }
 
-          if (currentUser && !isQuestLaunch) {
+          if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (myHistory.length >= (quiz.maxAttempts || 1)) {
                   alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
@@ -7642,6 +8037,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const durationSecs = Math.max(0, Math.floor((endTime - effectiveStartTime) / 1000));
 
       const questContext = state.activeExam.questContext;
+      const realExamContext = state.activeExam.realExamContext;
       const assignment = questContext
         ? topicAssignments.find(item => item.id === questContext.topicAssignmentId)
         : undefined;
@@ -7662,6 +8058,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             topicNodeId: questContext.nodeId,
             questPassed,
             questQuestionIds: state.activeExam.questions.map(question => question.id),
+          } : {}),
+          ...(realExamContext ? {
+            hiddenFromStudent: true,
+            realExamPackageId: realExamContext.packageId,
+            realExamPackageTitle: realExamContext.packageTitle,
+            realExamAttemptId: realExamContext.packageAttemptId,
+            realExamOrderIndex: realExamContext.orderIndex,
+            testTakerId: realExamContext.testTakerId,
           } : {}),
       };
 
@@ -7821,6 +8225,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               )), 0);
             });
           }
+      } else if (realExamContext) {
+          submissionMessage = `Test completed. Please wait for the invigilator's instruction.`;
+          setQuizResults(nextResults);
+          if (isOffline || !navigator.onLine) {
+              pushOfflineResult(currentUser?.email, result);
+              submissionMessage += " The result is saved on this device and will sync when the connection returns.";
+          } else {
+              void syncData({ quizResults: [result] });
+          }
       } else {
           let earnedCoins = 50;
           if (state.activeExam.scheduledEnd) {
@@ -7853,7 +8266,40 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
       _setAudioTested(false);
-      if (Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
+      if (!realExamContext && Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
+        if (realExamContext) {
+          const baseSession = realExamSession && realExamSession.packageAttemptId === realExamContext.packageAttemptId
+            ? realExamSession
+            : {
+              packageId: realExamContext.packageId,
+              packageAttemptId: realExamContext.packageAttemptId,
+              testTakerId: realExamContext.testTakerId,
+              completedQuizIds: [],
+              startedAt: Date.now(),
+            };
+          const completedQuizIds = Array.from(new Set([...baseSession.completedQuizIds, state.activeExam.id]));
+          const isPackageDone = realExamContext.packageQuizIds.every(id => completedQuizIds.includes(id));
+          setActiveExam(null); setGracePeriod(null); setHardLocked(false);
+          setManualExplanationQuestion(null);
+          setReviewQuiz(null);
+          setReviewSectionIdx(0);
+          setReviewActiveQuestionId(null);
+          if (isPackageDone) {
+            setRealExamSession(null);
+            persistRealExamSession(null);
+            setPortalTab("home");
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            alert("Real exam package completed. Returning to dashboard.");
+          } else {
+            const nextSession = { ...baseSession, completedQuizIds };
+            setRealExamSession(nextSession);
+            persistRealExamSession(nextSession);
+            setPortalTab("exams");
+            requestRealExamFullscreen();
+            alert(submissionMessage);
+          }
+          return;
+        }
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
         setReviewSectionIdx(0);
@@ -7874,6 +8320,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   forceSubmitExamRef.current = forceSubmitExam;
   const submitExam = (isTimeUp = false) => {
     if (!activeExam) return;
+    if (!isTimeUp && activeExam.realExamContext) return;
     if (!isTimeUp) {
         const timeRatio = examTimeLeft / (activeExam.timeLimit * 60);
         
@@ -8506,6 +8953,176 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 /*INSERT_PENDING_EXAM*/
 
 /*INSERT_ACTIVE_EXAM*/
+
+  if (userRole === "STUDENT" && realExamSession && !activeExam && !pendingExamState && !reviewQuiz) {
+    const pkg = realExamPackages.find(item => item.id === realExamSession.packageId);
+    const exams = packageQuizzes(pkg);
+    const completed = new Set(realExamSession.completedQuizIds || []);
+    const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
+    const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
+    const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
+      ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
+      : `${minutes} minutes`;
+    const finishAndLeave = () => {
+      setRealExamSession(null);
+      persistRealExamSession(null);
+      setPortalTab("home");
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+    const renderRealExamTopBar = () => (
+      <header className="real-exam-top">
+        <div className="real-exam-brand">
+          <img src="https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg" alt="IELTS" />
+          <span>{realExamSession.testTakerId}</span>
+        </div>
+        <div className="real-exam-icons" aria-hidden="true">
+          <span className="real-exam-wifi"><span></span></span>
+          <span className="real-exam-bell"></span>
+          <span className="real-exam-menu"></span>
+        </div>
+      </header>
+    );
+    const renderRealExamBottomBar = () => (
+      <footer className="real-exam-bottom">
+        <span className="real-exam-assessment"></span>
+        <div className="real-exam-bottom-icons">
+          <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
+          <span className="real-exam-battery"></span>
+          <span className="real-exam-wifi small"><span></span></span>
+          <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMuted(value => !value)} title="Audio">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>{realExamAudioMuted ? <><line x1="19" y1="9" x2="15" y2="13"/><line x1="15" y1="9" x2="19" y2="13"/></> : <path d="M15.5 8.5a5 5 0 0 1 0 7"/>}</svg>
+          </button>
+        </div>
+      </footer>
+    );
+    if (realExamInstructionGate && pkg && realExamInstructionGate.packageId === pkg.id) {
+      return (
+        <div className="real-exam-shell">
+          <style>{`
+            .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+            .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
+            .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
+            .real-exam-brand img{height:26px;display:block}
+            .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+            .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
+            .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
+            .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
+            .real-exam-wifi.small{transform:scale(.74);transform-origin:center}
+            .real-exam-bell{width:17px;height:19px;border:2px solid currentColor;border-bottom:0;border-radius:10px 10px 4px 4px;position:relative;display:inline-block}
+            .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
+            .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
+            .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
+            .real-exam-main{flex:1;overflow:auto;padding:26px 18px 78px}
+            .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
+            .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+            .real-exam-video-wrap{width:min(820px,calc(100vw - 48px));margin:0 auto;border:1px solid #b8b8b8;border-radius:4px;background:#fff;padding:20px;box-sizing:border-box}
+            .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#111;overflow:hidden}
+            .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+            .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
+            .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
+            .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+            .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
+            .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
+            .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
+            .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
+            .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
+            .real-exam-audio.is-muted{background:#fff;color:#333}
+            .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
+          `}</style>
+          {renderRealExamTopBar()}
+          <main className="real-exam-main">
+            <section className="real-exam-video-wrap">
+              <h1 style={{margin:"0 0 10px",fontSize:22,lineHeight:1.25}}>{realExamInstructionGate.skill} test information</h1>
+              <p style={{margin:"0 0 16px",fontSize:14,lineHeight:1.45}}>Watch the official IELTS information video to the end, then confirm to enter the test.</p>
+              <div className="real-exam-video-frame"><div id="real-exam-youtube-player" /></div>
+              <button type="button" className="real-exam-start" disabled={!realExamInstructionGate.ready} onClick={confirmRealExamInstructionGate} style={{marginTop:18}}>
+                Confirm and start {realExamInstructionGate.skill}
+              </button>
+            </section>
+          </main>
+          {renderRealExamBottomBar()}
+        </div>
+      );
+    }
+    return (
+      <div className="real-exam-shell">
+        <style>{`
+          .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+          .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
+          .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
+          .real-exam-brand img{height:26px;display:block}
+          .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+          .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
+          .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
+          .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
+          .real-exam-wifi.small{transform:scale(.74);transform-origin:center}
+          .real-exam-bell{width:17px;height:19px;border:2px solid currentColor;border-bottom:0;border-radius:10px 10px 4px 4px;position:relative;display:inline-block}
+          .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
+          .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
+          .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
+          .real-exam-main{flex:1;overflow:auto;padding:18px 18px 78px}
+          .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
+          .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+          .real-exam-check{color:#0b7f22;font-size:24px;font-weight:900}
+          .real-exam-test{padding:18px 20px 20px}
+          .real-exam-test h2{margin:0 0 18px;font-size:22px;line-height:1.15}
+          .real-exam-status{margin:0 0 20px;font-size:14px;font-weight:800;color:#b00020}
+          .real-exam-status.done{color:#0b7f22}
+          .real-exam-timing{margin:0 0 20px;font-size:14px}
+          .real-exam-info{height:52px;border:1px solid #c6c6c6;border-radius:2px;display:flex;align-items:center;padding:0 14px;margin:0 0 14px;gap:12px;box-sizing:border-box;font-size:14px}
+          .real-exam-info b{font-size:20px;line-height:1}
+          .real-exam-info span:last-child{color:#0b7f22;margin-left:4px}
+          .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
+          .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
+          .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+          .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
+          .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
+          .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
+          .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
+          .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
+          .real-exam-audio.is-muted{background:#fff;color:#333}
+          .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
+        `}</style>
+        {globalStyles}
+        {renderRealExamTopBar()}
+        <main className="real-exam-main">
+          {!pkg ? (
+            <section className="real-exam-card" style={{ padding: 24 }}>
+              <h1 style={{ margin: "0 0 10px", fontSize: 24 }}>Package unavailable</h1>
+              <p style={{ margin: "0 0 18px", color: "#4b5563" }}>This real exam package is no longer available.</p>
+              <button onClick={finishAndLeave} style={{ border: "1px solid #111827", background: "#111827", color: "#fff", padding: "10px 18px", fontWeight: 800, cursor: "pointer" }}>Return to dashboard</button>
+            </section>
+          ) : (
+            <>
+              <section className="real-exam-card">
+                <div className="real-exam-card-head">
+                  <span>Pre-test checks</span>
+                  <span className="real-exam-check">✓</span>
+                </div>
+              </section>
+              {exams.map((quiz) => {
+                  const quizDone = completed.has(quiz.id);
+                  const isNext = quiz.id === nextQuizId;
+                  const skill = realExamSkillLabel(quiz);
+                  return (
+                    <section key={quiz.id} className="real-exam-card real-exam-test">
+                      <h2>{skill}</h2>
+                      <p className={`real-exam-status ${quizDone ? "done" : ""}`}>{quizDone ? "Completed" : "Not completed"}</p>
+                      <p className="real-exam-timing">Timing: {formatRealExamTiming(Number(quiz.timeLimit) || 0)}</p>
+                      {isNext && !quizDone && <div className="real-exam-info"><b>⌄</b><span>Test information.</span><span>Confirmed</span></div>}
+                      <button className="real-exam-start" disabled={!isNext || quizDone} onClick={() => startRealExamPackageQuiz(pkg, quiz.id)}>
+                        <span>➜</span> Start {skill}
+                      </button>
+                    </section>
+                  );
+                })}
+            </>
+          )}
+        </main>
+        {renderRealExamBottomBar()}
+      </div>
+    );
+  }
 
       // ==========================================
       // VIEW: STUDENT DASHBOARD

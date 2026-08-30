@@ -4,6 +4,13 @@
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
+          const formatExamRemaining = (seconds: number) => {
+              const safe = Math.max(0, Math.floor(seconds || 0));
+              const mins = Math.floor(safe / 60);
+              const secs = safe % 60;
+              if (safe <= 300) return `${mins} minutes ${secs} seconds remaining`;
+              return `${mins} minutes remaining`;
+          };
 
           const getNavigatorGroups = () => {
               const qs = activeExam?.questions;
@@ -61,14 +68,21 @@
               if (id) setExamCurrentQId(id);
           };
 
-          // Viền vàng flash mượt đánh dấu câu vừa nhảy tới (cả input inline)
+          // Navigation only gives blue focus to answer gaps/dropzones. MCQ state
+          // is already shown by the footer question square, so no card outline.
           const flashQuestion = (id: string) => {
               const el = findQuestionEl(id);
               if (!el) return;
-              el.classList.remove('idp-q-focus-flash');
-              void el.offsetWidth; // ép reflow để chạy lại animation
-              el.classList.add('idp-q-focus-flash');
-              window.setTimeout(() => el.classList.remove('idp-q-focus-flash'), 1700);
+              const target = el.matches('[data-answer-input], .idp-dropzone, .idp-diagram-input, .idp-diagram-overlay-input')
+                  ? el
+                  : (el.querySelector('[data-answer-input], .idp-dropzone, .idp-diagram-input, .idp-diagram-overlay-input') as HTMLElement | null);
+              if (!target) return;
+              document.querySelectorAll('.exam-content-block .idp-current-gap').forEach((node) => node.classList.remove('idp-current-gap'));
+              target.classList.remove('idp-q-focus-flash');
+              target.classList.add('idp-current-gap');
+              void target.offsetWidth;
+              target.classList.add('idp-q-focus-flash');
+              window.setTimeout(() => target.classList.remove('idp-q-focus-flash'), 1700);
           };
 
           // Chuyển câu trước/sau theo DANH SÁCH CÂU của section đang xem (chạy cả inline input)
@@ -182,11 +196,11 @@
               const transfer = event?.dataTransfer;
               if (!transfer) return;
               transfer.effectAllowed = sourceQid ? "copyMove" : "copy";
-              transfer.setData("text/plain", heading.id);
+              transfer.setData("text/plain", heading.text || heading.id);
               transfer.setData("application/x-ielts-heading-id", heading.id);
               transfer.setData("application/x-ielts-heading-label", heading.text);
               if (sourceQid) transfer.setData("application/x-ielts-heading-source", sourceQid);
-              setCleanDragImage(event, `${heading.id}. ${heading.text}`);
+              setCleanDragImage(event, heading.text || heading.id);
           };
 
           const readDroppedHeading = (event: any) => {
@@ -200,7 +214,7 @@
           const placeHeading = (qId: string | undefined, payload: { id: string; text: string; sourceQid: string }) => {
               if (!qId || !payload?.id) return;
               const heading = normalizeHeadingPayload(payload.id, payload.text, payload.sourceQid);
-              handleAnswerChange(qId, heading.id, "DRAG_DROP_HEADING");
+              handleAnswerChange(qId, heading.text || heading.id, "DRAG_DROP_HEADING");
               setHeadingLabelByQuestion((previous) => ({
                   ...previous,
                   [qId]: { id: heading.id, text: heading.text },
@@ -350,11 +364,16 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       (() => {
                                           const hasBlankInText = (q.text || "").includes("___") || (q.text || "").includes("…") || (q.text || "").includes("____");
                                           return hasBlankInText ? (
-                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
+                                              <input type="text" className={`idp-inline-input ${(examAnswers[q.id] as string) ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={firstGlobalIdx.toString()} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{ textAlign: 'center', width: rInputW }} />
                                           ) : null;
                                       })()
                                   )}
-                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && (
+                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && examCurrentQId === q.id && (
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''} idp-current-gap`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Drag answer here"}>
+                                          {(examAnswers[q.id] as string) || firstGlobalIdx}
+                                      </span>
+                                  )}
+                                  {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && examCurrentQId !== q.id && (
                                       <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Kéo đáp án thả vào đây"}>
                                           {(examAnswers[q.id] as string) || firstGlobalIdx}
                                       </span>
@@ -364,7 +383,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                           
                           <div style={{ marginLeft: (isFillBlank || isDragDrop) ? 0 : 40, marginTop: 8 }}>
                               {q.type === "BLANK" && !isTFNGQuestion && !isYNNGQuestion && !isInjectedIntoContext && !isInlineInjected && !(q.text || "").includes("___") && !(q.text || "").includes("____") && (
-                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
+                                  <input type="text" className={`idp-input ${(examAnswers[q.id] as string) ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-answer-input="true" autoComplete="off" spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="text" aria-autocomplete="none" {...({ writingsuggestions: "false" } as any)} placeholder={`${firstGlobalIdx}`} defaultValue={(examAnswers[q.id] as string) || ""} onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)} onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")} onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(firstGlobalIdx, (activeExam!.questions || []).length); }} style={{maxWidth: rInputW, marginTop: 4, textAlign: 'center', borderRadius: '3px'}} />
                               )}
                               
                               {(q.type === "CHOICE" || isTFNGQuestion || isYNNGQuestion) && (
@@ -414,7 +433,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 if ((e.currentTarget as HTMLElement).querySelector('.idp-temp-selection, .student-highlight, .student-note-hl')?.contains(e.target)) return;
                                 const sel = window.getSelection();
                                 if (sel && sel.toString().trim().length > 0) return;
-                                handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length);
+                                handleAnswerChange(q.id, optIndex);
                             }}>
                             {/* Vùng chọn mở rộng ra cả dòng (kể cả text) — quét chữ để highlight vẫn được, chỉ bấm mới tính là chọn */}
                             <input
@@ -422,7 +441,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 id={optionId}
                                 name={`q_${q.id}`}
                                 checked={isSelected}
-                                onChange={() => { handleAnswerChange(q.id, optIndex); handleAutoScrollNext(firstGlobalIdx, (activeExam.questions || []).length); }}
+                                onChange={() => { handleAnswerChange(q.id, optIndex); }}
                                 className="idp-mcq-radio"
                             />
                             <StaticHtmlBlock tagName="span" className="highlightable-content idp-mcq-opt" dataField="options" dataQid={q.id} dataOptIndex={String(optIndex)} style={{ color: 'var(--etext)' }} html={renderSafeHTML(cleanOpt)} />
@@ -518,23 +537,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
                    onContextMenu={(e: any) => {
                        if (isPractice) return;
-                       if (e.target && e.target.classList && e.target.classList.contains('student-highlight')) {
-                           e.preventDefault();
-                           const target = e.target as HTMLElement;
-                           const container = target.closest('.highlightable-content');
-                           
-                           target.outerHTML = target.innerHTML;
-                           
-                           if (container) {
-                               const field = container.getAttribute('data-field');
-                               const qId = container.getAttribute('data-qid');
-                               const optIndex = container.getAttribute('data-optindex');
-                               
-                               if (field) {
-                                   const cleanHTML = serializeHighlightHTML(container as HTMLElement);
-                                   setActiveExam(prev => syncHighlightState(prev, field, qId || "", cleanHTML, optIndex));
-                               }
-                           }
+                       if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
+                           openHighlightDeleteMenu(e, (e.target as HTMLElement).closest('.student-highlight') as HTMLElement);
                        } else {
                            e.preventDefault(); 
                        }
@@ -656,11 +660,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* ĐàFIX UI CHUẨN: Popup Highlight & Giao diện Tooltip Nhập Ghi Chú */
                       /* POPUP QUÉT CHỮ — sao chép Inspera: 2 nút NGANG [Note | Highlight], icon trên, chữ dưới, vạch chia dọc */
-                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; }
+                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; animation: idpPopupRise .18s cubic-bezier(.2,.82,.2,1) both; }
                       .idp-popup-menu::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.05)); }
                       .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
                       .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
+                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:188px; min-height:150px; border:1px solid #8a8f98; border-radius:8px; background:#fff; color:#2f3338; box-shadow:0 10px 24px rgba(0,0,0,.22); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-14px; left:50%; width:24px; height:24px; background:#fff; border-left:1px solid #8a8f98; border-top:1px solid #8a8f98; transform:translateX(-50%) rotate(45deg); }
+                      .idp-highlight-delete-menu button { position:relative; z-index:1; border:0; background:transparent; color:inherit; cursor:pointer; font:500 22px/1.1 Arial,sans-serif; display:grid; gap:6px; place-items:center; }
+                      .idp-highlight-delete-menu button:hover { color:#111; }
+                      @keyframes idpDeleteRise { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
                       
                       /* THANH AUDIO PRACTICE (trên nav bar) — tối giản IDP: track mảnh, thumb tròn đen, không màu mè */
                       .idp-audio-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 7px 20px; background: var(--epanel); border-top: 1px solid var(--eborder); }
@@ -690,8 +699,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-note-link { background: none; border: none; cursor: pointer; font-size: 13px; font-weight: 600; color: #2563eb; padding: 6px 0 0 0; }
                       .idp-note-link:hover { text-decoration: underline; }
                       .idp-note-link.light { color: #fff; }
-                      .idp-note-input-modal { position: absolute; background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 999999; transform: translate(-50%, 10px); border: 1px solid #d1d5db; min-width: 250px; }
+                      .idp-note-input-modal { position: absolute; background: #fff; border-radius: 6px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 999999; transform: translate(-50%, 10px); border: 1px solid #d1d5db; min-width: 250px; animation: idpNoteRise .2s cubic-bezier(.2,.82,.2,1) both; }
                       .idp-note-input-modal::before { content: ''; position: absolute; top: -8px; left: 50%; transform: translateX(-50%); border-width: 0 8px 8px; border-style: solid; border-color: transparent transparent #fff transparent; filter: drop-shadow(0 -2px 2px rgba(0,0,0,0.05)); }
+                      @keyframes idpPopupRise { from { opacity: 0; transform: translate(-50%, calc(-100% + 12px)); } to { opacity: 1; transform: translate(-50%, -100%); } }
+                      @keyframes idpNoteRise { from { opacity: 0; transform: translate(-50%, 24px); } to { opacity: 1; transform: translate(-50%, 10px); } }
+                      @media (prefers-reduced-motion: reduce) { .idp-popup-menu, .idp-note-input-modal, .idp-highlight-delete-menu { animation: none; } }
 
                       .idp-section-tab { flex: 1; text-align: center; padding: 12px 5px; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; color: var(--esub); position: relative; }
                       .idp-section-tab.active { border-bottom-color: var(--etext); color: var(--etext); font-weight: 900; background: var(--epanel); }
@@ -706,6 +718,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-content-block .highlightable-content .student-highlight, .exam-content-block .highlightable-content .student-highlight *, .exam-content-block .idp-q-text-inline .student-highlight, .exam-content-block .idp-q-text-inline .student-highlight * { background-color: var(--hlbg) !important; color: var(--hlfg) !important; cursor: pointer; }
                       .exam-content-block .highlightable-content .student-note-hl, .exam-content-block .highlightable-content .student-note-hl *, .exam-content-block .idp-q-text-inline .student-note-hl, .exam-content-block .idp-q-text-inline .student-note-hl * { background-color: var(--notebg) !important; color: var(--notefg) !important; cursor: pointer; }
+                      .exam-content-block .highlightable-content .student-note-hl .student-highlight, .exam-content-block .highlightable-content .student-note-hl .student-highlight *, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight * { background-color: #ff66dd !important; color: #000 !important; cursor: pointer; }
                       .exam-content-block .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection * { background-color: #b3d4fc !important; color: #000 !important; }
@@ -787,7 +800,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-footer-nav { position: relative; width: 100%; min-height: 52px; max-height: 40vh; background: #fff; border-top: 2px solid #ccc; display: flex; justify-content: space-between; align-items: stretch; z-index: 1000; flex-shrink: 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
                       .idp-nav-squares { display: flex; gap: 8px; padding: 0; flex: 1; align-items: flex-start; height: 100%; flex-wrap: wrap; }
                       /* NAV CHUẨN IELTS: số trần, đã trả lời = gạch chân xanh, câu hiện tại = khung xanh */
-                      .idp-nav-sq { min-width: 26px; height: 30px; padding: 3px 6px 0; border: none; border-top: 2px solid #cbd0d6; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: #1a1a1a; display: flex; justify-content: center; align-items: center; border-radius: 0; flex-shrink: 0; box-sizing: border-box; transition: 0.12s; }
+                      .idp-nav-sq { min-width: 26px; height: 30px; padding: 3px 6px 0; border: none; border-top: 2px solid #cbd0d6; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: #1a1a1a; display: flex; justify-content: center; align-items: center; border-radius: 0; flex-shrink: 0; box-sizing: border-box; transition: 0.12s; white-space: nowrap; }
+                      .idp-nav-sq.wide { min-width: 44px; }
                       .idp-nav-sq.ans { border-top: 2px solid #16a34a; }
                       .idp-nav-sq.cur { border: 1.5px solid #0a66c2; border-radius: 3px; color: #0a66c2; font-weight: 800; }
                       .idp-nav-sq.flagged { border-top: 2px solid #bf8700; color: #7a5200; }
@@ -808,13 +822,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
                       .highlight-flash { animation: flashYellow 1.5s; }
                       @keyframes flashYellow { 0%, 100% { background-color: transparent; } 50% { background-color: #fff3cd; } }
-                      /* Quầng vàng đánh dấu câu mũi tên vừa tới — nở quầng sáng mờ ảo rồi tan dần */
-                      .idp-q-focus-flash { animation: qFocusFlash 2.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards; border-radius: 8px; will-change: box-shadow, background-color; }
+                      .idp-current-gap { border-color:#0969da !important; outline:2px solid rgba(9,105,218,.22) !important; outline-offset:1px !important; }
+                      .idp-q-focus-flash { animation: qFocusFlash 1.4s cubic-bezier(0.22, 0.61, 0.36, 1) forwards; will-change: box-shadow, background-color; }
                       @keyframes qFocusFlash {
-                          0%   { box-shadow: 0 0 0 0 rgba(245,158,11,0), 0 0 0 0 rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
-                          14%  { box-shadow: 0 0 18px 6px rgba(245,158,11,0.45), 0 0 0 1px rgba(245,158,11,0.55); background-color: rgba(245,158,11,0.13); }
-                          45%  { box-shadow: 0 0 14px 5px rgba(245,158,11,0.26), 0 0 0 1px rgba(245,158,11,0.30); background-color: rgba(245,158,11,0.07); }
-                          100% { box-shadow: 0 0 26px 10px rgba(245,158,11,0), 0 0 0 1px rgba(245,158,11,0); background-color: rgba(245,158,11,0); }
+                          0%   { box-shadow: 0 0 0 0 rgba(9,105,218,0); background-color: rgba(9,105,218,0); }
+                          20%  { box-shadow: 0 0 0 3px rgba(9,105,218,0.28); background-color: rgba(9,105,218,0.08); }
+                          100% { box-shadow: 0 0 0 0 rgba(9,105,218,0); background-color: rgba(9,105,218,0); }
                       }
                       
                       /* ĐàFIX: Tăng độ ưu tiên CSS (Specificity) cực đại để ghi đè luật transparent của hệ thống */
@@ -845,26 +858,34 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* Hình 3: Matching matrix table */
                       .idp-matching-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-                      .idp-matching-table th { background: #f4f5f7; border: 1px solid #ccc; padding: 8px 12px; text-align: center; font-weight: 700; color: #24292f; min-width: 42px; }
-                      .idp-matching-table td { border: 1px solid #ddd; padding: 10px 12px; vertical-align: middle; background: #fff; }
-                      .idp-matching-table td:first-child { background: #fafafa; font-size: 13px; }
-                      .idp-matching-table tbody tr:hover td { background: #f8f9ff; }
-                      .idp-matching-table input[type="radio"] { display: block; margin: 0 auto; width: 17px; height: 17px; cursor: pointer; accent-color: #0969da; }
-                      .idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
-                      .idp-matching-text-option { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid transparent; border-radius: 4px; background: #fff; color: #24292f; font-size: 13px; line-height: 1.35; cursor: pointer; }
-                      .idp-matching-text-option:hover { border-color: #b6d7ff; background: #f6faff; }
-                      .idp-matching-text-option.selected { border-color: #0969da; background: #eef6ff; }
-                      .idp-matching-text-option input[type="radio"] { margin: 1px 0 0; width: 16px; height: 16px; }
-                      .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
-                      .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
-                      .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
+                      .idp-matching-grid-frame { display:inline-block; min-width:min(100%, 620px); padding:18px 16px 22px; border:1px solid #555 !important; background:#fff !important; box-sizing:border-box; overflow-x:auto; }
+                      .idp-matching-grid-table { min-width: 560px; border: 0 !important; background: #fff !important; }
+                      .idp-matching-grid-table th { background: #fff !important; border: 1px solid #111 !important; border-top-color: transparent !important; padding: 9px 12px; text-align: center; font-weight: 700; color: #111827 !important; min-width: 44px; }
+                      .idp-matching-grid-table th:first-child { border-left-color: transparent !important; }
+                      .idp-matching-grid-table th:last-child { border-right-color: transparent !important; }
+                      .idp-matching-grid-table td { border: 1px solid #111 !important; padding: 11px 12px; vertical-align: middle; background: #fff !important; }
+                      .idp-matching-grid-table tr:last-child td { border-bottom-color: transparent !important; }
+                      .idp-matching-grid-table td:first-child { border-left-color: transparent !important; }
+                      .idp-matching-grid-table td:last-child { border-right-color: transparent !important; }
+                      .idp-matching-grid-table .idp-matching-grid-question { text-align: left; font-size: 14px; line-height: 1.35; }
+                      .idp-matching-grid-choice { width: 48px; text-align: center; padding: 8px 6px !important; }
+                      .idp-matching-grid-table tbody tr:hover td { background: #f8fafc; }
+                      .idp-matching-grid-table input[type="radio"] { display: block; margin: 0 auto; width: 14px; height: 14px; cursor: pointer; accent-color: #0969da; }
+                      .idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; font-size:14px; font-weight:800; flex-shrink:0; }
+                      .idp-matching-grid-number.cur { border-color:#0969da; color:#0969da; }
+                      .idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
+                      .idp-matching-feature-title { font-size:14px; font-weight:700; color:#111827; margin:0 0 6px; }
+                      .idp-matching-feature-key { width: auto; border-collapse: collapse; border: 0; background: #fff; font-size: 14px; }
+                      .idp-matching-feature-key th { min-width: 54px; padding: 9px 12px; border: 1px solid #333; background: #fff; text-align: left; font-weight: 800; color: #111827; }
+                      .idp-matching-feature-key td { min-width: 190px; padding: 9px 12px; border: 1px solid #333; background: #fff; color: #111827; }
                       /* Map / plan labelling: image and answer matrix stay visible together. */
                       .idp-map-plan-layout { display: grid; grid-template-columns: minmax(0, 1.26fr) minmax(500px, .94fr); gap: 28px; align-items: start; }
                       .idp-map-plan-visual { position: sticky; top: 10px; min-width: 0; border: 1px solid var(--eborder); background: var(--epanel); padding: 8px; box-sizing: border-box; }
                       .idp-map-plan-image { display: block; line-height: 0; }
                       .idp-map-plan-image img { display: block; width: 100% !important; max-width: 100% !important; height: auto !important; max-height: min(72vh, 760px); object-fit: contain; margin: 0 auto !important; }
-                      .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 1px solid var(--eborder); background: var(--ecard); }
+                      .idp-map-plan-answers { min-width: 0; overflow-x: auto; overscroll-behavior: contain; border: 0; background: transparent; }
                       .idp-map-plan-answers .idp-matching-table { min-width: 500px; margin: 0; }
+                      .idp-map-plan-answers .idp-matching-grid-frame { min-width: 500px; }
                       .idp-map-plan-answers .idp-matching-table th { min-width: 34px; padding: 8px 7px; }
                       .idp-map-plan-answers .idp-matching-table td { padding: 9px 7px; }
                       .idp-map-plan-answers .idp-matching-table th:first-child { min-width: 155px; }
@@ -887,8 +908,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
                       .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
                       /* Diagram labelling: one responsive coordinate canvas, with labels allowed outside the artwork. */
-                      .idp-diagram-wrap { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
-                      .idp-diagram-stage { position:relative; width:100%; min-width:720px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
+                      .idp-diagram-wrap { width:100%; max-width:min(100%, var(--idp-diagram-max, 860px)); margin:0 auto; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+                      .idp-diagram-stage { position:relative; width:100%; min-width:min(640px, 100%); aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
                       .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
                       .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
                       .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:#fff; color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
@@ -908,7 +929,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         .idp-map-drag-canvas { overflow:auto; }
                         .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
                         .idp-diagram-wrap { overflow:auto; }
-                        .idp-diagram-stage { min-width:660px; }
+                        .idp-diagram-stage { min-width:min(600px, 100%); }
                       }
 
                       /* Hình 6: Drag-drop 2-column layout */
@@ -925,9 +946,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wordbank-item.selected, .idp-match2-tag.selected { outline: 2px solid #0969da; outline-offset: 1px; background: #e6f0ff; }
 
                       /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
-                      .idp-wordbank { display: flex; flex-wrap: wrap; gap: 10px; padding: 16px; background: var(--epanel); border: 1px solid var(--eborder); border-radius: 8px; margin-bottom: 18px; }
-                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--einput); border: 1px solid var(--eborder); border-radius: 6px; cursor: grab; font-size: var(--efont); font-weight: 600; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
-                      .idp-wordbank-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+                      .idp-wordbank { display: flex; flex-wrap: wrap; align-items:center; gap: 7px 8px; padding: 0; background: transparent; border: 0; border-radius: 0; margin: 16px 0 0; }
+                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 4px 9px; background: var(--ecard); border: 1px solid #8a8f98; border-radius: 2px; cursor: grab; font-size: 13px; font-weight: 700; line-height:1.25; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
+                      .idp-wordbank-item:hover { box-shadow: 0 1px 5px rgba(0,0,0,0.12); }
                       .idp-wordbank-item:active { cursor: grabbing; }
                       .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
@@ -948,6 +969,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
+                      .idp-sentence-ending { max-width: 780px; }
+                      .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
+                      .idp-sentence-ending-row { display:block; font-size:var(--efont); line-height:1.45; color:var(--etext); }
+                      .idp-sentence-ending-row .idp-dropzone { display:block; margin:4px 0 0; min-height:24px; border:1.5px dashed #0a66c2; background:transparent; border-radius:2px; color:var(--etext); font-weight:800; }
+                      .idp-sentence-ending-row .idp-dropzone.filled { border-style:solid; background:rgba(9,105,218,.06); color:#0550ae; }
+                      .idp-sentence-ending-bank { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
+                      .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
+                      .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
+                      .mh-heading-title { margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
+                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
+                      .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
+                      .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
+                      .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; }
                       .idp-drag-summary { line-height: 2.2; }
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
                       .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
@@ -955,6 +989,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* Section header Listening */
                       .idp-section-header { font-size: 12px; font-weight: 700; color: #57606a; text-transform: uppercase; letter-spacing: 0.6px; padding: 0 0 8px 0; margin-bottom: 14px; border-bottom: 2px solid #d1d5db; display: flex; align-items: center; gap: 8px; }
+                      .idp-listening-section-card { width:100%; box-sizing:border-box; margin:0 0 16px; padding:14px 16px; border:1px solid #c9cdd3; border-radius:2px; background:#f3f4ef; color:#111827; }
+                      .idp-listening-section-card div { font-size:14px; font-weight:800; line-height:1.25; margin-bottom:5px; }
+                      .idp-listening-section-card span { display:block; font-size:13px; line-height:1.35; font-weight:500; color:#111827; }
 
                       /* Option letter badge */
                       .idp-opt-letter { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #bbb; font-size: 12px; font-weight: 700; color: #555; flex-shrink: 0; background: #f4f5f7; }
@@ -1019,7 +1056,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       }}>
                           {Array.from({ length: 40 }).map((_, i) => (
                               <div key={i} style={{ transform: 'rotate(-30deg)', fontSize: 15, fontWeight: 900, color: '#000', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                                  CONFIDENTIAL | ID: {students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}
+                                  CONFIDENTIAL | ID: {activeExam.realExamContext ? activeExam.realExamContext.testTakerId : `${students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | ${currentUser?.email}`}
                               </div>
                           ))}
                       </div>
@@ -1144,11 +1181,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                           <img src={examTheme === 'dark' || examTheme === 'yellow' ? "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts-white.svg" : "https://d2snzxottmona5.cloudfront.net/releases/3.60.0/images/logo/ielts.svg"} alt="IELTS" style={{ height: 26, userSelect: 'none', flexShrink: 0 }} />
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                              <div style={{ fontWeight: 800, fontSize: 16 }}>{students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | {currentUser?.email}</div>
+                              <div style={{ fontWeight: 800, fontSize: 16 }}>{activeExam.realExamContext ? activeExam.realExamContext.testTakerId : `${students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase())?.name || "Student"} | ${currentUser?.email}`}</div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
                                   {(!isPreview) && (
                                       <div className={isTimeRunningOut ? 'pulse-fast' : ''} style={{ fontSize: 13, fontWeight: 600, color: isTimeRunningOut ? '#d32f2f' : 'var(--esub)' }}>
-                                          {Math.floor(examTimeLeft / 60)} minutes remaining
+                                          {formatExamRemaining(examTimeLeft)}
                                       </div>
                                   )}
                                   {/* STRICT: chỉ báo tĩnh "Audio is Playing" (không có thanh tua) */}
@@ -1213,16 +1250,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                  {/* Thanh chọn Passage trên đầu đã bỏ (đề thi IDP thật không có) — chuyển passage bằng thanh review dưới chân. */}
 
-          {/* BANNER PASSAGE FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
-          {(!String(activeExam.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (() => {
+          {/* BANNER SECTION FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
+          {(() => {
               const navG = navGroups[currentSectionIndex];
               const qStart = navG ? navG.startIndex + 1 : 1;
               const qEnd = navG ? navG.startIndex + navG.questions.length : qStart;
-              const label = activeExam.type === "Integrated" ? `PART ${currentSectionIndex + 1}` : `READING PASSAGE ${currentSectionIndex + 1}`;
+              const listeningBanner = String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+              const label = listeningBanner
+                  ? `Part ${currentSectionIndex + 1}`
+                  : (activeExam.type === "Integrated" ? `PART ${currentSectionIndex + 1}` : `READING PASSAGE ${currentSectionIndex + 1}`);
+              const copy = listeningBanner
+                  ? `Listen and answer questions ${qStart}–${qEnd}.`
+                  : `Read the text and answer questions ${qStart}–${qEnd}.`;
               return (
                   <div style={{ flex: 'none', background: 'var(--eboxbg)', padding: '12px 40px', textAlign: 'left', borderBottom: '1px solid var(--eborder)' }}>
                       <div style={{ fontWeight: 800, fontSize: 'calc(var(--efont) + 1px)', color: 'var(--etext)', letterSpacing: '0.01em' }}>{label}</div>
-                      <div style={{ fontSize: 'var(--efont)', color: 'var(--etext)', marginTop: 2 }}>Read the text and answer questions {qStart}–{qEnd}.</div>
+                      <div style={{ fontSize: 'var(--efont)', color: 'var(--etext)', marginTop: 2 }}>{copy}</div>
                   </div>
               );
           })()}
@@ -1231,10 +1274,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(70,70,70,.94) 0 59%, rgba(56,56,56,.94) 59% 100%)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <svg width="96" height="96" viewBox="0 0 24 24" fill="#ffffff" style={{ marginBottom: 18 }}><path d="M12 2.5a9 9 0 0 0-9 9v5.2A2.8 2.8 0 0 0 5.8 19.5h.7a1.5 1.5 0 0 0 1.5-1.5v-4.5a1.5 1.5 0 0 0-1.5-1.5h-1.5v-.5a7 7 0 0 1 14 0v.5h-1.5a1.5 1.5 0 0 0-1.5 1.5V18a1.5 1.5 0 0 0 1.5 1.5h.7A2.8 2.8 0 0 0 21 16.7v-5.2a9 9 0 0 0-9-9z"/></svg>
+                          <svg width="290" height="230" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '52vw' }}>
+                              <path d="M51 130C51 62 93 29 145 29s94 33 94 101" stroke="#fff" strokeWidth="48" strokeLinecap="round" />
+                              <path d="M57 130c8-30 33-42 59-34v79c-27 8-54-9-61-38l-4-7Z" fill="#fff" />
+                              <rect x="98" y="94" width="28" height="112" rx="7" fill="#fff" />
+                              <path d="M233 130c-8-30-33-42-59-34v79c27 8 54-9 61-38l4-7Z" fill="#fff" />
+                              <rect x="164" y="94" width="28" height="112" rx="7" fill="#fff" />
+                          </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
                                   ? 'You will be listening to an audio clip during this test. Practice mode: you may pause, rewind and replay the audio while answering the questions.'
@@ -1297,24 +1346,37 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               };
                               const lookupHeading = (value: any, question: any) => {
                                   const id = headingAnswerId(value);
+                                  const plain = stripHeadingPrefix(value);
                                   // Prefer this paragraph's exact option object; this guarantees
                                   // the slot mirrors the wording visible in the heading tray.
-                                  return getHeadingCatalog([question]).get(id)
+                                  const byId = getHeadingCatalog([question]).get(id)
                                       || sectionHeadingById.get(id)
                                       || headingById.get(id);
+                                  if (byId) return byId;
+                                  const allHeadings = [
+                                      ...Array.from(getHeadingCatalog([question]).values()),
+                                      ...Array.from(sectionHeadingById.values()),
+                                      ...Array.from(headingById.values()),
+                                  ];
+                                  return allHeadings.find((heading: any) =>
+                                      normalizeComparableAnswer(stripHeadingPrefix(heading.text)) === normalizeComparableAnswer(plain)
+                                  );
                               };
                               return (
                                   <div className="highlightable-content idp-text-content notranslate" translate="no" data-field="sections" data-qid="" style={{ lineHeight: 1.8 }}>
                                       {chunks[0] && chunks[0].trim() && <StaticHtmlBlock html={renderSafeHTML(chunks[0])} />}
                                       {headingQs.map((q: any, i: number) => {
                                           const letter = String.fromCharCode(65 + i);
+                                          const qNumber = getQuizQuestionNumber(activeExam!.questions || [], q.id);
                                           const filled = examAnswers[q.id] as string;
                                           const isFilled = !!filled;
                                           const assignedHeading = lookupHeading(filled, q);
                                           const cachedHeading = headingLabelByQuestion[q.id];
-                                           const displayedHeading = cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
-                                               ? cachedHeading
-                                               : { id: assignedHeading?.id || headingAnswerId(filled), text: headingPlainText(assignedHeading?.text) || headingPlainText(cachedHeading?.text) };
+                                           const displayedHeading = assignedHeading
+                                               ? assignedHeading
+                                               : (cachedHeading?.id === headingAnswerId(filled) && headingPlainText(cachedHeading.text)
+                                                  ? cachedHeading
+                                                  : { id: headingAnswerId(filled), text: stripHeadingPrefix(filled) || headingPlainText(cachedHeading?.text) });
                                           const assignedHeadingText = headingPlainText(displayedHeading.text) || resolveHeadingText(filled);
                                           return (
                                               <React.Fragment key={q.id}>
@@ -1331,9 +1393,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onClick={(e: any) => { e.stopPropagation(); if (isFilled) setSelectedHeadingDrag({ ...displayedHeading, sourceQid: q.id }); else if (selectedHeadingDrag) placeHeading(q.id, selectedHeadingDrag); }}
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); clearHeading(q.id); }}
                                                           title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
-                                                          style={{flex:1, minHeight:40, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#bbb'}`, borderRadius:6, display:'flex', alignItems:'center', gap:10, padding:'6px 14px', background: isFilled ? 'rgba(26,115,232,0.06)' : 'var(--ecard)', cursor: isFilled ? 'pointer' : 'default', transition:'all .15s'}}>
-                                                          <span key={`heading-number-${q.id}`} aria-hidden={!isFilled} style={{display:isFilled?'inline':'none',fontStyle:'italic',fontWeight:700,fontSize:13,color:'var(--eblue)',flexShrink:0}}>{displayedHeading.id}{isFilled ? '.' : ''}</span>
-                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:12.5,color:isFilled?'var(--etext)':'var(--esub)',lineHeight:1.4,fontStyle:isFilled?'normal':'italic'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : 'Drag heading here'}</span>
+                                                          style={{flex:1, minHeight:26, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#0a66c2'}`, borderRadius:2, display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'2px 10px', background: isFilled ? 'rgba(26,115,232,0.04)' : 'transparent', cursor: isFilled ? 'pointer' : 'default', transition:'border-color .15s, background .15s'}}>
+                                                          <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:13,color:isFilled?'var(--etext)':'var(--etext)',lineHeight:1.35,fontWeight:isFilled?700:800,textAlign:'center'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : qNumber}</span>
                                                       </div>
                                                   </div>
                                               </div>
@@ -1401,18 +1462,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
                        onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
                        onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(String(zone.textContent || '').trim()); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                        onDoubleClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; const qId = zone?.dataset.qid; if (qId) { handleAnswerChange(qId, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); } }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
-                                  {(String(activeExam!.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                                      <div className="idp-section-header">
-                                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM5 7.5a1.5 1.5 0 013 0v3a1.5 1.5 0 01-3 0v-3zm6 0a1.5 1.5 0 01-3 0v3a1.5 1.5 0 013 0v-3z" fill="#57606a"/></svg>
-                                          {activeExam.type === "Integrated" ? `Part ${currentSectionIndex + 1}` : `Part ${currentSectionIndex + 1}`}
-                                      </div>
-                                  )}
                                   {/* LỌC & RENDER CU HỎI */}
                   {(() => {
                       // ĐàFIX: Gom nhóm câu hỏi trực tiếp từ mảng questions của Tab hiện tại
@@ -1464,7 +1519,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   const tQ = activeExam?.questions?.[tIdx];
                                   if (!tQ) return match;
                                   // PHẢI giống HỆT input của System1 (App.template) để TRƯỚC == SAU highlight.
-                                  return `<input type="text" class="idp-inline-input inline-blank-input" data-qid="${tQ.id}" data-answer-input="true" placeholder="${num}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${groupInputW}px" />`;
+                                  const currentClass = examCurrentQId === tQ.id ? " idp-current-gap" : "";
+                                  return `<input type="text" class="idp-inline-input inline-blank-input${currentClass}" data-qid="${tQ.id}" data-answer-input="true" placeholder="${num}" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" inputmode="text" aria-autocomplete="none" writingsuggestions="false" data-ms-editor="false" style="width:${groupInputW}px" />`;
                               });
                               // Flow-chart markers may be sanitized to -&gt; before this point; normalize every standalone marker.
                               const flowArrowHtml = '<img class="idp-flow-arrow" src="/flowchart-arrow-down.png" alt="" aria-hidden="true" />';
@@ -1492,7 +1548,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               }
                               return Array.from(ids);
                           })();
-                          const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP");
+                          const sentenceEndingPrompt = `${group.instruction || ""} ${group.context || ""}`.toLowerCase();
+                          const isSentenceEndingMatching = group.questions.every(q => q.type === "MATCHING")
+                              && (/(sentence|sentences).{0,80}ending/.test(sentenceEndingPrompt)
+                                  || sentenceEndingPrompt.includes("complete each sentence")
+                                  || sentenceEndingPrompt.includes("move it into the gap"));
+                          const isDragDropGroup = group.questions.some(q => q.type === "DRAG_DROP") || isSentenceEndingMatching;
                           const isMapDragGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "MAP_DRAG");
                           const isDiagramLabelGroup = group.questions.length > 0 && group.questions.every((q: any) => q.type === "DIAGRAM_LABEL");
                   const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
@@ -1516,7 +1577,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
                   let dragCleanInstruction = group.instruction || "";
                   dragLabels.forEach(l => { dragCleanInstruction = dragCleanInstruction.split(`<div>${l}</div>`).join(`<div class="idp-draglabel-hide">${l}</div>`); });
-                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING");
+                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
                   // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
                   const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
@@ -1538,12 +1599,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       return overall >= 0 ? overall + 1 : currentSectionQuestions.findIndex((x: any) => x.id === q.id) + 1;
                   }).filter((n: number) => n > 0);
                   const explicitDragSubType = String(group.questions.find((q: any) => q.subType)?.subType || "").toUpperCase();
+                  const isSentenceEndingDrag = isSentenceEndingMatching || explicitDragSubType === "SENTENCE_ENDING_DRAG";
                   const contextSlotLines = String(group.context || "").replace(/<\/?(?:div|p|br)[^>]*>/gi, "\n").split(/\n+/).map((line: string) => line.replace(/<[^>]+>/g, "").trim()).filter(Boolean);
                   const markedContextLines = contextSlotLines.filter((line: string) => /\[\d+\]/.test(line));
                   const hasSummarySlots = markedContextLines.length > 0
                       && groupQuestionNumbers.some((n: number) => new RegExp(`\\[${n}\\]`).test(group.context))
                       && !markedContextLines.every((line: string) => /^\[\d+\]/.test(line));
-                  const isWordBankDrag = isDragDropGroup && dragOptions.length > 0
+                  const isWordBankDrag = isDragDropGroup && !isSentenceEndingDrag && dragOptions.length > 0
                       && (explicitDragSubType === "SUMMARY_DRAG" || (!explicitDragSubType && hasSummarySlots));
                   const wordBankSummaryHtml = isWordBankDrag ? (() => {
                       let html = renderSafeHTML(group.context);
@@ -1554,7 +1616,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const val = examAnswers[tQ.id];
                           const filled = val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0);
                           const disp = filled ? String(val) : num;
-                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
+                          const currentClass = examCurrentQId === tQ.id ? ' idp-current-gap' : '';
+                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}${currentClass}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
                       });
                       return html;
                   })() : "";
@@ -1635,7 +1698,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           <span className="idp-flowchart-number">{qGlobalIdx}</span>
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
                                            {isDragFlow ? <span
-                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''}`}
+                                              className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
@@ -1673,49 +1736,111 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         );
                     };
 
-                    const renderMatchingTable = () => {
-                       const matchingOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                   const renderMatchingTable = () => {
+                       const rawOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).filter((option: any) => String(option ?? "").trim());
+                       const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                       const questionColumnTitle = String(group.questions.find((item: any) => item.leftTitle)?.leftTitle || "").trim();
+                       const legendTitle = String(group.questions.find((item: any) => item.rightTitle)?.rightTitle || "").trim();
+                       const optionCells = rawOptions.map((option: any, index: number) => ({
+                           label: matchingOptionLabel(option, index),
+                           value: matchingOptionValue(option, index, infoGrid),
+                           text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                       }));
                        return (
                        <>
-                           <table className="idp-matching-table">
-                               <thead>
-                                   <tr>
-                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 200, padding: '8px 12px'}}>Question</th>
-                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 260, padding: '8px 12px'}}>Answer</th>
-                                   </tr>
-                               </thead>
-                               <tbody>
-                                   {group.questions.map((q) => {
+                           <div className="idp-matching-grid-frame">
+                               <table className="idp-matching-table idp-matching-grid-table">
+                                   <thead>
+                                       <tr>
+                                           <th style={{textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 260}}>{questionColumnTitle}</th>
+                                           {optionCells.map((option) => <th key={`match-head-${option.label}`}>{option.label}</th>)}
+                                       </tr>
+                                   </thead>
+                                   <tbody>
+                                       {group.questions.map((q) => {
+                                           const qGlobalIdx = getQuizQuestionNumber(activeExam.questions || [], q.id);
+                                           const optionCarrier = { ...q, options: optionCells.map(option => option.value) };
+                                           const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
+                                           const isCurrent = examCurrentQId === q.id;
+                                           return (
+                                               <tr id={`question-${q.id}`} key={q.id}>
+                                                   <td className="idp-matching-grid-question">
+                                                       <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+                                                           <span className={`idp-matching-grid-number ${isCurrent ? 'cur' : ''}`}>{qGlobalIdx}</span>
+                                                           <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                                       </div>
+                                                   </td>
+                                                   {optionCells.map((option) => {
+                                                       const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(option.value);
+                                                       return (
+                                                           <td key={`${q.id}-${option.label}`} className="idp-matching-grid-choice">
+                                                               <input type="radio" aria-label={`Question ${qGlobalIdx}, ${option.label}`} checked={checked} onChange={() => handleAnswerChange(q.id, option.value, "MATCHING")} />
+                                                           </td>
+                                                       );
+                                                   })}
+                                               </tr>
+                                           );
+                                       })}
+                                   </tbody>
+                               </table>
+                           </div>
+                           {!infoGrid && optionCells.length > 0 && (
+                               <div className="idp-matching-feature-wrap">
+                                   {legendTitle && <div className="idp-matching-feature-title">{legendTitle}</div>}
+                                   <table className="idp-matching-feature-key" aria-label={legendTitle || "Matching answer key"}>
+                                       <tbody>
+                                           {optionCells.map((option) => (
+                                               <tr key={`match-key-${option.label}`}>
+                                                   <th>{option.label}</th>
+                                                   <td>{option.text}</td>
+                                               </tr>
+                                           ))}
+                                       </tbody>
+                                   </table>
+                               </div>
+                           )}
+                       </>
+                       );
+                   };
+
+                   const renderSentenceEndingDrag = () => {
+                       const usedValues = group.questions.map((question: any) => resolveMatchingAnswerText({ ...question, options: dragOptions }, examAnswers[question.id])).filter(Boolean);
+                       const bankWords = dragOptions.filter((option: string) => !usedValues.some((value: string) => normalizeComparableAnswer(value) === normalizeComparableAnswer(option)));
+                       return (
+                           <div className="idp-sentence-ending">
+                               <div className="idp-sentence-ending-list">
+                                   {group.questions.map((q: any) => {
                                        const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
-                                       const optionCarrier = { ...q, options: matchingOptions };
-                                       const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
+                                       const rawValue = examAnswers[q.id] as string;
+                                       const val = rawValue ? resolveMatchingAnswerText({ ...q, options: dragOptions }, rawValue) : "";
                                        return (
-                                           <tr id={`question-${q.id}`} key={q.id}>
-                                               <td style={{ verticalAlign: 'middle' }}>
-                                                   <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
-                                                       <span style={{border: '1px solid #ccc', padding: '2px 6px', fontSize: 12, background: '#fff', borderRadius: 2, flexShrink: 0}}>{qGlobalIdx}</span>
-                                                       <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
-                                                   </div>
-                                               </td>
-                                               <td style={{background: '#fff', textAlign: 'left', verticalAlign: 'middle'}}>
-                                                   <div className="idp-matching-text-options">
-                                                       {matchingOptions.map((optionText: string, i: number) => {
-                                                           const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(optionText);
-                                                           return (
-                                                               <label key={`${q.id}-${i}`} className={`idp-matching-text-option ${checked ? 'selected' : ''}`}>
-                                                                   <input type="radio" aria-label={`Question ${qGlobalIdx}, ${optionText}`} checked={checked} onChange={() => { handleAnswerChange(q.id, optionText, "MATCHING"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} />
-                                                                   <span>{optionText}</span>
-                                                               </label>
-                                                           );
-                                                       })}
-                                                   </div>
-                                               </td>
-                                           </tr>
+                                           <div key={q.id} id={`question-${q.id}`} className="idp-sentence-ending-row">
+                                               <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
+                                               <span
+                                                   className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                   data-qid={q.id}
+                                                   draggable={!!val}
+                                                   style={{minWidth: groupZoneW}}
+                                                   onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                   onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                                   onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                                   onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                   onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                               >{val || qGlobalIdx}</span>
+                                           </div>
                                        );
                                    })}
-                               </tbody>
-                           </table>
-                       </>
+                               </div>
+                               <div className="idp-sentence-ending-bank">
+                                   {bankWords.map((opt: string, idx: number) => (
+                                       <div key={`${opt}-${idx}`} className={`idp-sentence-ending-option ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
+                                           onClick={() => selectBankAnswer(String(opt))}
+                                           onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
+                                           {opt}
+                                       </div>
+                                   ))}
+                               </div>
+                           </div>
                        );
                    };
 
@@ -1786,6 +1911,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const isOverlayDiagram = imageMode === "OVERLAY";
                        const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
+                       const diagramMaxWidth = Math.max(520, Math.min(1180, Number(source.diagramMaxWidth || 860) || 860));
                        // TEXT_BOXES coordinates are always percentages of the raw image, never
                        // of an inferred canvas. Builder and exam therefore share one geometry.
                        const letDiagramImageDefineAspect = isFullCanvasDiagram;
@@ -1808,16 +1934,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const renderGap = (number: string, key: string) => {
                            const question = questionByNumber.get(number);
                            if (!question) return <span key={key}>[{number}]</span>;
-                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
+                           return <span key={key} className="idp-diagram-gap"><span className="idp-diagram-num">{number}</span><input id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id, event.target.value, "BLANK")} style={{width:getDiagramGapWidth(question)}} /></span>;
                        };
                        const renderBoxText = (box: DiagramTextBox) => toDiagramHtml(box.text || "").split(/(\[\d+\])/g).map((part: string, index: number) => {
                            const marker = part.match(/^\[(\d+)\]$/);
                            return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <StaticHtmlBlock key={`${box.id}-text-${index}`} tagName="span" className="highlightable-content" dataField={`diagramTextBoxes:${box.id}:${index}`} dataQid={source.id} html={sanitizeRichHtml(part)} />;
                        });
-                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling">
+                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
                                {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
-                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-diagram-number={number} aria-label={`Question ${number}`} className="idp-diagram-overlay-input" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
+                               {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
                    };
@@ -1841,6 +1967,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           {/* WORD-BANK KÉO-THẢ (chuẩn IELTS Mate): lưới từ phía trên + tóm tắt có ô thả inline */}
                           {isWordBankDrag && (
                               <div style={{marginBottom: 20}}>
+                                  <StaticHtmlBlock className="idp-context-box idp-drag-summary highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}} html={wordBankSummaryHtml} />
                                   <div className="idp-wordbank">
                                       {dragOptions.map((opt: string, idx: number) => {
                                           const used = group.questions.some(q => String(examAnswers[q.id] ?? "") === String(opt));
@@ -1853,12 +1980,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           );
                                       })}
                                   </div>
-                                  <StaticHtmlBlock className="idp-context-box idp-drag-summary highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} style={{whiteSpace: 'pre-wrap', wordBreak: 'break-word'}} html={wordBankSummaryHtml} />
                               </div>
                           )}
 
                           {isDiagramLabelGroup ? renderDiagramLabels() : isMapDragGroup ? renderMapDrag() : isWordBankDrag ? null : isFlowChartGroup ? (
                               renderFlowChart()
+                          ) : isSentenceEndingDrag && dragOptions.length > 0 ? (
+                              renderSentenceEndingDrag()
                           ) : isMatchingGroup && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
                                   <div className="idp-map-plan-layout">
@@ -1874,11 +2002,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               )
                           ) : isDragDropHeadingGroup ? (
                                                       (() => {
-                                                        const usedIds = new Set(group.questions.map((q: any) => normalizeHeadingId(examAnswers[q.id])).filter(Boolean));
+                                                        const usedIds = new Set(group.questions.map((q: any) => {
+                                                            const meta = resolveHeadingAnswerMeta({ ...q, options: headingOptions }, examAnswers[q.id]);
+                                                            return meta.id;
+                                                        }).filter(Boolean));
+                                                        const headingListTitle = String(group.questions.find((q: any) => q.rightTitle)?.rightTitle || "List of Headings").trim();
                                                         return (
                                                           <div className="mh-heading-tray notranslate" translate="no" style={{display:'flex', flexDirection:'column', gap:0}}>
                                                             <div style={{marginBottom:18}}>
-                                                              <div style={{fontSize:11, fontWeight:800, color:'var(--esub)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8}}>List of Headings</div>
+                                                              <div className="mh-heading-title">{headingListTitle}</div>
                                                               {headingOptions.map((opt: any, oIdx: number) => {
                                                                 const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
                                                                   ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
@@ -1888,22 +2020,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 const isUsed = usedIds.has(optId);
                                                                 return (
                                                                   <div key={`heading-option-${optId}`}
-                                                                    className="notranslate"
+                                                                    className={`mh-heading-option notranslate ${isUsed ? 'is-used' : ''} ${selectedHeadingDrag?.id === optId ? 'selected' : ''}`}
                                                                     translate="no"
                                                                     data-heading-id={optId}
                                                                     data-heading-label={headingPlainText(optContent)}
                                                                     draggable={!isUsed}
                                                                     onClick={() => { if (!isUsed) setSelectedHeadingDrag({ id: optId, text: headingPlainText(optContent), sourceQid: '' }); }}
-                                                                    onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}
-                                                                    style={{display:'flex', alignItems:'flex-start', gap:10, padding:'8px 12px', marginBottom:6, borderRadius:6, border:'1px solid', cursor: isUsed ? 'default' : 'grab', userSelect:'none', transition:'opacity .15s, background .15s, outline .15s', opacity: isUsed ? 0.4 : 1, background: isUsed ? 'var(--epanel)' : 'var(--ecard)', borderColor: isUsed ? 'transparent' : 'var(--eborder)', outline: selectedHeadingDrag?.id === optId ? '2px solid var(--eblue)' : 'none'}}>
-                                                                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{opacity:.4, flexShrink:0, marginTop:2}}><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
-                                                                    <span style={{fontStyle:'italic',fontWeight:800,fontSize:13,color:'var(--eblue)',minWidth:24,flexShrink:0}}>{optId}.</span>
-                                                                    <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} style={{flex:1,fontSize:13,lineHeight:1.45,color:'var(--etext)'}} />
+                                                                    onDragStart={(e: any) => { if (!isUsed) beginHeadingDrag(e, { id: optId, text: optContent }); }}>
+                                                                    <StaticHtmlBlock tagName="span" className="notranslate" html={renderSafeHTML(optContent)} />
                                                                   </div>
                                                                 );
                                                               })}
                                                             </div>
-                                                            <div style={{fontSize:11.5, color:'var(--esub)', fontStyle:'italic', marginTop:4, lineHeight:1.5}}>Drag each heading to the box above its matching paragraph in the passage.</div>
                                                           </div>
                                                         );
                                                       })()
@@ -1924,7 +2052,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
@@ -2033,7 +2161,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                      const isFlagged = qIds.some((id: string) => flaggedQuestions?.includes(id));
                                                      const isCur = qIds.includes(curId);
                                                      return (
-                                                         <button key={qIds[0]} className={`idp-nav-sq ${isAns ? 'ans' : ''} ${isFlagged ? 'flagged' : ''} ${isCur ? 'cur' : ''}`}
+                                                         <button key={qIds[0]} className={`idp-nav-sq ${numberLabel.length > 2 ? 'wide' : ''} ${isAns ? 'ans' : ''} ${isFlagged ? 'flagged' : ''} ${isCur ? 'cur' : ''}`}
                                                              onClick={() => {
                                                                  setExamCurrentQId(qIds[0]);
                                                                  const el = findQuestionEl(qIds[0]);
@@ -2053,11 +2181,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          })}
                      </div>
 
-                     <div style={{ display: 'flex', alignItems: 'stretch', flex: 'none', borderLeft: '1px solid var(--eborder)', background: 'var(--ebg)', padding: 0 }}>
-                         <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}>
-                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                         </button>
-                     </div>
+                     {!activeExam.realExamContext && (
+                         <div style={{ display: 'flex', alignItems: 'stretch', flex: 'none', borderLeft: '1px solid var(--eborder)', background: 'var(--ebg)', padding: 0 }}>
+                             <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}>
+                                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                             </button>
+                         </div>
+                     )}
                  </div>
 
                  {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
@@ -2072,6 +2202,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              {/* Icon Inspera 16x16: con trỏ chữ I + vệt highlight dưới chân */}
                              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M6.9 1.5c.9 0 1.3.3 1.6.7.3-.4.7-.7 1.6-.7v1.2c-.7 0-1 .35-1 1v5.6c0 .65.3 1 1 1v1.2c-.9 0-1.3-.3-1.6-.7-.3.4-.7.7-1.6.7v-1.2c.7 0 1-.35 1-1V3.7c0-.65-.3-1-1-1V1.5z"/><rect x="3" y="13" width="10" height="2.2" rx="0.4"/></svg>
                              Highlight
+                         </button>
+                     </div>
+                 )}
+
+                 {highlightDeleteMenu && (
+                     <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
+                         <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
+                             <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+                             <span>Delete<br />Highlight</span>
                          </button>
                      </div>
                  )}

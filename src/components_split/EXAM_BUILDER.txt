@@ -29,7 +29,7 @@
                 const builderGroups: any[] = [];
                 for (let i = 0; i < qs.length; i++) {
                     const q = qs[i];
-                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG' || q.type === 'DIAGRAM_LABEL') {
+                    if (q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING' || q.type === 'BLANK' || q.type === 'DRAG_DROP' || q.type === 'SHORT_ANSWER' || q.type === 'DRAG_DROP_HEADING' || q.type === 'MAP_DRAG' || q.type === 'DIAGRAM_LABEL') {
                         let j = i + 1;
                         const sharedQs = [q];
                         // FIX "phân thân": chỉ gộp khi CÙNG groupContext + instruction (khớp logic đề thi),
@@ -39,7 +39,7 @@
                                && (qs[j].instruction || "") === (q.instruction || "")
                                && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))
                                && (q.type !== 'DIAGRAM_LABEL' || String(qs[j].diagramImageUrl || '') === String(q.diagramImageUrl || ''))) {
-                            if (q.type === 'CHOICE_MULTIPLE' && JSON.stringify(qs[j].options) !== JSON.stringify(q.options)) break;
+                            if ((q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING') && JSON.stringify(qs[j].options || []) !== JSON.stringify(q.options || [])) break;
                             sharedQs.push(qs[j]);
                             j++;
                         }
@@ -454,7 +454,57 @@
                                         </div>
 
                                         {/* NỘI DUNG CHÍNH DỰA THEO TYPE */}
-                                        {grp.groupType === 'DRAG_DROP_HEADING' ? (() => {
+                                        {grp.groupType === 'MATCHING' ? (() => {
+                                            const rawOptions = ((q.options || []) as any[]).map((option: any) => String(option ?? "").trim()).filter(Boolean);
+                                            const infoGrid = isMatchingInfoOptionSet(rawOptions);
+                                            const optionCells = rawOptions.map((option: any, index: number) => ({
+                                                label: matchingOptionLabel(option, index),
+                                                value: matchingOptionValue(option, index, infoGrid),
+                                                text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                                            }));
+                                            const optionValues = optionCells.map(option => option.value);
+                                            const writeOptions = (raw: string) => {
+                                                const options = raw.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+                                                updateGroup((qItem: any) => ({ ...qItem, options }));
+                                            };
+                                            return <div style={{display: 'grid', gap: 18}}>
+                                                <div style={{background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '18px 20px'}}>
+                                                    <div style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="link" size={13} />Matching grid titles</div>
+                                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12}}>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Table left title
+                                                            <input value={q.leftTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, leftTitle: e.target.value}))} placeholder="Optional" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                        <label style={{display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: EB.sub}}>Legend title
+                                                            <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Optional" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.15fr) minmax(250px, .85fr)', gap:18, alignItems:'start'}}>
+                                                    <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
+                                                        <div style={{...ebEyebrow, marginBottom:14, display:'flex'}}><Ico name="key" size={13} />Questions and correct answers</div>
+                                                        <div style={{display:'grid', gap:10}}>
+                                                            {grp.questions.map((qItem:any, offset:number) => {
+                                                                const qNo = getQuizQuestionNumber(editingQuiz.questions || [], qItem.id) || qIndex + offset + 1;
+                                                                const currentValue = resolveMatchingAnswerText({ ...qItem, options: optionValues }, qItem.correctAnswer);
+                                                                return (
+                                                                    <div key={qItem.id} style={{display:'grid', gridTemplateColumns:'46px minmax(0, 1fr) minmax(190px, .45fr)', gap:8, alignItems:'center'}}>
+                                                                        <span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>#{qNo}</span>
+                                                                        <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,text:e.target.value}:qIt)} placeholder="Question text" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} />
+                                                                        <select value={currentValue || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt,correctAnswer:e.target.value}:qIt)} style={{padding:'9px 8px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}}>
+                                                                            <option value="">Correct option</option>
+                                                                            {optionCells.map((option) => <option key={option.label} value={option.value}>{infoGrid ? option.label : `${option.label}. ${option.text}`}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                    <label style={{display:'grid', gap:8, background:EB.wash, padding:'18px 20px', borderRadius:EB.radius, color:EB.sub, fontSize:12, fontWeight:800}}>Options, one per line
+                                                        <textarea value={rawOptions.join('\n')} onChange={(e:any)=>writeOptions(e.target.value)} placeholder={'A. option text\nB. option text'} style={{width:'100%', minHeight:180, boxSizing:'border-box', padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, resize:'vertical', fontWeight:600}} />
+                                                    </label>
+                                                </div>
+                                            </div>;
+                                        })() : grp.groupType === 'DRAG_DROP_HEADING' ? (() => {
                                             const ROMAN = ['i','ii','iii','iv','v','vi','vii','viii','ix','x','xi','xii','xiii','xiv','xv','xvi','xvii','xviii','xix','xx'];
                                             const srcQ = grp.questions.find((x:any) => x.options && x.options.length) || grp.questions[0];
                                             const heads = ((srcQ as any).options || []).map((o:string) => String(o).replace(/^\s*[ivxlcdm]+[.)]\s*/i, ''));
@@ -540,6 +590,7 @@
                                             const imageUrl = String(source.diagramImageUrl || '');
                                             const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
+                                            const diagramMaxWidth = String(source.diagramMaxWidth || '860');
                                             // Keep the authoring canvas on the raw image's intrinsic ratio.
                                             // This is the same coordinate surface used by ACTIVE_EXAM.
                                             const letDiagramImageDefineAspect = imageMode !== 'BOXES';
@@ -592,9 +643,10 @@
                                             };
                                             return <div style={{display:'grid',gap:16}}>
                                                 <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>Each label is one free-positioned text box. A box may contain several gaps, for example <b style={{color:EB.accent}}>Network of [34] ... constant [35] supply</b>. Coordinates are percentages of this exact canvas.</div>
-                                                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(190px,.35fr) auto',gap:10,alignItems:'end'}}>
+                                                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(180px,.28fr) minmax(150px,.22fr) auto',gap:10,alignItems:'end'}}>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Diagram image URL<input value={imageUrl} onChange={(event:any)=>updateDiagram({diagramImageUrl:event.target.value})} placeholder="https://.../diagram.png" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
+                                                    <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Max display width<input type="number" min="520" max="1180" step="20" value={diagramMaxWidth} onChange={(event:any)=>updateDiagram({diagramMaxWidth:event.target.value})} placeholder="860" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
                                                 </div>
                                                 <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash}}>
@@ -1004,6 +1056,36 @@
                                 </div>
                             )}
 
+                            {realExamPackages.length > 0 && (
+                                <div style={{marginBottom: 34}}>
+                                    <div style={{...ebEyebrow, marginBottom: 15}}>Real exam packages <span style={{fontFamily: EB.fMono}}>({realExamPackages.length})</span></div>
+                                    <div style={{display: 'grid', gap: 10}}>
+                                        {realExamPackages.map((pkg: RealExamPackage) => {
+                                            const exams = packageQuizzes(pkg);
+                                            return (
+                                                <div key={pkg.id} className="ebx-card" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderLeft: `4px solid ${pkg.active ? EB.accent : EB.sub}`, borderRadius: EB.radiusSm, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+                                                    <div style={{minWidth: 0}}>
+                                                        <div style={{fontFamily: EB.fDisplay, fontSize: 17, fontWeight: 700, color: EB.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{pkg.title}</div>
+                                                        <div style={{fontSize: 12.5, color: EB.sub, marginTop: 4}}>{pkg.mode === 'LRW' ? 'Listening · Reading · Writing' : 'Listening · Reading'} · {exams.map(q => q.title).join(' → ')}</div>
+                                                        <div style={{fontSize: 11, color: EB.sub, marginTop: 4}}>Pass: {pkg.passcode ? 'set' : 'none'} · {pkg.active ? 'active' : 'inactive'}</div>
+                                                    </div>
+                                                    <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
+                                                        <button className="ebx-soft" onClick={() => updateRealExamPackage(pkg, { active: !pkg.active })} style={{background: 'transparent', color: pkg.active ? EB.warn : EB.accent, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>{pkg.active ? 'Disable' : 'Enable'}</button>
+                                                        <button className="ebx-soft" onClick={() => {
+                                                            const title = prompt('Tên gói:', pkg.title)?.trim();
+                                                            if (!title) return;
+                                                            const passcode = prompt('Pass riêng (để trống nếu không dùng):', pkg.passcode || '')?.trim() || '';
+                                                            updateRealExamPackage(pkg, { title, passcode });
+                                                        }} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Edit</button>
+                                                        <button className="ebx-soft" onClick={() => deleteRealExamPackage(pkg.id)} style={{background: 'transparent', color: C.err, padding: '7px 12px', fontSize: 12, border: `1px solid ${C.err}33`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Delete</button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* KHU VỰC ĐỀ THI */}
                             <div>
                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
@@ -1019,6 +1101,7 @@
                                             }} style={{background: C.accent, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="folder" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_move_folder')}</button>
                                             <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: C.warn, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="lock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_lock_quiz')}</button>
                                             <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: C.succ, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="unlock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_unlock_quiz')}</button>
+                                            <button onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: '#111827', color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Real package</button>
                                             <button onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: C.err, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="trash" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_delete')}</button>
                                         </div>
                                     )}

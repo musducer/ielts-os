@@ -66,9 +66,9 @@ VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DRO
 def clean_option_answer_text(value: Any) -> str:
     text = html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
     text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"^\s*[A-Ka-k][\.\)]\s*", "", text).strip()
-    text = re.sub(r"^\s*[A-Ka-k]\s+(?=\S)", "", text).strip()
-    return text
+    cleaned = re.sub(r"^\s*[A-Ka-k][\.\)]\s*", "", text).strip()
+    cleaned = re.sub(r"^\s*[A-Ka-k]\s+(?=\S)", "", cleaned).strip()
+    return cleaned or re.sub(r"[\.\)]$", "", text).strip()
 
 def _split_env_keys(value: str) -> List[str]:
     return [part.strip() for part in re.split(r"[\s,;]+", str(value or "")) if part.strip()]
@@ -498,6 +498,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
     image_url = ""
     image_mode = ""
     image_aspect_ratio = ""
+    image_max_width = ""
     image_bounds: Dict[str, float] = {"x": 27, "y": 7, "width": 46, "height": 86}
     boxes: Dict[str, Dict[str, Any]] = {}
     answers: Dict[str, str] = {}
@@ -572,6 +573,9 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         if raw.upper().startswith("IMAGE_ASPECT_RATIO:"):
             image_aspect_ratio = raw.split(":", 1)[1].strip()
             continue
+        if raw.upper().startswith("IMAGE_MAX_WIDTH:"):
+            image_max_width = re.sub(r'[^\d.]', '', raw.split(":", 1)[1]).strip()
+            continue
         if raw.upper().startswith("IMAGE_BOUNDS:"):
             image_bounds = parse_props(raw, image_bounds)
             continue
@@ -623,6 +627,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             "diagramImageUrl": image_url,
             "diagramImageMode": image_mode,
             "diagramImageAspectRatio": image_aspect_ratio,
+            "diagramMaxWidth": image_max_width,
             "diagramImageBounds": image_bounds.copy(),
             "diagramBoxes": {key: value.copy() for key, value in legacy_boxes.items()},
             "diagramTextBoxes": [box.copy() for box in shared_text_boxes],
@@ -689,6 +694,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if right_match:
             right_title = right_match.group(1).strip()
             continue
+        if re.match(r'^\s*list\s+of\b', t_line, re.IGNORECASE):
+            right_title = right_title or t_line.strip()
+            continue
         
         if in_context:
             group_context += f"<div>{h_line}</div>"
@@ -743,6 +751,11 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             right_title = instruction_labels[0]
         if not left_title and len(instruction_labels) > 1:
             left_title = instruction_labels[-1]
+    if block_type == "MATCHING" and instruction_labels:
+        if not left_title and len(instruction_labels) > 1:
+            left_title = instruction_labels[-1]
+        if not right_title and instruction_labels:
+            right_title = instruction_labels[0]
     
     # Chia sẻ options cho các câu trong nhóm
     shared_options = []
@@ -775,7 +788,18 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             if is_tfng: q["options"] = ["TRUE", "FALSE", "NOT GIVEN"]
             elif is_ynng: q["options"] = ["YES", "NO", "NOT GIVEN"]
             
-        output_type = "DRAG_DROP_HEADING" if "heading" in lower_txt and q["type"] == "MATCHING" else q["type"]
+        is_sentence_ending_drag = (
+            q["type"] == "MATCHING"
+            and (
+                ("sentence" in lower_txt and "ending" in lower_txt)
+                or "complete each sentence" in lower_txt
+                or "move it into the gap" in lower_txt
+            )
+        )
+        output_type = "DRAG_DROP_HEADING" if "heading" in lower_txt and q["type"] == "MATCHING" else ("DRAG_DROP" if is_sentence_ending_drag else q["type"])
+        if is_sentence_ending_drag:
+            sub_t = "SENTENCE_ENDING_DRAG"
+            q["options"] = [clean_option_answer_text(opt) for opt in (q["options"] or [])]
         if is_tfng or is_ynng: output_type = "CHOICE"
         # SYNC FRONTEND: Short answer = điền từ -> render như Inline Blank để FE có ô nhập
         if output_type == "SHORT_ANSWER": output_type = "BLANK"
@@ -831,14 +855,17 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
                             break
             final_correct_answer = ans_arr
         elif output_type == "DRAG_DROP_HEADING":
-            # correctAnswer = roman numeral label (e.g. "iv") matched against option prefix
+            # Store the actual heading text. Older attempts may still contain the
+            # roman id; the frontend scorer resolves both.
             if q["correctAnswers"]:
                 raw = str(q["correctAnswers"][0]).strip().lower()
-                final_correct_answer = raw  # default: giữ nguyên
+                final_correct_answer = re.sub(r'^\s*[ivxlcdmIVXLCDM]+[\.)]?\s*', '', str(q["correctAnswers"][0]).strip(), flags=re.IGNORECASE).strip()
                 for opt in (q["options"] or []):
-                    m = re.match(r'^([ivxlcdmIVXLCDM]+)[\.)\s]', str(opt).strip(), re.IGNORECASE)
+                    opt_plain = html.unescape(re.sub(r"<[^>]+>", " ", str(opt or "")))
+                    opt_plain = re.sub(r"\s+", " ", opt_plain).strip()
+                    m = re.match(r'^([ivxlcdmIVXLCDM]+)(?:[\.)]\s*|\s+)(.*)$', opt_plain, re.IGNORECASE)
                     if m and m.group(1).lower() == raw:
-                        final_correct_answer = m.group(1).lower()
+                        final_correct_answer = m.group(2).strip() or opt_plain
                         break
             else:
                 final_correct_answer = ""
