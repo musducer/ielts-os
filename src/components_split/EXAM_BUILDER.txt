@@ -74,10 +74,12 @@
             const handleForceSave = async () => {
                 const currentLatestQuiz: any = editingQuizRef.current;
                 if (!currentLatestQuiz) return;
-                const idx = quizzesRef.current.findIndex((q: any) => q.id === currentLatestQuiz.id);
+                const quizForSave = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(currentLatestQuiz)));
+                const idx = quizzesRef.current.findIndex((q: any) => q.id === quizForSave.id);
                 const nx = [...quizzesRef.current];
-                if (idx > -1) nx[idx] = currentLatestQuiz;
-                else nx.unshift(currentLatestQuiz);
+                if (idx > -1) nx[idx] = quizForSave;
+                else nx.unshift(quizForSave);
+                setEditingQuiz(quizForSave);
                 setQuizCatalogState(nx);
                 const saved = await syncData({ quizzes: nx });
                 alert(saved
@@ -276,6 +278,16 @@
                                             <button key={idx} className="ebx-tab" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _activePassageTab: idx} : prev)} style={{ padding: '6px 15px', fontSize: 12, borderRadius: 7, background: isActive ? EB.sheet : 'transparent', color: isActive ? EB.ink : EB.sub, boxShadow: isActive ? '0 1px 3px rgba(26,23,38,0.10)' : 'none', fontWeight: isActive ? 700 : 500, border: 'none', cursor: 'pointer' }}>{label}</button>
                                         )})})()}
                                     </div>
+                                </div>
+                                <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', margin:'0 0 12px'}}>
+                                    <input id="eb-replace-passage-docx" type="file" accept=".docx" onChange={(e:any) => handleSupplementDocxUpload(e, "replace_sections")} style={{display:'none'}} />
+                                    <input id="eb-import-explanations-docx" type="file" accept=".docx" onChange={(e:any) => handleSupplementDocxUpload(e, "explanations")} style={{display:'none'}} />
+                                    <label htmlFor="eb-replace-passage-docx" className="ebx-soft" style={{background:EB.sheet,color:EB.ink,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${EB.line}`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
+                                        <Ico name="plus" size={13} />Replace passage from DOCX
+                                    </label>
+                                    <label htmlFor="eb-import-explanations-docx" className="ebx-soft" style={{background:EB.accentWash,color:EB.accent,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${C.accent}22`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
+                                        <Ico name="bulb" size={13} />Import explanations DOCX
+                                    </label>
                                 </div>
                                 <div style={{ border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', background: EB.sheet }}>
                                     <RichTextEditor
@@ -746,9 +758,14 @@
                                                     {q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE" || q.type === "MATCHING" ? (
                                                         <div style={{display: 'flex', flexDirection: 'column', gap: 0}}>
                                                             {(q.options || []).map((opt: string, optIndex: number) => {
+                                                                const matchingOptionText = resolveMatchingAnswerText(q, optIndex);
                                                                 const isChecked = isMerged
                                                                     ? grp.questions.some((qItem: any) => Array.isArray(qItem.correctAnswer) ? qItem.correctAnswer.includes(optIndex) : qItem.correctAnswer === optIndex)
-                                                                    : (q.type === "CHOICE" || q.type === "MATCHING" ? q.correctAnswer === optIndex : (Array.isArray(q.correctAnswer) && q.correctAnswer.includes(optIndex)));
+                                                                    : (q.type === "CHOICE"
+                                                                        ? q.correctAnswer === optIndex
+                                                                        : q.type === "MATCHING"
+                                                                            ? normalizeComparableAnswer(resolveMatchingAnswerText(q, q.correctAnswer)) === normalizeComparableAnswer(matchingOptionText)
+                                                                            : (Array.isArray(q.correctAnswer) && q.correctAnswer.includes(optIndex)));
 
                                                                 return (
                                                                 <div key={optIndex} className="ebx-opt" style={{display: 'flex', alignItems: 'center', gap: 14, background: isChecked ? `${C.succ}12` : 'transparent', padding: '10px 14px', borderRadius: EB.radiusSm, borderLeft: `2px solid ${isChecked ? C.succ : 'transparent'}`, marginBottom: 2}}>
@@ -762,7 +779,8 @@
                                                                                 if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
                                                                                 updateGroup((qItem: any) => ({ ...qItem, correctAnswer: curArr }));
                                                                             } else {
-                                                                                if (q.type === "CHOICE" || q.type === "MATCHING") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: optIndex }));
+                                                                                if (q.type === "CHOICE") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: optIndex }));
+                                                                                else if (q.type === "MATCHING") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: resolveMatchingAnswerText(qItem, optIndex) }));
                                                                                 else {
                                                                                     let curArr = Array.isArray(q.correctAnswer) ? [...(q.correctAnswer as number[])] : [];
                                                                                     if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
@@ -785,6 +803,43 @@
                                                 </div>
                                             </div>
                                         )}
+                                        <div className="no-print" style={{marginTop: 18, padding: '16px 18px', border: `1px solid ${EB.line}`, borderRadius: EB.radius, background: EB.washSoft}}>
+                                            <label style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="bulb" size={13} />Teacher Explanation (Optional)</label>
+                                            <div style={{display: 'grid', gap: 10}}>
+                                                {grp.questions.map((qItem: any, offset: number) => {
+                                                    const qNo = getQuizQuestionNumber(editingQuiz.questions || [], qItem.id);
+                                                    const manual = parseManualExplanation(qItem.manualExplanation);
+                                                    return (
+                                                        <div key={`manual-explanation-${qItem.id}`} style={{display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr)', gap: 10, alignItems: 'start'}}>
+                                                            <div style={{fontFamily: EB.fMono, fontWeight: 800, color: EB.accent, fontSize: 13, paddingTop: 10}}>#{qNo || qIndex + offset + 1}</div>
+                                                            <div>
+                                                                <textarea
+                                                                    value={manual?.rawText || ""}
+                                                                    onChange={(event: any) => {
+                                                                        const parsed = parseManualExplanation(event.target.value);
+                                                                        updateGroup((entry: any, entryOffset: number) => {
+                                                                            if (entryOffset !== offset) return entry;
+                                                                            const next = { ...entry };
+                                                                            if (parsed) next.manualExplanation = parsed;
+                                                                            else delete next.manualExplanation;
+                                                                            return next;
+                                                                        });
+                                                                    }}
+                                                                    placeholder={'e.g. The speaker clarifies "annual membership fee" at [02:15] to rule out option A.'}
+                                                                    style={{width: '100%', minHeight: 74, boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet, color: EB.ink, fontFamily: EB.fBody, fontSize: 13.5, lineHeight: 1.5, resize: 'vertical', outline: 'none', boxShadow: 'none'}}
+                                                                />
+                                                                {!!manual && (
+                                                                    <div style={{display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 7, fontSize: 11, color: EB.sub}}>
+                                                                        <span style={{border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 7, padding: '4px 7px', fontWeight: 700}}>Evidence {manual.parsedQuotes.length}</span>
+                                                                        <span style={{border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 7, padding: '4px 7px', fontWeight: 700}}>Timestamp {manual.parsedTimestamps.length}</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
                                     </div>
                                 )})}
                             </div>

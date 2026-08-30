@@ -1575,6 +1575,8 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
 interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
+interface ManualExplanationTimestamp { startTime: number; endTime?: number; label: string; }
+interface ManualExplanation { rawText: string; parsedQuotes: string[]; parsedTimestamps: ManualExplanationTimestamp[]; }
 interface DiagramTextBox {
   id: string;
   x: number;
@@ -1586,9 +1588,195 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; }
+interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
+
+const manualTimestampToSeconds = (value: any) => {
+  const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
+  return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : 0;
+};
+
+const parseManualExplanation = (value: any): ManualExplanation | undefined => {
+  const rawSource = typeof value === "object" && value ? value.rawText : value;
+  const rawText = String(rawSource || "")
+    .replace(/^\s*\[EXPLANATION\]\s*/i, "")
+    .replace(/^\s*\d+\s*[:.)-]\s*/, "")
+    .trim();
+  if (!rawText) return undefined;
+  const parsedQuotes = Array.from(new Set(Array.from(rawText.matchAll(/"([^"]+)"/g))
+    .map(match => match[1].replace(/\s+/g, " ").trim())
+    .filter(Boolean)));
+  const parsedTimestamps = Array.from(rawText.matchAll(/\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]/g))
+    .map(match => {
+      const startTime = manualTimestampToSeconds(match[1]);
+      const endTime = match[2] ? manualTimestampToSeconds(match[2]) : undefined;
+      const label = match[2] ? `${match[1]} - ${match[2]}` : match[1];
+      return endTime === undefined ? { startTime, label } : { startTime, endTime, label };
+    })
+    .filter((item, index, all) => all.findIndex(other => other.startTime === item.startTime && other.endTime === item.endTime && other.label === item.label) === index);
+  return { rawText, parsedQuotes, parsedTimestamps };
+};
+
+const normalizeQuestionManualExplanation = (question: any) => {
+  if (!question) return question;
+  const next = { ...question };
+  const manual = parseManualExplanation(next.manualExplanation);
+  if (manual) next.manualExplanation = manual;
+  else delete next.manualExplanation;
+  return next;
+};
+
+const normalizeQuizManualExplanations = (quiz: any) => {
+  if (!quiz) return quiz;
+  const questions = Array.isArray(quiz.questions) ? quiz.questions.map(normalizeQuestionManualExplanation) : [];
+  const byId = new Map(questions.map((question: any) => [String(question.id), question]));
+  const sections = Array.isArray(quiz.sections)
+    ? quiz.sections.map((section: any) => ({
+        ...section,
+        questions: Array.isArray(section.questions)
+          ? section.questions.map((question: any) => byId.get(String(question.id)) || normalizeQuestionManualExplanation(question))
+          : [],
+      }))
+    : quiz.sections;
+  return { ...quiz, questions, sections };
+};
+
+const stripQuestionExplanationFields = (question: any) => {
+  if (!question) return question;
+  const { manualExplanation, aiExplanation, ...safeQuestion } = question;
+  return safeQuestion;
+};
+
+const stripExamExplanations = (quiz: any): Quiz => {
+  if (!quiz) return quiz;
+  return {
+    ...quiz,
+    questions: Array.isArray(quiz.questions) ? quiz.questions.map(stripQuestionExplanationFields) : [],
+    sections: Array.isArray(quiz.sections)
+      ? quiz.sections.map((section: any) => ({
+          ...section,
+          questions: Array.isArray(section.questions) ? section.questions.map(stripQuestionExplanationFields) : [],
+        }))
+      : quiz.sections,
+  };
+};
+
+const restoreReviewExplanations = (runtimeQuiz: any, sourceQuiz: any): Quiz => {
+  if (!runtimeQuiz) return runtimeQuiz;
+  const normalizedSource = normalizeQuizManualExplanations(sourceQuiz || runtimeQuiz);
+  const byId = new Map<string, any>((normalizedSource.questions || []).map((question: any) => [String(question.id), question]));
+  const restoreQuestion = (question: any) => {
+    if (!question) return question;
+    const source = byId.get(String(question.id));
+    if (!source) return normalizeQuestionManualExplanation(question);
+    const next = normalizeQuestionManualExplanation({ ...question, manualExplanation: source.manualExplanation });
+    if (source.aiExplanation) next.aiExplanation = source.aiExplanation;
+    return next;
+  };
+  return {
+    ...runtimeQuiz,
+    questions: Array.isArray(runtimeQuiz.questions) ? runtimeQuiz.questions.map(restoreQuestion) : [],
+    sections: Array.isArray(runtimeQuiz.sections)
+      ? runtimeQuiz.sections.map((section: any) => ({
+          ...section,
+          questions: Array.isArray(section.questions) ? section.questions.map(restoreQuestion) : [],
+        }))
+      : runtimeQuiz.sections,
+  };
+};
+
+const quizSectionsForPatch = (quiz: any) => {
+  if (Array.isArray(quiz?.sections) && quiz.sections.length) {
+    return quiz.sections.map((section: any) => ({
+      ...section,
+      passage: section?.passage || "",
+      questions: Array.isArray(section?.questions) ? section.questions.map((question: any) => ({ ...question })) : [],
+    }));
+  }
+  return [{
+    passage: quiz?.passage || "",
+    questions: Array.isArray(quiz?.questions) ? quiz.questions.map((question: any) => ({ ...question, passageIndex: 0 })) : [],
+  }];
+};
+
+const rebuildQuizFromSections = (quiz: any, sections: any[]) => {
+  const normalizedSections = sections.map((section: any, sectionIndex: number) => ({
+    ...section,
+    passage: section?.passage || "",
+    questions: (Array.isArray(section?.questions) ? section.questions : []).map((question: any) =>
+      normalizeQuestionManualExplanation({ ...question, passageIndex: sectionIndex })
+    ),
+  }));
+  return normalizeQuizManualExplanations({
+    ...quiz,
+    passage: normalizedSections[0]?.passage || "",
+    sections: normalizedSections,
+    questions: normalizedSections.flatMap((section: any) => section.questions || []),
+  });
+};
+
+const mergeQuizSectionsFromSupplement = (baseQuiz: any, supplementQuiz: any, startSectionIndex = 0) => {
+  const baseSections = quizSectionsForPatch(baseQuiz);
+  const patchSections = quizSectionsForPatch(supplementQuiz).filter((section: any) =>
+    String(section?.passage || "").trim() || (Array.isArray(section?.questions) && section.questions.length)
+  );
+  if (!patchSections.length) return { quiz: baseQuiz, replaced: 0 };
+  const start = Math.max(0, Math.min(Number(startSectionIndex) || 0, Math.max(0, baseSections.length - 1)));
+  patchSections.forEach((section: any, offset: number) => {
+    const targetIndex = start + offset;
+    while (baseSections.length <= targetIndex) baseSections.push({ passage: "", questions: [] });
+    baseSections[targetIndex] = {
+      ...section,
+      passage: section?.passage || "",
+      questions: (section?.questions || []).map((question: any) => ({
+        ...question,
+        id: question.id || `q_${Date.now()}_${targetIndex}_${offset}_${Math.random().toString(36).slice(2)}`,
+        passageIndex: targetIndex,
+      })),
+    };
+  });
+  return { quiz: rebuildQuizFromSections(baseQuiz, baseSections), replaced: patchSections.length };
+};
+
+const manualExplanationMapFromSupplement = (payload: any) => {
+  const map = new Map<string, ManualExplanation>();
+  Object.entries(payload?.explanations || {}).forEach(([number, value]) => {
+    const manual = parseManualExplanation(value);
+    if (manual) map.set(String(number), manual);
+  });
+  const questions = Array.isArray(payload?.quiz?.questions)
+    ? payload.quiz.questions
+    : (Array.isArray(payload?.questions) ? payload.questions : []);
+  questions.forEach((question: any, index: number) => {
+    const manual = parseManualExplanation(question?.manualExplanation);
+    const number = String(question?.questionNumber || index + 1);
+    if (manual) map.set(number, manual);
+  });
+  return map;
+};
+
+const mergeQuizManualExplanationsFromSupplement = (baseQuiz: any, supplementPayload: any) => {
+  const explanationByNumber = manualExplanationMapFromSupplement(supplementPayload);
+  if (!explanationByNumber.size) return { quiz: baseQuiz, imported: 0 };
+  const normalized = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(baseQuiz)));
+  let imported = 0;
+  const questions = (normalized.questions || []).map((question: any, index: number) => {
+    const number = String(question?.questionNumber || index + 1);
+    const manual = explanationByNumber.get(number);
+    if (!manual) return question;
+    imported += 1;
+    return { ...question, manualExplanation: manual };
+  });
+  const byId = new Map<string, any>(questions.map((question: any) => [String(question.id), question]));
+  const sections = Array.isArray(normalized.sections)
+    ? normalized.sections.map((section: any) => ({
+        ...section,
+        questions: (section.questions || []).map((question: any) => byId.get(String(question.id)) || question),
+      }))
+    : normalized.sections;
+  return { quiz: normalizeQuizManualExplanations({ ...normalized, questions, sections }), imported };
+};
 
 const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
   if (!quiz) return false;
@@ -1662,21 +1850,46 @@ const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any>
   };
 };
 
+const cleanOptionAnswerText = (value: any) => String(value ?? "")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/&nbsp;/gi, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .replace(/^\s*[A-Ka-k][.)]\s*/, "")
+  .replace(/^\s*[A-Ka-k]\s+(?=\S)/, "")
+  .trim();
+
+const normalizeComparableAnswer = (value: any) => cleanOptionAnswerText(value).toLocaleLowerCase();
+
+const resolveOptionAnswerText = (question: any, value: any) => {
+  const raw = String(value ?? "").trim();
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (!raw) return raw;
+  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
+  if (options.length && numeric >= 0 && numeric < options.length) return cleanOptionAnswerText(options[numeric]);
+  if (/^[A-Z]$/i.test(raw)) {
+    const index = raw.toUpperCase().charCodeAt(0) - 65;
+    if (options.length && index >= 0 && index < options.length) return cleanOptionAnswerText(options[index]);
+  }
+  return cleanOptionAnswerText(raw);
+};
+
 const resolveDragAnswerText = (question: any, value: any) => {
   const raw = String(value ?? "").trim();
   const options = Array.isArray(question?.options) ? question.options : [];
-  if (!raw || !options.length) return raw;
-  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
-  if (numeric >= 0 && numeric < options.length) return String(options[numeric]).replace(/<[^>]+>/g, "").trim();
-  if (/^[A-Z]$/i.test(raw)) {
-    const index = raw.toUpperCase().charCodeAt(0) - 65;
-    if (index >= 0 && index < options.length) return String(options[index]).replace(/<[^>]+>/g, "").trim();
-  }
-  return raw;
+  if (!raw || !options.length) return cleanOptionAnswerText(raw);
+  return resolveOptionAnswerText(question, value);
+};
+
+const resolveMatchingAnswerText = (question: any, value: any) => {
+  return resolveOptionAnswerText(question, value);
 };
 
 const isSingleQuestionCorrect = (question: any, answer: any) => {
-  if (question?.type === "CHOICE" || question?.type === "MATCHING") return answer === question.correctAnswer;
+  if (question?.type === "CHOICE") return answer === question.correctAnswer;
+  if (question?.type === "MATCHING") {
+    return normalizeComparableAnswer(resolveMatchingAnswerText(question, answer)) === normalizeComparableAnswer(resolveMatchingAnswerText(question, question.correctAnswer));
+  }
   const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
   const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
   return String(question?.correctAnswer).split("/").map(value => {
@@ -2015,22 +2228,28 @@ const createTestUIQuiz = (q: Quiz): Quiz => {
         sections: q.sections?.map(sec => ({
             ...sec,
             passage: obfuscateHTML(sec.passage || ""),
-            questions: (sec.questions || []).map(qst => ({
-                ...qst,
+            questions: (sec.questions || []).map(qst => {
+                const safeQst = stripQuestionExplanationFields(qst);
+                return {
+                    ...safeQst,
+                    text: obfuscateHTML(qst.text),
+                    instruction: obfuscateHTML(qst.instruction || ""),
+                    groupContext: obfuscateHTML(qst.groupContext || ""),
+                    options: qst.options?.map(opt => obfuscateHTML(opt)),
+                };
+            })
+        })),
+        questions: q.questions.map(qst => {
+            const safeQst = stripQuestionExplanationFields(qst);
+            return {
+                ...safeQst,
                 text: obfuscateHTML(qst.text),
                 instruction: obfuscateHTML(qst.instruction || ""),
                 groupContext: obfuscateHTML(qst.groupContext || ""),
                 options: qst.options?.map(opt => obfuscateHTML(opt)),
-            }))
-        })),
-        questions: q.questions.map(qst => ({
-            ...qst,
-            text: obfuscateHTML(qst.text),
-            instruction: obfuscateHTML(qst.instruction || ""),
-            groupContext: obfuscateHTML(qst.groupContext || ""),
-            options: qst.options?.map(opt => obfuscateHTML(opt)),
-            correctAnswer: (qst.type === "CHOICE" ? 0 : "███") as any
-        }))
+                correctAnswer: (qst.type === "CHOICE" ? 0 : "███") as any
+            };
+        })
     };
 };
 // ==========================================
@@ -3336,6 +3555,7 @@ export default function IeltsSupremeOS() {
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
   const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
+  const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   // Thanh audio DÍNH TRÊN ở màn Review (sao chép layout phòng thi) — khỏi cuộn tìm player
@@ -5768,9 +5988,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
             cor = group.multiple.correct.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
           } else {
             const sAns = r.answers?.[q.id];
-            if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+            if (q.type === 'CHOICE') {
             stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(q.options?.[Number(sAns)] ?? sAns);
             cor = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
+            } else if (q.type === 'MATCHING') {
+            stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(resolveMatchingAnswerText(q, sAns));
+            cor = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
             } else {
               stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(sAns);
               cor = stripTags(q.correctAnswer);
@@ -5816,7 +6039,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .replace(/[^\S\r\n]+/g, " ")
         .replace(/\n{2,}/g, "\n")
         .trim();
-      const optStr = (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
+      const optStr = q.type === 'MATCHING'
+        ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
+        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
@@ -5834,9 +6059,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
         };
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
-      } else if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+      } else if (q.type === 'CHOICE') {
         correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
+      } else if (q.type === 'MATCHING') {
+        correctStr = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
+        stuStr = blank ? "(trống)" : stripTags(resolveMatchingAnswerText(q, studentAnsRaw));
       } else if (q.type === 'CHOICE_MULTIPLE') {
         const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
         correctStr = arr.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
@@ -5920,8 +6148,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
-        if (question.type === "CHOICE" || question.type === "MATCHING") {
+        if (question.type === "CHOICE") {
           return stripTags(question.options?.[Number(question.correctAnswer)] ?? question.correctAnswer);
+        }
+        if (question.type === "MATCHING") {
+          return stripTags(resolveMatchingAnswerText(question, question.correctAnswer));
         }
         if (question.type === "CHOICE_MULTIPLE") {
           const answers = Array.isArray(question.correctAnswer) ? question.correctAnswer : [question.correctAnswer];
@@ -6925,12 +7156,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
           }
           const answer = r.answers?.[question.id];
           const options = question.options || [];
-          const correctDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+          const correctDisplay = question.type === 'CHOICE'
             ? options[question.correctAnswer as number] || question.correctAnswer
-            : question.correctAnswer;
-          const studentDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+            : question.type === 'MATCHING'
+              ? resolveMatchingAnswerText(question, question.correctAnswer)
+              : question.correctAnswer;
+          const studentDisplay = question.type === 'CHOICE'
             ? (answer !== undefined ? options[answer as number] || answer : '')
-            : answer ?? '';
+            : question.type === 'MATCHING'
+              ? (answer !== undefined ? resolveMatchingAnswerText(question, answer) : '')
+              : answer ?? '';
           return [questionLabel, strip(question.text), strip(correctDisplay), strip(studentDisplay), group.isFullyCorrect ? 'Đúng' : 'Sai'];
       });
       const cols = [{header:'Câu', width:6},{header:'Nội dung câu hỏi', width:50},{header:'Đáp án đúng', width:22},{header:'Học viên trả lời', width:22},{header:'Kết quả', width:10}];
@@ -7021,6 +7256,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       quiz.questions.forEach((q, i) => {
           let ans = q.correctAnswer;
           if (q.type === "CHOICE" && q.options) ans = q.options[q.correctAnswer as number] || ans;
+          if (q.type === "MATCHING") ans = resolveMatchingAnswerText(q, q.correctAnswer);
           content += `Question ${i+1}: ${ans}\n`;
       });
       const blob = new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8;' });
@@ -7052,16 +7288,70 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const parseSupplementDocxFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch(`${getApiBase()}/api/upload_docx_supplement`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await readApiJson(response);
+    if (!data.success) throw new Error(data.error || "Backend unknown error");
+    return data;
+  };
+
+  const handleSupplementDocxUpload = async (e: any, mode: "replace_sections" | "explanations") => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const currentQuiz = editingQuizRef.current;
+    if (!currentQuiz) {
+      alert("Hãy mở đề cần chỉnh trước.");
+      return;
+    }
+    try {
+      const data = await parseSupplementDocxFile(file);
+      if (mode === "replace_sections") {
+        const patchQuiz = data.quiz;
+        if (!patchQuiz?.questions?.length) {
+          alert("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.");
+          return;
+        }
+        const activeSection = Number(currentQuiz._activePassageTab || 0);
+        const merged = mergeQuizSectionsFromSupplement(currentQuiz, patchQuiz, activeSection);
+        if (!merged.replaced) {
+          alert("Không tìm thấy passage/section hợp lệ trong file bổ sung.");
+          return;
+        }
+        editingQuizRef.current = merged.quiz;
+        setEditingQuiz(merged.quiz);
+        alert(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`);
+        return;
+      }
+      const merged = mergeQuizManualExplanationsFromSupplement(currentQuiz, data);
+      if (!merged.imported) {
+        alert("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.");
+        return;
+      }
+      editingQuizRef.current = merged.quiz;
+      setEditingQuiz(merged.quiz);
+      alert(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`);
+    } catch (error: any) {
+      logErrorToSystem("UPLOAD_DOCX_SUPPLEMENT_FAIL", error?.message || String(error), { fileName: file.name, mode });
+      alert("Không xử lý được file bổ sung: " + (error?.message || String(error)));
+    }
+  };
+
   const saveQuiz = async (quizToSave?: any): Promise<boolean> => {
       const isEvent = quizToSave && typeof quizToSave.preventDefault === 'function';
       const targetQuiz = isEvent ? undefined : quizToSave;
 
       if (targetQuiz) {
           // Branch A: gọi với quiz object trực tiếp (duplicateQuiz, handleFileUpload)
-          const qz = JSON.parse(JSON.stringify({
+          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
-          }));
+          })));
           const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
           const updated = [...quizzesRef.current];
           if (existingIndex !== -1) updated[existingIndex] = qz;
@@ -7086,10 +7376,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return false;
           }
 
-          const qz = JSON.parse(JSON.stringify({
+          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...currentSnapshot,
               id: currentSnapshot.id || getTrueTime().toString()
-          }));
+          })));
 
           // Ba lệnh độc lập, KHÔNG lồng nhau  React batch an toàn
           setEditingQuiz(null);
@@ -7111,7 +7401,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   
   const duplicateQuiz = (q: Quiz) => {
-      const newQuiz = JSON.parse(JSON.stringify({
+      const newQuiz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
           ...q,
           id: typeof crypto !== "undefined" && crypto.randomUUID
               ? `quiz_${crypto.randomUUID()}`
@@ -7119,7 +7409,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           title: q.title + " (Copy)",
           active: false,
           isLocked: true
-      }));
+      })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
       void syncData({ quizzes: [newQuiz] }).then(saved => {
           alert(saved ? "Exam duplicated successfully!" : "The copy is saved on this device and will retry automatically when the connection returns.");
@@ -7192,7 +7482,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       }
 
       // Khôi phục lại màn hình chờ (Instructions)
-      setPendingExamState({ quiz, isPreview: isTeacherPreview, isStudentTestUI });
+      setPendingExamState({ quiz: stripExamExplanations(normalizeExamSections(quiz)), isPreview: isTeacherPreview, isStudentTestUI });
   };
 
   const startTopicQuestNode = (assignment: TopicAssignment, node: QuestNodeConfig) => {
@@ -7265,7 +7555,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
-      const quizToLoad = normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz);
+      const quizToLoad = stripExamExplanations(normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz));
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
       const now = getRealTime();
       const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
@@ -7569,12 +7859,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         setReviewSectionIdx(0);
         setReviewActiveQuestionId(null);
         if (questContext) {
+          setManualExplanationQuestion(null);
           setReviewQuiz(null);
           setPortalTab("quests");
           setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
           setQuestStatusNotice(questNotice);
         } else {
-          setReviewQuiz({ quiz: state.activeExam, result });
+          const sourceQuiz = quizzesRef.current.find((quiz: any) => quiz.id === state.activeExam?.id);
+          const reviewReadyQuiz = normalizeExamSections(restoreReviewExplanations(state.activeExam, sourceQuiz));
+          setReviewQuiz({ quiz: reviewReadyQuiz, result });
         }
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }
@@ -8416,6 +8709,94 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           </>;
 
       };
+      const rvManualExplanationOf = (question: any) => parseManualExplanation(question?.manualExplanation);
+      const rvSecondsToLabel = (seconds: number) => {
+          const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+          const mins = Math.floor(safe / 60);
+          const secs = safe % 60;
+          return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      };
+      const rvJumpToTranscriptQuote = (quotes: string[]) => {
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-rv-transcript-start]'));
+          const targetQuote = quotes.map(quote => String(quote || '').replace(/\s+/g, ' ').trim()).find(quote => quote.length >= 4);
+          if (!blocks.length || !targetQuote) return false;
+          const normalizedQuote = rvNormalizeEvidenceText(targetQuote);
+          const target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote));
+          if (!target) return false;
+          rvJumpToTranscript(rvSecondsToLabel(Number(target.dataset.rvTranscriptStart) || 0), targetQuote);
+          return true;
+      };
+      const rvJumpToManualEvidence = (question: any) => {
+          const manual = rvManualExplanationOf(question);
+          const primaryQuote = (manual?.parsedQuotes || []).find((quote: string) => String(quote || '').trim().length >= 4);
+          if (!primaryQuote) return;
+          if (rvActiveIsListening) {
+              if (rvJumpToTranscriptQuote([primaryQuote])) return;
+              const ts = manual?.parsedTimestamps?.[0];
+              if (ts?.label) rvJumpToTranscript(ts.label, primaryQuote);
+              return;
+          }
+          rvJumpToEvidence(primaryQuote);
+      };
+      const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
+          const secs = Number(ts?.startTime);
+          if (!Number.isFinite(secs)) return;
+          const el = document.getElementById('review-audio') as HTMLAudioElement | null;
+          if (!el) return;
+          if (el.duration && isFinite(el.duration) && secs > el.duration) return;
+          el.currentTime = secs;
+          setRvAudioCur(secs);
+          const quote = rvManualExplanationOf(question)?.parsedQuotes?.[0] || "";
+          if (ts.label) rvJumpToTranscript(ts.label, quote);
+          void requestReviewAudioPlayback();
+      };
+      const rvRenderManualExplanationCopy = (manual: ManualExplanation) => {
+          const parts = String(manual.rawText || '').split(/("[^"]+")/g).filter(part => part.length > 0);
+          return <div className="rv-manual-copy">{parts.map((part, index) => part.startsWith('"') && part.endsWith('"') ? <span key={index} className="rv-manual-quote">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>)}</div>;
+      };
+      const rvRenderReviewActions = (question: any, studentAnswer?: any, aiQuestion?: any) => {
+          if (!question?.id) return null;
+          const manual = rvManualExplanationOf(question);
+          const quotes = manual?.parsedQuotes || [];
+          const timestamps = (manual?.parsedTimestamps || []).filter((ts: ManualExplanationTimestamp) => Number.isFinite(Number(ts.startTime)));
+          const aiState = explainMap[question.id];
+          return (
+              <div className="rv-review-action-wrap">
+                  <div className="rv-review-actions">
+                      {!!manual?.rawText && (
+                          <button type="button" className="rv-review-action rv-review-action-teacher" onClick={() => setManualExplanationQuestion(question)} title="Teacher explanation">
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-.8.6-1.3 1.4-1.5 2.5h-4c-.2-1.1-.7-1.9-1.5-2.5Z"/></svg>
+                              Why
+                          </button>
+                      )}
+                      <button type="button" className="rv-review-action rv-review-action-ai" disabled={!!aiState?.loading} onClick={() => handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)} title="AI explanation">
+                          {aiState?.loading ? <Ico name="refresh" size={14} /> : <Ico name="bulb" size={14} />}
+                          Why (AI)
+                      </button>
+                      {!!quotes.length && (
+                          <button type="button" className="rv-review-action rv-review-action-evidence" onClick={() => rvJumpToManualEvidence(question)} title={rvActiveIsListening ? "Locate quote in transcript" : "Locate quote in reading passage"}>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                              Locate Evidence
+                          </button>
+                      )}
+                      {rvActiveIsListening && timestamps.length > 0 && (
+                          <div className="rv-review-timestamp-pills" aria-label="Locate timestamp">
+                              {timestamps.map((ts: ManualExplanationTimestamp, index: number) => (
+                                  <button key={`${ts.label}-${index}`} type="button" className="rv-review-action rv-review-action-time" onClick={() => rvSeekManualTimestamp(ts, question)} title={`Play audio from ${ts.label}`}>
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                                      {ts.label}
+                                  </button>
+                              ))}
+                          </div>
+                      )}
+                  </div>
+                  {aiState?.loading && <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>}
+                  {!!aiState && !aiState.loading && (
+                      <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(aiState.text || '', aiState.audioEvidence, aiState.audioEvidenceSegments)}</div>
+                  )}
+              </div>
+          );
+      };
       const rvEscapeHtml = (value: any) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       const rvCompletionAnswer = (q: any) => {
           const raw = reviewQuiz.result.answers?.[q.id];
@@ -8462,7 +8843,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               const value = state.blank ? 'No answer' : state.given;
               return `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-completion-qid="${rvEscapeHtml(question.id)}" title="Question ${rawNumber}: ${rvEscapeHtml(value)}">${rawNumber}. ${rvEscapeHtml(value)}</button>`;
           });
-          const selectedExplanation = explainMap[selected.id];
           const selectedQuestionHtml = rvQuestionBodyHtml(selected.text);
           return (
               <section key={`completion-review-${seed.id}`} className="rv-completion-review">
@@ -8485,13 +8865,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
                       </div>
                       {!!selectedQuestionHtml && <div className="rv-completion-detail-question" dangerouslySetInnerHTML={{ __html: selectedQuestionHtml }} />}
-                      {!selectedExplanation ? (
-                          <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button>
-                      ) : selectedExplanation.loading ? (
-                          <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>
-                      ) : (
-                          <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(selectedExplanation.text, selectedExplanation.audioEvidence, selectedExplanation.audioEvidenceSegments)}</div>
-                      )}
+                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                   </div>
               </section>
           );
@@ -8548,6 +8922,50 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
                   .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
                   .rv-completion-explanation b { color: #6d28d9; }
+                  .rv-exam-review-card { margin-bottom: 20px; border: 1px solid #d7dde6; border-left: 4px solid #f59e0b; border-radius: 4px; background: #fff; padding: 18px 20px; box-shadow: none; color: #111827; }
+                  .rv-exam-review-card.correct { border-left-color: #10b981; }
+                  .rv-exam-review-card.wrong { border-left-color: #ef4444; }
+                  .rv-exam-review-card.partial { border-left-color: #f59e0b; }
+                  .rv-exam-question-head { margin-bottom: 13px; font: 800 15px/1.45 Inter, sans-serif; color: #111827; }
+                  .rv-exam-review-options { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+                  .rv-exam-review-option { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; border: 1px solid #d7dde6; border-radius: 4px; background: #fff; color: #111827; font: 500 14px/1.5 Inter, sans-serif; }
+                  .rv-exam-review-option.correct { border-color: #34d399; background: #ecfdf5; color: #047857; }
+                  .rv-exam-review-option.wrong { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+                  .rv-exam-review-option-status { color: inherit; font-size: 11px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
+                  .rv-exam-review-answer-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; font-size: 14px; }
+                  .rv-exam-review-answer-row > div { border: 1px solid #d7dde6; border-radius: 4px; background: #fff; padding: 9px 11px; }
+                  .rv-exam-review-answer-row span { display: block; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+                  .rv-exam-review-answer-row strong { display: block; margin-top: 3px; overflow-wrap: anywhere; color: #111827; }
+                  .rv-review-action-wrap { margin-top: 12px; display: grid; gap: 10px; }
+                  .rv-review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+                  .rv-review-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border-radius: 7px; padding: 7px 11px; font: 800 12px/1 Inter, sans-serif; border: 1px solid #cbd5e1; background: #fff; color: #334155; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .12s ease; }
+                  .rv-review-action:hover { transform: translateY(-1px); background: #f8fafc; }
+                  .rv-review-action:active { transform: translateY(0); }
+                  .rv-review-action:disabled { opacity: .64; cursor: wait; transform: none; }
+                  .rv-review-action-teacher { border-color: #111827; color: #111827; background: #fff; }
+                  .rv-review-action-ai { border-color: #c7d2fe; color: #4338ca; background: #eef2ff; }
+                  .rv-review-action-evidence { border-color: #99f6e4; color: #0f766e; background: #ecfdf5; }
+                  .rv-review-action-time { border-color: #fde68a; color: #92400e; background: #fffbeb; font-family: Consolas, monospace; }
+                  .rv-review-timestamp-pills { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+                  .rv-idp-matching-text-table td { vertical-align: top; }
+                  .rv-idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
+                  .rv-idp-matching-text-option { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid #dbe3ee; border-radius: 4px; background: #fff; color: #1f2937; font: 500 13px/1.35 Inter, sans-serif; }
+                  .rv-idp-matching-text-option.correct { border-color: #34d399; background: #ecfdf5; color: #047857; }
+                  .rv-idp-matching-text-option.wrong { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+                  .rv-idp-radio-dot { width: 15px; height: 15px; margin-top: 1px; border-radius: 50%; border: 2px solid #cbd5e1; background: #fff; box-sizing: border-box; }
+                  .rv-idp-matching-text-option.correct .rv-idp-radio-dot { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
+                  .rv-idp-matching-text-option.wrong .rv-idp-radio-dot { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
+                  .rv-manual-backdrop { position: fixed; inset: 0; z-index: 250; background: rgba(15,23,42,.42); display: flex; align-items: flex-start; justify-content: flex-end; padding: 76px 22px 22px; }
+                  .rv-manual-panel { width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 104px); overflow: auto; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; box-shadow: 0 28px 80px rgba(15,23,42,.28); }
+                  .rv-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 18px; border-bottom: 1px solid #e2e8f0; }
+                  .rv-manual-title { margin: 0; color: #111827; font: 900 15px/1.3 Inter, sans-serif; }
+                  .rv-manual-kicker { color: #64748b; font: 800 11px/1 Inter, sans-serif; letter-spacing: 0; text-transform: uppercase; }
+                  .rv-manual-close { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #334155; cursor: pointer; }
+                  .rv-manual-body { padding: 18px; }
+                  .rv-manual-copy { color: #334155; font: 500 14.5px/1.78 Inter, sans-serif; white-space: pre-wrap; }
+                  .rv-manual-quote { display: inline; font-family: Georgia, 'Times New Roman', serif; font-style: italic; color: #334155; background: rgba(241,245,249,.92); border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 5px; }
+                  .rv-manual-evidence-list { margin-top: 16px; display: grid; gap: 8px; }
+                  .rv-manual-evidence-pill { display: inline-flex; align-items: center; gap: 7px; width: fit-content; border: 1px solid #99f6e4; border-radius: 7px; background: #ecfdf5; color: #0f766e; padding: 7px 10px; font: 800 12px/1 Inter, sans-serif; cursor: pointer; }
                   .rv-explanation-copy { display:grid; gap:10px; margin-top:10px; color:#334155; font-size:13.5px; line-height:1.65; white-space:normal; }
                   .rv-explanation-copy p { margin:0; }
                   .rv-review-match-grid { display:grid; grid-template-columns:minmax(420px,1fr) minmax(220px,.55fr); gap:20px; align-items:start; }
@@ -8585,11 +9003,43 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-map-review-slot-number { position:absolute; top:-17px; left:0; padding:1px 4px; background:#fff; color:#475569; font-size:10px; font-weight:900; }
                   @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
                   @media (max-width: 760px) { .rv-review-match-grid { grid-template-columns:1fr; } .rv-review-match-row { grid-template-columns:minmax(0,1fr) minmax(130px,.55fr); } .rv-review-match-answer.rv-review-match-correct { grid-column:2; } }
-                  @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } }
+                  @media (max-width: 760px) { .rv-manual-backdrop { justify-content: center; padding: 62px 12px 12px; } }
+                  @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } .rv-review-action { width: 100%; } .rv-review-timestamp-pills { width: 100%; } }
               `}</style>
+              {manualExplanationQuestion && (() => {
+                  const manual = rvManualExplanationOf(manualExplanationQuestion);
+                  if (!manual) return null;
+                  const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], manualExplanationQuestion.id);
+                  return (
+                      <div className="rv-manual-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualExplanationQuestion(null); }}>
+                          <section className="rv-manual-panel" role="dialog" aria-modal="true" aria-label={`Teacher explanation for question ${number}`}>
+                              <div className="rv-manual-head">
+                                  <div>
+                                      <div className="rv-manual-kicker">Teacher explanation</div>
+                                      <h3 className="rv-manual-title">Question {number}</h3>
+                                  </div>
+                                  <button type="button" className="rv-manual-close" onClick={() => setManualExplanationQuestion(null)} aria-label="Close teacher explanation">
+                                      <Ico name="x" size={15} />
+                                  </button>
+                              </div>
+                              <div className="rv-manual-body">
+                                  {rvRenderManualExplanationCopy(manual)}
+                                  {!!manual.parsedQuotes.length && (
+                                      <div className="rv-manual-evidence-list">
+                                          <button type="button" className="rv-manual-evidence-pill" onClick={() => { rvJumpToManualEvidence(manualExplanationQuestion); setManualExplanationQuestion(null); }}>
+                                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                                              Locate evidence
+                                          </button>
+                                      </div>
+                                  )}
+                              </div>
+                          </section>
+                      </div>
+                  );
+              })()}
               <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
                   <div style={{fontWeight: 900, fontSize: 18}}>REVIEW: {reviewQuiz.quiz.title}</div>
-                  <button onClick={() => setReviewQuiz(null)} style={{background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '8px 20px'}}>Back</button>
+                  <button onClick={() => { setManualExplanationQuestion(null); setReviewQuiz(null); }} style={{background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '8px 20px'}}>Back</button>
               </div>
               {rvHasSections && (
                   <div style={{ flex: 'none', display: 'flex', background: C.card, borderBottom: `1px solid ${C.border}`, padding: '0 24px', overflowX: 'auto', zIndex: 90 }}>
@@ -8646,7 +9096,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   );
               })()}
               {renderMeetAudioNotice()}
-              <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
                   {!rvActiveIsListening && (() => {
                       const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
                       const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
@@ -8662,7 +9112,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const rnorm = (v: any) => normalizeHeadingId(v);
                       const headingBody = (roman: string) => headingPlainText(headingCatalog.get(rnorm(roman))?.text);
                       return (
-                      <div style={{ width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", borderRight: `1px solid ${C.border}`, lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
+                      <div className="exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 0, height: '100%', overflowY: 'auto', padding: "30px 40px", lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
                           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
                               <h2 style={{marginTop: 0, color: C.accent, margin: 0}}>{rvIsIntegrated ? `PART ${rvActiveIdx + 1}` : 'READING PASSAGE'}</h2>
                           </div>
@@ -8748,7 +9198,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
                       };
                       return (
-                          <div className="rv-transcript-panel" style={{ width: '50%', height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px 34px', borderRight: `1px solid ${C.border}`, background: '#fff', color: '#333', boxSizing: 'border-box' }}>
+                          <div className="rv-transcript-panel exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px 34px', background: '#fff', color: '#333', boxSizing: 'border-box' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: `2px solid ${C.accent}`, marginBottom: 16, paddingBottom: 10 }}>
                                   <div><div style={{ fontSize: 16, fontWeight: 900, color: C.accent }}>TRANSCRIPT</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Listening evidence, ordered by the original audio timeline</div></div>
                                   {transcriptText ? <button onClick={downloadTranscript} title="Download transcript" style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 10px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Transcript (.doc)</button> : null}
@@ -8758,7 +9208,24 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       );
 
                   })()}
-                  <div style={{ flex: 1, minWidth: 0, width: '50%', height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
+                  <div onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                       onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                       title="Drag to resize"
+                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'col-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                       <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                           <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
+                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
+                           </div>
+                       </div>
+                  </div>
+                  {isDraggingSplitter && (
+                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'col-resize', userSelect: 'none' }}
+                           onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
+                           onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
+                           onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
+                           onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} />
+                  )}
+                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "30px 40px", background: C.bg }}>
                       
                       {(() => {
                           const rqQuiz = reviewQuiz.quiz;
@@ -8963,7 +9430,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   || headingQuestions.find((candidate: any) => !headingState(candidate).correct)
                                   || headingQuestions[0];
                               const selectedState = headingState(selected);
-                              const selectedExplanation = explainMap[selected.id];
                               const firstNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[0]?.id);
                               const lastNumber = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], headingQuestions[headingQuestions.length - 1]?.id);
                               return <section key={`heading-review-${q.id}`} className="rv-completion-review rv-heading-review">
@@ -8996,7 +9462,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
                                       <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
-                                      {!selectedExplanation ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : selectedExplanation.loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(selectedExplanation.text || '', selectedExplanation.audioEvidence, selectedExplanation.audioEvidenceSegments)}</div>}
+                                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
                               </section>;
                           }
@@ -9021,26 +9487,37 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               for (let cursor = i; cursor < reviewQuiz.quiz.questions.length && isSameMatchingRun(reviewQuiz.quiz.questions[cursor]); cursor++) {
                                   matchQuestions.push(reviewQuiz.quiz.questions[cursor]);
                               }
-                              const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => String(option));
+                              const options = (matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
                               const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
                               const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
                               const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-                                  || matchQuestions.find((candidate: any) => Number(reviewQuiz.result.answers?.[candidate.id]) !== Number(candidate.correctAnswer))
+                                  || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
                                   || matchQuestions[0];
-                              const renderGrid = <div style={{overflowX:'auto'}}><table className="idp-matching-table" style={{width:'100%', borderCollapse:'collapse'}}><thead><tr><th style={{textAlign:'left', minWidth:180}}>Question</th>{options.map((_:string, optionIndex:number)=><th key={optionIndex}>{String.fromCharCode(65+optionIndex)}</th>)}</tr></thead><tbody>{matchQuestions.map((question:any) => {
+                              const renderGrid = <div style={{overflowX:'auto'}}><table className="idp-matching-table rv-idp-matching-text-table" style={{width:'100%', borderCollapse:'collapse'}}><thead><tr><th style={{textAlign:'left', minWidth:180}}>Question</th><th style={{textAlign:'left', minWidth:260}}>Answer</th></tr></thead><tbody>{matchQuestions.map((question:any) => {
                                   const answer = reviewQuiz.result.answers?.[question.id];
                                   const number = getQuizQuestionNumber(reviewQuiz.quiz.questions || [], question.id);
-                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td><span style={{display:'inline-flex', minWidth:24, height:24, alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, marginRight:8, fontSize:12, fontWeight:800}}>{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td>{options.map((_:string, optionIndex:number) => {
-                                      const correct = Number(question.correctAnswer) === optionIndex;
-                                      const chosen = answer !== undefined && Number(answer) === optionIndex;
+                                  const optionCarrier = { ...question, options };
+                                  const chosenText = resolveMatchingAnswerText(optionCarrier, answer);
+                                  const correctText = resolveMatchingAnswerText(optionCarrier, question.correctAnswer);
+                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td><span style={{display:'inline-flex', minWidth:24, height:24, alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, marginRight:8, fontSize:12, fontWeight:800}}>{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td><td><div className="rv-idp-matching-text-options">{options.map((optionText:string, optionIndex:number) => {
+                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(optionText);
+                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(optionText);
+                                      const tone = correct ? 'correct' : chosen ? 'wrong' : '';
+                                      return <span key={`${question.id}-${optionIndex}`} className={`rv-idp-matching-text-option ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className="rv-idp-radio-dot" /><span>{optionText}</span></span>;
                                       return <td key={optionIndex} style={{textAlign:'center', background:correct ? `${C.succ}16` : chosen ? `${C.err}12` : 'transparent'}}><span title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''} style={{display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:'50%', border:`2px solid ${correct ? C.succ : chosen ? C.err : C.border}`, color:correct ? C.succ : chosen ? C.err : C.sub, fontWeight:900}}>{correct ? '✓' : chosen ? '×' : ''}</span></td>;
-                                  })}</tr>;
+                                  })}</div></td></tr>;
                               })}</tbody></table></div>;
                               return <section key={`matching-review-${q.id}`} className="rv-completion-review">
                                   {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
                                   {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
-                                  <div className="rv-completion-detail" style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
+                                  {selected && (() => {
+                                      const answer = reviewQuiz.result.answers?.[selected.id];
+                                      const optionCarrier = { ...selected, options };
+                                      const selectedOk = isSingleQuestionCorrect(optionCarrier, answer);
+                                      const selectedBlank = answer === undefined || answer === null || answer === "";
+                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
+                                  })()}
                               </section>;
                           }
                           if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
@@ -9055,7 +9532,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=getQuizQuestionNumber(reviewQuiz.quiz.questions || [],question.id); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
@@ -9101,7 +9578,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
                                       <div className="rv-completion-detail-heading">Question {getQuizQuestionNumber(reviewQuiz.quiz.questions || [], selected.id)}</div>
                                       <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
-                                      {!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}
+                                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
                                   </div>
                               </section>;
                           }
@@ -9140,7 +9617,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
                                       </div>
                                   </div>
-                                  {selected && (()=>{const selectedState=rvCompletionAnswer(selected);return <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected, diagramQuestions.indexOf(selected))}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>})()}
+                                  {selected && (()=>{const selectedState=rvCompletionAnswer(selected);return <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected, diagramQuestions.indexOf(selected))}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>})()}
                               </section>;
                           }
                           if (q.type === "MAP_DRAG") {
@@ -9181,7 +9658,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       </div>
                                       <aside className="rv-review-match-bank"><div className="rv-review-match-bank-title">Answer choices</div>{(q.options || []).map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span className="rv-review-match-option-key">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside>
                                   </div></div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{!explainMap[selected.id] ? <button type="button" className="rv-completion-why" onClick={() => handleAiExplain(selected, reviewQuiz.result.answers?.[selected.id], reviewQuiz.quiz)}><Ico name="bulb" size={15} /> {t('explain_why')}</button> : explainMap[selected.id].loading ? <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div> : <div className="explanation"><div className="explanation-title"><Ico name="bulb" size={15} /> {t('explanation')}</div>{rvRenderExplain(explainMap[selected.id].text || '', explainMap[selected.id].audioEvidence, explainMap[selected.id].audioEvidenceSegments)}</div>}</div>
+                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
                               </section>;
                           }
                           const rvGroup = rvGroupByQuestionId.get(q.id);
@@ -9219,7 +9696,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           const rvCMulti = rvIsMulti ? (multiOutcome?.correct || (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer])).map(Number) : [];
                           const rvSMulti = rvIsMulti ? (Array.isArray(studentAns) ? studentAns.map(Number) : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : [])) : [];
                           const rvOptMark = (oi: number, otext: string) => {
-                              if (q.type === "CHOICE" || q.type === "MATCHING") return { correct: Number(q.correctAnswer) === oi, chosen: studentAns !== undefined && studentAns !== "" && Number(studentAns) === oi };
+                              if (q.type === "CHOICE") return { correct: Number(q.correctAnswer) === oi, chosen: studentAns !== undefined && studentAns !== "" && Number(studentAns) === oi };
                               if (rvIsMulti) return { correct: rvCMulti.includes(oi), chosen: rvSMulti.includes(oi) };
                               const lab = (otext.match(/^\s*([ivxlcdm]+|[A-Za-z])[\.\)]/i) || [])[1];
                               return { correct: !!lab && rvNorm(q.correctAnswer) === rvNorm(lab), chosen: !!lab && rvNorm(studentAns) === rvNorm(lab) };
@@ -9228,17 +9705,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           return (
                           <React.Fragment key={q.id}>
                               {showContext && <div className="group-context" dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />}
-                              <div className="card" style={{marginBottom: 20, borderLeft: `5px solid ${isCorrect ? C.succ : (isPartial ? C.warn : C.err)}`}}>
-                                  <div style={{fontWeight: 800, marginBottom: 12}}>Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}{questionBodyHtml ? ': ' : ''}{questionBodyHtml && <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: questionBodyHtml}} />}</div>
+                              <div className={`rv-exam-review-card ${isCorrect ? 'correct' : (isPartial ? 'partial' : 'wrong')}`}>
+                                  <div className="rv-exam-question-head">Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}{questionBodyHtml ? ': ' : ''}{questionBodyHtml && <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: questionBodyHtml}} />}</div>
                                   {rvShowOpts ? (
-                                      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                                      <ul className="rv-exam-review-options">
                                           {rvOpts.map((o: any, oi: number) => {
                                               const { correct, chosen } = rvOptMark(oi, String(o));
-                                              const bd = correct ? C.succ : (chosen ? C.err : C.border);
-                                              const bg = correct ? `${C.succ}14` : (chosen ? `${C.err}12` : 'transparent');
                                               const clean = String(o).replace(/^\s*([ivxlcdm]+|[A-Za-z]{1,3})[\.\)]\s*/i, '');
                                               return (
-                                                  <li key={oi} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '8px 11px', borderRadius: 8, border: `1px solid ${bd}`, background: bg, fontSize: 14, lineHeight: 1.5 }}>
+                                                  <li key={oi} className={`rv-exam-review-option ${correct ? 'correct' : (chosen ? 'wrong' : '')}`}>
                                                       <span style={{ flexShrink: 0, marginTop: 1, color: correct ? C.succ : (chosen ? C.err : C.sub) }}>
                                                           {correct
                                                               ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -9247,37 +9722,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                                   : <span style={{ display: 'inline-block', width: 15, height: 15, border: `1.5px solid ${C.border}`, borderRadius: rvIsMulti ? 3 : '50%' }} />)}
                                                       </span>
                                                       <span style={{ flex: 1, color: C.text }} dangerouslySetInnerHTML={{ __html: formatContent(clean) }} />
-                                                      {chosen && <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: correct ? C.succ : C.err, alignSelf: 'center', whiteSpace: 'nowrap' }}>Your answer</span>}
-                                                      {correct && !chosen && <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 800, color: C.succ, alignSelf: 'center', whiteSpace: 'nowrap' }}>Correct</span>}
+                                                      {chosen && <span className="rv-exam-review-option-status">Your answer</span>}
+                                                      {correct && !chosen && <span className="rv-exam-review-option-status">Correct</span>}
                                                   </li>
                                               );
                                           })}
                                       </ul>
                                   ) : (
-                                  <div style={{display:'flex', gap: 10, fontSize: 14, flexWrap: 'wrap'}}>
-                                      <div style={{background: isCorrect ? `${C.succ}20` : (isPartial ? `${C.warn}20` : `${C.err}20`), color: isCorrect ? C.succ : (isPartial ? C.warn : C.err), padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
-                                          <b>Your answer:</b> {(studentAns === undefined || studentAns === "" || (Array.isArray(studentAns) && studentAns.length === 0)) ? "No answer" : String(studentAns)}
+                                  <div className="rv-exam-review-answer-row">
+                                      <div>
+                                          <span>Your answer</span><strong>{(studentAns === undefined || studentAns === "" || (Array.isArray(studentAns) && studentAns.length === 0)) ? "No answer" : String(studentAns)}</strong>
                                       </div>
                                       {!isCorrect && (
-                                          <div style={{background: `${C.accent}20`, color: C.accent, padding: '8px 12px', borderRadius: 6, flex: 1, minWidth: 140}}>
-                                              <b>Correct answer:</b> {correctDisplay}
+                                          <div>
+                                              <span>Correct answer</span><strong>{correctDisplay}</strong>
                                           </div>
                                       )}
                                   </div>
                                   )}
-                                  {!isCorrect && (
-                                      <div style={{marginTop: 12}}>
-                                          {!explainMap[q.id] ? (
-                                              <button onClick={() => handleAiExplain(multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q, studentAns, reviewQuiz.quiz)} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '6px 14px', borderRadius: 8}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_why')}</button>
-                                          ) : explainMap[q.id].loading ? (
-                                              <div style={{fontSize: 13, color: C.sub, fontWeight: 600}}><Ico name="refresh" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_loading')}</div>
-                                          ) : (
-                                              <div style={{background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '12px 14px', fontSize: 13.5, lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-line'}}>
-                                                  <b style={{color: '#6d28d9'}}><Ico name="bulb" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{t('explain_title')}:</b><br/>{rvRenderExplain(explainMap[q.id].text, explainMap[q.id].audioEvidence, explainMap[q.id].audioEvidenceSegments)}
-                                              </div>
-                                          )}
-                                      </div>
-                                  )}
+                                  {rvRenderReviewActions(q, studentAns, multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q)}
                               </div>
                           </React.Fragment>
                       )})}
@@ -10251,6 +10714,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-matching-table td:first-child { background: #fafafa; font-size: 13px; }
                       .idp-matching-table tbody tr:hover td { background: #f8f9ff; }
                       .idp-matching-table input[type="radio"] { display: block; margin: 0 auto; width: 17px; height: 17px; cursor: pointer; accent-color: #0969da; }
+                      .idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
+                      .idp-matching-text-option { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid transparent; border-radius: 4px; background: #fff; color: #24292f; font-size: 13px; line-height: 1.35; cursor: pointer; }
+                      .idp-matching-text-option:hover { border-color: #b6d7ff; background: #f6faff; }
+                      .idp-matching-text-option.selected { border-color: #0969da; background: #eef6ff; }
+                      .idp-matching-text-option input[type="radio"] { margin: 1px 0 0; width: 16px; height: 16px; }
                       .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
                       .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
                       .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
@@ -11069,18 +11537,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         );
                     };
 
-                    const renderMatchingTable = () => (
+                    const renderMatchingTable = () => {
+                       const matchingOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                       return (
                        <>
                            <table className="idp-matching-table">
                                <thead>
                                    <tr>
                                        <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 200, padding: '8px 12px'}}>Question</th>
-                                       {(group.questions[0].options || []).map((_: any, i: any) => <th key={i}>{String.fromCharCode(65 + i)}</th>)}
+                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 260, padding: '8px 12px'}}>Answer</th>
                                    </tr>
                                </thead>
                                <tbody>
                                    {group.questions.map((q) => {
                                        const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
+                                       const optionCarrier = { ...q, options: matchingOptions };
+                                       const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
                                        return (
                                            <tr id={`question-${q.id}`} key={q.id}>
                                                <td style={{ verticalAlign: 'middle' }}>
@@ -11089,28 +11561,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                        <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
                                                    </div>
                                                </td>
-                                               {(group.questions[0].options || []).map((_: any, i: any) => (
-                                                   <td key={i} style={{background: '#fff', textAlign: 'center', verticalAlign: 'middle'}}>
-                                                       <input type="radio" aria-label={`Question ${qGlobalIdx}, option ${String.fromCharCode(65 + i)}`} checked={examAnswers[q.id] === i} onChange={() => { handleAnswerChange(q.id, i); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} style={{width: 18, height: 18, accentColor: idpC.blueAccent, cursor: 'pointer', margin: '0 auto', display: 'block'}} />
-                                                   </td>
-                                               ))}
+                                               <td style={{background: '#fff', textAlign: 'left', verticalAlign: 'middle'}}>
+                                                   <div className="idp-matching-text-options">
+                                                       {matchingOptions.map((optionText: string, i: number) => {
+                                                           const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(optionText);
+                                                           return (
+                                                               <label key={`${q.id}-${i}`} className={`idp-matching-text-option ${checked ? 'selected' : ''}`}>
+                                                                   <input type="radio" aria-label={`Question ${qGlobalIdx}, ${optionText}`} checked={checked} onChange={() => { handleAnswerChange(q.id, optionText, "MATCHING"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} />
+                                                                   <span>{optionText}</span>
+                                                               </label>
+                                                           );
+                                                       })}
+                                                   </div>
+                                               </td>
                                            </tr>
                                        );
                                    })}
                                </tbody>
                            </table>
-                           {!isInfoMatching && (
-                               <div className="idp-matching-legend">
-                                   {(group.questions[0].options || []).map((opt: string, i: number) => (
-                                       <div key={i} className="idp-matching-legend-item">
-                                           <span className="idp-matching-legend-key">{String.fromCharCode(65 + i)}</span>
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={group.questions[0].id} dataOptIndex={String(i)} html={renderSafeHTML(String(opt).replace(/^\s*[A-Za-z][\.\)]\s*/, ''))} />
-                                       </div>
-                                   ))}
-                               </div>
-                           )}
                        </>
-                   );
+                       );
+                   };
 
                    const renderMapDrag = () => {
                        const sourceQuestion = group.questions[0] as any;
@@ -13541,10 +14012,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             const handleForceSave = async () => {
                 const currentLatestQuiz: any = editingQuizRef.current;
                 if (!currentLatestQuiz) return;
-                const idx = quizzesRef.current.findIndex((q: any) => q.id === currentLatestQuiz.id);
+                const quizForSave = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(currentLatestQuiz)));
+                const idx = quizzesRef.current.findIndex((q: any) => q.id === quizForSave.id);
                 const nx = [...quizzesRef.current];
-                if (idx > -1) nx[idx] = currentLatestQuiz;
-                else nx.unshift(currentLatestQuiz);
+                if (idx > -1) nx[idx] = quizForSave;
+                else nx.unshift(quizForSave);
+                setEditingQuiz(quizForSave);
                 setQuizCatalogState(nx);
                 const saved = await syncData({ quizzes: nx });
                 alert(saved
@@ -13743,6 +14216,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <button key={idx} className="ebx-tab" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _activePassageTab: idx} : prev)} style={{ padding: '6px 15px', fontSize: 12, borderRadius: 7, background: isActive ? EB.sheet : 'transparent', color: isActive ? EB.ink : EB.sub, boxShadow: isActive ? '0 1px 3px rgba(26,23,38,0.10)' : 'none', fontWeight: isActive ? 700 : 500, border: 'none', cursor: 'pointer' }}>{label}</button>
                                         )})})()}
                                     </div>
+                                </div>
+                                <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', margin:'0 0 12px'}}>
+                                    <input id="eb-replace-passage-docx" type="file" accept=".docx" onChange={(e:any) => handleSupplementDocxUpload(e, "replace_sections")} style={{display:'none'}} />
+                                    <input id="eb-import-explanations-docx" type="file" accept=".docx" onChange={(e:any) => handleSupplementDocxUpload(e, "explanations")} style={{display:'none'}} />
+                                    <label htmlFor="eb-replace-passage-docx" className="ebx-soft" style={{background:EB.sheet,color:EB.ink,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${EB.line}`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
+                                        <Ico name="plus" size={13} />Replace passage from DOCX
+                                    </label>
+                                    <label htmlFor="eb-import-explanations-docx" className="ebx-soft" style={{background:EB.accentWash,color:EB.accent,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${C.accent}22`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
+                                        <Ico name="bulb" size={13} />Import explanations DOCX
+                                    </label>
                                 </div>
                                 <div style={{ border: `1px solid ${EB.line}`, borderRadius: EB.radius, overflow: 'hidden', background: EB.sheet }}>
                                     <RichTextEditor
@@ -14213,9 +14696,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     {q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE" || q.type === "MATCHING" ? (
                                                         <div style={{display: 'flex', flexDirection: 'column', gap: 0}}>
                                                             {(q.options || []).map((opt: string, optIndex: number) => {
+                                                                const matchingOptionText = resolveMatchingAnswerText(q, optIndex);
                                                                 const isChecked = isMerged
                                                                     ? grp.questions.some((qItem: any) => Array.isArray(qItem.correctAnswer) ? qItem.correctAnswer.includes(optIndex) : qItem.correctAnswer === optIndex)
-                                                                    : (q.type === "CHOICE" || q.type === "MATCHING" ? q.correctAnswer === optIndex : (Array.isArray(q.correctAnswer) && q.correctAnswer.includes(optIndex)));
+                                                                    : (q.type === "CHOICE"
+                                                                        ? q.correctAnswer === optIndex
+                                                                        : q.type === "MATCHING"
+                                                                            ? normalizeComparableAnswer(resolveMatchingAnswerText(q, q.correctAnswer)) === normalizeComparableAnswer(matchingOptionText)
+                                                                            : (Array.isArray(q.correctAnswer) && q.correctAnswer.includes(optIndex)));
 
                                                                 return (
                                                                 <div key={optIndex} className="ebx-opt" style={{display: 'flex', alignItems: 'center', gap: 14, background: isChecked ? `${C.succ}12` : 'transparent', padding: '10px 14px', borderRadius: EB.radiusSm, borderLeft: `2px solid ${isChecked ? C.succ : 'transparent'}`, marginBottom: 2}}>
@@ -14229,7 +14717,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                                 if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
                                                                                 updateGroup((qItem: any) => ({ ...qItem, correctAnswer: curArr }));
                                                                             } else {
-                                                                                if (q.type === "CHOICE" || q.type === "MATCHING") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: optIndex }));
+                                                                                if (q.type === "CHOICE") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: optIndex }));
+                                                                                else if (q.type === "MATCHING") updateGroup((qItem: any) => ({ ...qItem, correctAnswer: resolveMatchingAnswerText(qItem, optIndex) }));
                                                                                 else {
                                                                                     let curArr = Array.isArray(q.correctAnswer) ? [...(q.correctAnswer as number[])] : [];
                                                                                     if (e.target.checked) curArr.push(optIndex); else curArr = curArr.filter(x => x !== optIndex);
@@ -14252,6 +14741,43 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 </div>
                                             </div>
                                         )}
+                                        <div className="no-print" style={{marginTop: 18, padding: '16px 18px', border: `1px solid ${EB.line}`, borderRadius: EB.radius, background: EB.washSoft}}>
+                                            <label style={{...ebEyebrow, marginBottom: 12, display: 'flex'}}><Ico name="bulb" size={13} />Teacher Explanation (Optional)</label>
+                                            <div style={{display: 'grid', gap: 10}}>
+                                                {grp.questions.map((qItem: any, offset: number) => {
+                                                    const qNo = getQuizQuestionNumber(editingQuiz.questions || [], qItem.id);
+                                                    const manual = parseManualExplanation(qItem.manualExplanation);
+                                                    return (
+                                                        <div key={`manual-explanation-${qItem.id}`} style={{display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr)', gap: 10, alignItems: 'start'}}>
+                                                            <div style={{fontFamily: EB.fMono, fontWeight: 800, color: EB.accent, fontSize: 13, paddingTop: 10}}>#{qNo || qIndex + offset + 1}</div>
+                                                            <div>
+                                                                <textarea
+                                                                    value={manual?.rawText || ""}
+                                                                    onChange={(event: any) => {
+                                                                        const parsed = parseManualExplanation(event.target.value);
+                                                                        updateGroup((entry: any, entryOffset: number) => {
+                                                                            if (entryOffset !== offset) return entry;
+                                                                            const next = { ...entry };
+                                                                            if (parsed) next.manualExplanation = parsed;
+                                                                            else delete next.manualExplanation;
+                                                                            return next;
+                                                                        });
+                                                                    }}
+                                                                    placeholder={'e.g. The speaker clarifies "annual membership fee" at [02:15] to rule out option A.'}
+                                                                    style={{width: '100%', minHeight: 74, boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet, color: EB.ink, fontFamily: EB.fBody, fontSize: 13.5, lineHeight: 1.5, resize: 'vertical', outline: 'none', boxShadow: 'none'}}
+                                                                />
+                                                                {!!manual && (
+                                                                    <div style={{display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 7, fontSize: 11, color: EB.sub}}>
+                                                                        <span style={{border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 7, padding: '4px 7px', fontWeight: 700}}>Evidence {manual.parsedQuotes.length}</span>
+                                                                        <span style={{border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 7, padding: '4px 7px', fontWeight: 700}}>Timestamp {manual.parsedTimestamps.length}</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
                                     </div>
                                 )})}
                             </div>

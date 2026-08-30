@@ -2,7 +2,7 @@
 
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
-**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-28, commit c93eee0.
+**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-30 by the commit that updates this changelog.
 
 **Success condition:** The formatted DOCX parses into the intended sections, question types, visual layout, option bank, and answer keys without manual repair in Exam Builder.
 
@@ -19,7 +19,8 @@
 7. Inner structures may use only their documented closers: [/CONTEXT], [/FLOW], [/SLOTS], [/BOX], [/ANSWERS], and [/DIAGRAM_LABEL].
 8. Each numbered question needs one answer key. A multiple-selection task needs one starred line for each correct option.
 9. Preserve original question numbering and source order.
-10. Parse the final DOCX locally before upload. Compare extracted types, numbers, options, and answers against the source test.
+10. Put teacher explanations in [EXPLANATION] lines only. Never mix them into answer-key paragraphs.
+11. Parse the final DOCX locally before upload. Compare extracted types, numbers, options, answers, explanations, evidence quotes, and timestamps against the source test.
 
 ---
 
@@ -118,6 +119,47 @@ Multiple selection:
 ~~~
 
 Never write *A and C, *A,C, or *A/C.
+
+### Teacher explanations: [EXPLANATION]
+
+Manual teacher explanations are optional review-only data. They are stripped from the live exam and appear only in Review through Why, Locate Evidence, and Listening timestamp buttons.
+
+Use one explanation line per question:
+
+~~~text
+[EXPLANATION] 27: Because the text states "the number of visitors has increased by 20%" [01:24].
+~~~
+
+Rules:
+
+- The question number after [EXPLANATION] is strongly recommended and safest.
+- Quotes must use straight double quotes: "quoted evidence". The app extracts quoted text for Locate Evidence.
+- Listening timestamps must use [mm:ss] or [mm:ss - mm:ss]. The app converts them to seconds for audio seek.
+- Put [EXPLANATION] after that question's answer key, or place a numbered [EXPLANATION] line in the passage/question area.
+- Do not put [EXPLANATION] in headers, footers, comments, Word text boxes, or tables.
+- If several quotes exist, Review uses the most representative extracted quote for Locate Evidence. Put the best quote first.
+
+Explanation-only supplement files are accepted by the backend import channel. They may omit [PASSAGE] and [QUESTIONS] when their only purpose is to patch explanations:
+
+~~~text
+[EXPLANATION] 26: The speaker says "processing data she had gathered" at [12:04 - 12:10].
+[EXPLANATION] 27:
+The teacher note can continue on the next normal paragraph.
+It is attached to question 27 until the next [EXPLANATION] tag.
+~~~
+
+In Exam Builder, use Import explanations DOCX on the open test, then Save. Explanations are matched by visible question number.
+
+### Supplement DOCX patching
+
+Exam Builder can patch an existing test through the backend without rebuilding the whole exam:
+
+- Open the existing quiz and select the Passage/Section tab to replace.
+- Use Replace passage from DOCX.
+- If the supplement DOCX contains one [PASSAGE]/[QUESTIONS] section, it replaces the current tab.
+- If it contains two sections, it replaces the current tab and the next tab.
+- Metadata such as title, audience, lock status, attempts, and scheduling stays from the existing quiz.
+- Use Import explanations DOCX for [EXPLANATION]-only corrections; this does not replace questions or passages.
 
 ### Shared visual body: [CONTEXT]
 
@@ -236,7 +278,8 @@ C. Mr Gamma
 
 - Put the complete option bank before the first numbered question.
 - Use one paragraph per option.
-- Matching answer keys are normally letters, for example *B.
+- Matching answer keys may be letters or exact option text, for example *B or *Dr Beta.
+- The parser stores ordinary matching answers as clean option text and the exam UI renders text choices only. Do not rely on A/B/C as the saved answer value.
 - Do not use this for card-drag tasks; use [DRAG] instead.
 
 ### 4.6 Matching headings: [MATCHING] plus [HEADING_SLOT]
@@ -270,6 +313,7 @@ Rules:
 - Put [HEADING_SLOT] immediately before every passage paragraph that needs a heading.
 - Roman heading prefixes must be literal: i., ii., iii.
 - Heading answers are Roman values: *iv, not an index number.
+- Matching headings are the exception to the text-answer rule: they keep Roman numerals as the canonical answer.
 - Keep the word heading in the visible instruction so the parser chooses the heading renderer.
 - Do not convert headings into A/B/C options.
 
@@ -493,7 +537,9 @@ Critical rules:
 - [ ] Every question has an answer key.
 - [ ] Multiple selection has one starred line per correct option.
 - [ ] Option banks are complete and in original order.
+- [ ] Ordinary matching answers parse to clean option text, not A/B/C labels.
 - [ ] Drag answer keys use full card text.
+- [ ] Optional [EXPLANATION] lines use straight quotes and valid [mm:ss] timestamps.
 - [ ] Heading tasks use Roman numerals and [HEADING_SLOT].
 - [ ] Map/diagram URL is publicly reachable via HTTPS.
 - [ ] Map/diagram coordinates use the original image ratio.
@@ -512,7 +558,8 @@ from index import parse_docx_to_quiz
 
 quiz = parse_docx_to_quiz(Document(r'C:\path\to\formatted.docx'))
 for q in quiz['questions']:
-    print(q['passageIndex'], q['type'], q.get('subType'), q['text'], '=>', q['correctAnswer'])
+    manual = q.get('manualExplanation') or {}
+    print(q['passageIndex'], q['type'], q.get('subType'), q['text'], '=>', q['correctAnswer'], manual.get('parsedQuotes'), manual.get('parsedTimestamps'))
 '@ | .\.venv\Scripts\python.exe -
 ~~~
 
@@ -523,7 +570,9 @@ Verify manually:
 - option order;
 - all answer values;
 - Roman heading answers;
+- ordinary matching answer text;
 - full-text drag answers;
+- optional manualExplanation raw text, parsed quotes, and parsed timestamps;
 - diagram TEXT_BOXES, real aspect ratio, shared box count, and one question per marker.
 
 ---
@@ -541,6 +590,17 @@ Whenever api/index.py changes a DOCX grammar, supported block type, answer mappi
 
 Do not silently change parser behaviour while leaving this handbook stale.
 
+## 8. AI Provider Key Pool
+
+Backend AI routes distribute requests across configured keys and fail over when one provider/key is rate-limited:
+
+- Groq text and Whisper: `GROQ_API_KEY`, `GROQ_API_KEY_2`, etc., or comma-separated `GROQ_API_KEYS`.
+- Gemini text/audio fallback: `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, etc., `GOOGLE_API_KEY`, or comma-separated `GEMINI_API_KEYS`.
+- Affected routes include transcript generation, AI feedback, AI vocabulary, and AI Why/explanation.
+- Groq Whisper remains first for audio transcription because it returns machine timestamps; Gemini is fallback transcript-only.
+
 ## Changelog
 
+- **2026-08-30**: Added optional [EXPLANATION] grammar for teacher review explanations, parsed quoted evidence, and Listening timestamps.
+- **2026-08-30**: Added backend supplement DOCX import for replacing passages/sections and explanation-only files; ordinary [MATCHING] now stores clean option text while Matching Headings keep Roman numerals.
 - **2026-08-28 / c93eee0**: Initial complete handbook. Covers metadata, passages, generic blocks, completions, MCQ, multi-selection, matching headings, two-column drag, flow drag, map drag, and free-box diagram labelling.

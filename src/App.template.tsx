@@ -1575,6 +1575,8 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
 type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
 interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
+interface ManualExplanationTimestamp { startTime: number; endTime?: number; label: string; }
+interface ManualExplanation { rawText: string; parsedQuotes: string[]; parsedTimestamps: ManualExplanationTimestamp[]; }
 interface DiagramTextBox {
   id: string;
   x: number;
@@ -1586,9 +1588,195 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface QuizQuestion { id: string; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; }
+interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; }
+
+const manualTimestampToSeconds = (value: any) => {
+  const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
+  return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : 0;
+};
+
+const parseManualExplanation = (value: any): ManualExplanation | undefined => {
+  const rawSource = typeof value === "object" && value ? value.rawText : value;
+  const rawText = String(rawSource || "")
+    .replace(/^\s*\[EXPLANATION\]\s*/i, "")
+    .replace(/^\s*\d+\s*[:.)-]\s*/, "")
+    .trim();
+  if (!rawText) return undefined;
+  const parsedQuotes = Array.from(new Set(Array.from(rawText.matchAll(/"([^"]+)"/g))
+    .map(match => match[1].replace(/\s+/g, " ").trim())
+    .filter(Boolean)));
+  const parsedTimestamps = Array.from(rawText.matchAll(/\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]/g))
+    .map(match => {
+      const startTime = manualTimestampToSeconds(match[1]);
+      const endTime = match[2] ? manualTimestampToSeconds(match[2]) : undefined;
+      const label = match[2] ? `${match[1]} - ${match[2]}` : match[1];
+      return endTime === undefined ? { startTime, label } : { startTime, endTime, label };
+    })
+    .filter((item, index, all) => all.findIndex(other => other.startTime === item.startTime && other.endTime === item.endTime && other.label === item.label) === index);
+  return { rawText, parsedQuotes, parsedTimestamps };
+};
+
+const normalizeQuestionManualExplanation = (question: any) => {
+  if (!question) return question;
+  const next = { ...question };
+  const manual = parseManualExplanation(next.manualExplanation);
+  if (manual) next.manualExplanation = manual;
+  else delete next.manualExplanation;
+  return next;
+};
+
+const normalizeQuizManualExplanations = (quiz: any) => {
+  if (!quiz) return quiz;
+  const questions = Array.isArray(quiz.questions) ? quiz.questions.map(normalizeQuestionManualExplanation) : [];
+  const byId = new Map(questions.map((question: any) => [String(question.id), question]));
+  const sections = Array.isArray(quiz.sections)
+    ? quiz.sections.map((section: any) => ({
+        ...section,
+        questions: Array.isArray(section.questions)
+          ? section.questions.map((question: any) => byId.get(String(question.id)) || normalizeQuestionManualExplanation(question))
+          : [],
+      }))
+    : quiz.sections;
+  return { ...quiz, questions, sections };
+};
+
+const stripQuestionExplanationFields = (question: any) => {
+  if (!question) return question;
+  const { manualExplanation, aiExplanation, ...safeQuestion } = question;
+  return safeQuestion;
+};
+
+const stripExamExplanations = (quiz: any): Quiz => {
+  if (!quiz) return quiz;
+  return {
+    ...quiz,
+    questions: Array.isArray(quiz.questions) ? quiz.questions.map(stripQuestionExplanationFields) : [],
+    sections: Array.isArray(quiz.sections)
+      ? quiz.sections.map((section: any) => ({
+          ...section,
+          questions: Array.isArray(section.questions) ? section.questions.map(stripQuestionExplanationFields) : [],
+        }))
+      : quiz.sections,
+  };
+};
+
+const restoreReviewExplanations = (runtimeQuiz: any, sourceQuiz: any): Quiz => {
+  if (!runtimeQuiz) return runtimeQuiz;
+  const normalizedSource = normalizeQuizManualExplanations(sourceQuiz || runtimeQuiz);
+  const byId = new Map<string, any>((normalizedSource.questions || []).map((question: any) => [String(question.id), question]));
+  const restoreQuestion = (question: any) => {
+    if (!question) return question;
+    const source = byId.get(String(question.id));
+    if (!source) return normalizeQuestionManualExplanation(question);
+    const next = normalizeQuestionManualExplanation({ ...question, manualExplanation: source.manualExplanation });
+    if (source.aiExplanation) next.aiExplanation = source.aiExplanation;
+    return next;
+  };
+  return {
+    ...runtimeQuiz,
+    questions: Array.isArray(runtimeQuiz.questions) ? runtimeQuiz.questions.map(restoreQuestion) : [],
+    sections: Array.isArray(runtimeQuiz.sections)
+      ? runtimeQuiz.sections.map((section: any) => ({
+          ...section,
+          questions: Array.isArray(section.questions) ? section.questions.map(restoreQuestion) : [],
+        }))
+      : runtimeQuiz.sections,
+  };
+};
+
+const quizSectionsForPatch = (quiz: any) => {
+  if (Array.isArray(quiz?.sections) && quiz.sections.length) {
+    return quiz.sections.map((section: any) => ({
+      ...section,
+      passage: section?.passage || "",
+      questions: Array.isArray(section?.questions) ? section.questions.map((question: any) => ({ ...question })) : [],
+    }));
+  }
+  return [{
+    passage: quiz?.passage || "",
+    questions: Array.isArray(quiz?.questions) ? quiz.questions.map((question: any) => ({ ...question, passageIndex: 0 })) : [],
+  }];
+};
+
+const rebuildQuizFromSections = (quiz: any, sections: any[]) => {
+  const normalizedSections = sections.map((section: any, sectionIndex: number) => ({
+    ...section,
+    passage: section?.passage || "",
+    questions: (Array.isArray(section?.questions) ? section.questions : []).map((question: any) =>
+      normalizeQuestionManualExplanation({ ...question, passageIndex: sectionIndex })
+    ),
+  }));
+  return normalizeQuizManualExplanations({
+    ...quiz,
+    passage: normalizedSections[0]?.passage || "",
+    sections: normalizedSections,
+    questions: normalizedSections.flatMap((section: any) => section.questions || []),
+  });
+};
+
+const mergeQuizSectionsFromSupplement = (baseQuiz: any, supplementQuiz: any, startSectionIndex = 0) => {
+  const baseSections = quizSectionsForPatch(baseQuiz);
+  const patchSections = quizSectionsForPatch(supplementQuiz).filter((section: any) =>
+    String(section?.passage || "").trim() || (Array.isArray(section?.questions) && section.questions.length)
+  );
+  if (!patchSections.length) return { quiz: baseQuiz, replaced: 0 };
+  const start = Math.max(0, Math.min(Number(startSectionIndex) || 0, Math.max(0, baseSections.length - 1)));
+  patchSections.forEach((section: any, offset: number) => {
+    const targetIndex = start + offset;
+    while (baseSections.length <= targetIndex) baseSections.push({ passage: "", questions: [] });
+    baseSections[targetIndex] = {
+      ...section,
+      passage: section?.passage || "",
+      questions: (section?.questions || []).map((question: any) => ({
+        ...question,
+        id: question.id || `q_${Date.now()}_${targetIndex}_${offset}_${Math.random().toString(36).slice(2)}`,
+        passageIndex: targetIndex,
+      })),
+    };
+  });
+  return { quiz: rebuildQuizFromSections(baseQuiz, baseSections), replaced: patchSections.length };
+};
+
+const manualExplanationMapFromSupplement = (payload: any) => {
+  const map = new Map<string, ManualExplanation>();
+  Object.entries(payload?.explanations || {}).forEach(([number, value]) => {
+    const manual = parseManualExplanation(value);
+    if (manual) map.set(String(number), manual);
+  });
+  const questions = Array.isArray(payload?.quiz?.questions)
+    ? payload.quiz.questions
+    : (Array.isArray(payload?.questions) ? payload.questions : []);
+  questions.forEach((question: any, index: number) => {
+    const manual = parseManualExplanation(question?.manualExplanation);
+    const number = String(question?.questionNumber || index + 1);
+    if (manual) map.set(number, manual);
+  });
+  return map;
+};
+
+const mergeQuizManualExplanationsFromSupplement = (baseQuiz: any, supplementPayload: any) => {
+  const explanationByNumber = manualExplanationMapFromSupplement(supplementPayload);
+  if (!explanationByNumber.size) return { quiz: baseQuiz, imported: 0 };
+  const normalized = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(baseQuiz)));
+  let imported = 0;
+  const questions = (normalized.questions || []).map((question: any, index: number) => {
+    const number = String(question?.questionNumber || index + 1);
+    const manual = explanationByNumber.get(number);
+    if (!manual) return question;
+    imported += 1;
+    return { ...question, manualExplanation: manual };
+  });
+  const byId = new Map<string, any>(questions.map((question: any) => [String(question.id), question]));
+  const sections = Array.isArray(normalized.sections)
+    ? normalized.sections.map((section: any) => ({
+        ...section,
+        questions: (section.questions || []).map((question: any) => byId.get(String(question.id)) || question),
+      }))
+    : normalized.sections;
+  return { quiz: normalizeQuizManualExplanations({ ...normalized, questions, sections }), imported };
+};
 
 const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
   if (!quiz) return false;
@@ -1662,21 +1850,46 @@ const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any>
   };
 };
 
+const cleanOptionAnswerText = (value: any) => String(value ?? "")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/&nbsp;/gi, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .replace(/^\s*[A-Ka-k][.)]\s*/, "")
+  .replace(/^\s*[A-Ka-k]\s+(?=\S)/, "")
+  .trim();
+
+const normalizeComparableAnswer = (value: any) => cleanOptionAnswerText(value).toLocaleLowerCase();
+
+const resolveOptionAnswerText = (question: any, value: any) => {
+  const raw = String(value ?? "").trim();
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (!raw) return raw;
+  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
+  if (options.length && numeric >= 0 && numeric < options.length) return cleanOptionAnswerText(options[numeric]);
+  if (/^[A-Z]$/i.test(raw)) {
+    const index = raw.toUpperCase().charCodeAt(0) - 65;
+    if (options.length && index >= 0 && index < options.length) return cleanOptionAnswerText(options[index]);
+  }
+  return cleanOptionAnswerText(raw);
+};
+
 const resolveDragAnswerText = (question: any, value: any) => {
   const raw = String(value ?? "").trim();
   const options = Array.isArray(question?.options) ? question.options : [];
-  if (!raw || !options.length) return raw;
-  const numeric = /^\d+$/.test(raw) ? Number(raw) : -1;
-  if (numeric >= 0 && numeric < options.length) return String(options[numeric]).replace(/<[^>]+>/g, "").trim();
-  if (/^[A-Z]$/i.test(raw)) {
-    const index = raw.toUpperCase().charCodeAt(0) - 65;
-    if (index >= 0 && index < options.length) return String(options[index]).replace(/<[^>]+>/g, "").trim();
-  }
-  return raw;
+  if (!raw || !options.length) return cleanOptionAnswerText(raw);
+  return resolveOptionAnswerText(question, value);
+};
+
+const resolveMatchingAnswerText = (question: any, value: any) => {
+  return resolveOptionAnswerText(question, value);
 };
 
 const isSingleQuestionCorrect = (question: any, answer: any) => {
-  if (question?.type === "CHOICE" || question?.type === "MATCHING") return answer === question.correctAnswer;
+  if (question?.type === "CHOICE") return answer === question.correctAnswer;
+  if (question?.type === "MATCHING") {
+    return normalizeComparableAnswer(resolveMatchingAnswerText(question, answer)) === normalizeComparableAnswer(resolveMatchingAnswerText(question, question.correctAnswer));
+  }
   const isDrag = /^(?:DRAG_DROP|MAP_DRAG|FLOW_DRAG)$/i.test(String(question?.type || ""));
   const submitted = isDrag ? resolveDragAnswerText(question, answer) : String(answer ?? "");
   return String(question?.correctAnswer).split("/").map(value => {
@@ -2015,22 +2228,28 @@ const createTestUIQuiz = (q: Quiz): Quiz => {
         sections: q.sections?.map(sec => ({
             ...sec,
             passage: obfuscateHTML(sec.passage || ""),
-            questions: (sec.questions || []).map(qst => ({
-                ...qst,
+            questions: (sec.questions || []).map(qst => {
+                const safeQst = stripQuestionExplanationFields(qst);
+                return {
+                    ...safeQst,
+                    text: obfuscateHTML(qst.text),
+                    instruction: obfuscateHTML(qst.instruction || ""),
+                    groupContext: obfuscateHTML(qst.groupContext || ""),
+                    options: qst.options?.map(opt => obfuscateHTML(opt)),
+                };
+            })
+        })),
+        questions: q.questions.map(qst => {
+            const safeQst = stripQuestionExplanationFields(qst);
+            return {
+                ...safeQst,
                 text: obfuscateHTML(qst.text),
                 instruction: obfuscateHTML(qst.instruction || ""),
                 groupContext: obfuscateHTML(qst.groupContext || ""),
                 options: qst.options?.map(opt => obfuscateHTML(opt)),
-            }))
-        })),
-        questions: q.questions.map(qst => ({
-            ...qst,
-            text: obfuscateHTML(qst.text),
-            instruction: obfuscateHTML(qst.instruction || ""),
-            groupContext: obfuscateHTML(qst.groupContext || ""),
-            options: qst.options?.map(opt => obfuscateHTML(opt)),
-            correctAnswer: (qst.type === "CHOICE" ? 0 : "███") as any
-        }))
+                correctAnswer: (qst.type === "CHOICE" ? 0 : "███") as any
+            };
+        })
     };
 };
 // ==========================================
@@ -3336,6 +3555,7 @@ export default function IeltsSupremeOS() {
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
   const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
+  const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   // Thanh audio DÍNH TRÊN ở màn Review (sao chép layout phòng thi) — khỏi cuộn tìm player
@@ -5768,9 +5988,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
             cor = group.multiple.correct.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
           } else {
             const sAns = r.answers?.[q.id];
-            if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+            if (q.type === 'CHOICE') {
             stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(q.options?.[Number(sAns)] ?? sAns);
             cor = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
+            } else if (q.type === 'MATCHING') {
+            stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(resolveMatchingAnswerText(q, sAns));
+            cor = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
             } else {
               stu = (sAns === undefined || sAns === "") ? "(trống)" : stripTags(sAns);
               cor = stripTags(q.correctAnswer);
@@ -5816,7 +6039,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .replace(/[^\S\r\n]+/g, " ")
         .replace(/\n{2,}/g, "\n")
         .trim();
-      const optStr = (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
+      const optStr = q.type === 'MATCHING'
+        ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
+        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
@@ -5834,9 +6059,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
         };
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
-      } else if (q.type === 'CHOICE' || q.type === 'MATCHING') {
+      } else if (q.type === 'CHOICE') {
         correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
+      } else if (q.type === 'MATCHING') {
+        correctStr = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
+        stuStr = blank ? "(trống)" : stripTags(resolveMatchingAnswerText(q, studentAnsRaw));
       } else if (q.type === 'CHOICE_MULTIPLE') {
         const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
         correctStr = arr.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
@@ -5920,8 +6148,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const context = ctxParts.join("\n").trim().slice(0, 24000);
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
-        if (question.type === "CHOICE" || question.type === "MATCHING") {
+        if (question.type === "CHOICE") {
           return stripTags(question.options?.[Number(question.correctAnswer)] ?? question.correctAnswer);
+        }
+        if (question.type === "MATCHING") {
+          return stripTags(resolveMatchingAnswerText(question, question.correctAnswer));
         }
         if (question.type === "CHOICE_MULTIPLE") {
           const answers = Array.isArray(question.correctAnswer) ? question.correctAnswer : [question.correctAnswer];
@@ -6925,12 +7156,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
           }
           const answer = r.answers?.[question.id];
           const options = question.options || [];
-          const correctDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+          const correctDisplay = question.type === 'CHOICE'
             ? options[question.correctAnswer as number] || question.correctAnswer
-            : question.correctAnswer;
-          const studentDisplay = question.type === 'CHOICE' || question.type === 'MATCHING'
+            : question.type === 'MATCHING'
+              ? resolveMatchingAnswerText(question, question.correctAnswer)
+              : question.correctAnswer;
+          const studentDisplay = question.type === 'CHOICE'
             ? (answer !== undefined ? options[answer as number] || answer : '')
-            : answer ?? '';
+            : question.type === 'MATCHING'
+              ? (answer !== undefined ? resolveMatchingAnswerText(question, answer) : '')
+              : answer ?? '';
           return [questionLabel, strip(question.text), strip(correctDisplay), strip(studentDisplay), group.isFullyCorrect ? 'Đúng' : 'Sai'];
       });
       const cols = [{header:'Câu', width:6},{header:'Nội dung câu hỏi', width:50},{header:'Đáp án đúng', width:22},{header:'Học viên trả lời', width:22},{header:'Kết quả', width:10}];
@@ -7021,6 +7256,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       quiz.questions.forEach((q, i) => {
           let ans = q.correctAnswer;
           if (q.type === "CHOICE" && q.options) ans = q.options[q.correctAnswer as number] || ans;
+          if (q.type === "MATCHING") ans = resolveMatchingAnswerText(q, q.correctAnswer);
           content += `Question ${i+1}: ${ans}\n`;
       });
       const blob = new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8;' });
@@ -7052,16 +7288,70 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const parseSupplementDocxFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch(`${getApiBase()}/api/upload_docx_supplement`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await readApiJson(response);
+    if (!data.success) throw new Error(data.error || "Backend unknown error");
+    return data;
+  };
+
+  const handleSupplementDocxUpload = async (e: any, mode: "replace_sections" | "explanations") => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const currentQuiz = editingQuizRef.current;
+    if (!currentQuiz) {
+      alert("Hãy mở đề cần chỉnh trước.");
+      return;
+    }
+    try {
+      const data = await parseSupplementDocxFile(file);
+      if (mode === "replace_sections") {
+        const patchQuiz = data.quiz;
+        if (!patchQuiz?.questions?.length) {
+          alert("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.");
+          return;
+        }
+        const activeSection = Number(currentQuiz._activePassageTab || 0);
+        const merged = mergeQuizSectionsFromSupplement(currentQuiz, patchQuiz, activeSection);
+        if (!merged.replaced) {
+          alert("Không tìm thấy passage/section hợp lệ trong file bổ sung.");
+          return;
+        }
+        editingQuizRef.current = merged.quiz;
+        setEditingQuiz(merged.quiz);
+        alert(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`);
+        return;
+      }
+      const merged = mergeQuizManualExplanationsFromSupplement(currentQuiz, data);
+      if (!merged.imported) {
+        alert("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.");
+        return;
+      }
+      editingQuizRef.current = merged.quiz;
+      setEditingQuiz(merged.quiz);
+      alert(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`);
+    } catch (error: any) {
+      logErrorToSystem("UPLOAD_DOCX_SUPPLEMENT_FAIL", error?.message || String(error), { fileName: file.name, mode });
+      alert("Không xử lý được file bổ sung: " + (error?.message || String(error)));
+    }
+  };
+
   const saveQuiz = async (quizToSave?: any): Promise<boolean> => {
       const isEvent = quizToSave && typeof quizToSave.preventDefault === 'function';
       const targetQuiz = isEvent ? undefined : quizToSave;
 
       if (targetQuiz) {
           // Branch A: gọi với quiz object trực tiếp (duplicateQuiz, handleFileUpload)
-          const qz = JSON.parse(JSON.stringify({
+          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
-          }));
+          })));
           const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
           const updated = [...quizzesRef.current];
           if (existingIndex !== -1) updated[existingIndex] = qz;
@@ -7086,10 +7376,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return false;
           }
 
-          const qz = JSON.parse(JSON.stringify({
+          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...currentSnapshot,
               id: currentSnapshot.id || getTrueTime().toString()
-          }));
+          })));
 
           // Ba lệnh độc lập, KHÔNG lồng nhau  React batch an toàn
           setEditingQuiz(null);
@@ -7111,7 +7401,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   
   const duplicateQuiz = (q: Quiz) => {
-      const newQuiz = JSON.parse(JSON.stringify({
+      const newQuiz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
           ...q,
           id: typeof crypto !== "undefined" && crypto.randomUUID
               ? `quiz_${crypto.randomUUID()}`
@@ -7119,7 +7409,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           title: q.title + " (Copy)",
           active: false,
           isLocked: true
-      }));
+      })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
       void syncData({ quizzes: [newQuiz] }).then(saved => {
           alert(saved ? "Exam duplicated successfully!" : "The copy is saved on this device and will retry automatically when the connection returns.");
@@ -7192,7 +7482,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       }
 
       // Khôi phục lại màn hình chờ (Instructions)
-      setPendingExamState({ quiz, isPreview: isTeacherPreview, isStudentTestUI });
+      setPendingExamState({ quiz: stripExamExplanations(normalizeExamSections(quiz)), isPreview: isTeacherPreview, isStudentTestUI });
   };
 
   const startTopicQuestNode = (assignment: TopicAssignment, node: QuestNodeConfig) => {
@@ -7265,7 +7555,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
-      const quizToLoad = normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz);
+      const quizToLoad = stripExamExplanations(normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz));
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
       const now = getRealTime();
       const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
@@ -7569,12 +7859,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         setReviewSectionIdx(0);
         setReviewActiveQuestionId(null);
         if (questContext) {
+          setManualExplanationQuestion(null);
           setReviewQuiz(null);
           setPortalTab("quests");
           setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
           setQuestStatusNotice(questNotice);
         } else {
-          setReviewQuiz({ quiz: state.activeExam, result });
+          const sourceQuiz = quizzesRef.current.find((quiz: any) => quiz.id === state.activeExam?.id);
+          const reviewReadyQuiz = normalizeExamSections(restoreReviewExplanations(state.activeExam, sourceQuiz));
+          setReviewQuiz({ quiz: reviewReadyQuiz, result });
         }
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     }

@@ -850,6 +850,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-matching-table td:first-child { background: #fafafa; font-size: 13px; }
                       .idp-matching-table tbody tr:hover td { background: #f8f9ff; }
                       .idp-matching-table input[type="radio"] { display: block; margin: 0 auto; width: 17px; height: 17px; cursor: pointer; accent-color: #0969da; }
+                      .idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
+                      .idp-matching-text-option { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid transparent; border-radius: 4px; background: #fff; color: #24292f; font-size: 13px; line-height: 1.35; cursor: pointer; }
+                      .idp-matching-text-option:hover { border-color: #b6d7ff; background: #f6faff; }
+                      .idp-matching-text-option.selected { border-color: #0969da; background: #eef6ff; }
+                      .idp-matching-text-option input[type="radio"] { margin: 1px 0 0; width: 16px; height: 16px; }
                       .idp-matching-legend { display: flex; flex-wrap: wrap; gap: 16px 24px; background: #f4f5f7; padding: 12px 15px; border: 1px solid #ccc; border-top: none; font-size: 13px; }
                       .idp-matching-legend-item { display: flex; align-items: baseline; gap: 6px; }
                       .idp-matching-legend-key { font-weight: 800; min-width: 18px; color: #0969da; }
@@ -1668,18 +1673,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         );
                     };
 
-                    const renderMatchingTable = () => (
+                    const renderMatchingTable = () => {
+                       const matchingOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
+                       return (
                        <>
                            <table className="idp-matching-table">
                                <thead>
                                    <tr>
                                        <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: isMapPlanMatching ? 155 : 200, padding: '8px 12px'}}>Question</th>
-                                       {(group.questions[0].options || []).map((_: any, i: any) => <th key={i}>{String.fromCharCode(65 + i)}</th>)}
+                                       <th style={{border: '1px solid #ccc', background: '#f4f5f7', textAlign: 'left', minWidth: 260, padding: '8px 12px'}}>Answer</th>
                                    </tr>
                                </thead>
                                <tbody>
                                    {group.questions.map((q) => {
                                        const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
+                                       const optionCarrier = { ...q, options: matchingOptions };
+                                       const selectedValue = resolveMatchingAnswerText(optionCarrier, examAnswers[q.id]);
                                        return (
                                            <tr id={`question-${q.id}`} key={q.id}>
                                                <td style={{ verticalAlign: 'middle' }}>
@@ -1688,28 +1697,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                        <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} />
                                                    </div>
                                                </td>
-                                               {(group.questions[0].options || []).map((_: any, i: any) => (
-                                                   <td key={i} style={{background: '#fff', textAlign: 'center', verticalAlign: 'middle'}}>
-                                                       <input type="radio" aria-label={`Question ${qGlobalIdx}, option ${String.fromCharCode(65 + i)}`} checked={examAnswers[q.id] === i} onChange={() => { handleAnswerChange(q.id, i); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} style={{width: 18, height: 18, accentColor: idpC.blueAccent, cursor: 'pointer', margin: '0 auto', display: 'block'}} />
-                                                   </td>
-                                               ))}
+                                               <td style={{background: '#fff', textAlign: 'left', verticalAlign: 'middle'}}>
+                                                   <div className="idp-matching-text-options">
+                                                       {matchingOptions.map((optionText: string, i: number) => {
+                                                           const checked = normalizeComparableAnswer(selectedValue) === normalizeComparableAnswer(optionText);
+                                                           return (
+                                                               <label key={`${q.id}-${i}`} className={`idp-matching-text-option ${checked ? 'selected' : ''}`}>
+                                                                   <input type="radio" aria-label={`Question ${qGlobalIdx}, ${optionText}`} checked={checked} onChange={() => { handleAnswerChange(q.id, optionText, "MATCHING"); handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === q.id), (activeExam!.questions || []).length); }} />
+                                                                   <span>{optionText}</span>
+                                                               </label>
+                                                           );
+                                                       })}
+                                                   </div>
+                                               </td>
                                            </tr>
                                        );
                                    })}
                                </tbody>
                            </table>
-                           {!isInfoMatching && (
-                               <div className="idp-matching-legend">
-                                   {(group.questions[0].options || []).map((opt: string, i: number) => (
-                                       <div key={i} className="idp-matching-legend-item">
-                                           <span className="idp-matching-legend-key">{String.fromCharCode(65 + i)}</span>
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={group.questions[0].id} dataOptIndex={String(i)} html={renderSafeHTML(String(opt).replace(/^\s*[A-Za-z][\.\)]\s*/, ''))} />
-                                       </div>
-                                   ))}
-                               </div>
-                           )}
                        </>
-                   );
+                       );
+                   };
 
                    const renderMapDrag = () => {
                        const sourceQuestion = group.questions[0] as any;

@@ -10,13 +10,14 @@ import urllib.request
 import urllib.error
 import html
 import zipfile
+import threading
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 
 _DEFAULT_ALLOWED_ORIGINS = (
     "https://ielts-os-sandy.vercel.app,https://ielts-os.vercel.app,"
@@ -31,6 +32,8 @@ ENABLE_API_DOCS = os.environ.get("API_DOCS_ENABLED", "").strip().lower() in {"1"
 MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
 MAX_DOCX_ZIP_MEMBERS = 2500
+_AI_KEY_LOCK = threading.Lock()
+_AI_KEY_CURSOR: Dict[str, int] = {}
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -60,10 +63,149 @@ FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.fi
 
 VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG", "DIAGRAM_LABEL"]
 
+def clean_option_answer_text(value: Any) -> str:
+    text = html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^\s*[A-Ka-k][\.\)]\s*", "", text).strip()
+    text = re.sub(r"^\s*[A-Ka-k]\s+(?=\S)", "", text).strip()
+    return text
+
+def _split_env_keys(value: str) -> List[str]:
+    return [part.strip() for part in re.split(r"[\s,;]+", str(value or "")) if part.strip()]
+
+def _api_key_pool(*names: str, max_index: int = 8) -> List[str]:
+    keys: List[str] = []
+    for name in names:
+        candidates = [name]
+        candidates.extend(f"{name}_{idx}" for idx in range(2, max_index + 1))
+        if name.endswith("_KEY"):
+            candidates.append(f"{name}S")
+        for candidate in candidates:
+            keys.extend(_split_env_keys(os.environ.get(candidate, "")))
+    unique: List[str] = []
+    seen = set()
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    return unique
+
+def _rotated_api_keys(provider: str, keys: List[str]) -> List[str]:
+    if not keys:
+        return []
+    with _AI_KEY_LOCK:
+        start = _AI_KEY_CURSOR.get(provider, 0) % len(keys)
+        _AI_KEY_CURSOR[provider] = (start + 1) % len(keys)
+    return keys[start:] + keys[:start]
+
+def _provider_counts() -> Dict[str, int]:
+    return {
+        "groq": len(_api_key_pool("GROQ_API_KEY")),
+        "gemini": len(_api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+        "cerebras": len(_api_key_pool("CEREBRAS_API_KEY")),
+        "openai": len(_api_key_pool("OPENAI_API_KEY", max_index=1)),
+    }
+
 RE_Q_START = re.compile(r'^(?:Question|Câu)\s+\d+', re.IGNORECASE)
 RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
 RE_TFNG = re.compile(r'\btrue\b[\s\S]*\bfalse\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
 RE_YNNG = re.compile(r'\byes\b[\s\S]*\bno\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
+RE_MANUAL_EXPLANATION = re.compile(r'^\s*\[EXPLANATION\]\s*(?:(\d+)\s*[:\.\)-]\s*)?(.*)$', re.IGNORECASE)
+RE_MANUAL_TIMESTAMP = re.compile(r'\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]')
+
+def _manual_timestamp_to_seconds(value: str) -> int:
+    parts = [int(part) for part in str(value or "").split(":") if part.isdigit()]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return 0
+
+def parse_manual_explanation_text(raw_text: str) -> Dict[str, Any]:
+    raw = re.sub(r'^\s*\[EXPLANATION\]\s*', '', str(raw_text or ""), flags=re.IGNORECASE).strip()
+    raw = re.sub(r'^\s*\d+\s*[:\.\)-]\s*', '', raw).strip()
+    quotes = []
+    for match in re.findall(r'"([^"]+)"', raw):
+        quote = re.sub(r'\s+', ' ', match).strip()
+        if quote and quote not in quotes:
+            quotes.append(quote)
+    timestamps = []
+    seen_timestamps = set()
+    for start, end in RE_MANUAL_TIMESTAMP.findall(raw):
+        start_seconds = _manual_timestamp_to_seconds(start)
+        end_seconds = _manual_timestamp_to_seconds(end) if end else None
+        label = f"{start} - {end}" if end else start
+        key = (start_seconds, end_seconds, label)
+        if key in seen_timestamps:
+            continue
+        seen_timestamps.add(key)
+        item: Dict[str, Any] = {"startTime": start_seconds, "label": label}
+        if end_seconds is not None:
+            item["endTime"] = end_seconds
+        timestamps.append(item)
+    return {"rawText": raw, "parsedQuotes": quotes, "parsedTimestamps": timestamps}
+
+def parse_manual_explanation_line(line: str):
+    match = RE_MANUAL_EXPLANATION.match(str(line or ""))
+    if not match:
+        return None, None
+    number, raw = match.groups()
+    parsed = parse_manual_explanation_text(raw)
+    return number, parsed if parsed["rawText"] else None
+
+def attach_manual_explanation(target: Dict[str, Any], explanation: Optional[Dict[str, Any]]):
+    if explanation and explanation.get("rawText"):
+        target["manualExplanation"] = explanation
+
+def docx_plain_text_lines(doc) -> List[str]:
+    lines: List[str] = []
+    for element in doc.element.body:
+        if element.tag.endswith("p"):
+            text = Paragraph(element, doc).text.strip()
+            if text:
+                lines.append(text)
+        elif element.tag.endswith("tbl"):
+            table = Table(element, doc)
+            for row in table.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            lines.append(text)
+    return lines
+
+def extract_docx_manual_explanations(doc) -> Dict[str, Dict[str, Any]]:
+    explanations: Dict[str, Dict[str, Any]] = {}
+    current_number: Optional[str] = None
+    current_parts: List[str] = []
+
+    def flush_current():
+        nonlocal current_number, current_parts
+        if current_number:
+            parsed = parse_manual_explanation_text(" ".join(current_parts))
+            if parsed.get("rawText"):
+                explanations[str(current_number)] = parsed
+        current_number = None
+        current_parts = []
+
+    for line in docx_plain_text_lines(doc):
+        match = RE_MANUAL_EXPLANATION.match(line)
+        if match:
+            flush_current()
+            number, raw = match.groups()
+            if number:
+                current_number = str(number)
+                current_parts = [raw.strip()] if raw and raw.strip() else []
+            continue
+        if current_number:
+            if re.match(r"^\s*\[[A-Z_/]+\]", line, re.IGNORECASE):
+                flush_current()
+                continue
+            current_parts.append(line.strip())
+
+    flush_current()
+    return explanations
 
 def is_option(text: str) -> bool:
     text = text.strip()
@@ -154,6 +296,7 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
     slots: Dict[str, Dict[str, Any]] = {}
     options: List[str] = []
     answers: Dict[str, str] = {}
+    explanations: Dict[str, Dict[str, Any]] = {}
     instruction_lines: List[str] = []
     image_url = ""
     in_slots = False
@@ -170,6 +313,12 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
 
     for line in raw_lines:
         upper = line.upper()
+        explanation_number, explanation = parse_manual_explanation_line(line)
+        if RE_MANUAL_EXPLANATION.match(line):
+            key = explanation_number or current_question
+            if key and explanation:
+                explanations[str(key)] = explanation
+            continue
         if upper == "[SLOTS]":
             in_slots, in_options = True, False
             continue
@@ -230,8 +379,9 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
         slot = shared_slots.get(number)
         if not slot:
             continue
-        target_questions.append({
+        question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "questionNumber": int(number),
             "type": "MAP_DRAG",
             "subType": "MAP_DRAG",
             "instruction": instruction,
@@ -241,7 +391,9 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             "correctAnswer": answers.get(number, ""),
             "mapImageUrl": image_url,
             "mapSlots": shared_slots,
-        })
+        }
+        attach_manual_explanation(question, explanations.get(str(number)))
+        target_questions.append(question)
 
 def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     """Parse a flow-chart whose numbered nodes are completed from a drag answer bank.
@@ -253,6 +405,7 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     flow_nodes: List[Tuple[str, str]] = []
     options: List[str] = []
     answers: Dict[str, str] = {}
+    explanations: Dict[str, Dict[str, Any]] = {}
     in_flow = False
     in_options = False
     current_answer = ""
@@ -267,6 +420,12 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
         if not text_line:
             continue
         upper = text_line.upper()
+        explanation_number, explanation = parse_manual_explanation_line(text_line)
+        if RE_MANUAL_EXPLANATION.match(text_line):
+            key = explanation_number or current_answer
+            if key and explanation:
+                explanations[str(key)] = explanation
+            continue
         if upper in {"[FLOW]", "[CONTEXT]"}:
             in_flow, in_options, current_answer = True, False, ""
             continue
@@ -304,8 +463,9 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
     shared_options = list(dict.fromkeys(options))
     for number, node_html in flow_nodes:
-        target_questions.append({
+        question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "questionNumber": int(number),
             "type": "DRAG_DROP",
             "subType": "FLOWCHART_DRAG",
             "instruction": instruction,
@@ -313,7 +473,9 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
             "text": node_html,
             "options": shared_options.copy(),
             "correctAnswer": answers.get(number, ""),
-        })
+        }
+        attach_manual_explanation(question, explanations.get(str(number)))
+        target_questions.append(question)
 
 
 def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
@@ -339,6 +501,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
     image_bounds: Dict[str, float] = {"x": 27, "y": 7, "width": 46, "height": 86}
     boxes: Dict[str, Dict[str, Any]] = {}
     answers: Dict[str, str] = {}
+    explanations: Dict[str, Dict[str, Any]] = {}
     instruction_html: List[str] = []
     current_box = ""
     in_answers = False
@@ -362,6 +525,16 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         if not raw:
             continue
         upper = raw.upper()
+        explanation_number, explanation = parse_manual_explanation_line(raw)
+        if RE_MANUAL_EXPLANATION.match(raw):
+            targets = [explanation_number] if explanation_number else []
+            if not targets and current_box:
+                current_text = boxes.get(current_box, {}).get("text", "")
+                targets = re.findall(r'\[(\d+)\]', current_text) or ([current_box] if str(current_box).isdigit() else [])
+            for number in targets:
+                if number and explanation:
+                    explanations[str(number)] = explanation
+            continue
         if upper == "[ANSWERS]":
             current_box, in_answers = "", True
             continue
@@ -437,8 +610,9 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             }
     marker_order.sort(key=lambda value: int(value))
     for number in marker_order:
-        target_questions.append({
+        question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "questionNumber": int(number),
             "type": "DIAGRAM_LABEL",
             "subType": "DIAGRAM_LABEL",
             "instruction": instruction,
@@ -452,7 +626,9 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             "diagramImageBounds": image_bounds.copy(),
             "diagramBoxes": {key: value.copy() for key, value in legacy_boxes.items()},
             "diagramTextBoxes": [box.copy() for box in shared_text_boxes],
-        })
+        }
+        attach_manual_explanation(question, explanations.get(str(number)))
+        target_questions.append(question)
 
 def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
     if block_type == "MAP_DRAG":
@@ -483,6 +659,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     left_title = ""
     right_title = ""
     instruction_labels = []
+    explanations_by_number: Dict[str, Dict[str, Any]] = {}
     in_context = False
     
     for h_line, t_line in zip(html_lines, text_lines):
@@ -492,6 +669,14 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             continue
         if "[/CONTEXT]" in t_upper:
             in_context = False
+            continue
+
+        explanation_number, explanation = parse_manual_explanation_line(t_line)
+        if RE_MANUAL_EXPLANATION.match(t_line):
+            if explanation_number and explanation:
+                explanations_by_number[str(explanation_number)] = explanation
+            elif current_q and explanation:
+                current_q["manualExplanation"] = explanation
             continue
 
         # Explicit, portable authoring syntax for two-column drag matching.
@@ -530,7 +715,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if is_q_start:
             if current_q: questions_in_block.append(current_q)
             content_only = re.sub(r'^(?:Question|Câu)?\s*\d+[\.\:\)]?\s*', '', t_line, flags=re.IGNORECASE).strip()
+            q_number = re.search(r'(?:Question|Câu)?\s*(\d+)', t_line, flags=re.IGNORECASE)
             current_q = {
+                "questionNumber": q_number.group(1) if q_number else "",
                 "type": block_type, "text": content_only if content_only else h_line,
                 "options": pre_question_options.copy(), "correctAnswers": [],
                 "instruction": accumulated_instruction,
@@ -599,7 +786,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
 
         final_correct_answer = ""
         # THUẬT TOÁN ÁNH XẠ ĐÁP ÁN (SMART MAPPER)
-        if output_type in ["CHOICE", "MATCHING"]:
+        if output_type == "CHOICE":
             if q["correctAnswers"] and q["options"]:
                 ans_str = q["correctAnswers"][0].strip().upper()
                 for idx, opt in enumerate(q["options"]):
@@ -613,6 +800,23 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
                 if final_correct_answer == "": final_correct_answer = 0
             else:
                 final_correct_answer = 0
+        elif output_type == "MATCHING":
+            q["options"] = [clean_option_answer_text(opt) for opt in (q["options"] or [])]
+            if q["correctAnswers"] and q["options"]:
+                raw_answer = str(q["correctAnswers"][0]).strip()
+                ans_str = raw_answer.upper()
+                for idx, opt in enumerate(q["options"]):
+                    opt_str = str(opt).strip()
+                    opt_letter = chr(65 + idx)
+                    if ans_str == opt_letter or ans_str == opt_str.upper():
+                        final_correct_answer = clean_option_answer_text(opt_str)
+                        break
+                if final_correct_answer == "":
+                    final_correct_answer = clean_option_answer_text(raw_answer)
+            elif q["correctAnswers"]:
+                final_correct_answer = clean_option_answer_text(q["correctAnswers"][0])
+            else:
+                final_correct_answer = ""
         elif output_type == "CHOICE_MULTIPLE":
             ans_arr = []
             if q["correctAnswers"]:
@@ -653,8 +857,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         else:
             final_correct_answer = q["correctAnswers"][0] if q["correctAnswers"] else ""
 
-        target_questions.append({
+        question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
+            "questionNumber": int(q["questionNumber"]) if str(q.get("questionNumber", "")).isdigit() else len(target_questions) + 1,
             "type": output_type,
             "subType": sub_t, 
             "instruction": q["instruction"], 
@@ -664,11 +869,17 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             "text": q["text"], 
             "options": q["options"] if q["options"] else [],
             "correctAnswer": final_correct_answer
-        })
+        }
+        attach_manual_explanation(
+            question,
+            q.get("manualExplanation") or explanations_by_number.get(str(q.get("questionNumber", "")))
+        )
+        target_questions.append(question)
 
 def parse_docx_to_quiz(doc):
     title, time_limit, quiz_type, audio_url = "Untitled Mock Test", 60, "Reading", ""
     sections = []
+    passage_level_explanations: Dict[str, Dict[str, Any]] = {}
     
     current_passage = ""
     current_questions = []
@@ -697,6 +908,11 @@ def parse_docx_to_quiz(doc):
                 continue
             if "[TYPE]" in text_upper: quiz_type = re.sub(r'\[TYPE\]', '', text, flags=re.IGNORECASE).strip(); continue
             if "[AUDIO]" in text_upper: audio_url = re.sub(r'\[AUDIO\]', '', text, flags=re.IGNORECASE).strip(); continue
+            if state == "PASSAGE" and RE_MANUAL_EXPLANATION.match(text):
+                explanation_number, explanation = parse_manual_explanation_line(text)
+                if explanation_number and explanation:
+                    passage_level_explanations[str(explanation_number)] = explanation
+                continue
             
             if "[PASSAGE]" in text_upper:
                 flush_block()
@@ -722,6 +938,11 @@ def parse_docx_to_quiz(doc):
                     flush_block()
                     block_type = match.group(1)
                     continue
+                if not block_type and RE_MANUAL_EXPLANATION.match(text):
+                    explanation_number, explanation = parse_manual_explanation_line(text)
+                    if explanation_number and explanation:
+                        passage_level_explanations[str(explanation_number)] = explanation
+                    continue
                 
                 if block_type:
                     current_block_lines.append(para)
@@ -743,6 +964,9 @@ def parse_docx_to_quiz(doc):
 
     all_questions = []
     for sec in sections: all_questions.extend(sec["questions"])
+    for index, question in enumerate(all_questions, start=1):
+        if not question.get("manualExplanation"):
+            attach_manual_explanation(question, passage_level_explanations.get(str(index)))
 
     return {
         "id": f"quiz_{int(time.time() * 1000)}",
@@ -764,36 +988,39 @@ def parse_docx_to_quiz(doc):
         "scheduledEnd": ""
     }
 
+async def read_validated_docx_upload(file: UploadFile):
+    filename = str(file.filename or "").lower()
+    content_type = str(file.content_type or "").lower()
+    if not filename.endswith(".docx") or (content_type and content_type not in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/octet-stream",
+    }):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only .docx files are accepted.")
+
+    raw = await file.read(MAX_DOCX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_DOCX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="DOCX is larger than 20 MB.")
+    if not zipfile.is_zipfile(io.BytesIO(raw)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is not a valid DOCX archive.")
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        members = archive.infolist()
+        uncompressed_size = sum(member.file_size for member in members)
+        if len(members) > MAX_DOCX_ZIP_MEMBERS or uncompressed_size > MAX_DOCX_UNCOMPRESSED_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="DOCX archive is too large to process safely.")
+        if any(member.flag_bits & 0x1 for member in members):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Encrypted DOCX files are not supported.")
+        if "[Content_Types].xml" not in archive.namelist() or "word/document.xml" not in archive.namelist():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded archive is not a Word document.")
+
+    return docx.Document(io.BytesIO(raw))
+
 @app.post("/api/upload_docx")
 async def upload_docx(
     file: UploadFile = File(...),
 ):
     try:
-        filename = str(file.filename or "").lower()
-        content_type = str(file.content_type or "").lower()
-        if not filename.endswith(".docx") or (content_type and content_type not in {
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/octet-stream",
-        }):
-            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only .docx files are accepted.")
-
-        raw = await file.read(MAX_DOCX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_DOCX_UPLOAD_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="DOCX is larger than 20 MB.")
-        if not zipfile.is_zipfile(io.BytesIO(raw)):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is not a valid DOCX archive.")
-
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            members = archive.infolist()
-            uncompressed_size = sum(member.file_size for member in members)
-            if len(members) > MAX_DOCX_ZIP_MEMBERS or uncompressed_size > MAX_DOCX_UNCOMPRESSED_BYTES:
-                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="DOCX archive is too large to process safely.")
-            if any(member.flag_bits & 0x1 for member in members):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Encrypted DOCX files are not supported.")
-            if "[Content_Types].xml" not in archive.namelist() or "word/document.xml" not in archive.namelist():
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded archive is not a Word document.")
-
-        doc = docx.Document(io.BytesIO(raw))
+        doc = await read_validated_docx_upload(file)
         quiz = parse_docx_to_quiz(doc)
         if not quiz.get("questions") or len(quiz["questions"]) == 0:
             return {"success": False, "error": "Lỗi: Không trích xuất được câu hỏi nào. Hãy chắc chắn bạn đã gắn đủ thẻ [PASSAGE] và [QUESTIONS]."}
@@ -804,6 +1031,24 @@ async def upload_docx(
         print(f"DOCX parse failed: {e}")
         traceback.print_exc()
         return {"success": False, "error": "Không thể xử lý file DOCX này. Hãy kiểm tra lại định dạng file và thử lại."}
+
+@app.post("/api/upload_docx_supplement")
+async def upload_docx_supplement(
+    file: UploadFile = File(...),
+):
+    try:
+        doc = await read_validated_docx_upload(file)
+        quiz = parse_docx_to_quiz(doc)
+        explanations = extract_docx_manual_explanations(doc)
+        if (not quiz.get("questions") or len(quiz["questions"]) == 0) and not explanations:
+            return {"success": False, "error": "Không trích xuất được passage/câu hỏi hoặc [EXPLANATION] nào từ file bổ sung."}
+        return {"success": True, "quiz": quiz, "explanations": explanations}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"DOCX supplement parse failed: {e}")
+        traceback.print_exc()
+        return {"success": False, "error": "Không thể xử lý file DOCX bổ sung này. Hãy kiểm tra lại định dạng file và thử lại."}
 
 def _decode_audio_key(audio_key: str):
     raw = audio_key.replace("-", "+").replace("_", "/")
@@ -1008,20 +1253,19 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
 def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temperature: float = 0.7, json_mode: bool = False, model: str = None, reasoning_effort: str = None):
     """ĐA-PROVIDER tự xoay khi rate-limit: Groq (nhiều key) -> Cerebras -> Gemini.
     Giữ nguyên tên & signature cũ để mọi caller dùng được. Trả (text, error).
-    Env: GROQ_API_KEY[_2/_3/_4], CEREBRAS_API_KEY (+CEREBRAS_MODEL), GEMINI_API_KEY (+GEMINI_MODEL)."""
+    Env: GROQ_API_KEY(S)/GROQ_API_KEY_2..., CEREBRAS_API_KEY(S), GEMINI_API_KEY(S)/GOOGLE_API_KEY(S)."""
     GROQ_BASE = "https://api.groq.com/openai/v1"
     CEREBRAS_BASE = "https://api.cerebras.ai/v1"
-    groq_keys = [k for k in [os.environ.get("GROQ_API_KEY"), os.environ.get("GROQ_API_KEY_2"),
-                             os.environ.get("GROQ_API_KEY_3"), os.environ.get("GROQ_API_KEY_4")] if k]
-    cerebras_key = os.environ.get("CEREBRAS_API_KEY")
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not (groq_keys or cerebras_key or gemini_key):
+    groq_keys = _rotated_api_keys("groq_chat", _api_key_pool("GROQ_API_KEY"))
+    cerebras_keys = _rotated_api_keys("cerebras_chat", _api_key_pool("CEREBRAS_API_KEY"))
+    gemini_keys = _rotated_api_keys("gemini_chat", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    if not (groq_keys or cerebras_keys or gemini_keys):
         return "", "Server chưa cấu hình GROQ_API_KEY / CEREBRAS_API_KEY / GEMINI_API_KEY."
 
     preferred = model or os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     groq_models = [preferred] + [m for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m != preferred]
-    cerebras_models = [os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]
-    gemini_models = [os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-2.0-flash"]
+    cerebras_models = list(dict.fromkeys([os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]))
+    gemini_models = list(dict.fromkeys([os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-2.0-flash"]))
 
     last_err = ""
     any_rate = False
@@ -1039,9 +1283,9 @@ def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temper
                 break
 
     # 2) CEREBRAS (free, OpenAI-compatible)
-    if cerebras_key:
+    for key in cerebras_keys:
         for cm in cerebras_models:
-            text, err = _oai_chat_once(CEREBRAS_BASE, cerebras_key, cm, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort)
+            text, err = _oai_chat_once(CEREBRAS_BASE, key, cm, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort)
             if text:
                 return text, ""
             last_err = err
@@ -1051,7 +1295,7 @@ def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temper
                 break
 
     # 3) GEMINI (free, hạn mức rộng)
-    if gemini_key:
+    for gemini_key in gemini_keys:
         for gem in gemini_models:
             text, err = _gemini_chat_once(gemini_key, gem, sys_prompt, user_prompt, max_tokens, temperature, json_mode)
             if text:
@@ -1104,7 +1348,7 @@ def _friendly_err(err: str, lang: str) -> str:
     if err == "RATE_LIMIT":
         return ("Rate limit reached (too many requests in a short time). Please wait a moment and try again."
                 if lang == "en" else
-                "⏳ Đạt giới hạn tốc độ (quá nhiều yêu cầu trong thời gian ngắn). Vui lòng đợi chút rồi thử lại.")
+                "Đạt giới hạn tốc độ (quá nhiều yêu cầu trong thời gian ngắn). Vui lòng đợi chút rồi thử lại.")
     return err
 
 
@@ -2145,11 +2389,11 @@ async def ai_vocab(
         if _err_holder[0] == "RATE_LIMIT":
             # Chẩn đoán: server có NHẬN được key của provider nào không (giúp biết đã set env + redeploy chưa).
             provs = []
-            gk = sum(1 for k in ["GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3", "GROQ_API_KEY_4"] if os.environ.get(k))
-            if gk: provs.append(f"groq×{gk}")
-            if os.environ.get("CEREBRAS_API_KEY"): provs.append("cerebras")
-            if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"): provs.append("gemini")
-            if os.environ.get("OPENAI_API_KEY"): provs.insert(0, "openai")
+            counts = _provider_counts()
+            if counts["groq"]: provs.append(f"groq×{counts['groq']}")
+            if counts["cerebras"]: provs.append(f"cerebras×{counts['cerebras']}")
+            if counts["gemini"]: provs.append(f"gemini×{counts['gemini']}")
+            if counts["openai"]: provs.insert(0, f"openai×{counts['openai']}")
             msg += f"  ·  providers loaded: {', '.join(provs) if provs else 'chưa thấy provider key — kiểm tra env + redeploy'}"
         return {"success": False, "error": msg}
 
@@ -2304,6 +2548,89 @@ def _segments_to_marked_transcript(segments, block_sec: float = 5.0) -> str:
     if cur_start is not None:
         blocks.append((cur_start, cur_end, " ".join(cur_texts)))
     return "\n\n".join(f"({_fmt_ts(a)} - {_fmt_ts(b)})\n{t}" for a, b, t in blocks)
+
+
+def _groq_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
+    import json as _json
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    body, boundary = _build_multipart(
+        {"model": model, "response_format": "verbose_json", "language": "en", "temperature": "0"},
+        "file", "audio.mp3", raw, mime,
+    )
+    try:
+        req = _urlreq.Request(
+            "https://api.groq.com/openai/v1/audio/transcriptions", data=body, method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Accept": "application/json",
+            },
+        )
+        with _urlreq.urlopen(req, timeout=170) as r:
+            raw_resp = r.read().decode("utf-8").strip()
+        try:
+            parsed = _json.loads(raw_resp)
+            segs = parsed.get("segments") or []
+            text = _segments_to_marked_transcript(segs) if segs else str(parsed.get("text", "") or "").strip()
+        except Exception:
+            text = raw_resp
+        return (text, "") if text else ("", "EMPTY")
+    except _urlerr.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8")[:300]
+        except Exception:
+            pass
+        if e.code == 429:
+            return "", "RATE_LIMIT"
+        if e.code in (401, 403):
+            return "", "AUTH"
+        return "", f"Lỗi Groq {e.code}: {detail}"
+    except Exception as e:
+        return "", f"Lỗi chép lời Groq: {e}"
+
+
+def _gemini_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
+    import json as _json
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"text": "Transcribe this IELTS Listening audio in English. Return only the transcript text, no commentary."},
+                {"inlineData": {"mimeType": mime, "data": base64.b64encode(raw).decode("ascii")}},
+            ],
+        }],
+        "generationConfig": {"maxOutputTokens": 8192, "temperature": 0},
+    }
+    if "2.5" in model:
+        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    try:
+        req = _urlreq.Request(url, data=_json.dumps(body).encode("utf-8"), method="POST",
+                              headers={"Content-Type": "application/json", "Accept": "application/json"})
+        with _urlreq.urlopen(req, timeout=170) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        candidates = data.get("candidates") or []
+        parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+        text = "".join(part.get("text", "") for part in parts).strip()
+        return (text, "") if text else ("", "EMPTY")
+    except _urlerr.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8")[:300]
+        except Exception:
+            pass
+        if e.code == 429:
+            return "", "RATE_LIMIT"
+        if e.code in (401, 403):
+            return "", "AUTH"
+        return "", f"Lỗi Gemini {e.code}: {detail}"
+    except Exception as e:
+        return "", f"Lỗi chép lời Gemini: {e}"
 
 
 _TS_MARKER_RE = re.compile(r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)")
@@ -2628,9 +2955,10 @@ async def ai_transcribe(
     if not audio_url:
         return {"success": False, "error": "Đề này chưa có link audio."}
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return {"success": False, "error": "Server chưa cấu hình GROQ_API_KEY."}
+    groq_keys = _rotated_api_keys("groq_whisper", _api_key_pool("GROQ_API_KEY"))
+    gemini_keys = _rotated_api_keys("gemini_audio", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    if not (groq_keys or gemini_keys):
+        return {"success": False, "error": "Server chưa cấu hình GROQ_API_KEY hoặc GEMINI_API_KEY."}
 
     dl_url = _normalize_audio_url(audio_url)
     try:
@@ -2649,38 +2977,47 @@ async def ai_transcribe(
     model = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
     # verbose_json -> Whisper trả từng segment kèm start/end TUYỆT ĐỐI theo file audio
     # -> transcript nhúng mốc (m:ss - m:ss) chính xác máy, hết cảnh AI bịa timestamp.
-    body, boundary = _build_multipart(
-        {"model": model, "response_format": "verbose_json", "language": "en", "temperature": "0"},
-        "file", "audio.mp3", raw, mime,
-    )
-    try:
-        req = _urlreq.Request(
-            "https://api.groq.com/openai/v1/audio/transcriptions", data=body, method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-                "Accept": "application/json",
-            },
-        )
-        with _urlreq.urlopen(req, timeout=170) as r:
-            _raw_resp = r.read().decode("utf-8").strip()
-        import json as _json
-        try:
-            _vj = _json.loads(_raw_resp)
-            segs = _vj.get("segments") or []
-            text = _segments_to_marked_transcript(segs) if segs else str(_vj.get("text", "") or "").strip()
-        except Exception:
-            text = _raw_resp  # fallback: server trả text thường
-    except _urlerr.HTTPError as e:
-        detail = ""
-        try: detail = e.read().decode("utf-8")[:300]
-        except Exception: pass
-        if e.code == 429:
-            return {"success": False, "error": _friendly_err("RATE_LIMIT", lang)}
-        return {"success": False, "error": f"Lỗi Groq {e.code}: {detail}"}
-    except Exception as e:
-        return {"success": False, "error": f"Lỗi chép lời: {e}"}
+    text = ""
+    last_err = ""
+    any_rate = False
+    for key in groq_keys:
+        text, err = _groq_transcribe_once(key, raw, mime, model)
+        if text:
+            break
+        last_err = err
+        if err == "RATE_LIMIT":
+            any_rate = True
+            continue
+        if err == "AUTH":
+            continue
+
+    if not text and gemini_keys:
+        # Gemini fallback keeps class moving if Groq Whisper is exhausted. It may
+        # return plain transcript without machine timestamps, so Groq remains first.
+        gemini_models = list(dict.fromkeys([
+            os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+            "gemini-2.0-flash",
+        ]))
+        for key in gemini_keys:
+            for gem_model in gemini_models:
+                text, err = _gemini_transcribe_once(key, raw, mime, gem_model)
+                if text:
+                    break
+                last_err = err
+                if err == "RATE_LIMIT":
+                    any_rate = True
+                    break
+                if err == "AUTH":
+                    break
+            if text:
+                break
+
+    if not text and any_rate:
+        counts = _provider_counts()
+        detail = f" providers loaded: groq×{counts['groq']}, gemini×{counts['gemini']}"
+        return {"success": False, "error": _friendly_err("RATE_LIMIT", lang) + detail}
+    if not text and last_err:
+        return {"success": False, "error": last_err}
 
     if not text:
         return {"success": False, "error": "Không nghe được nội dung (audio rỗng?)."}
