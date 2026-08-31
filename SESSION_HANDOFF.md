@@ -1,4 +1,4 @@
-# IELTS OS — Session Handoff (2026-07-03)
+# IELTS OS — Session Handoff (cập nhật 2026-08-31)
 
 Đọc file này TRƯỚC khi làm bất cứ gì trong repo `ielts-timer-pro`. Nó ghi lại toàn bộ thay đổi của phiên làm việc gần nhất và các luật bất di bất dịch rút ra từ đó — vi phạm là tái phát bug đã fix.
 
@@ -56,7 +56,7 @@
 - User **rất khó chịu với UI "trông giống AI làm"** — luôn tham khảo `design-taste-exam-builder` memory/skill trước khi động vào bất kỳ UI nào. Ưu tiên phong cách Manuscript/Editorial nhất quán toàn app.
 - User yêu cầu **dùng skill phù hợp** trước khi thực hiện task lớn (frontend-design, redesign-existing-projects, v.v. đã cài trong `.agents/` hoặc plugin marketplace) — kiểm tra danh sách skill khả dụng trước khi bắt tay code UI.
 - Khi user báo "lỗi X" mà nghe giống bug tái diễn/ngẫu nhiên → nghi ngờ ngay: (a) hàm trùng tên/logic trùng lặp lệch pha, (b) service worker/cache, (c) merge logic Firestore thiếu field mới. Đây là 3 nguồn lỗi đã xác nhận lặp lại trong dự án này.
-- Luôn build + typecheck (`compile_app.py` + `tsc --noEmit`) trước khi báo "xong" — không suy đoán compile thành công.
+- Luôn build + typecheck (`compile_app.py` + `npx tsc -b`) trước khi báo "xong" — không suy đoán compile thành công.
 
 ## File/thư mục quan trọng cần biết
 
@@ -65,3 +65,22 @@
 - `api/index.py` — backend FastAPI (AI vocab, AI explain, v.v.)
 - `public/sw.js` — service worker, đã có bài học đau về audio caching, cẩn thận khi sửa.
 - `compile_app.py` — script ráp file, PHẢI chạy sau mọi thay đổi ở template/components_split.
+
+## Cập nhật hạ tầng 2026-08-31
+
+### Video hướng dẫn kỳ thi thật
+
+- Không phát trực tiếp hai video hướng dẫn từ `cdn.videotourl.net`. Host này đã đo được độ trễ kết nối/TTFB nhiều giây, response không có cache policy rõ ràng và có lúc reset request tải đoạn.
+- Bản gốc không cắt xén được lưu tại `public/instruction-videos/` với tên có version:
+  - `listening-tutorial-v1.mp4`
+  - `reading-tutorial-v1.mp4`
+- `vercel.json` đặt `Cache-Control: public, max-age=31536000, immutable` cho `/instruction-videos/*`. Khi thay nội dung video phải tăng hậu tố version và cập nhật URL trong `officialInstructionVideoUrl`; không ghi đè file cùng tên vì client có thể giữ cache một năm.
+- Màn tổng hợp kỳ thi thật mount một video ẩn `preload="auto"` cho đúng bài kế tiếp. Khi học sinh bấm Start, video hiển thị dùng lại tài nguyên đã được browser/CDN làm ấm thay vì bắt đầu kết nối từ số 0.
+- Service worker vẫn phải bypass toàn bộ media và Range request. Cache tutorial video do browser/Vercel HTTP cache xử lý, không đưa vào Cache Storage của `public/sw.js`.
+
+### Kỷ luật tài liệu
+
+- Feature hoặc hành vi mới của web: cập nhật `README.md` trong cùng thay đổi.
+- Hạ tầng, deploy, cache, storage, build hoặc quy chuẩn làm việc mới: cập nhật `SESSION_HANDOFF.md` trong cùng thay đổi.
+- Backend, API, parser hoặc quy trình bóc/tạo DOCX mới: cập nhật `DOCX_FORMATTER_PLAYBOOK.md` trong cùng thay đổi.
+- Các luật trên cũng được ghi trong `AGENTS.md`; không commit hoặc báo hoàn thành khi tài liệu thuộc phạm vi chưa đồng bộ.

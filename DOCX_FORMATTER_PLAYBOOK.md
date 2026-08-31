@@ -6,6 +6,8 @@
 
 **Success condition:** The formatted DOCX parses into the intended sections, question types, visual layout, option bank, and answer keys without manual repair in Exam Builder.
 
+**Maintenance rule:** Any change to the backend API, DOCX parser, parser tags, extraction rules, or DOCX preparation workflow must update this playbook in the same change. Frontend-only features and deployment infrastructure belong in `README.md` and `SESSION_HANDOFF.md`, respectively.
+
 ---
 
 ## 1. Non-Negotiable Rules

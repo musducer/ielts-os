@@ -7759,8 +7759,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return String(quiz?.type || "Exam");
   };
   const officialInstructionVideoUrl = (skill: string) => {
-    if (skill === "Listening") return "https://cdn.videotourl.net/videos/cade58dc-dc96-4012-a568-fc676abea03e.mp4";
-    if (skill === "Reading") return "https://cdn.videotourl.net/videos/d202d60d-c717-42e2-a782-cd64902c2707.mp4";
+    if (skill === "Listening") return "/instruction-videos/listening-tutorial-v1.mp4";
+    if (skill === "Reading") return "/instruction-videos/reading-tutorial-v1.mp4";
     return "";
   };
   const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
@@ -12945,6 +12945,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const exams = packageQuizzes(pkg);
     const completed = new Set(realExamSession.completedQuizIds || []);
     const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
+    const nextQuiz = exams.find(quiz => quiz.id === nextQuizId);
+    const nextInstructionVideoUrl = officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
     const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
     const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
       ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
@@ -13120,6 +13122,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         {globalStyles}
         {renderRealExamTopBar()}
         <main className="real-exam-main">
+          {nextInstructionVideoUrl && (
+            <video
+              id="real-exam-instruction-preloader"
+              src={nextInstructionVideoUrl}
+              preload="auto"
+              muted
+              playsInline
+              aria-hidden="true"
+              tabIndex={-1}
+              style={{ position: "fixed", left: -2, bottom: -2, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+            />
+          )}
           {!pkg ? (
             <section className="real-exam-card" style={{ padding: 24 }}>
               <h1 style={{ margin: "0 0 10px", fontSize: 24 }}>Package unavailable</h1>
