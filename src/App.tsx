@@ -11419,7 +11419,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
-                      .idp-match2-items .idp-dropzone { width: 100%; box-sizing: border-box; min-height: 26px; margin: 0; padding: 3px 10px; line-height: 1.4; }
+                      /* The answer slot is deliberately fixed: a long assigned option must not stretch its row. */
+                      .idp-match2-items .idp-dropzone { width: 100%; height: 32px; min-height: 32px; max-height: 32px; box-sizing: border-box; display: block; overflow: hidden; margin: 0; padding: 3px 10px; line-height: 24px; white-space: nowrap; text-overflow: ellipsis; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-sentence-ending { max-width: 780px; }
                       .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
@@ -11733,9 +11734,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                           <svg width="158" height="137" viewBox="0 0 158 137" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
                               <path d="M28.5 76.5A52 52 0 0 1 132.5 76.5H120.5A40 40 0 0 0 40.5 76.5H28.5Z" fill="#fff" />
-                              <path d="M60.5 76.3A16.2 16.2 0 0 0 60.5 108.7Z" fill="#fff" />
+                              <path d="M28.5 76.5C28.8 87.1 32.4 96.4 42.5 102.7C47.6 105.9 54.1 108.7 60.5 108.7V76.3C51.9 76.3 45.3 79.6 41.2 84.9C39.4 80 34.6 76.5 28.5 76.5Z" fill="#fff" />
                               <rect x="60.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
-                              <path d="M100.5 76.3A16.2 16.2 0 0 1 100.5 108.7Z" fill="#fff" />
+                              <path d="M132.5 76.5C132.2 87.1 128.6 96.4 118.5 102.7C113.4 105.9 106.9 108.7 100.5 108.7V76.3C109.1 76.3 115.7 79.6 119.8 84.9C121.6 80 126.4 76.5 132.5 76.5Z" fill="#fff" />
                               <rect x="92.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
@@ -12506,7 +12507,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val ? 'Drag or click, then choose another answer box' : 'Drag an answer here'}>{val || gi}</span>
+                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val || 'Drag an answer here'} aria-label={val || `Answer slot ${gi}`}>{val || gi}</span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
