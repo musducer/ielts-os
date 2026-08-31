@@ -1591,7 +1591,7 @@ interface DiagramTextBox {
 interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
-interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
@@ -5197,8 +5197,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (!YT?.Player) return;
       player = new YT.Player("real-exam-youtube-player", {
         videoId: realExamInstructionGate.videoId,
+        host: "https://www.youtube-nocookie.com",
         playerVars: {
           autoplay: 1,
+          mute: 0,
           controls: 0,
           disablekb: 1,
           fs: 0,
@@ -5214,6 +5216,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
               event.target.setVolume?.(realExamAudioVolume);
               if (realExamAudioMuted) event.target.mute?.();
               else event.target.unMute?.();
+              setRealExamInstructionGate(gate => gate ? { ...gate, currentTime: 0, duration: Number(event.target.getDuration?.()) || 0 } : gate);
               event.target.playVideo?.();
             } catch (error) {}
           },
@@ -5227,10 +5230,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
         try {
           const current = Number(player?.getCurrentTime?.()) || 0;
           const duration = Number(player?.getDuration?.()) || 0;
+          const state = Number(player?.getPlayerState?.());
           if (current + 0.8 < maxSeen) player?.seekTo?.(maxSeen, true);
           else maxSeen = Math.max(maxSeen, current);
+          setRealExamInstructionGate(gate => gate ? { ...gate, currentTime: maxSeen, duration: duration || gate.duration || 0 } : gate);
           if (duration > 0 && current >= duration - 1.25) {
             setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
+          } else if (state === 2) {
+            player?.playVideo?.();
           }
         } catch (error) {}
       }, 500);
@@ -5272,7 +5279,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
       setRealExamFullscreenBlocked(false);
       return;
     }
-    const syncFullscreenGate = () => setRealExamFullscreenBlocked(!document.fullscreenElement);
+    const hasNativeExamFullscreen = () => {
+      if (!document.fullscreenElement) return false;
+      const screenHeight = Number(window.screen?.height) || 0;
+      return !screenHeight || screenHeight - window.innerHeight <= 8;
+    };
+    const syncFullscreenGate = () => setRealExamFullscreenBlocked(!hasNativeExamFullscreen());
     requestRealExamFullscreen();
     const initialTimer = window.setTimeout(syncFullscreenGate, 180);
     document.addEventListener("fullscreenchange", syncFullscreenGate);
@@ -7724,7 +7736,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   const requestRealExamFullscreen = () => {
     if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen().catch(() => {});
+      (document.documentElement as any).requestFullscreen({ navigationUI: "hide" }).catch(() => {
+        document.documentElement.requestFullscreen().catch(() => {});
+      });
     }
   };
   const startRealExamPackage = (pkg: RealExamPackage) => {
@@ -9048,7 +9062,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       return (
         <div className="real-exam-shell">
           <style>{`
-            .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+            .real-exam-shell{min-height:100dvh;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
             .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
             .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
             .real-exam-brand img{height:26px;display:block}
@@ -9062,16 +9076,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
             .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
             .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
-            .real-exam-main{flex:1;overflow:auto;padding:26px 18px 78px}
+            .real-exam-main{flex:1;overflow:hidden;padding:0;display:grid;place-items:center}
             .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
             .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
             .real-exam-check{display:inline-flex;color:#0b7f22}
-            .real-exam-video-wrap{width:min(820px,calc(100vw - 48px));margin:0 auto;border:1px solid #b8b8b8;border-radius:4px;background:#fff;padding:20px;box-sizing:border-box}
-            .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#111;overflow:hidden}
-            .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
-            .real-exam-video-frame:before,.real-exam-video-frame:after{content:'';position:absolute;z-index:3;pointer-events:none;background:#111}
-            .real-exam-video-frame:before{top:0;right:0;width:138px;height:50px}
-            .real-exam-video-frame:after{left:0;right:0;bottom:0;height:42px}
+            .real-exam-video-wrap{width:min(960px,100vw);margin:0 auto;box-sizing:border-box}
+            .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden;isolation:isolate}
+            .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;transform:scale(1.18);transform-origin:center}
+            .real-exam-video-duration{height:5px;width:100%;background:#3e3e3e;overflow:hidden}
+            .real-exam-video-duration>span{display:block;height:100%;background:#fff;transition:width .45s linear}
             .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
             .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
             .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
@@ -9093,19 +9106,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
             .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
           `}</style>
-          {renderRealExamTopBar()}
           <main className="real-exam-main">
             <section className="real-exam-video-wrap">
-              <h1 style={{margin:"0 0 10px",fontSize:22,lineHeight:1.25}}>{realExamInstructionGate.skill} test information</h1>
-              <p style={{margin:"0 0 16px",fontSize:14,lineHeight:1.45}}>Watch the official IELTS information video to the end, then confirm to enter the test.</p>
               <div className="real-exam-video-frame"><div id="real-exam-youtube-player" /></div>
-              <button type="button" className="real-exam-start" disabled={!realExamInstructionGate.ready} onClick={confirmRealExamInstructionGate} style={{marginTop:18}}>
-                Confirm and start {realExamInstructionGate.skill}
-              </button>
+              <div className="real-exam-video-duration" aria-label="Video progress"><span style={{width: `${Math.min(100, Math.max(0, (Number(realExamInstructionGate.currentTime) || 0) / Math.max(1, Number(realExamInstructionGate.duration) || 1) * 100))}%`}} /></div>
+              {realExamInstructionGate.ready && <div style={{textAlign:'center',paddingTop:18}}><button type="button" className="real-exam-start" onClick={confirmRealExamInstructionGate}>Confirm and start {realExamInstructionGate.skill}</button></div>}
             </section>
           </main>
-          {renderRealExamBottomBar()}
-          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
+          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - window.innerHeight > 8)), 400); }}>Return to full screen</button></div></div>}
         </div>
       );
     }
@@ -9197,7 +9205,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           )}
         </main>
         {renderRealExamBottomBar()}
-        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
+        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - window.innerHeight > 8)), 400); }}>Return to full screen</button></div></div>}
       </div>
     );
   }

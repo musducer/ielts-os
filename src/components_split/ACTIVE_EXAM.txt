@@ -725,10 +725,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-passage-col img, .exam-question-col img { max-width: 100% !important; height: auto !important; object-fit: contain; border-radius: 4px; margin: 10px 0; }
                       .exam-two-column { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
-                      ::-webkit-scrollbar { width: 10px; height: 10px; }
-                      ::-webkit-scrollbar-track { background: #f1f1f1; border-left: 1px solid #ddd; }
-                      ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 10px; }
-                      ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #8d8d8d #f1f1f1; }
+                      .exam-content-block ::-webkit-scrollbar { width: 12px; height: 12px; }
+                      .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1; border: 0; }
+                      .exam-content-block ::-webkit-scrollbar-thumb { background: #8d8d8d; border: 2px solid #f1f1f1; border-radius: 0; }
+                      .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #707070; }
+                      .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1; }
                       .idp-radio-label { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; transition: 0.1s; margin-bottom: 6px; background: #fff; border: 1px solid #ccc; }
                       .idp-radio-label:hover { background: #f8f9fa; border-color: #bbb; }
                       .idp-radio-label.selected { background: #f0f6ff; border-color: ${idpC.blueAccent}; }
@@ -2225,7 +2227,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  )}
 
                  {activeExam.realExamContext && realExamFullscreenBlocked && (
-                     <div className="real-exam-active-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}><Ico name="expand" size={15} />Return to full screen</button></div></div>
+                     <div className="real-exam-active-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - window.innerHeight > 8)), 400); }}><Ico name="expand" size={15} />Return to full screen</button></div></div>
                  )}
 
                  {selectionMenu && (
