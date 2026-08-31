@@ -1591,7 +1591,7 @@ interface DiagramTextBox {
 interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
-interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
@@ -5187,91 +5187,49 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   useEffect(() => {
     if (!realExamInstructionGate) return;
-    let cancelled = false;
-    let player: any = null;
-    let guardTimer = 0;
+    const video = document.getElementById("real-exam-instruction-video") as HTMLVideoElement | null;
+    if (!video) return;
     let maxSeen = 0;
-    const mountPlayer = () => {
-      if (cancelled || player) return;
-      const YT = (window as any).YT;
-      if (!YT?.Player) return;
-      player = new YT.Player("real-exam-youtube-player", {
-        videoId: realExamInstructionGate.videoId,
-        host: "https://www.youtube-nocookie.com",
-        playerVars: {
-          autoplay: 1,
-          mute: 0,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          iv_load_policy: 3,
-          modestbranding: 1,
-          playsinline: 1,
-          rel: 0,
-          enablejsapi: 1,
-        },
-        events: {
-          onReady: (event: any) => {
-            try {
-              event.target.setVolume?.(realExamAudioVolume);
-              if (realExamAudioMuted) event.target.mute?.();
-              else event.target.unMute?.();
-              setRealExamInstructionGate(gate => gate ? { ...gate, currentTime: 0, duration: Number(event.target.getDuration?.()) || 0 } : gate);
-              event.target.playVideo?.();
-            } catch (error) {}
-          },
-          onStateChange: (event: any) => {
-            if (event.data === 0) setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
-          },
-        },
-      });
-      (window as any).__realExamInstructionPlayer = player;
-      guardTimer = window.setInterval(() => {
-        try {
-          const current = Number(player?.getCurrentTime?.()) || 0;
-          const duration = Number(player?.getDuration?.()) || 0;
-          const state = Number(player?.getPlayerState?.());
-          if (current + 0.8 < maxSeen) player?.seekTo?.(maxSeen, true);
-          else maxSeen = Math.max(maxSeen, current);
-          setRealExamInstructionGate(gate => gate ? { ...gate, currentTime: maxSeen, duration: duration || gate.duration || 0 } : gate);
-          if (duration > 0 && current >= duration - 1.25) {
-            setRealExamInstructionGate(gate => gate ? { ...gate, ready: true } : gate);
-          } else if (state === 2) {
-            player?.playVideo?.();
-          }
-        } catch (error) {}
-      }, 500);
+    const syncProgress = () => {
+      const duration = Number(video.duration) || 0;
+      const current = Number(video.currentTime) || 0;
+      maxSeen = Math.max(maxSeen, current);
+      setRealExamInstructionGate(gate => gate ? { ...gate, currentTime: maxSeen, duration: duration || gate.duration || 0 } : gate);
     };
-    if ((window as any).YT?.Player) {
-      mountPlayer();
-    } else {
-      const previousReady = (window as any).onYouTubeIframeAPIReady;
-      (window as any).onYouTubeIframeAPIReady = () => {
-        if (typeof previousReady === "function") previousReady();
-        mountPlayer();
-      };
-      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
-        const script = document.createElement("script");
-        script.src = "https://www.youtube.com/iframe_api";
-        document.head.appendChild(script);
-      }
-    }
+    const preventRewind = () => {
+      if (video.currentTime + 0.35 < maxSeen) video.currentTime = maxSeen;
+    };
+    const keepPlaying = () => {
+      if (!video.ended) void video.play().catch(() => {});
+    };
+    const complete = () => setRealExamInstructionGate(gate => gate ? { ...gate, ready: true, currentTime: Number(video.duration) || gate.currentTime, duration: Number(video.duration) || gate.duration } : gate);
+    video.controls = false;
+    video.disablePictureInPicture = true;
+    video.volume = Math.max(0, Math.min(1, realExamAudioVolume / 100));
+    video.muted = realExamAudioMuted || realExamAudioVolume <= 0;
+    video.addEventListener("loadedmetadata", syncProgress);
+    video.addEventListener("timeupdate", syncProgress);
+    video.addEventListener("seeking", preventRewind);
+    video.addEventListener("pause", keepPlaying);
+    video.addEventListener("ended", complete);
+    keepPlaying();
     return () => {
-      cancelled = true;
-      if (guardTimer) window.clearInterval(guardTimer);
-      if ((window as any).__realExamInstructionPlayer === player) delete (window as any).__realExamInstructionPlayer;
-      try { player?.destroy?.(); } catch (error) {}
+      video.removeEventListener("loadedmetadata", syncProgress);
+      video.removeEventListener("timeupdate", syncProgress);
+      video.removeEventListener("seeking", preventRewind);
+      video.removeEventListener("pause", keepPlaying);
+      video.removeEventListener("ended", complete);
+      video.pause();
     };
-  }, [realExamInstructionGate?.nonce, realExamInstructionGate?.videoId]);
+  }, [realExamInstructionGate?.nonce, realExamInstructionGate?.videoUrl]);
 
   useEffect(() => {
     if (!realExamInstructionGate) return;
-    try {
-      const player = (window as any).__realExamInstructionPlayer;
-      player?.setVolume?.(realExamAudioVolume);
-      if (realExamAudioMuted || realExamAudioVolume <= 0) player?.mute?.();
-      else player?.unMute?.();
-    } catch (error) {}
+    const video = document.getElementById("real-exam-instruction-video") as HTMLVideoElement | null;
+    if (!video) return;
+    video.volume = Math.max(0, Math.min(1, realExamAudioVolume / 100));
+    video.muted = realExamAudioMuted || realExamAudioVolume <= 0;
+    if (!video.ended) void video.play().catch(() => {});
   }, [realExamAudioMuted, realExamAudioVolume, realExamInstructionGate?.nonce]);
 
   useEffect(() => {
@@ -5282,17 +5240,24 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const hasNativeExamFullscreen = () => {
       if (!document.fullscreenElement) return false;
       const screenHeight = Number(window.screen?.height) || 0;
-      return !screenHeight || screenHeight - window.innerHeight <= 8;
+      const viewportHeight = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0);
+      return !screenHeight || screenHeight - viewportHeight <= 8;
     };
     const syncFullscreenGate = () => setRealExamFullscreenBlocked(!hasNativeExamFullscreen());
     requestRealExamFullscreen();
     const initialTimer = window.setTimeout(syncFullscreenGate, 180);
+    const watchdog = window.setInterval(syncFullscreenGate, 900);
     document.addEventListener("fullscreenchange", syncFullscreenGate);
     window.addEventListener("focus", syncFullscreenGate);
+    window.addEventListener("resize", syncFullscreenGate);
+    window.visualViewport?.addEventListener("resize", syncFullscreenGate);
     return () => {
       window.clearTimeout(initialTimer);
+      window.clearInterval(watchdog);
       document.removeEventListener("fullscreenchange", syncFullscreenGate);
       window.removeEventListener("focus", syncFullscreenGate);
+      window.removeEventListener("resize", syncFullscreenGate);
+      window.visualViewport?.removeEventListener("resize", syncFullscreenGate);
     };
   }, [userRole, realExamSession?.packageAttemptId]);
 
@@ -7734,12 +7699,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     setRealExamPackages(nx);
     await syncData({ realExamPackages: nx });
   };
-  const requestRealExamFullscreen = () => {
-    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
-      (document.documentElement as any).requestFullscreen({ navigationUI: "hide" }).catch(() => {
-        document.documentElement.requestFullscreen().catch(() => {});
-      });
-    }
+  const requestRealExamFullscreen = (refresh = false) => {
+    const root = document.documentElement as any;
+    if (!root.requestFullscreen) return;
+    const viewportHeight = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0);
+    const screenHeight = Number(window.screen?.height) || 0;
+    const fillsScreen = !screenHeight || screenHeight - viewportHeight <= 8;
+    const enter = () => root.requestFullscreen({ navigationUI: "hide" }).catch(() => root.requestFullscreen().catch(() => {}));
+    if (!document.fullscreenElement) { enter(); return; }
+    if (refresh && !fillsScreen) document.exitFullscreen().catch(() => {}).finally(enter);
   };
   const startRealExamPackage = (pkg: RealExamPackage) => {
     const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
@@ -7790,9 +7758,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (type.includes("writ")) return "Writing";
     return String(quiz?.type || "Exam");
   };
-  const officialInstructionVideoId = (skill: string) => {
-    if (skill === "Listening") return "_O2RHxsAugg";
-    if (skill === "Reading") return "dsCXG9kfRgk";
+  const officialInstructionVideoUrl = (skill: string) => {
+    if (skill === "Listening") return "https://cdn.videotourl.net/videos/cade58dc-dc96-4012-a568-fc676abea03e.mp4";
+    if (skill === "Reading") return "https://cdn.videotourl.net/videos/d202d60d-c717-42e2-a782-cd64902c2707.mp4";
     return "";
   };
   const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
@@ -7832,13 +7800,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     const skill = realExamSkillLabel(source);
-    const videoId = officialInstructionVideoId(skill);
-    if (videoId && realExamSession?.packageId === pkg.id) {
+    const videoUrl = officialInstructionVideoUrl(skill);
+    if (videoUrl && realExamSession?.packageId === pkg.id) {
       setRealExamInstructionGate({
         packageId: pkg.id,
         quizId,
         skill: skill as "Listening" | "Reading",
-        videoId,
+        videoUrl,
         ready: false,
         nonce: Date.now(),
       });
@@ -11193,12 +11161,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-passage-col img, .exam-question-col img { max-width: 100% !important; height: auto !important; object-fit: contain; border-radius: 4px; margin: 10px 0; }
                       .exam-two-column { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
-                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #8d8d8d #f1f1f1; }
-                      .exam-content-block ::-webkit-scrollbar { width: 12px; height: 12px; }
-                      .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1; border: 0; }
-                      .exam-content-block ::-webkit-scrollbar-thumb { background: #8d8d8d; border: 2px solid #f1f1f1; border-radius: 0; }
-                      .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #707070; }
-                      .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1; }
+                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #969696 #f1f1f1; }
+                      .exam-content-block::-webkit-scrollbar, .exam-content-block ::-webkit-scrollbar { width: 14px !important; height: 14px !important; }
+                      .exam-content-block::-webkit-scrollbar-track, .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1 !important; border: 0 !important; border-radius: 0 !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb, .exam-content-block ::-webkit-scrollbar-thumb { background: #969696 !important; border: 0 !important; border-radius: 0 !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb:hover, .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #787878 !important; }
+                      .exam-content-block::-webkit-scrollbar-corner, .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1 !important; }
                       .idp-radio-label { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; transition: 0.1s; margin-bottom: 6px; background: #fff; border: 1px solid #ccc; }
                       .idp-radio-label:hover { background: #f8f9fa; border-color: #bbb; }
                       .idp-radio-label.selected { background: #f0f6ff; border-color: ${idpC.blueAccent}; }
@@ -11296,10 +11264,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .real-exam-active-time { font-size:15px; font-weight:800; letter-spacing:1px; }
                       .real-exam-active-volume { position:relative; display:flex; align-items:center; }
                       .real-exam-active-audio { width:32px; height:32px; display:grid; place-items:center; border:1px solid #c4c4c4; background:#f8f8f8; color:#111; cursor:pointer; padding:0; }
-                      .real-exam-active-volume-popover { position:absolute; right:0; bottom:40px; width:160px; padding:11px 12px; border:1px solid #bdbdbd; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,.16); }
-                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:136px; height:4px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
-                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
-                      .real-exam-active-volume-popover input::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-volume-popover { position:absolute; right:-2px; bottom:40px; width:202px; height:38px; padding:0 12px; display:flex; align-items:center; border:1px solid #bdbdbd; background:rgba(245,245,245,.98); box-shadow:0 3px 10px rgba(0,0,0,.18); box-sizing:border-box; }
+                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:178px; height:5px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
+                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; border:1px solid #b9b9b9; border-radius:50%; background:#e7e7e7; box-shadow:0 1px 2px rgba(0,0,0,.18); cursor:pointer; }
+                      .real-exam-active-volume-popover input::-moz-range-thumb { width:20px; height:20px; border:1px solid #b9b9b9; border-radius:50%; background:#e7e7e7; box-shadow:0 1px 2px rgba(0,0,0,.18); cursor:pointer; }
                       .real-exam-active-fullscreen-gate { position:fixed; inset:0; z-index:999998; display:grid; place-items:center; background:rgba(20,20,20,.82); color:#fff; text-align:center; }
                       .real-exam-active-fullscreen-gate>div { width:min(360px,calc(100vw - 48px)); padding:28px 24px; background:#252525; border:1px solid rgba(255,255,255,.22); box-shadow:0 18px 50px rgba(0,0,0,.34); }
                       .real-exam-active-fullscreen-gate h2 { margin:0; font-size:20px; }.real-exam-active-fullscreen-gate p { margin:9px 0 20px; color:#e7e7e7; font-size:13px; line-height:1.45; }.real-exam-active-fullscreen-gate button { display:inline-flex; align-items:center; gap:7px; padding:10px 15px; border:0; background:#fff; color:#111; font-weight:800; cursor:pointer; }
@@ -11418,9 +11386,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Hình 6: Drag-drop 2-column layout */
                       .idp-dragdrop-workspace { display: flex; gap: 24px; align-items: flex-start; }
                       .idp-dragdrop-flowchart { flex: 1; min-width: 0; }
-                      .idp-dragdrop-pool { flex: 0 0 180px; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
+                      .idp-dragdrop-pool { flex: 0 0 180px; display:flex; flex-direction:column; align-items:flex-start; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
                       .idp-dragdrop-pool-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #57606a; margin-bottom: 10px; }
-                      .idp-draggable { display: block; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
+                      .idp-draggable { display: inline-block; width: fit-content; max-width: 100%; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
                       .idp-draggable:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
                       .idp-draggable:active { cursor: grabbing; opacity: 0.7; }
                       .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
@@ -11437,12 +11405,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
                       /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
                       .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) var(--idp-drag-bank-w, 240px); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
-                      .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+                      .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
                       .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 10px; align-items: center; }
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
                       /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
                       .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
-                      .idp-match2-tag { display: flex; align-items: flex-start; gap: 8px; text-align: left; }
+                      .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: flex-start; gap: 8px; text-align: left; }
                       .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
                       .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 6px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
@@ -11461,7 +11429,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
                       .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
                       .mh-heading-title { margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
-                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
+                      .mh-heading-tray { align-items:flex-start; }
+                      .mh-heading-option { display:inline-block; width:fit-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; }
@@ -12688,7 +12657,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                      setRealExamAudioVolume(value); setRealExamAudioMuted(value <= 0);
                                      _setAudioVolume(value / 100);
                                      try { if (audioRef.current) audioRef.current.volume = value / 100; } catch (error) {}
-                                 }} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+                                 }} style={{ background: `linear-gradient(90deg, #1673cc 0%, #1673cc ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 100%)` }} /></div>}
                              </div>
                          </div>
                      </div>
@@ -13005,7 +12974,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       setRealExamAudioMuted(next <= 0);
       _setAudioVolume(next / 100);
       try { if (audioRef.current) audioRef.current.volume = next / 100; } catch (error) {}
-      try { (window as any).__realExamInstructionPlayer?.setVolume?.(next); } catch (error) {}
+      try {
+        const video = document.getElementById("real-exam-instruction-video") as HTMLVideoElement | null;
+        if (video) { video.volume = next / 100; video.muted = next <= 0; }
+      } catch (error) {}
     };
     const renderRealExamTopBar = () => (
       <header className="real-exam-top">
@@ -13031,7 +13003,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMenuOpen(open => !open)} title="Audio volume" aria-expanded={realExamAudioMenuOpen}>
               {renderRealExamIcon(realExamAudioMuted || realExamAudioVolume <= 0 ? "muted" : "volume", 18)}
             </button>
-            {realExamAudioMenuOpen && <div className="real-exam-volume-popover"><input aria-label="Audio volume" type="range" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => setRealExamVolume(Number(event.target.value))} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+            {realExamAudioMenuOpen && <div className="real-exam-volume-popover"><input aria-label="Audio volume" type="range" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => setRealExamVolume(Number(event.target.value))} style={{ background: `linear-gradient(90deg, #1673cc 0%, #1673cc ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 100%)` }} /></div>}
           </div>
         </div>
       </footer>
@@ -13040,7 +13012,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       return (
         <div className="real-exam-shell">
           <style>{`
-            .real-exam-shell{min-height:100dvh;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
+            .real-exam-shell{min-height:100dvh;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
             .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
             .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
             .real-exam-brand img{height:26px;display:block}
@@ -13054,15 +13026,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             .real-exam-bell:after{content:"";position:absolute;left:4px;right:4px;bottom:-5px;border-bottom:2px solid currentColor}
             .real-exam-menu{width:20px;height:14px;border-top:3px solid currentColor;border-bottom:3px solid currentColor;display:inline-block;position:relative}
             .real-exam-menu:before{content:"";position:absolute;left:0;right:0;top:4px;border-top:3px solid currentColor}
-            .real-exam-main{flex:1;overflow:hidden;padding:0;display:grid;place-items:center}
+            .real-exam-main{flex:1;overflow:hidden;padding:24px 18px 52px;display:grid;place-items:center;background:#fff;box-sizing:border-box}
             .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
             .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
             .real-exam-check{display:inline-flex;color:#0b7f22}
-            .real-exam-video-wrap{width:min(960px,100vw);margin:0 auto;box-sizing:border-box}
+            .real-exam-video-wrap{width:min(960px,calc(100vw - 36px));margin:0 auto;box-sizing:border-box}
             .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden;isolation:isolate}
-            .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;transform:scale(1.18);transform-origin:center}
-            .real-exam-video-duration{height:5px;width:100%;background:#3e3e3e;overflow:hidden}
-            .real-exam-video-duration>span{display:block;height:100%;background:#fff;transition:width .45s linear}
+            .real-exam-video-frame video{position:absolute;inset:0;width:100%;height:100%;border:0;object-fit:contain;background:#000}
+            .real-exam-video-duration{height:5px;width:100%;background:#dedede;overflow:hidden}
+            .real-exam-video-duration>span{display:block;height:100%;background:#111;transition:width .45s linear}
             .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
             .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
             .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
@@ -13073,12 +13045,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
             .real-exam-audio.is-muted{background:#fff;color:#333}
             .real-exam-volume{position:relative;display:flex;align-items:center}
-            .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
-            .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
-            .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
-            .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
-            .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
-            .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+            .real-exam-volume-popover{position:absolute;right:-2px;bottom:40px;width:202px;height:38px;padding:0 12px;display:flex;align-items:center;border:1px solid #bdbdbd;background:rgba(245,245,245,.98);box-shadow:0 3px 10px rgba(0,0,0,.18);box-sizing:border-box}
+            .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:178px;height:5px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+            .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:#e7e7e7;border:1px solid #b9b9b9;box-shadow:0 1px 2px rgba(0,0,0,.18);cursor:pointer}
+            .real-exam-volume input::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#e7e7e7;border:1px solid #b9b9b9;box-shadow:0 1px 2px rgba(0,0,0,.18);cursor:pointer}
+            .real-exam-volume input::-moz-range-track{height:5px;background:#d1d1d1;border:0}
+            .real-exam-volume input::-moz-range-progress{height:5px;background:#1673cc}
             .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
             .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
             .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
@@ -13086,12 +13058,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           `}</style>
           <main className="real-exam-main">
             <section className="real-exam-video-wrap">
-              <div className="real-exam-video-frame"><div id="real-exam-youtube-player" /></div>
+              <div className="real-exam-video-frame"><video id="real-exam-instruction-video" src={realExamInstructionGate.videoUrl} autoPlay playsInline preload="auto" controls={false} controlsList="nodownload noplaybackrate nofullscreen" disablePictureInPicture onContextMenu={(event) => event.preventDefault()} /></div>
               <div className="real-exam-video-duration" aria-label="Video progress"><span style={{width: `${Math.min(100, Math.max(0, (Number(realExamInstructionGate.currentTime) || 0) / Math.max(1, Number(realExamInstructionGate.duration) || 1) * 100))}%`}} /></div>
               {realExamInstructionGate.ready && <div style={{textAlign:'center',paddingTop:18}}><button type="button" className="real-exam-start" onClick={confirmRealExamInstructionGate}>Confirm and start {realExamInstructionGate.skill}</button></div>}
             </section>
           </main>
-          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - window.innerHeight > 8)), 400); }}>Return to full screen</button></div></div>}
+          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
         </div>
       );
     }
@@ -13135,12 +13107,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
           .real-exam-audio.is-muted{background:#fff;color:#333}
           .real-exam-volume{position:relative;display:flex;align-items:center}
-          .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
-          .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
-          .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
-          .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
-          .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
-          .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+          .real-exam-volume-popover{position:absolute;right:-2px;bottom:40px;width:202px;height:38px;padding:0 12px;display:flex;align-items:center;border:1px solid #bdbdbd;background:rgba(245,245,245,.98);box-shadow:0 3px 10px rgba(0,0,0,.18);box-sizing:border-box}
+          .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:178px;height:5px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+          .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:#e7e7e7;border:1px solid #b9b9b9;box-shadow:0 1px 2px rgba(0,0,0,.18);cursor:pointer}
+          .real-exam-volume input::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#e7e7e7;border:1px solid #b9b9b9;box-shadow:0 1px 2px rgba(0,0,0,.18);cursor:pointer}
+          .real-exam-volume input::-moz-range-track{height:5px;background:#d1d1d1;border:0}
+          .real-exam-volume input::-moz-range-progress{height:5px;background:#1673cc}
           .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
           .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
           .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
@@ -13183,7 +13155,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           )}
         </main>
         {renderRealExamBottomBar()}
-        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - window.innerHeight > 8)), 400); }}>Return to full screen</button></div></div>}
+        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
       </div>
     );
   }

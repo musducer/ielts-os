@@ -725,12 +725,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-passage-col img, .exam-question-col img { max-width: 100% !important; height: auto !important; object-fit: contain; border-radius: 4px; margin: 10px 0; }
                       .exam-two-column { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
-                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #8d8d8d #f1f1f1; }
-                      .exam-content-block ::-webkit-scrollbar { width: 12px; height: 12px; }
-                      .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1; border: 0; }
-                      .exam-content-block ::-webkit-scrollbar-thumb { background: #8d8d8d; border: 2px solid #f1f1f1; border-radius: 0; }
-                      .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #707070; }
-                      .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1; }
+                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #969696 #f1f1f1; }
+                      .exam-content-block::-webkit-scrollbar, .exam-content-block ::-webkit-scrollbar { width: 14px !important; height: 14px !important; }
+                      .exam-content-block::-webkit-scrollbar-track, .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1 !important; border: 0 !important; border-radius: 0 !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb, .exam-content-block ::-webkit-scrollbar-thumb { background: #969696 !important; border: 0 !important; border-radius: 0 !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb:hover, .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #787878 !important; }
+                      .exam-content-block::-webkit-scrollbar-corner, .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1 !important; }
                       .idp-radio-label { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; transition: 0.1s; margin-bottom: 6px; background: #fff; border: 1px solid #ccc; }
                       .idp-radio-label:hover { background: #f8f9fa; border-color: #bbb; }
                       .idp-radio-label.selected { background: #f0f6ff; border-color: ${idpC.blueAccent}; }
@@ -828,10 +828,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .real-exam-active-time { font-size:15px; font-weight:800; letter-spacing:1px; }
                       .real-exam-active-volume { position:relative; display:flex; align-items:center; }
                       .real-exam-active-audio { width:32px; height:32px; display:grid; place-items:center; border:1px solid #c4c4c4; background:#f8f8f8; color:#111; cursor:pointer; padding:0; }
-                      .real-exam-active-volume-popover { position:absolute; right:0; bottom:40px; width:160px; padding:11px 12px; border:1px solid #bdbdbd; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,.16); }
-                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:136px; height:4px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
-                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
-                      .real-exam-active-volume-popover input::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-volume-popover { position:absolute; right:-2px; bottom:40px; width:202px; height:38px; padding:0 12px; display:flex; align-items:center; border:1px solid #bdbdbd; background:rgba(245,245,245,.98); box-shadow:0 3px 10px rgba(0,0,0,.18); box-sizing:border-box; }
+                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:178px; height:5px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
+                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; border:1px solid #b9b9b9; border-radius:50%; background:#e7e7e7; box-shadow:0 1px 2px rgba(0,0,0,.18); cursor:pointer; }
+                      .real-exam-active-volume-popover input::-moz-range-thumb { width:20px; height:20px; border:1px solid #b9b9b9; border-radius:50%; background:#e7e7e7; box-shadow:0 1px 2px rgba(0,0,0,.18); cursor:pointer; }
                       .real-exam-active-fullscreen-gate { position:fixed; inset:0; z-index:999998; display:grid; place-items:center; background:rgba(20,20,20,.82); color:#fff; text-align:center; }
                       .real-exam-active-fullscreen-gate>div { width:min(360px,calc(100vw - 48px)); padding:28px 24px; background:#252525; border:1px solid rgba(255,255,255,.22); box-shadow:0 18px 50px rgba(0,0,0,.34); }
                       .real-exam-active-fullscreen-gate h2 { margin:0; font-size:20px; }.real-exam-active-fullscreen-gate p { margin:9px 0 20px; color:#e7e7e7; font-size:13px; line-height:1.45; }.real-exam-active-fullscreen-gate button { display:inline-flex; align-items:center; gap:7px; padding:10px 15px; border:0; background:#fff; color:#111; font-weight:800; cursor:pointer; }
@@ -950,9 +950,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Hình 6: Drag-drop 2-column layout */
                       .idp-dragdrop-workspace { display: flex; gap: 24px; align-items: flex-start; }
                       .idp-dragdrop-flowchart { flex: 1; min-width: 0; }
-                      .idp-dragdrop-pool { flex: 0 0 180px; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
+                      .idp-dragdrop-pool { flex: 0 0 180px; display:flex; flex-direction:column; align-items:flex-start; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
                       .idp-dragdrop-pool-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #57606a; margin-bottom: 10px; }
-                      .idp-draggable { display: block; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
+                      .idp-draggable { display: inline-block; width: fit-content; max-width: 100%; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
                       .idp-draggable:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
                       .idp-draggable:active { cursor: grabbing; opacity: 0.7; }
                       .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
@@ -969,12 +969,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
                       /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
                       .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) var(--idp-drag-bank-w, 240px); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
-                      .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+                      .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
                       .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 10px; align-items: center; }
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
                       /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
                       .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
-                      .idp-match2-tag { display: flex; align-items: flex-start; gap: 8px; text-align: left; }
+                      .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: flex-start; gap: 8px; text-align: left; }
                       .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
                       .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 6px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
@@ -993,7 +993,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
                       .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
                       .mh-heading-title { margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
-                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
+                      .mh-heading-tray { align-items:flex-start; }
+                      .mh-heading-option { display:inline-block; width:fit-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; }
@@ -2220,7 +2221,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                      setRealExamAudioVolume(value); setRealExamAudioMuted(value <= 0);
                                      _setAudioVolume(value / 100);
                                      try { if (audioRef.current) audioRef.current.volume = value / 100; } catch (error) {}
-                                 }} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+                                 }} style={{ background: `linear-gradient(90deg, #1673cc 0%, #1673cc ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #d1d1d1 100%)` }} /></div>}
                              </div>
                          </div>
                      </div>
