@@ -11161,12 +11161,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-passage-col img, .exam-question-col img { max-width: 100% !important; height: auto !important; object-fit: contain; border-radius: 4px; margin: 10px 0; }
                       .exam-two-column { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
-                      .exam-content-block, .exam-content-block * { scrollbar-width: auto; scrollbar-color: #969696 #f1f1f1; }
-                      .exam-content-block::-webkit-scrollbar, .exam-content-block ::-webkit-scrollbar { width: 14px !important; height: 14px !important; }
-                      .exam-content-block::-webkit-scrollbar-track, .exam-content-block ::-webkit-scrollbar-track { background: #f1f1f1 !important; border: 0 !important; border-radius: 0 !important; }
-                      .exam-content-block::-webkit-scrollbar-thumb, .exam-content-block ::-webkit-scrollbar-thumb { background: #969696 !important; border: 0 !important; border-radius: 0 !important; }
-                      .exam-content-block::-webkit-scrollbar-thumb:hover, .exam-content-block ::-webkit-scrollbar-thumb:hover { background: #787878 !important; }
-                      .exam-content-block::-webkit-scrollbar-corner, .exam-content-block ::-webkit-scrollbar-corner { background: #f1f1f1 !important; }
+                      .exam-content-block, .exam-content-block * { scrollbar-width:auto; scrollbar-color:#909090 #f3f3f3; }
+                      .exam-content-block .exam-passage-col, .exam-content-block .exam-question-col, .exam-content-block .idp-notes-panel-body { scrollbar-gutter:stable; }
+                      .exam-content-block::-webkit-scrollbar, .exam-content-block ::-webkit-scrollbar { width:15px !important; height:15px !important; }
+                      .exam-content-block::-webkit-scrollbar-track, .exam-content-block ::-webkit-scrollbar-track { background:#f3f3f3 !important; border:0 !important; border-radius:0 !important; box-shadow:inset 1px 0 #d7d7d7 !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb, .exam-content-block ::-webkit-scrollbar-thumb { min-height:48px; background:#909090 !important; border:0 !important; border-radius:0 !important; box-shadow:inset 1px 0 rgba(255,255,255,.24), inset -1px 0 rgba(0,0,0,.1) !important; }
+                      .exam-content-block::-webkit-scrollbar-thumb:hover, .exam-content-block ::-webkit-scrollbar-thumb:hover { background:#737373 !important; }
+                      .exam-content-block::-webkit-scrollbar-corner, .exam-content-block ::-webkit-scrollbar-corner { background:#f3f3f3 !important; }
                       .idp-radio-label { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 4px; cursor: pointer; transition: 0.1s; margin-bottom: 6px; background: #fff; border: 1px solid #ccc; }
                       .idp-radio-label:hover { background: #f8f9fa; border-color: #bbb; }
                       .idp-radio-label.selected { background: #f0f6ff; border-color: ${idpC.blueAccent}; }
@@ -11323,7 +11324,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-matching-grid-table tbody tr:hover td { background: #f8fafc; }
                       .idp-matching-grid-table input[type="radio"] { display: block; margin: 0 auto; width: 14px; height: 14px; cursor: pointer; accent-color: #0969da; }
                       .idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; font-size:14px; font-weight:800; flex-shrink:0; }
-                      .idp-matching-grid-number.cur { border-color:#0969da; color:#0969da; }
+                      .idp-matching-grid-number.cur { border-color:#0969da; color:#111827; }
                       .idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
                       .idp-matching-feature-title { font-size:14px; font-weight:700; color:#111827; margin:0 0 6px; }
                       .idp-matching-feature-key { width: auto; border-collapse: collapse; border: 0; background: #fff; font-size: 14px; }
@@ -11359,8 +11360,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
                       .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
                       /* Diagram labelling: one responsive coordinate canvas, with labels allowed outside the artwork. */
-                      .idp-diagram-wrap { width:100%; max-width:min(100%, var(--idp-diagram-max, 860px)); margin:0 auto; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
-                      .idp-diagram-stage { position:relative; width:100%; min-width:min(640px, 100%); aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
+                      .idp-diagram-wrap { width:min(100%, var(--idp-diagram-canvas, var(--idp-diagram-max, 860px))); max-width:100%; margin:0 auto; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+                      .idp-diagram-stage { position:relative; width:max(100%, var(--idp-diagram-canvas, 860px)); min-width:680px; aspect-ratio:3 / 2; background:linear-gradient(180deg,#fff,#fbfcfe); overflow:hidden; }
                       .idp-diagram-image { position:absolute; object-fit:contain; max-width:none; max-height:none; pointer-events:none; user-select:none; }
                       .idp-diagram-connectors { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
                       .idp-diagram-box { position:absolute; box-sizing:border-box; padding:12px 14px; border:2px solid #111827; background:#fff; color:#111827; font:500 15px/1.4 Arial,sans-serif; text-align:left; white-space:pre-wrap; box-shadow:0 2px 0 rgba(15,23,42,.05); z-index:2; }
@@ -11380,7 +11381,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         .idp-map-drag-canvas { overflow:auto; }
                         .idp-map-drag-slot { font-size:11px; min-width:52px; min-height:25px; }
                         .idp-diagram-wrap { overflow:auto; }
-                        .idp-diagram-stage { min-width:min(600px, 100%); }
+                        .idp-diagram-stage { min-width:680px; }
                       }
 
                       /* Hình 6: Drag-drop 2-column layout */
@@ -11429,8 +11430,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
                       .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
                       .mh-heading-title { margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
-                      .mh-heading-tray { align-items:flex-start; }
-                      .mh-heading-option { display:block; width:fit-content; max-width:100%; padding:3px 7px; margin:0 0 8px; border-radius:2px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
+                      .mh-heading-tray { align-items:flex-start; width:100%; }
+                      .mh-heading-tray > div { display:flex; flex-direction:column; align-items:flex-start; width:100%; }
+                      .mh-heading-option { display:block; width:fit-content; max-width:calc(100% - 12px); padding:3px 6px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; }
@@ -11726,15 +11728,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(48,48,48,.78)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(76,76,76,.84)', zIndex: 2147480000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <svg width="252" height="204" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
-                              <path d="M59 130C59 67 96 38 145 38s86 29 86 92" stroke="#fff" strokeWidth="30" strokeLinecap="round" />
-                              <path d="M61 132c8-24 29-35 52-28v66c-24 7-48-8-54-31l-3-7Z" fill="#fff" />
-                              <rect x="103" y="103" width="19" height="86" rx="5" fill="#fff" />
-                              <path d="M229 132c-8-24-29-35-52-28v66c24 7 48-8 54-31l3-7Z" fill="#fff" />
-                              <rect x="168" y="103" width="19" height="86" rx="5" fill="#fff" />
+                          <svg width="158" height="137" viewBox="0 0 158 137" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
+                              <path d="M28.5 76.5A52 52 0 0 1 132.5 76.5H120.5A40 40 0 0 0 40.5 76.5H28.5Z" fill="#fff" />
+                              <path d="M60.5 76.3A16.2 16.2 0 0 0 60.5 108.7Z" fill="#fff" />
+                              <rect x="60.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
+                              <path d="M100.5 76.3A16.2 16.2 0 0 1 100.5 108.7Z" fill="#fff" />
+                              <rect x="92.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
@@ -12392,7 +12394,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            const marker = part.match(/^\[(\d+)\]$/);
                            return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <StaticHtmlBlock key={`${box.id}-text-${index}`} tagName="span" className="highlightable-content" dataField={`diagramTextBoxes:${box.id}:${index}`} dataQid={source.id} html={sanitizeRichHtml(part)} />;
                        });
-                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px` } as React.CSSProperties}>
+                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
                                {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
