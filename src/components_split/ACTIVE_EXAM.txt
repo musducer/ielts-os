@@ -975,16 +975,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
                       /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
                       .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
-                      .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: flex-start; gap: 8px; text-align: left; }
+                      .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: center; gap: 8px; text-align: left; }
                       .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
-                      .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 6px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
+                      .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 3px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
                       .idp-match2-tag:hover { border-color: var(--eblue); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
                       .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
-                      .idp-match2-items .idp-dropzone { width: 100%; height: 34px; min-height: 34px; max-height: 34px; box-sizing: border-box; display: block; overflow: visible; margin: 0; padding: 3px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+                      .idp-match2-items .idp-dropzone { width: 100%; height: 28px; min-height: 28px; max-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-sentence-ending { max-width: 780px; }
                       .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
@@ -997,7 +997,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .mh-heading-title { width:fit-content; margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
                       .mh-heading-tray { align-items:flex-start; width:fit-content; max-width:100%; }
                       .mh-heading-tray > div { display:flex; flex-direction:column; align-items:flex-start; width:fit-content; max-width:100%; }
-                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:3px 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
+                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:2px 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; white-space:nowrap; }
@@ -1408,7 +1408,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           onClick={(e: any) => { e.stopPropagation(); if (isFilled) setSelectedHeadingDrag({ ...displayedHeading, sourceQid: q.id }); else if (selectedHeadingDrag) placeHeading(q.id, selectedHeadingDrag); }}
                                                           onDoubleClick={(e: any) => { e.stopPropagation(); clearHeading(q.id); }}
                                                           title={isFilled ? "Drag or click, then choose another heading box" : selectedHeadingDrag ? "Click to place selected heading" : "Drag a heading here"}
-                                                          style={{flex:1, minHeight:24, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#0a66c2'}`, borderRadius:2, display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'1px 10px', background: isFilled ? 'rgba(26,115,232,0.04)' : 'transparent', cursor: isFilled ? 'pointer' : 'default', transition:'border-color .15s, background .15s'}}>
+                                                          style={{flex:1, minHeight:22, border:`1.5px dashed ${isFilled ? 'var(--eblue)' : '#0a66c2'}`, borderRadius:2, display:'flex', alignItems:'center', justifyContent:'center', gap:10, padding:'0 10px', background: isFilled ? 'rgba(26,115,232,0.04)' : 'transparent', cursor: isFilled ? 'pointer' : 'default', transition:'border-color .15s, background .15s'}}>
                                                           <span key={`heading-text-${q.id}`} className="notranslate" style={{flex:1,fontSize:13,color:isFilled?'var(--etext)':'var(--etext)',lineHeight:1.35,fontWeight:isFilled?700:800,textAlign:'center'}}>{isFilled ? (assignedHeadingText || 'Heading text unavailable') : qNumber}</span>
                                                       </div>
                                                   </div>
