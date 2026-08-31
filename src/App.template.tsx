@@ -9015,9 +9015,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         </div>
       </header>
     );
-    const renderRealExamBottomBar = () => (
+    const renderRealExamBottomBar = (showBranding = false) => (
       <footer className="real-exam-bottom">
-        <span className="real-exam-assessment"></span>
+        {showBranding ? <div className="real-exam-bottom-brand" aria-label="IELTS OS"><BrandLogo size={20} stops={["#202020", "#4b4b4b", "#747474"]} /><BrandWordmark size={12} color="#222" osColor="#222" /></div> : <span className="real-exam-assessment"></span>}
         <div className="real-exam-bottom-icons">
           <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
           {renderRealExamIcon("battery", 25)}
@@ -9123,6 +9123,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
           .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
           .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+          .real-exam-bottom-brand{height:100%;display:flex;align-items:center;gap:7px;white-space:nowrap}
           .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
           .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
           .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
@@ -9189,7 +9190,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             </>
           )}
         </main>
-        {renderRealExamBottomBar()}
+        {renderRealExamBottomBar(true)}
         {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
       </div>
     );

@@ -12188,14 +12188,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     };
 
                    const renderMatchingTable = () => {
-                       const rawOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).filter((option: any) => String(option ?? "").trim());
+                       const optionsSourceQuestion = group.questions.find((item: any) => Array.isArray(item.options) && item.options.length) || group.questions[0];
+                       const legendTitleQuestion = group.questions.find((item: any) => String(item.rightTitle || "").trim());
+                       const rawOptions = ((optionsSourceQuestion?.options || []) as any[]).filter((option: any) => String(option ?? "").trim());
                        const infoGrid = isMatchingInfoOptionSet(rawOptions);
                        const questionColumnTitle = String(group.questions.find((item: any) => item.leftTitle)?.leftTitle || "").trim();
-                       const legendTitle = String(group.questions.find((item: any) => item.rightTitle)?.rightTitle || "").trim();
+                       const legendTitle = String(legendTitleQuestion?.rightTitle || "").trim();
                        const optionCells = rawOptions.map((option: any, index: number) => ({
+                           index,
                            label: matchingOptionLabel(option, index),
                            value: matchingOptionValue(option, index, infoGrid),
                            text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                           html: String(option ?? "").replace(/^\s*[A-Ka-k](?:[.)]\s*|\s+(?=\S))/, "").trim(),
                        }));
                        return (
                        <>
@@ -12237,13 +12241,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            </div>
                            {!infoGrid && optionCells.length > 0 && (
                                <div className="idp-matching-feature-wrap">
-                                   {legendTitle && <div className="idp-matching-feature-title">{legendTitle}</div>}
+                                   {legendTitle && legendTitleQuestion && <StaticHtmlBlock tagName="div" className="highlightable-content idp-matching-feature-title" dataField="rightTitle" dataQid={legendTitleQuestion.id} html={renderSafeHTML(legendTitle)} />}
                                    <table className="idp-matching-feature-key" aria-label={legendTitle || "Matching answer key"}>
                                        <tbody>
                                            {optionCells.map((option) => (
                                                <tr key={`match-key-${option.label}`}>
                                                    <th>{option.label}</th>
-                                                   <td>{option.text}</td>
+                                                   <td><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={optionsSourceQuestion.id} dataOptIndex={String(option.index)} html={renderSafeHTML(option.html || option.text)} /></td>
                                                </tr>
                                            ))}
                                        </tbody>
@@ -12993,9 +12997,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         </div>
       </header>
     );
-    const renderRealExamBottomBar = () => (
+    const renderRealExamBottomBar = (showBranding = false) => (
       <footer className="real-exam-bottom">
-        <span className="real-exam-assessment"></span>
+        {showBranding ? <div className="real-exam-bottom-brand" aria-label="IELTS OS"><BrandLogo size={20} stops={["#202020", "#4b4b4b", "#747474"]} /><BrandWordmark size={12} color="#222" osColor="#222" /></div> : <span className="real-exam-assessment"></span>}
         <div className="real-exam-bottom-icons">
           <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
           {renderRealExamIcon("battery", 25)}
@@ -13101,6 +13105,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
           .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
           .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
+          .real-exam-bottom-brand{height:100%;display:flex;align-items:center;gap:7px;white-space:nowrap}
           .real-exam-bottom-icons{display:flex;align-items:center;gap:18px}
           .real-exam-bottom-icons b{font-size:16px;letter-spacing:1px}
           .real-exam-battery{width:23px;height:14px;border:2px solid #111;display:inline-block;position:relative}
@@ -13167,7 +13172,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </>
           )}
         </main>
-        {renderRealExamBottomBar()}
+        {renderRealExamBottomBar(true)}
         {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
       </div>
     );

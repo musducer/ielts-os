@@ -16,7 +16,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Timer, điều hướng theo part/passage/câu hỏi, đánh dấu câu, note, highlight, gạch lựa chọn và scratchpad.
 - Split view Reading có splitter điều chỉnh độ rộng hai cột.
 - Các dạng câu hỏi: Choice, Multiple Choice, Blank, Short Answer, Matching, Matching Headings, Drag and Drop, Map Drag và Diagram Label.
-- Matching một hoặc hai cột, option bank co theo nội dung, slot cố định và kéo thả không làm đổi cỡ chữ.
+- Matching một hoặc hai cột, option bank co theo nội dung, slot cố định và kéo thả không làm đổi cỡ chữ; title và option của Matching Features dùng chung highlight/note persistence.
 - Diagram hỗ trợ ảnh nền, box, overlay và text box.
 - Listening strict mode tự bảo vệ luồng audio, tiếp tục phát sau gián đoạn tạm thời và không cho tua trái phép.
 - Kiểm soát fullscreen, focus, vi phạm rời màn hình và trạng thái nộp bài.
@@ -26,7 +26,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 
 - Gói thi LR hoặc LRW, làm bài đúng thứ tự do giáo viên cấu hình.
 - Passcode, đối tượng học sinh, lịch mở/đóng, số lần làm và trạng thái hoàn thành.
-- Test taker ID, pre-test checks, màn tổng hợp và bottom bar riêng.
+- Test taker ID, pre-test checks, màn tổng hợp và bottom bar riêng có nhận diện IELTS OS tinh gọn ở góc trái.
 - Video hướng dẫn Listening/Reading bắt buộc xem hết trước khi xác nhận vào bài.
 - Video được phục vụ từ static CDN của chính bản deploy, cache dài hạn và preload video của bài kế tiếp ngay tại màn tổng hợp.
 - Yêu cầu trở lại fullscreen trước khi tiếp tục nếu thí sinh thoát toàn màn hình.

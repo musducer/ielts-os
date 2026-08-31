@@ -1752,14 +1752,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     };
 
                    const renderMatchingTable = () => {
-                       const rawOptions = ((group.questions.find((item: any) => Array.isArray(item.options) && item.options.length)?.options || group.questions[0].options || []) as any[]).filter((option: any) => String(option ?? "").trim());
+                       const optionsSourceQuestion = group.questions.find((item: any) => Array.isArray(item.options) && item.options.length) || group.questions[0];
+                       const legendTitleQuestion = group.questions.find((item: any) => String(item.rightTitle || "").trim());
+                       const rawOptions = ((optionsSourceQuestion?.options || []) as any[]).filter((option: any) => String(option ?? "").trim());
                        const infoGrid = isMatchingInfoOptionSet(rawOptions);
                        const questionColumnTitle = String(group.questions.find((item: any) => item.leftTitle)?.leftTitle || "").trim();
-                       const legendTitle = String(group.questions.find((item: any) => item.rightTitle)?.rightTitle || "").trim();
+                       const legendTitle = String(legendTitleQuestion?.rightTitle || "").trim();
                        const optionCells = rawOptions.map((option: any, index: number) => ({
+                           index,
                            label: matchingOptionLabel(option, index),
                            value: matchingOptionValue(option, index, infoGrid),
                            text: cleanOptionAnswerText(option) || matchingOptionLabel(option, index),
+                           html: String(option ?? "").replace(/^\s*[A-Ka-k](?:[.)]\s*|\s+(?=\S))/, "").trim(),
                        }));
                        return (
                        <>
@@ -1801,13 +1805,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            </div>
                            {!infoGrid && optionCells.length > 0 && (
                                <div className="idp-matching-feature-wrap">
-                                   {legendTitle && <div className="idp-matching-feature-title">{legendTitle}</div>}
+                                   {legendTitle && legendTitleQuestion && <StaticHtmlBlock tagName="div" className="highlightable-content idp-matching-feature-title" dataField="rightTitle" dataQid={legendTitleQuestion.id} html={renderSafeHTML(legendTitle)} />}
                                    <table className="idp-matching-feature-key" aria-label={legendTitle || "Matching answer key"}>
                                        <tbody>
                                            {optionCells.map((option) => (
                                                <tr key={`match-key-${option.label}`}>
                                                    <th>{option.label}</th>
-                                                   <td>{option.text}</td>
+                                                   <td><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="options" dataQid={optionsSourceQuestion.id} dataOptIndex={String(option.index)} html={renderSafeHTML(option.html || option.text)} /></td>
                                                </tr>
                                            ))}
                                        </tbody>
