@@ -11407,7 +11407,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
                       .idp-match2 { display: grid; grid-template-columns: minmax(0, 1.15fr) var(--idp-drag-bank-w, 240px); gap: clamp(28px, 5vw, 72px); align-items: start; max-width: 1120px; margin: 8px auto 20px; }
                       .idp-match2-bank { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-                      .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 10px; align-items: center; }
+                      .idp-match2-items { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 300px); column-gap: 16px; row-gap: 18px; align-items: center; }
                       .idp-match2-h { grid-column: 1 / -1; justify-self: start; text-align: left; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--esub); margin-bottom: 3px; }
                       /* Heading kho tag (Attractions/Theorists): căn GIỮA so với list tag bên dưới */
                       .idp-match2-bank .idp-match2-h { text-align: center; justify-self: stretch; }
@@ -11419,8 +11419,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
-                      /* The answer slot is deliberately fixed: a long assigned option must not stretch its row. */
-                      .idp-match2-items .idp-dropzone { width: 100%; height: 32px; min-height: 32px; max-height: 32px; box-sizing: border-box; display: block; overflow: hidden; margin: 0; padding: 3px 10px; line-height: 24px; white-space: nowrap; text-overflow: ellipsis; }
+                      /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
+                      .idp-match2-items .idp-dropzone { width: 100%; height: 46px; min-height: 46px; max-height: 46px; box-sizing: border-box; display: block; overflow: visible; margin: 0; padding: 6px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-sentence-ending { max-width: 780px; }
                       .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
@@ -11729,15 +11729,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(76,76,76,.84)', zIndex: 2147480000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'fixed', inset: 0, background: '#4c4c4c', zIndex: 2147480000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                           <svg width="158" height="137" viewBox="0 0 158 137" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
-                              <path d="M28.5 76.5A52 52 0 0 1 132.5 76.5H120.5A40 40 0 0 0 40.5 76.5H28.5Z" fill="#fff" />
-                              <path d="M28.5 76.5C28.8 87.1 32.4 96.4 42.5 102.7C47.6 105.9 54.1 108.7 60.5 108.7V76.3C51.9 76.3 45.3 79.6 41.2 84.9C39.4 80 34.6 76.5 28.5 76.5Z" fill="#fff" />
-                              <rect x="60.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
-                              <path d="M132.5 76.5C132.2 87.1 128.6 96.4 118.5 102.7C113.4 105.9 106.9 108.7 100.5 108.7V76.3C109.1 76.3 115.7 79.6 119.8 84.9C121.6 80 126.4 76.5 132.5 76.5Z" fill="#fff" />
-                              <rect x="92.5" y="72.5" width="8" height="40" rx="1" fill="#fff" />
+                              <path fill="#fff" d="M28.5 76.5A52 52 0 0 1 132.5 76.5H120.5A40 40 0 0 0 40.5 76.5H28.5ZM29.3 67C28.9 72.5 29 78.7 30.2 82.5C30.7 84.1 31.7 85.3 33.1 86.2C35.1 87.3 37.9 87.6 40.2 86.3C42.2 85.2 43 83.1 42.4 81.1C41.2 77 40.7 72.2 40.7 67H29.3ZM60.5 72.5H68.5V112.5H60.5V105.5C55.6 105.3 51.4 103.8 47.1 100.8C40.2 96.2 34.4 92 31.9 87.2C31.5 86.4 31.2 85.6 31.2 84.9C35.5 84.9 42 84.9 47.2 84.2C48 81.9 50 80.2 53 79.5C55.3 79 57.9 79.2 60.5 80V72.5ZM131.7 67C132.1 72.5 132 78.7 130.8 82.5C130.3 84.1 129.3 85.3 127.9 86.2C125.9 87.3 123.1 87.6 120.8 86.3C118.8 85.2 118 83.1 118.6 81.1C119.8 77 120.3 72.2 120.3 67H131.7ZM100.5 72.5H92.5V112.5H100.5V105.5C105.4 105.3 109.6 103.8 113.9 100.8C120.8 96.2 126.6 92 129.1 87.2C129.5 86.4 129.8 85.6 129.8 84.9C125.5 84.9 119 84.9 113.8 84.2C113 81.9 111 80.2 108 79.5C105.7 79 103.1 79.2 100.5 80V72.5Z" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
