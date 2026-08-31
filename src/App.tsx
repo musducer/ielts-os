@@ -1588,7 +1588,7 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; createdAt?: number; updatedAt?: number; }
+interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; }
@@ -3447,9 +3447,13 @@ export default function IeltsSupremeOS() {
   const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
   const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
   const [realExamPackages, setRealExamPackages] = useState<RealExamPackage[]>([]);
+  const [realExamPackageEditor, setRealExamPackageEditor] = useState<RealExamPackage | null>(null);
   const [realExamSession, setRealExamSession] = useState<RealExamSession | null>(null);
   const [realExamInstructionGate, setRealExamInstructionGate] = useState<RealExamInstructionGate | null>(null);
   const [realExamAudioMuted, setRealExamAudioMuted] = useState(false);
+  const [realExamAudioVolume, setRealExamAudioVolume] = useState(80);
+  const [realExamAudioMenuOpen, setRealExamAudioMenuOpen] = useState(false);
+  const [realExamFullscreenBlocked, setRealExamFullscreenBlocked] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -5202,10 +5206,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
           modestbranding: 1,
           playsinline: 1,
           rel: 0,
+          enablejsapi: 1,
         },
         events: {
           onReady: (event: any) => {
             try {
+              event.target.setVolume?.(realExamAudioVolume);
               if (realExamAudioMuted) event.target.mute?.();
               else event.target.unMute?.();
               event.target.playVideo?.();
@@ -5255,24 +5261,26 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (!realExamInstructionGate) return;
     try {
       const player = (window as any).__realExamInstructionPlayer;
-      if (realExamAudioMuted) player?.mute?.();
+      player?.setVolume?.(realExamAudioVolume);
+      if (realExamAudioMuted || realExamAudioVolume <= 0) player?.mute?.();
       else player?.unMute?.();
     } catch (error) {}
-  }, [realExamAudioMuted, realExamInstructionGate?.nonce]);
+  }, [realExamAudioMuted, realExamAudioVolume, realExamInstructionGate?.nonce]);
 
   useEffect(() => {
-    if (userRole !== "STUDENT" || !realExamSession) return;
-    const enforce = () => window.setTimeout(requestRealExamFullscreen, 40);
-    enforce();
-    document.addEventListener("fullscreenchange", enforce);
-    window.addEventListener("focus", enforce);
-    window.addEventListener("click", enforce, true);
-    window.addEventListener("keydown", enforce, true);
+    if (userRole !== "STUDENT" || !realExamSession) {
+      setRealExamFullscreenBlocked(false);
+      return;
+    }
+    const syncFullscreenGate = () => setRealExamFullscreenBlocked(!document.fullscreenElement);
+    requestRealExamFullscreen();
+    const initialTimer = window.setTimeout(syncFullscreenGate, 180);
+    document.addEventListener("fullscreenchange", syncFullscreenGate);
+    window.addEventListener("focus", syncFullscreenGate);
     return () => {
-      document.removeEventListener("fullscreenchange", enforce);
-      window.removeEventListener("focus", enforce);
-      window.removeEventListener("click", enforce, true);
-      window.removeEventListener("keydown", enforce, true);
+      window.clearTimeout(initialTimer);
+      document.removeEventListener("fullscreenchange", syncFullscreenGate);
+      window.removeEventListener("focus", syncFullscreenGate);
     };
   }, [userRole, realExamSession?.packageAttemptId]);
 
@@ -7646,6 +7654,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const isPackageVisibleToStudent = (pkg: RealExamPackage, student: Student | undefined) => {
     if (!pkg?.active || !student) return false;
     if (pkg.audience === "SPECIFIC" && !(pkg.targetStudentIds || []).includes(student.id)) return false;
+    const now = getRealTime();
+    if (pkg.scheduledStart && now < parseVNTime(pkg.scheduledStart)) return false;
+    if (pkg.scheduledEnd && now > parseVNTime(pkg.scheduledEnd)) return false;
     return packageQuizzes(pkg).length === (pkg.quizIds || []).length && (pkg.quizIds || []).length >= 2;
   };
   const persistRealExamSession = (session: RealExamSession | null) => {
@@ -7662,6 +7673,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       title: String(pkg.title || "Real exam package").trim(),
       quizIds: (pkg.quizIds || []).filter(Boolean),
       mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
+      maxAttempts: Math.max(1, Number(pkg.maxAttempts) || 1),
       updatedAt: Date.now(),
       createdAt: pkg.createdAt || Date.now(),
     };
@@ -7684,23 +7696,20 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
       return;
     }
-    const title = prompt("Tên gói bài thi thật:", `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`)?.trim();
-    if (!title) return;
-    const passcode = prompt("Pass riêng cho gói này (có thể để trống):", "")?.trim() || "";
     const pkg: RealExamPackage = {
       id: makeRealExamId(),
-      title,
-      active: true,
+      title: `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`,
+      active: false,
       mode: ordered.length === 3 ? "LRW" : "LR",
       quizIds: ordered.map(quiz => quiz.id),
-      passcode,
+      passcode: "",
       audience: "ALL",
       targetStudentIds: [],
+      maxAttempts: 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await saveRealExamPackage(pkg);
-    setSelectedQuizzes([]);
+    setRealExamPackageEditor(pkg);
   };
   const deleteRealExamPackage = async (pkgId: string) => {
     if (!confirm("Xóa gói bài thi thật này?")) return;
@@ -7720,6 +7729,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   const startRealExamPackage = (pkg: RealExamPackage) => {
     const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+    if (!me || !pkg.active) return;
+    const now = getRealTime();
+    if (pkg.scheduledStart && now < parseVNTime(pkg.scheduledStart)) { alert("This exam package has not opened yet."); return; }
+    if (pkg.scheduledEnd && now > parseVNTime(pkg.scheduledEnd)) { alert("This exam package is closed."); return; }
     if (!isPackageVisibleToStudent(pkg, me)) return;
     if (pkg.passcode) {
       const pass = prompt("Enter package passcode:");
@@ -7731,6 +7744,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
         if (saved?.packageId === pkg.id) session = saved;
       } catch (error) {}
+    }
+    if (!session) {
+      const previousAttempts = new Set(
+        quizResults
+          .filter(result => result.studentId === me.id && result.realExamPackageId === pkg.id)
+          .map(result => result.realExamAttemptId)
+          .filter(Boolean)
+      );
+      if (previousAttempts.size >= Math.max(1, Number(pkg.maxAttempts) || 1)) {
+        alert(`You have used all ${Math.max(1, Number(pkg.maxAttempts) || 1)} attempt(s) for this exam package.`);
+        return;
+      }
     }
     session = session || {
       packageId: pkg.id,
@@ -7765,6 +7790,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     if (!source) { alert("This test is no longer available."); return; }
+    _setAudioVolume((realExamAudioMuted ? 0 : realExamAudioVolume) / 100);
     const orderIndex = (pkg.quizIds || []).indexOf(quizId);
     const launchQuiz: Quiz = {
       ...source,
@@ -11093,9 +11119,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
                       .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
-                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:188px; min-height:150px; border:1px solid #8a8f98; border-radius:8px; background:#fff; color:#2f3338; box-shadow:0 10px 24px rgba(0,0,0,.22); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
-                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-14px; left:50%; width:24px; height:24px; background:#fff; border-left:1px solid #8a8f98; border-top:1px solid #8a8f98; transform:translateX(-50%) rotate(45deg); }
-                      .idp-highlight-delete-menu button { position:relative; z-index:1; border:0; background:transparent; color:inherit; cursor:pointer; font:500 22px/1.1 Arial,sans-serif; display:grid; gap:6px; place-items:center; }
+                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:72px; min-height:62px; border:1px solid #b8bec7; border-radius:6px; background:#fff; color:#2f3338; box-shadow:0 6px 14px rgba(0,0,0,.16); display:flex; align-items:center; justify-content:center; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-6px; left:50%; width:10px; height:10px; background:#fff; border-left:1px solid #b8bec7; border-top:1px solid #b8bec7; transform:translateX(-50%) rotate(45deg); }
+                      .idp-highlight-delete-menu button { position:relative; z-index:1; width:100%; height:100%; border:0; background:transparent; color:inherit; cursor:pointer; font:500 10px/1.04 Arial,sans-serif; display:grid; gap:3px; place-items:center; padding:6px 5px; }
                       .idp-highlight-delete-menu button:hover { color:#111; }
                       @keyframes idpDeleteRise { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
                       
@@ -11248,6 +11274,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-submit-fab { width: 64px; height: 100%; border-radius: 0; background: #ececec; color: #3a3d47; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .18s ease, color .18s ease; }
                       .idp-submit-fab:hover { background: #1b1e2b; color: #fff; }
                       .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
+                      .real-exam-active-bar { min-height:46px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 16px; box-sizing:border-box; background:#e7e7e7; border-top:1px solid #d0d0d0; color:#111; font-family:Arial,Helvetica,sans-serif; position:relative; z-index:1001; }
+                      .real-exam-active-mark { width:100px; height:10px; opacity:.55; background:linear-gradient(90deg,#777 0 7px,transparent 7px 11px,#777 11px 100%); }
+                      .real-exam-active-tools { display:flex; align-items:center; gap:16px; font-variant-numeric:tabular-nums; }
+                      .real-exam-active-time { font-size:15px; font-weight:800; letter-spacing:1px; }
+                      .real-exam-active-volume { position:relative; display:flex; align-items:center; }
+                      .real-exam-active-audio { width:32px; height:32px; display:grid; place-items:center; border:1px solid #c4c4c4; background:#f8f8f8; color:#111; cursor:pointer; padding:0; }
+                      .real-exam-active-volume-popover { position:absolute; right:0; bottom:40px; width:160px; padding:11px 12px; border:1px solid #bdbdbd; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,.16); }
+                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:136px; height:4px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
+                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-volume-popover input::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-fullscreen-gate { position:fixed; inset:0; z-index:999998; display:grid; place-items:center; background:rgba(20,20,20,.82); color:#fff; text-align:center; }
+                      .real-exam-active-fullscreen-gate>div { width:min(360px,calc(100vw - 48px)); padding:28px 24px; background:#252525; border:1px solid rgba(255,255,255,.22); box-shadow:0 18px 50px rgba(0,0,0,.34); }
+                      .real-exam-active-fullscreen-gate h2 { margin:0; font-size:20px; }.real-exam-active-fullscreen-gate p { margin:9px 0 20px; color:#e7e7e7; font-size:13px; line-height:1.45; }.real-exam-active-fullscreen-gate button { display:inline-flex; align-items:center; gap:7px; padding:10px 15px; border:0; background:#fff; color:#111; font-weight:800; cursor:pointer; }
                       .highlight-flash { animation: flashYellow 1.5s; }
                       @keyframes flashYellow { 0%, 100% { background-color: transparent; } 50% { background-color: #fff3cd; } }
                       .idp-current-gap { border-color:#0969da !important; outline:2px solid rgba(9,105,218,.22) !important; outline-offset:1px !important; }
@@ -11702,15 +11741,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(70,70,70,.94) 0 59%, rgba(56,56,56,.94) 59% 100%)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(48,48,48,.78)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <svg width="290" height="230" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '52vw' }}>
-                              <path d="M51 130C51 62 93 29 145 29s94 33 94 101" stroke="#fff" strokeWidth="48" strokeLinecap="round" />
-                              <path d="M57 130c8-30 33-42 59-34v79c-27 8-54-9-61-38l-4-7Z" fill="#fff" />
-                              <rect x="98" y="94" width="28" height="112" rx="7" fill="#fff" />
-                              <path d="M233 130c-8-30-33-42-59-34v79c27 8 54-9 61-38l4-7Z" fill="#fff" />
-                              <rect x="164" y="94" width="28" height="112" rx="7" fill="#fff" />
+                          <svg width="252" height="204" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
+                              <path d="M59 130C59 67 96 38 145 38s86 29 86 92" stroke="#fff" strokeWidth="30" strokeLinecap="round" />
+                              <path d="M61 132c8-24 29-35 52-28v66c-24 7-48-8-54-31l-3-7Z" fill="#fff" />
+                              <rect x="103" y="103" width="19" height="86" rx="5" fill="#fff" />
+                              <path d="M229 132c-8-24-29-35-52-28v66c24 7 48-8 54-31l3-7Z" fill="#fff" />
+                              <rect x="168" y="103" width="19" height="86" rx="5" fill="#fff" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
@@ -12619,6 +12658,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  </div>
 
                  {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
+                 {activeExam.realExamContext && (
+                     <div className="real-exam-active-bar">
+                         <span className="real-exam-active-mark" aria-hidden="true" />
+                         <div className="real-exam-active-tools">
+                             <b className="real-exam-active-time">{new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</b>
+                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3"/><path d="M6 10.5h8v4H6z" fill="currentColor" stroke="none"/></svg>
+                             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.1 5.1 0 0 1 7 0"/><path d="M12 19.5h.01"/></svg>
+                             <div className="real-exam-active-volume">
+                                 <button type="button" className="real-exam-active-audio" title="Audio volume" aria-expanded={realExamAudioMenuOpen} onClick={() => setRealExamAudioMenuOpen(open => !open)}><Ico name="volume2" size={17} sw={1.8} /></button>
+                                 {realExamAudioMenuOpen && <div className="real-exam-active-volume-popover"><input type="range" aria-label="Audio volume" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => {
+                                     const value = Math.max(0, Math.min(100, Number(event.target.value) || 0));
+                                     setRealExamAudioVolume(value); setRealExamAudioMuted(value <= 0);
+                                     _setAudioVolume(value / 100);
+                                     try { if (audioRef.current) audioRef.current.volume = value / 100; } catch (error) {}
+                                 }} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+                             </div>
+                         </div>
+                     </div>
+                 )}
+
+                 {activeExam.realExamContext && realExamFullscreenBlocked && (
+                     <div className="real-exam-active-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}><Ico name="expand" size={15} />Return to full screen</button></div></div>
+                 )}
+
                  {selectionMenu && (
                      <div className="idp-popup-menu" style={{ left: selectionMenu!.x, top: selectionMenu!.y }}>
                          <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }}>
@@ -12637,7 +12700,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  {highlightDeleteMenu && (
                      <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
                          <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
-                             <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
                              <span>Delete<br />Highlight</span>
                          </button>
                      </div>
@@ -12908,6 +12971,26 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       setPortalTab("home");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     };
+    const renderRealExamIcon = (name: "wifi" | "bell" | "menu" | "battery" | "volume" | "muted" | "check" | "chevron" | "arrow", size = 24) => {
+      const base = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.1, strokeLinecap: "round", strokeLinejoin: "round", className: "real-exam-ico", "aria-hidden": true } as any;
+      if (name === "wifi") return <svg {...base}><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.1 5.1 0 0 1 7 0"/><path d="M12 19.5h.01"/></svg>;
+      if (name === "bell") return <svg {...base}><path d="M18 8.5a6 6 0 0 0-12 0c0 5.2-2 6.7-2 6.7h16s-2-1.5-2-6.7"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></svg>;
+      if (name === "menu") return <svg {...base}><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>;
+      if (name === "battery") return <svg {...base}><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3"/><path d="M6 10.5h8v4H6z" fill="currentColor" stroke="none"/></svg>;
+      if (name === "muted") return <svg {...base}><path d="M11 5 6.5 9H3v6h3.5l4.5 4V5z"/><path d="m18 10-4 4"/><path d="m14 10 4 4"/></svg>;
+      if (name === "volume") return <svg {...base}><path d="M11 5 6.5 9H3v6h3.5l4.5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>;
+      if (name === "check") return <svg {...base} stroke="#0b7f22" strokeWidth={2.4}><path d="m5 12.5 4.1 4.1L19 6.8"/></svg>;
+      if (name === "chevron") return <svg {...base} width={14} height={14} viewBox="0 0 14 14" strokeWidth={2}><path d="m3 5 4 4 4-4"/></svg>;
+      return <svg {...base} width={16} height={16} viewBox="0 0 16 16" strokeWidth={2.2}><path d="M3 8h9"/><path d="m8 4 4 4-4 4"/></svg>;
+    };
+    const setRealExamVolume = (value: number) => {
+      const next = Math.max(0, Math.min(100, Math.round(value || 0)));
+      setRealExamAudioVolume(next);
+      setRealExamAudioMuted(next <= 0);
+      _setAudioVolume(next / 100);
+      try { if (audioRef.current) audioRef.current.volume = next / 100; } catch (error) {}
+      try { (window as any).__realExamInstructionPlayer?.setVolume?.(next); } catch (error) {}
+    };
     const renderRealExamTopBar = () => (
       <header className="real-exam-top">
         <div className="real-exam-brand">
@@ -12915,9 +12998,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           <span>{realExamSession.testTakerId}</span>
         </div>
         <div className="real-exam-icons" aria-hidden="true">
-          <span className="real-exam-wifi"><span></span></span>
-          <span className="real-exam-bell"></span>
-          <span className="real-exam-menu"></span>
+          {renderRealExamIcon("wifi", 24)}
+          {renderRealExamIcon("bell", 24)}
+          {renderRealExamIcon("menu", 26)}
         </div>
       </header>
     );
@@ -12926,11 +13009,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         <span className="real-exam-assessment"></span>
         <div className="real-exam-bottom-icons">
           <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
-          <span className="real-exam-battery"></span>
-          <span className="real-exam-wifi small"><span></span></span>
-          <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMuted(value => !value)} title="Audio">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>{realExamAudioMuted ? <><line x1="19" y1="9" x2="15" y2="13"/><line x1="15" y1="9" x2="19" y2="13"/></> : <path d="M15.5 8.5a5 5 0 0 1 0 7"/>}</svg>
-          </button>
+          {renderRealExamIcon("battery", 25)}
+          {renderRealExamIcon("wifi", 19)}
+          <div className="real-exam-volume">
+            <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMenuOpen(open => !open)} title="Audio volume" aria-expanded={realExamAudioMenuOpen}>
+              {renderRealExamIcon(realExamAudioMuted || realExamAudioVolume <= 0 ? "muted" : "volume", 18)}
+            </button>
+            {realExamAudioMenuOpen && <div className="real-exam-volume-popover"><input aria-label="Audio volume" type="range" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => setRealExamVolume(Number(event.target.value))} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+          </div>
         </div>
       </footer>
     );
@@ -12943,6 +13029,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
             .real-exam-brand img{height:26px;display:block}
             .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+            .real-exam-ico{display:block;flex:0 0 auto}
             .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
             .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
             .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
@@ -12954,9 +13041,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             .real-exam-main{flex:1;overflow:auto;padding:26px 18px 78px}
             .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
             .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+            .real-exam-check{display:inline-flex;color:#0b7f22}
             .real-exam-video-wrap{width:min(820px,calc(100vw - 48px));margin:0 auto;border:1px solid #b8b8b8;border-radius:4px;background:#fff;padding:20px;box-sizing:border-box}
             .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#111;overflow:hidden}
             .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+            .real-exam-video-frame:before,.real-exam-video-frame:after{content:'';position:absolute;z-index:3;pointer-events:none;background:#111}
+            .real-exam-video-frame:before{top:0;right:0;width:138px;height:50px}
+            .real-exam-video-frame:after{left:0;right:0;bottom:0;height:42px}
             .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
             .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
             .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
@@ -12966,6 +13057,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
             .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
             .real-exam-audio.is-muted{background:#fff;color:#333}
+            .real-exam-volume{position:relative;display:flex;align-items:center}
+            .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
+            .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+            .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+            .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+            .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
+            .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+            .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
+            .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
+            .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
             .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
           `}</style>
           {renderRealExamTopBar()}
@@ -12980,6 +13081,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </section>
           </main>
           {renderRealExamBottomBar()}
+          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
         </div>
       );
     }
@@ -12991,6 +13093,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
           .real-exam-brand img{height:26px;display:block}
           .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+          .real-exam-ico{display:block;flex:0 0 auto}
           .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
           .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
           .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
@@ -13002,7 +13105,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-main{flex:1;overflow:auto;padding:18px 18px 78px}
           .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
           .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
-          .real-exam-check{color:#0b7f22;font-size:24px;font-weight:900}
+          .real-exam-check{display:inline-flex;color:#0b7f22}
           .real-exam-test{padding:18px 20px 20px}
           .real-exam-test h2{margin:0 0 18px;font-size:22px;line-height:1.15}
           .real-exam-status{margin:0 0 20px;font-size:14px;font-weight:800;color:#b00020}
@@ -13010,6 +13113,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-timing{margin:0 0 20px;font-size:14px}
           .real-exam-info{height:52px;border:1px solid #c6c6c6;border-radius:2px;display:flex;align-items:center;padding:0 14px;margin:0 0 14px;gap:12px;box-sizing:border-box;font-size:14px}
           .real-exam-info b{font-size:20px;line-height:1}
+          .real-exam-info-caret{display:inline-flex;align-items:center;justify-content:center;width:14px;color:#111}
           .real-exam-info span:last-child{color:#0b7f22;margin-left:4px}
           .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
           .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
@@ -13020,6 +13124,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
           .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
           .real-exam-audio.is-muted{background:#fff;color:#333}
+          .real-exam-volume{position:relative;display:flex;align-items:center}
+          .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
+          .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+          .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+          .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+          .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
+          .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+          .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
+          .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
+          .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
           .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
         `}</style>
         {globalStyles}
@@ -13036,7 +13150,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <section className="real-exam-card">
                 <div className="real-exam-card-head">
                   <span>Pre-test checks</span>
-                  <span className="real-exam-check">✓</span>
+                  <span className="real-exam-check">{renderRealExamIcon("check", 25)}</span>
                 </div>
               </section>
               {exams.map((quiz) => {
@@ -13048,9 +13162,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <h2>{skill}</h2>
                       <p className={`real-exam-status ${quizDone ? "done" : ""}`}>{quizDone ? "Completed" : "Not completed"}</p>
                       <p className="real-exam-timing">Timing: {formatRealExamTiming(Number(quiz.timeLimit) || 0)}</p>
-                      {isNext && !quizDone && <div className="real-exam-info"><b>⌄</b><span>Test information.</span><span>Confirmed</span></div>}
+                      {isNext && !quizDone && <div className="real-exam-info"><span className="real-exam-info-caret">{renderRealExamIcon("chevron", 14)}</span><span>Test information.</span><span>Confirmed</span></div>}
                       <button className="real-exam-start" disabled={!isNext || quizDone} onClick={() => startRealExamPackageQuiz(pkg, quiz.id)}>
-                        <span>➜</span> Start {skill}
+                        {renderRealExamIcon("arrow", 16)} Start {skill}
                       </button>
                     </section>
                   );
@@ -13059,6 +13173,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           )}
         </main>
         {renderRealExamBottomBar()}
+        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
       </div>
     );
   }
@@ -14978,7 +15093,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <span style={{...ebEyebrow, fontSize: 10, letterSpacing: '0.18em'}}>Workspace</span>
                     </div>
 
-                    {!editingQuiz && !keyEditingQuiz && (
+                    {!editingQuiz && !keyEditingQuiz && !realExamPackageEditor && (
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                           <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '9px 16px', borderRadius: EB.radiusSm, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}` }}>
                             <Ico name="download" size={14} /> {t('eb_upload_docx')}
@@ -15029,6 +15144,106 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             alert("Đã đồng bộ Key!");
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
                       </div>
+                    </div>
+
+                ) : realExamPackageEditor ? (
+
+                    <div key="real-exam-editor" style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: EB.paper }}>
+                        <div style={{ maxWidth: 1080, margin: '0 auto', padding: '34px 32px 70px' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, marginBottom: 30, flexWrap: 'wrap' }}>
+                                <div>
+                                    <div style={{ ...ebEyebrow, marginBottom: 10 }}><Ico name="shield" size={13} />Gói bài thi thật</div>
+                                    <h2 style={{ margin: 0, fontFamily: EB.fDisplay, fontSize: 34, letterSpacing: '-0.025em', lineHeight: 1.08, color: EB.ink }}>Cấu hình bài thi mô phỏng</h2>
+                                    <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.</p>
+                                </div>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />Đóng</button>
+                                    <button className="ebx-primary" onClick={async () => {
+                                        const draft = realExamPackageEditor;
+                                        const ordered = (draft.quizIds || []).filter(Boolean).map(id => quizzes.find((quiz: any) => quiz.id === id)).filter(Boolean) as Quiz[];
+                                        const expectedCount = draft.mode === 'LRW' ? 3 : 2;
+                                        const validOrder = ordered.length === expectedCount && ordered.map(quizSkillRank).every((rank, index) => rank === index);
+                                        if (!String(draft.title || '').trim()) { alert('Nhập tên gói bài thi.'); return; }
+                                        if (!validOrder) { alert('Chọn đúng đề theo thứ tự Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.')); return; }
+                                        if (draft.scheduledStart && draft.scheduledEnd && parseVNTime(draft.scheduledEnd) <= parseVNTime(draft.scheduledStart)) { alert('Thời điểm đóng phải sau thời điểm mở.'); return; }
+                                        await saveRealExamPackage({ ...draft, quizIds: ordered.map(quiz => quiz.id), maxAttempts: Math.max(1, Number(draft.maxAttempts) || 1) });
+                                        setSelectedQuizzes([]);
+                                        setRealExamPackageEditor(null);
+                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />Lưu gói thi</button>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 340px)', gap: 22, alignItems: 'start' }}>
+                                <div style={{ display: 'grid', gap: 18 }}>
+                                    <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="fileText" size={13} />Thông tin gói thi</div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 144px', gap: 14 }}>
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Tên hiển thị
+                                                <input value={realExamPackageEditor.title || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, title: event.target.value } : prev)} placeholder="Ví dụ: Mock test 03" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} />
+                                            </label>
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Số lượt mỗi học sinh
+                                                <input type="number" min="1" value={Math.max(1, Number(realExamPackageEditor.maxAttempts) || 1)} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, maxAttempts: Math.max(1, Number(event.target.value) || 1) } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none', fontVariantNumeric: 'tabular-nums' }} />
+                                            </label>
+                                        </div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginTop: 14 }}>Mật khẩu vào gói
+                                            <div style={{ position: 'relative' }}><Ico name="key" size={15} color={EB.sub} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} /><input type="text" value={realExamPackageEditor.passcode || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, passcode: event.target.value } : prev)} placeholder="Để trống nếu không cần" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 36px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} /></div>
+                                        </label>
+                                    </section>
+
+                                    <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+                                            <div style={ebEyebrow}><Ico name="list" size={13} />Chuỗi kỹ năng</div>
+                                            <div style={{ display: 'flex', gap: 5, padding: 3, background: EB.wash, borderRadius: 8 }}>
+                                                {(['LR', 'LRW'] as const).map(mode => <button key={mode} type="button" onClick={() => setRealExamPackageEditor(prev => {
+                                                    if (!prev) return prev;
+                                                    const listening = prev.quizIds?.[0] || '';
+                                                    const reading = prev.quizIds?.[1] || '';
+                                                    const writing = prev.quizIds?.[2] || quizzes.find((quiz: any) => quizSkillRank(quiz) === 2)?.id || '';
+                                                    return { ...prev, mode, quizIds: mode === 'LRW' ? [listening, reading, writing] : [listening, reading] };
+                                                })} style={{ border: 0, borderRadius: 6, padding: '6px 10px', fontSize: 11, fontWeight: 800, cursor: 'pointer', background: realExamPackageEditor.mode === mode ? EB.sheet : 'transparent', color: realExamPackageEditor.mode === mode ? EB.ink : EB.sub, boxShadow: realExamPackageEditor.mode === mode ? '0 1px 2px rgba(26,23,38,.12)' : 'none' }}>{mode === 'LR' ? 'Listening + Reading' : 'Listening + Reading + Writing'}</button>)}
+                                            </div>
+                                        </div>
+                                        {(['Listening', 'Reading', ...(realExamPackageEditor.mode === 'LRW' ? ['Writing'] : [])] as string[]).map((skill, index) => {
+                                            const candidates = quizzes.filter((quiz: any) => quizSkillRank(quiz) === index);
+                                            const selectedId = realExamPackageEditor.quizIds?.[index] || '';
+                                            return <div key={skill} style={{ display: 'grid', gridTemplateColumns: '34px minmax(92px, .38fr) minmax(0, 1fr)', alignItems: 'center', gap: 12, padding: '12px 0', borderTop: index ? `1px solid ${EB.line}` : 'none' }}>
+                                                <span style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: '50%', background: `${EB.accent}12`, color: EB.accent, fontFamily: EB.fMono, fontSize: 12, fontWeight: 800 }}>{index + 1}</span>
+                                                <span style={{ fontWeight: 800, fontSize: 13, color: EB.ink }}>{skill}</span>
+                                                <select value={selectedId} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, quizIds: (prev.quizIds || []).map((id, itemIndex) => itemIndex === index ? event.target.value : id) } : prev)} style={{ width: '100%', minWidth: 0, padding: '9px 10px', background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }}><option value="">Chọn đề {skill.toLowerCase()}</option>{candidates.map((quiz: any) => <option key={quiz.id} value={quiz.id}>{quiz.title}</option>)}</select>
+                                            </div>;
+                                        })}
+                                    </section>
+
+                                    <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="users" size={13} />Học sinh được làm</div>
+                                        <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+                                            {([['ALL', 'Toàn bộ học sinh'], ['SPECIFIC', 'Chọn học sinh']] as const).map(([audience, label]) => <button type="button" key={audience} onClick={() => setRealExamPackageEditor(prev => prev ? { ...prev, audience } : prev)} style={{ padding: '8px 11px', borderRadius: 7, border: `1px solid ${realExamPackageEditor.audience === audience ? EB.accent : EB.line}`, background: realExamPackageEditor.audience === audience ? `${EB.accent}10` : EB.sheet, color: realExamPackageEditor.audience === audience ? EB.accent : EB.sub, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>{label}</button>)}
+                                        </div>
+                                        {realExamPackageEditor.audience === 'SPECIFIC' && <div style={{ maxHeight: 240, overflowY: 'auto', borderTop: `1px solid ${EB.line}` }}>{students.map((student: any) => {
+                                            const checked = (realExamPackageEditor.targetStudentIds || []).includes(student.id);
+                                            return <label key={student.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderBottom: `1px solid ${EB.line}`, cursor: 'pointer' }}><input type="checkbox" checked={checked} onChange={() => setRealExamPackageEditor(prev => prev ? { ...prev, targetStudentIds: checked ? (prev.targetStudentIds || []).filter(id => id !== student.id) : [...(prev.targetStudentIds || []), student.id] } : prev)} /><span style={{ minWidth: 0, fontSize: 13, fontWeight: 700, color: EB.ink }}>{student.name}<span style={{ color: EB.sub, fontWeight: 500 }}> · {student.email}</span></span></label>;
+                                        })}</div>}
+                                    </section>
+                                </div>
+
+                                <aside style={{ display: 'grid', gap: 18 }}>
+                                    <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 20 }}>
+                                        <div style={{ ...ebEyebrow, marginBottom: 15 }}><Ico name="calendar" size={13} />Lịch mở gói</div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginBottom: 13 }}>Mở từ
+                                            <input type="datetime-local" value={realExamPackageEditor.scheduledStart || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledStart: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
+                                        </label>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Đóng lúc
+                                            <input type="datetime-local" value={realExamPackageEditor.scheduledEnd || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledEnd: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
+                                        </label>
+                                        <p style={{ margin: '12px 0 0', fontSize: 11, lineHeight: 1.5, color: EB.sub }}>Để trống hai trường nếu gói có thể mở bất kỳ lúc nào.</p>
+                                    </section>
+                                    <section style={{ border: `1px solid ${realExamPackageEditor.active ? C.succ : EB.line}`, borderRadius: EB.radius, padding: 20, background: realExamPackageEditor.active ? `${C.succ}0b` : EB.sheet }}>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><Ico name={realExamPackageEditor.active ? 'check' : 'lock'} size={18} color={realExamPackageEditor.active ? C.succ : EB.sub} /><div><div style={{ fontSize: 14, fontWeight: 800, color: realExamPackageEditor.active ? C.succ : EB.ink }}>{realExamPackageEditor.active ? 'Đang mở cho học sinh' : 'Đang để bản nháp'}</div><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{realExamPackageEditor.active ? 'Học sinh đúng đối tượng có thể nhìn thấy gói trong thời gian đã cài.' : 'Gói chỉ được lưu, chưa xuất hiện ở phía học sinh.'}</div></div></div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 15, cursor: 'pointer', fontSize: 12, fontWeight: 800, color: EB.ink }}><input type="checkbox" checked={!!realExamPackageEditor.active} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, active: event.target.checked } : prev)} />Xuất bản gói thi</label>
+                                    </section>
+                                </aside>
+                            </div>
+                        </div>
                     </div>
 
                 ) : editingQuiz ? (
@@ -15898,16 +16113,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <div style={{minWidth: 0}}>
                                                         <div style={{fontFamily: EB.fDisplay, fontSize: 17, fontWeight: 700, color: EB.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{pkg.title}</div>
                                                         <div style={{fontSize: 12.5, color: EB.sub, marginTop: 4}}>{pkg.mode === 'LRW' ? 'Listening · Reading · Writing' : 'Listening · Reading'} · {exams.map(q => q.title).join(' → ')}</div>
-                                                        <div style={{fontSize: 11, color: EB.sub, marginTop: 4}}>Pass: {pkg.passcode ? 'set' : 'none'} · {pkg.active ? 'active' : 'inactive'}</div>
+                                                        <div style={{fontSize: 11, color: EB.sub, marginTop: 4}}>Pass: {pkg.passcode ? 'set' : 'none'} · {Math.max(1, Number(pkg.maxAttempts) || 1)} attempt(s) · {pkg.active ? 'published' : 'draft'}{pkg.scheduledStart || pkg.scheduledEnd ? ' · scheduled' : ''}</div>
                                                     </div>
                                                     <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
                                                         <button className="ebx-soft" onClick={() => updateRealExamPackage(pkg, { active: !pkg.active })} style={{background: 'transparent', color: pkg.active ? EB.warn : EB.accent, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>{pkg.active ? 'Disable' : 'Enable'}</button>
-                                                        <button className="ebx-soft" onClick={() => {
-                                                            const title = prompt('Tên gói:', pkg.title)?.trim();
-                                                            if (!title) return;
-                                                            const passcode = prompt('Pass riêng (để trống nếu không dùng):', pkg.passcode || '')?.trim() || '';
-                                                            updateRealExamPackage(pkg, { title, passcode });
-                                                        }} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Edit</button>
+                                                        <button className="ebx-soft" onClick={() => setRealExamPackageEditor({ ...pkg, quizIds: [...(pkg.quizIds || [])], targetStudentIds: [...(pkg.targetStudentIds || [])], maxAttempts: Math.max(1, Number(pkg.maxAttempts) || 1) })} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}><Ico name="edit" size={13} />Edit</button>
                                                         <button className="ebx-soft" onClick={() => deleteRealExamPackage(pkg.id)} style={{background: 'transparent', color: C.err, padding: '7px 12px', fontSize: 12, border: `1px solid ${C.err}33`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Delete</button>
                                                     </div>
                                                 </div>

@@ -665,9 +665,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
                       .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
-                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:188px; min-height:150px; border:1px solid #8a8f98; border-radius:8px; background:#fff; color:#2f3338; box-shadow:0 10px 24px rgba(0,0,0,.22); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
-                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-14px; left:50%; width:24px; height:24px; background:#fff; border-left:1px solid #8a8f98; border-top:1px solid #8a8f98; transform:translateX(-50%) rotate(45deg); }
-                      .idp-highlight-delete-menu button { position:relative; z-index:1; border:0; background:transparent; color:inherit; cursor:pointer; font:500 22px/1.1 Arial,sans-serif; display:grid; gap:6px; place-items:center; }
+                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:72px; min-height:62px; border:1px solid #b8bec7; border-radius:6px; background:#fff; color:#2f3338; box-shadow:0 6px 14px rgba(0,0,0,.16); display:flex; align-items:center; justify-content:center; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-6px; left:50%; width:10px; height:10px; background:#fff; border-left:1px solid #b8bec7; border-top:1px solid #b8bec7; transform:translateX(-50%) rotate(45deg); }
+                      .idp-highlight-delete-menu button { position:relative; z-index:1; width:100%; height:100%; border:0; background:transparent; color:inherit; cursor:pointer; font:500 10px/1.04 Arial,sans-serif; display:grid; gap:3px; place-items:center; padding:6px 5px; }
                       .idp-highlight-delete-menu button:hover { color:#111; }
                       @keyframes idpDeleteRise { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
                       
@@ -820,6 +820,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-submit-fab { width: 64px; height: 100%; border-radius: 0; background: #ececec; color: #3a3d47; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .18s ease, color .18s ease; }
                       .idp-submit-fab:hover { background: #1b1e2b; color: #fff; }
                       .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
+                      .real-exam-active-bar { min-height:46px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 16px; box-sizing:border-box; background:#e7e7e7; border-top:1px solid #d0d0d0; color:#111; font-family:Arial,Helvetica,sans-serif; position:relative; z-index:1001; }
+                      .real-exam-active-mark { width:100px; height:10px; opacity:.55; background:linear-gradient(90deg,#777 0 7px,transparent 7px 11px,#777 11px 100%); }
+                      .real-exam-active-tools { display:flex; align-items:center; gap:16px; font-variant-numeric:tabular-nums; }
+                      .real-exam-active-time { font-size:15px; font-weight:800; letter-spacing:1px; }
+                      .real-exam-active-volume { position:relative; display:flex; align-items:center; }
+                      .real-exam-active-audio { width:32px; height:32px; display:grid; place-items:center; border:1px solid #c4c4c4; background:#f8f8f8; color:#111; cursor:pointer; padding:0; }
+                      .real-exam-active-volume-popover { position:absolute; right:0; bottom:40px; width:160px; padding:11px 12px; border:1px solid #bdbdbd; background:#fff; box-shadow:0 4px 12px rgba(0,0,0,.16); }
+                      .real-exam-active-volume-popover input { display:block; box-sizing:border-box; -webkit-appearance:none; appearance:none; width:136px; height:4px; margin:0; border:0; border-radius:0; cursor:pointer; outline:0; }
+                      .real-exam-active-volume-popover input::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-volume-popover input::-moz-range-thumb { width:12px; height:12px; border:0; border-radius:50%; background:#111; cursor:pointer; }
+                      .real-exam-active-fullscreen-gate { position:fixed; inset:0; z-index:999998; display:grid; place-items:center; background:rgba(20,20,20,.82); color:#fff; text-align:center; }
+                      .real-exam-active-fullscreen-gate>div { width:min(360px,calc(100vw - 48px)); padding:28px 24px; background:#252525; border:1px solid rgba(255,255,255,.22); box-shadow:0 18px 50px rgba(0,0,0,.34); }
+                      .real-exam-active-fullscreen-gate h2 { margin:0; font-size:20px; }.real-exam-active-fullscreen-gate p { margin:9px 0 20px; color:#e7e7e7; font-size:13px; line-height:1.45; }.real-exam-active-fullscreen-gate button { display:inline-flex; align-items:center; gap:7px; padding:10px 15px; border:0; background:#fff; color:#111; font-weight:800; cursor:pointer; }
                       .highlight-flash { animation: flashYellow 1.5s; }
                       @keyframes flashYellow { 0%, 100% { background-color: transparent; } 50% { background-color: #fff3cd; } }
                       .idp-current-gap { border-color:#0969da !important; outline:2px solid rgba(9,105,218,.22) !important; outline-offset:1px !important; }
@@ -1274,15 +1287,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, rgba(70,70,70,.94) 0 59%, rgba(56,56,56,.94) 59% 100%)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(48,48,48,.78)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                          <svg width="290" height="230" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '52vw' }}>
-                              <path d="M51 130C51 62 93 29 145 29s94 33 94 101" stroke="#fff" strokeWidth="48" strokeLinecap="round" />
-                              <path d="M57 130c8-30 33-42 59-34v79c-27 8-54-9-61-38l-4-7Z" fill="#fff" />
-                              <rect x="98" y="94" width="28" height="112" rx="7" fill="#fff" />
-                              <path d="M233 130c-8-30-33-42-59-34v79c27 8 54-9 61-38l4-7Z" fill="#fff" />
-                              <rect x="164" y="94" width="28" height="112" rx="7" fill="#fff" />
+                          <svg width="252" height="204" viewBox="0 0 290 230" fill="none" aria-hidden="true" style={{ marginBottom: 18, maxWidth: '46vw' }}>
+                              <path d="M59 130C59 67 96 38 145 38s86 29 86 92" stroke="#fff" strokeWidth="30" strokeLinecap="round" />
+                              <path d="M61 132c8-24 29-35 52-28v66c-24 7-48-8-54-31l-3-7Z" fill="#fff" />
+                              <rect x="103" y="103" width="19" height="86" rx="5" fill="#fff" />
+                              <path d="M229 132c-8-24-29-35-52-28v66c24 7 48-8 54-31l3-7Z" fill="#fff" />
+                              <rect x="168" y="103" width="19" height="86" rx="5" fill="#fff" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
                               {(activeExam as any).audioMode === 'practice'
@@ -2191,6 +2204,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  </div>
 
                  {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
+                 {activeExam.realExamContext && (
+                     <div className="real-exam-active-bar">
+                         <span className="real-exam-active-mark" aria-hidden="true" />
+                         <div className="real-exam-active-tools">
+                             <b className="real-exam-active-time">{new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</b>
+                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3"/><path d="M6 10.5h8v4H6z" fill="currentColor" stroke="none"/></svg>
+                             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.1 5.1 0 0 1 7 0"/><path d="M12 19.5h.01"/></svg>
+                             <div className="real-exam-active-volume">
+                                 <button type="button" className="real-exam-active-audio" title="Audio volume" aria-expanded={realExamAudioMenuOpen} onClick={() => setRealExamAudioMenuOpen(open => !open)}><Ico name="volume2" size={17} sw={1.8} /></button>
+                                 {realExamAudioMenuOpen && <div className="real-exam-active-volume-popover"><input type="range" aria-label="Audio volume" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => {
+                                     const value = Math.max(0, Math.min(100, Number(event.target.value) || 0));
+                                     setRealExamAudioVolume(value); setRealExamAudioMuted(value <= 0);
+                                     _setAudioVolume(value / 100);
+                                     try { if (audioRef.current) audioRef.current.volume = value / 100; } catch (error) {}
+                                 }} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+                             </div>
+                         </div>
+                     </div>
+                 )}
+
+                 {activeExam.realExamContext && realExamFullscreenBlocked && (
+                     <div className="real-exam-active-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}><Ico name="expand" size={15} />Return to full screen</button></div></div>
+                 )}
+
                  {selectionMenu && (
                      <div className="idp-popup-menu" style={{ left: selectionMenu!.x, top: selectionMenu!.y }}>
                          <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }}>
@@ -2209,7 +2246,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  {highlightDeleteMenu && (
                      <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
                          <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
-                             <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
                              <span>Delete<br />Highlight</span>
                          </button>
                      </div>

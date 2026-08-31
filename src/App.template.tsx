@@ -1588,7 +1588,7 @@ interface DiagramTextBox {
   text: string;
   anchor?: "top-left" | "center";
 }
-interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; createdAt?: number; updatedAt?: number; }
+interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoId: string; ready: boolean; nonce: number; }
@@ -3447,9 +3447,13 @@ export default function IeltsSupremeOS() {
   const [topicAssignmentEditor, setTopicAssignmentEditor] = useState<TopicAssignment | null>(null);
   const [topicAssignmentProgressFor, setTopicAssignmentProgressFor] = useState<string | null>(null);
   const [realExamPackages, setRealExamPackages] = useState<RealExamPackage[]>([]);
+  const [realExamPackageEditor, setRealExamPackageEditor] = useState<RealExamPackage | null>(null);
   const [realExamSession, setRealExamSession] = useState<RealExamSession | null>(null);
   const [realExamInstructionGate, setRealExamInstructionGate] = useState<RealExamInstructionGate | null>(null);
   const [realExamAudioMuted, setRealExamAudioMuted] = useState(false);
+  const [realExamAudioVolume, setRealExamAudioVolume] = useState(80);
+  const [realExamAudioMenuOpen, setRealExamAudioMenuOpen] = useState(false);
+  const [realExamFullscreenBlocked, setRealExamFullscreenBlocked] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -5202,10 +5206,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
           modestbranding: 1,
           playsinline: 1,
           rel: 0,
+          enablejsapi: 1,
         },
         events: {
           onReady: (event: any) => {
             try {
+              event.target.setVolume?.(realExamAudioVolume);
               if (realExamAudioMuted) event.target.mute?.();
               else event.target.unMute?.();
               event.target.playVideo?.();
@@ -5255,24 +5261,26 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (!realExamInstructionGate) return;
     try {
       const player = (window as any).__realExamInstructionPlayer;
-      if (realExamAudioMuted) player?.mute?.();
+      player?.setVolume?.(realExamAudioVolume);
+      if (realExamAudioMuted || realExamAudioVolume <= 0) player?.mute?.();
       else player?.unMute?.();
     } catch (error) {}
-  }, [realExamAudioMuted, realExamInstructionGate?.nonce]);
+  }, [realExamAudioMuted, realExamAudioVolume, realExamInstructionGate?.nonce]);
 
   useEffect(() => {
-    if (userRole !== "STUDENT" || !realExamSession) return;
-    const enforce = () => window.setTimeout(requestRealExamFullscreen, 40);
-    enforce();
-    document.addEventListener("fullscreenchange", enforce);
-    window.addEventListener("focus", enforce);
-    window.addEventListener("click", enforce, true);
-    window.addEventListener("keydown", enforce, true);
+    if (userRole !== "STUDENT" || !realExamSession) {
+      setRealExamFullscreenBlocked(false);
+      return;
+    }
+    const syncFullscreenGate = () => setRealExamFullscreenBlocked(!document.fullscreenElement);
+    requestRealExamFullscreen();
+    const initialTimer = window.setTimeout(syncFullscreenGate, 180);
+    document.addEventListener("fullscreenchange", syncFullscreenGate);
+    window.addEventListener("focus", syncFullscreenGate);
     return () => {
-      document.removeEventListener("fullscreenchange", enforce);
-      window.removeEventListener("focus", enforce);
-      window.removeEventListener("click", enforce, true);
-      window.removeEventListener("keydown", enforce, true);
+      window.clearTimeout(initialTimer);
+      document.removeEventListener("fullscreenchange", syncFullscreenGate);
+      window.removeEventListener("focus", syncFullscreenGate);
     };
   }, [userRole, realExamSession?.packageAttemptId]);
 
@@ -7646,6 +7654,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const isPackageVisibleToStudent = (pkg: RealExamPackage, student: Student | undefined) => {
     if (!pkg?.active || !student) return false;
     if (pkg.audience === "SPECIFIC" && !(pkg.targetStudentIds || []).includes(student.id)) return false;
+    const now = getRealTime();
+    if (pkg.scheduledStart && now < parseVNTime(pkg.scheduledStart)) return false;
+    if (pkg.scheduledEnd && now > parseVNTime(pkg.scheduledEnd)) return false;
     return packageQuizzes(pkg).length === (pkg.quizIds || []).length && (pkg.quizIds || []).length >= 2;
   };
   const persistRealExamSession = (session: RealExamSession | null) => {
@@ -7662,6 +7673,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       title: String(pkg.title || "Real exam package").trim(),
       quizIds: (pkg.quizIds || []).filter(Boolean),
       mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
+      maxAttempts: Math.max(1, Number(pkg.maxAttempts) || 1),
       updatedAt: Date.now(),
       createdAt: pkg.createdAt || Date.now(),
     };
@@ -7684,23 +7696,20 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
       return;
     }
-    const title = prompt("Tên gói bài thi thật:", `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`)?.trim();
-    if (!title) return;
-    const passcode = prompt("Pass riêng cho gói này (có thể để trống):", "")?.trim() || "";
     const pkg: RealExamPackage = {
       id: makeRealExamId(),
-      title,
-      active: true,
+      title: `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`,
+      active: false,
       mode: ordered.length === 3 ? "LRW" : "LR",
       quizIds: ordered.map(quiz => quiz.id),
-      passcode,
+      passcode: "",
       audience: "ALL",
       targetStudentIds: [],
+      maxAttempts: 1,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await saveRealExamPackage(pkg);
-    setSelectedQuizzes([]);
+    setRealExamPackageEditor(pkg);
   };
   const deleteRealExamPackage = async (pkgId: string) => {
     if (!confirm("Xóa gói bài thi thật này?")) return;
@@ -7720,6 +7729,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   const startRealExamPackage = (pkg: RealExamPackage) => {
     const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
+    if (!me || !pkg.active) return;
+    const now = getRealTime();
+    if (pkg.scheduledStart && now < parseVNTime(pkg.scheduledStart)) { alert("This exam package has not opened yet."); return; }
+    if (pkg.scheduledEnd && now > parseVNTime(pkg.scheduledEnd)) { alert("This exam package is closed."); return; }
     if (!isPackageVisibleToStudent(pkg, me)) return;
     if (pkg.passcode) {
       const pass = prompt("Enter package passcode:");
@@ -7731,6 +7744,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         const saved = JSON.parse(localStorage.getItem(realExamSessionKey()) || "null");
         if (saved?.packageId === pkg.id) session = saved;
       } catch (error) {}
+    }
+    if (!session) {
+      const previousAttempts = new Set(
+        quizResults
+          .filter(result => result.studentId === me.id && result.realExamPackageId === pkg.id)
+          .map(result => result.realExamAttemptId)
+          .filter(Boolean)
+      );
+      if (previousAttempts.size >= Math.max(1, Number(pkg.maxAttempts) || 1)) {
+        alert(`You have used all ${Math.max(1, Number(pkg.maxAttempts) || 1)} attempt(s) for this exam package.`);
+        return;
+      }
     }
     session = session || {
       packageId: pkg.id,
@@ -7765,6 +7790,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     if (!source) { alert("This test is no longer available."); return; }
+    _setAudioVolume((realExamAudioMuted ? 0 : realExamAudioVolume) / 100);
     const orderIndex = (pkg.quizIds || []).indexOf(quizId);
     const launchQuiz: Quiz = {
       ...source,
@@ -8969,6 +8995,26 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setPortalTab("home");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     };
+    const renderRealExamIcon = (name: "wifi" | "bell" | "menu" | "battery" | "volume" | "muted" | "check" | "chevron" | "arrow", size = 24) => {
+      const base = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2.1, strokeLinecap: "round", strokeLinejoin: "round", className: "real-exam-ico", "aria-hidden": true } as any;
+      if (name === "wifi") return <svg {...base}><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.1 5.1 0 0 1 7 0"/><path d="M12 19.5h.01"/></svg>;
+      if (name === "bell") return <svg {...base}><path d="M18 8.5a6 6 0 0 0-12 0c0 5.2-2 6.7-2 6.7h16s-2-1.5-2-6.7"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></svg>;
+      if (name === "menu") return <svg {...base}><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>;
+      if (name === "battery") return <svg {...base}><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3"/><path d="M6 10.5h8v4H6z" fill="currentColor" stroke="none"/></svg>;
+      if (name === "muted") return <svg {...base}><path d="M11 5 6.5 9H3v6h3.5l4.5 4V5z"/><path d="m18 10-4 4"/><path d="m14 10 4 4"/></svg>;
+      if (name === "volume") return <svg {...base}><path d="M11 5 6.5 9H3v6h3.5l4.5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>;
+      if (name === "check") return <svg {...base} stroke="#0b7f22" strokeWidth={2.4}><path d="m5 12.5 4.1 4.1L19 6.8"/></svg>;
+      if (name === "chevron") return <svg {...base} width={14} height={14} viewBox="0 0 14 14" strokeWidth={2}><path d="m3 5 4 4 4-4"/></svg>;
+      return <svg {...base} width={16} height={16} viewBox="0 0 16 16" strokeWidth={2.2}><path d="M3 8h9"/><path d="m8 4 4 4-4 4"/></svg>;
+    };
+    const setRealExamVolume = (value: number) => {
+      const next = Math.max(0, Math.min(100, Math.round(value || 0)));
+      setRealExamAudioVolume(next);
+      setRealExamAudioMuted(next <= 0);
+      _setAudioVolume(next / 100);
+      try { if (audioRef.current) audioRef.current.volume = next / 100; } catch (error) {}
+      try { (window as any).__realExamInstructionPlayer?.setVolume?.(next); } catch (error) {}
+    };
     const renderRealExamTopBar = () => (
       <header className="real-exam-top">
         <div className="real-exam-brand">
@@ -8976,9 +9022,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           <span>{realExamSession.testTakerId}</span>
         </div>
         <div className="real-exam-icons" aria-hidden="true">
-          <span className="real-exam-wifi"><span></span></span>
-          <span className="real-exam-bell"></span>
-          <span className="real-exam-menu"></span>
+          {renderRealExamIcon("wifi", 24)}
+          {renderRealExamIcon("bell", 24)}
+          {renderRealExamIcon("menu", 26)}
         </div>
       </header>
     );
@@ -8987,11 +9033,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         <span className="real-exam-assessment"></span>
         <div className="real-exam-bottom-icons">
           <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
-          <span className="real-exam-battery"></span>
-          <span className="real-exam-wifi small"><span></span></span>
-          <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMuted(value => !value)} title="Audio">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>{realExamAudioMuted ? <><line x1="19" y1="9" x2="15" y2="13"/><line x1="15" y1="9" x2="19" y2="13"/></> : <path d="M15.5 8.5a5 5 0 0 1 0 7"/>}</svg>
-          </button>
+          {renderRealExamIcon("battery", 25)}
+          {renderRealExamIcon("wifi", 19)}
+          <div className="real-exam-volume">
+            <button type="button" className={`real-exam-audio ${realExamAudioMuted ? "is-muted" : ""}`} onClick={() => setRealExamAudioMenuOpen(open => !open)} title="Audio volume" aria-expanded={realExamAudioMenuOpen}>
+              {renderRealExamIcon(realExamAudioMuted || realExamAudioVolume <= 0 ? "muted" : "volume", 18)}
+            </button>
+            {realExamAudioMenuOpen && <div className="real-exam-volume-popover"><input aria-label="Audio volume" type="range" min={0} max={100} value={realExamAudioMuted ? 0 : realExamAudioVolume} onChange={(event: any) => setRealExamVolume(Number(event.target.value))} style={{ background: `linear-gradient(90deg, #111 0%, #111 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 ${realExamAudioMuted ? 0 : realExamAudioVolume}%, #c8c8c8 100%)` }} /></div>}
+          </div>
         </div>
       </footer>
     );
@@ -9004,6 +9053,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
             .real-exam-brand img{height:26px;display:block}
             .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+            .real-exam-ico{display:block;flex:0 0 auto}
             .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
             .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
             .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
@@ -9015,9 +9065,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             .real-exam-main{flex:1;overflow:auto;padding:26px 18px 78px}
             .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
             .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
+            .real-exam-check{display:inline-flex;color:#0b7f22}
             .real-exam-video-wrap{width:min(820px,calc(100vw - 48px));margin:0 auto;border:1px solid #b8b8b8;border-radius:4px;background:#fff;padding:20px;box-sizing:border-box}
             .real-exam-video-frame{position:relative;width:100%;aspect-ratio:16/9;background:#111;overflow:hidden}
             .real-exam-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+            .real-exam-video-frame:before,.real-exam-video-frame:after{content:'';position:absolute;z-index:3;pointer-events:none;background:#111}
+            .real-exam-video-frame:before{top:0;right:0;width:138px;height:50px}
+            .real-exam-video-frame:after{left:0;right:0;bottom:0;height:42px}
             .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
             .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
             .real-exam-bottom{position:fixed;left:0;right:0;bottom:0;height:52px;background:#e7e7e7;border-top:1px solid #d0d0d0;display:flex;align-items:center;justify-content:space-between;padding:0 18px;box-sizing:border-box}
@@ -9027,6 +9081,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
             .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
             .real-exam-audio.is-muted{background:#fff;color:#333}
+            .real-exam-volume{position:relative;display:flex;align-items:center}
+            .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
+            .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+            .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+            .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+            .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
+            .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+            .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
+            .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
+            .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
             .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
           `}</style>
           {renderRealExamTopBar()}
@@ -9041,6 +9105,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             </section>
           </main>
           {renderRealExamBottomBar()}
+          {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
         </div>
       );
     }
@@ -9052,6 +9117,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .real-exam-brand{display:flex;align-items:center;gap:28px;font-weight:800;font-size:14px}
           .real-exam-brand img{height:26px;display:block}
           .real-exam-icons{display:flex;align-items:center;gap:22px;color:#111}
+          .real-exam-ico{display:block;flex:0 0 auto}
           .real-exam-wifi{width:21px;height:15px;display:inline-block;position:relative;border-top:4px solid currentColor;border-radius:50% 50% 0 0}
           .real-exam-wifi:before{content:"";position:absolute;left:4px;right:4px;top:2px;border-top:3px solid currentColor;border-radius:50% 50% 0 0}
           .real-exam-wifi span{position:absolute;left:9px;top:9px;width:4px;height:4px;background:currentColor;border-radius:50%}
@@ -9063,7 +9129,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .real-exam-main{flex:1;overflow:auto;padding:18px 18px 78px}
           .real-exam-card{width:min(655px,calc(100vw - 36px));margin:0 auto 14px;border:1px solid #b8b8b8;border-radius:4px;background:#fff;box-sizing:border-box}
           .real-exam-card-head{display:flex;align-items:center;justify-content:space-between;padding:21px 20px;font-size:20px;font-weight:800}
-          .real-exam-check{color:#0b7f22;font-size:24px;font-weight:900}
+          .real-exam-check{display:inline-flex;color:#0b7f22}
           .real-exam-test{padding:18px 20px 20px}
           .real-exam-test h2{margin:0 0 18px;font-size:22px;line-height:1.15}
           .real-exam-status{margin:0 0 20px;font-size:14px;font-weight:800;color:#b00020}
@@ -9071,6 +9137,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .real-exam-timing{margin:0 0 20px;font-size:14px}
           .real-exam-info{height:52px;border:1px solid #c6c6c6;border-radius:2px;display:flex;align-items:center;padding:0 14px;margin:0 0 14px;gap:12px;box-sizing:border-box;font-size:14px}
           .real-exam-info b{font-size:20px;line-height:1}
+          .real-exam-info-caret{display:inline-flex;align-items:center;justify-content:center;width:14px;color:#111}
           .real-exam-info span:last-child{color:#0b7f22;margin-left:4px}
           .real-exam-start{display:inline-flex;align-items:center;gap:8px;background:#111;color:#fff;border:0;border-radius:2px;padding:10px 16px;font-size:14px;font-weight:800;cursor:pointer}
           .real-exam-start:disabled{background:#d7d7d7;color:#888;cursor:not-allowed}
@@ -9081,6 +9148,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .real-exam-battery:after{content:"";position:absolute;right:-5px;top:3px;width:3px;height:6px;background:#111}
           .real-exam-audio{width:34px;height:34px;border:1px solid #c4c4c4;background:#f8f8f8;color:#111;display:grid;place-items:center;cursor:pointer}
           .real-exam-audio.is-muted{background:#fff;color:#333}
+          .real-exam-volume{position:relative;display:flex;align-items:center}
+          .real-exam-volume-popover{position:absolute;right:0;bottom:42px;width:160px;padding:11px 12px;border:1px solid #bdbdbd;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.16)}
+          .real-exam-volume input{display:block;box-sizing:border-box;-webkit-appearance:none;appearance:none;width:136px;height:4px;margin:0;border:0;border-radius:0;cursor:pointer;outline:0}
+          .real-exam-volume input::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+          .real-exam-volume input::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#111;border:0;cursor:pointer}
+          .real-exam-volume input::-moz-range-track{height:4px;background:transparent;border:0}
+          .real-exam-volume input::-moz-range-progress{height:4px;background:#111}
+          .real-exam-fullscreen-gate{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;background:rgba(20,20,20,.82);color:#fff;text-align:center}
+          .real-exam-fullscreen-gate>div{width:min(360px,calc(100vw - 48px));padding:28px 24px;background:#252525;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.34)}
+          .real-exam-fullscreen-gate svg{margin:0 auto 12px}.real-exam-fullscreen-gate h2{margin:0;font-size:20px}.real-exam-fullscreen-gate p{margin:9px 0 20px;color:#e7e7e7;font-size:13px;line-height:1.45}
           .real-exam-assessment{width:120px;height:12px;background:linear-gradient(90deg,#777 0 8px,transparent 8px 12px,#777 12px 100%);opacity:.55}
         `}</style>
         {globalStyles}
@@ -9097,7 +9174,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               <section className="real-exam-card">
                 <div className="real-exam-card-head">
                   <span>Pre-test checks</span>
-                  <span className="real-exam-check">✓</span>
+                  <span className="real-exam-check">{renderRealExamIcon("check", 25)}</span>
                 </div>
               </section>
               {exams.map((quiz) => {
@@ -9109,9 +9186,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       <h2>{skill}</h2>
                       <p className={`real-exam-status ${quizDone ? "done" : ""}`}>{quizDone ? "Completed" : "Not completed"}</p>
                       <p className="real-exam-timing">Timing: {formatRealExamTiming(Number(quiz.timeLimit) || 0)}</p>
-                      {isNext && !quizDone && <div className="real-exam-info"><b>⌄</b><span>Test information.</span><span>Confirmed</span></div>}
+                      {isNext && !quizDone && <div className="real-exam-info"><span className="real-exam-info-caret">{renderRealExamIcon("chevron", 14)}</span><span>Test information.</span><span>Confirmed</span></div>}
                       <button className="real-exam-start" disabled={!isNext || quizDone} onClick={() => startRealExamPackageQuiz(pkg, quiz.id)}>
-                        <span>➜</span> Start {skill}
+                        {renderRealExamIcon("arrow", 16)} Start {skill}
                       </button>
                     </section>
                   );
@@ -9120,6 +9197,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           )}
         </main>
         {renderRealExamBottomBar()}
+        {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(); window.setTimeout(() => setRealExamFullscreenBlocked(!document.fullscreenElement), 180); }}>Return to full screen</button></div></div>}
       </div>
     );
   }
