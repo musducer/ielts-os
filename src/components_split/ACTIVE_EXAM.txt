@@ -112,7 +112,7 @@
           const setCleanDragImage = (event: any, label: string) => {
               const ghost = document.createElement('div');
               ghost.textContent = String(label || '').replace(/\s+/g, ' ').trim();
-              ghost.style.cssText = 'position:fixed;left:-10000px;top:-10000px;max-width:360px;padding:8px 12px;background:#fff;border:1px solid #9ca3af;border-radius:4px;color:#111827;font:600 13px Arial,sans-serif;line-height:1.35;box-shadow:0 3px 12px rgba(0,0,0,.16);pointer-events:none;';
+              ghost.style.cssText = 'position:fixed;left:-10000px;top:-10000px;box-sizing:border-box;max-width:360px;min-height:28px;padding:3px 12px;background:#fff;border:1px solid #9ca3af;border-radius:4px;color:#111827;font:600 13px/1.25 Arial,sans-serif;box-shadow:0 3px 12px rgba(0,0,0,.16);pointer-events:none;';
               document.body.appendChild(ghost);
               event.dataTransfer.setDragImage(ghost, 16, 16);
               window.setTimeout(() => ghost.remove(), 0);
@@ -824,7 +824,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-submit-fab:hover { background: #1b1e2b; color: #fff; }
                       .idp-check-icon { width: 16px; height: 26px; border: solid #fff; border-width: 0 4px 4px 0; transform: rotate(45deg); display: inline-block; margin-bottom: 6px; }
                       .real-exam-active-bar { min-height:46px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 16px; box-sizing:border-box; background:#e7e7e7; border-top:1px solid #d0d0d0; color:#111; font-family:Arial,Helvetica,sans-serif; position:relative; z-index:1001; }
-                      .real-exam-active-mark { width:100px; height:10px; opacity:.55; background:linear-gradient(90deg,#777 0 7px,transparent 7px 11px,#777 11px 100%); }
+                      .real-exam-active-brand { height:100%; display:flex; align-items:center; gap:7px; white-space:nowrap; flex:none; }
                       .real-exam-active-tools { display:flex; align-items:center; gap:16px; font-variant-numeric:tabular-nums; }
                       .real-exam-active-time { font-size:15px; font-weight:800; letter-spacing:1px; }
                       .real-exam-active-volume { position:relative; display:flex; align-items:center; }
@@ -978,7 +978,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: center; gap: 8px; text-align: left; }
                       .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
-                      .idp-match2-tag { border: 1px solid var(--eborder); border-radius: 4px; padding: 3px 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
+                      .idp-match2-tag { box-sizing:border-box; min-height:28px; border: 1px solid var(--eborder); border-radius: 4px; padding: 0 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
+                      .idp-match2-tag > span { min-width:0; overflow-wrap:break-word; }
                       .idp-match2-tag:hover { border-color: var(--eblue); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
                       .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
@@ -997,7 +998,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .mh-heading-title { width:fit-content; margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
                       .mh-heading-tray { align-items:flex-start; width:fit-content; max-width:100%; }
                       .mh-heading-tray > div { display:flex; flex-direction:column; align-items:flex-start; width:fit-content; max-width:100%; }
-                      .mh-heading-option { display:block; width:max-content; max-width:100%; padding:2px 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
+                      .mh-heading-option { box-sizing:border-box; display:inline-flex; align-items:center; width:max-content; max-width:100%; min-height:25px; height:25px; padding:0 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; white-space:nowrap; }
@@ -2212,7 +2213,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                  {/* POPUP BÔI ĐEN — sao chép Inspera: [Note 「」] | [Highlight ✎] */}
                  {activeExam.realExamContext && (
                      <div className="real-exam-active-bar">
-                         <span className="real-exam-active-mark" aria-hidden="true" />
+                         <RealExamBottomBrand className="real-exam-active-brand" />
                          <div className="real-exam-active-tools">
                              <b className="real-exam-active-time">{new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</b>
                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3"/><path d="M6 10.5h8v4H6z" fill="currentColor" stroke="none"/></svg>

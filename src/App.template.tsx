@@ -2400,6 +2400,13 @@ const BrandWordmark = ({ size = 18, color = "#1D1D1F", osColor = "#6D28D9", ligh
     </span>
 );
 
+const RealExamBottomBrand = ({ className = "" }: { className?: string }) => (
+    <div className={`real-exam-bottom-brand ${className}`.trim()} aria-label="IELTS OS">
+        <BrandLogo size={20} stops={["#202020", "#4b4b4b", "#747474"]} />
+        <BrandWordmark size={12} color="#222" osColor="#222" />
+    </div>
+);
+
 // ==========================================
 // ICON SET (line-style, Lucide-like) — thay emoji ở UI chrome. KHÔNG đụng phòng thi.
 // ==========================================
@@ -9017,7 +9024,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     );
     const renderRealExamBottomBar = (showBranding = false) => (
       <footer className="real-exam-bottom">
-        {showBranding ? <div className="real-exam-bottom-brand" aria-label="IELTS OS"><BrandLogo size={20} stops={["#202020", "#4b4b4b", "#747474"]} /><BrandWordmark size={12} color="#222" osColor="#222" /></div> : <span className="real-exam-assessment"></span>}
+        {showBranding ? <RealExamBottomBrand /> : <span className="real-exam-assessment"></span>}
         <div className="real-exam-bottom-icons">
           <b>{new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</b>
           {renderRealExamIcon("battery", 25)}
