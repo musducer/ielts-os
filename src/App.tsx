@@ -1854,15 +1854,20 @@ const getChoiceMultipleOutcome = (questions: any[], answers: Record<string, any>
   };
 };
 
-const cleanOptionAnswerText = (value: any) => String(value ?? "")
+const normalizeAnswerSpacing = (value: any) => String(value ?? "")
   .replace(/<[^>]+>/g, " ")
-  .replace(/&nbsp;/gi, " ")
+  .replace(/&(?:nbsp|ensp|emsp|thinsp);/gi, " ")
+  .replace(/&#(?:160|8194|8195|8201|8239);/g, " ")
+  .replace(/[\u200B-\u200D\uFEFF\u2060]/g, "")
+  .replace(/[\u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]/g, " ")
   .replace(/\s+/g, " ")
-  .trim()
+  .trim();
+
+const cleanOptionAnswerText = (value: any) => normalizeAnswerSpacing(value)
   .replace(/^\s*[A-Ka-k][.)]\s*(?=\S)/, "")
   .replace(/^\s*[A-Ka-k]\s+(?=\S)/, "")
   .trim()
-  || String(value ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim().replace(/[.)]$/, "").trim();
+  || normalizeAnswerSpacing(value).replace(/[.)]$/, "").trim();
 
 const normalizeComparableAnswer = (value: any) => cleanOptionAnswerText(value).toLocaleLowerCase();
 
@@ -1891,7 +1896,11 @@ const resolveOptionAnswerText = (question: any, value: any) => {
     const index = raw.toUpperCase().charCodeAt(0) - 65;
     if (options.length && index >= 0 && index < options.length) return cleanOptionAnswerText(options[index]);
   }
-  return cleanOptionAnswerText(raw);
+  const cleaned = cleanOptionAnswerText(raw);
+  const match = options
+    .map((option: any) => cleanOptionAnswerText(option))
+    .find((optionText: string) => normalizeComparableAnswer(optionText) === normalizeComparableAnswer(cleaned));
+  return match || cleaned;
 };
 
 const resolveDragAnswerText = (question: any, value: any) => {
@@ -7328,7 +7337,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   const exportDetailedQuizResult = (r: QuizResult) => {
       const qz = quizzes.find(x => x.id === r.quizId);
       if (!qz) { alert('Không tìm thấy dữ liệu đề gốc!'); return; }
-      const strip = (t: any) => String(t).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const strip = (t: any) => normalizeAnswerSpacing(t);
       const scoreSummary = getQuizScoreSummary(qz, r.answers || {});
       const optionText = (question: any, indexes: number[]) => indexes
         .map(index => strip(question.options?.[index] ?? index))
@@ -7833,7 +7842,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const handleAnswerChange = (questionId: string, answer: any, _type?: string) => {
     // FIX: Sử dụng Functional Update để đảm bảo State mới nhất không bị ghi đè khi gõ nhanh
-    setExamAnswers(prev => ({...prev, [questionId]: answer}));
+    const question =
+      activeExam?.questions?.find((item: any) => String(item?.id || "") === String(questionId))
+      || activeExam?.sections?.flatMap((section: any) => section?.questions || []).find((item: any) => String(item?.id || "") === String(questionId));
+    const nextAnswer = question?.type === "MATCHING" ? resolveMatchingAnswerText(question, answer) : answer;
+    setExamAnswers(prev => ({...prev, [questionId]: nextAnswer}));
     setSaveStatus("Saving...");
     setTimeout(() => setSaveStatus("Saved"), 500);
   };
