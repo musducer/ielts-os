@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import {
@@ -21,6 +21,20 @@ import type {
   StudentQuestProgress,
   TopicAssignment,
 } from "./quest";
+import {
+  DEFAULT_GIFT_CATALOG,
+  DEFAULT_REWARD_MECHANISMS,
+  coinsForRewardEvent,
+  countWritingWords,
+  isWritingQuiz,
+  normalizeGiftCatalog,
+  normalizeRewardMechanisms,
+  normalizeWritingTasks,
+  resultSubmittedAt,
+  writingDraftKey,
+  writingQuestions,
+} from "./publicRelease";
+import type { GiftDefinition, RewardMechanism, WritingTaskDefinition } from "./publicRelease";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -47,6 +61,7 @@ const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
 // A full exam can exceed Firestore's 1 MiB document limit. Keep every exam in its
 // own document so a successful local edit is always deliverable to every device.
 const QUIZZES_COLLECTION_REF = collection(DB_DOC_REF, "quizzes");
+const WRITING_DRAFTS_COLLECTION_REF = collection(DB_DOC_REF, "writingDrafts");
 const VOCAB_ROOT_COLLECTION = "ielts_vocab";
 const vocabStudentKey = (email: string) => encodeURIComponent(String(email || "").trim().toLowerCase());
 const vocabCardsRef = (email: string) => collection(db, VOCAB_ROOT_COLLECTION, vocabStudentKey(email), "cards");
@@ -1472,40 +1487,8 @@ const QUICK_NOTES = ["Well done", "Improve pronunciation", "Homework incomplete"
 
 // One source of truth for every item that can enter a student's bag. Quest rewards,
 // manual teacher grants, and Gacha must all use these exact inventory names.
-const CONSUMABLE_GIFT_CATALOG = [
-  { name: "Thẻ dời deadline (24h)" },
-  { name: "1 Hộp Milo" },
-  { name: "1 Ly Trái Chò" },
-  { name: "1 Trà sữa Viên Viên" },
-] as const;
-
-const PERMANENT_GIFT_CATALOG = [
-  { group: "titles", name: "Danh hiệu: Chiến Thần IELTS" },
-  { group: "titles", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
-  { group: "titles", name: "Danh hiệu: Học Bá Thượng Đẳng" },
-  { group: "titles", name: "Danh hiệu: Cao Thủ Reading" },
-  { group: "titles", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
-  { group: "titles", name: "Danh hiệu: Vua Tốc Độ" },
-  { group: "titles", name: "Danh hiệu: Huyền Thoại 8.0+" },
-  { group: "titles", name: "Danh hiệu: Mọt Sách Bất Bại" },
-  { group: "titles", name: "Danh hiệu: Thợ Săn Band Điểm" },
-  { group: "titles", name: "Danh hiệu: Ninja Phòng Thi" },
-  { group: "themes", name: "Giao diện: Hoàng Kim" },
-  { group: "themes", name: "Giao diện: Nửa Đêm" },
-  { group: "themes", name: "Giao diện: Anh Đào" },
-  { group: "themes", name: "Giao diện: Rừng Sâu" },
-  { group: "frames", name: "Khung avatar: Vương Miện" },
-  { group: "frames", name: "Khung avatar: Rồng Lửa" },
-  { group: "frames", name: "Khung avatar: Băng Giá" },
-  { group: "frames", name: "Khung avatar: Cầu Vồng" },
-  { group: "frames", name: "Khung avatar: Sao Băng" },
-  { group: "pets", name: "Linh thú: Cú Mèo" },
-  { group: "pets", name: "Linh thú: Mèo Thần Tài" },
-  { group: "pets", name: "Linh thú: Rồng Con" },
-  { group: "pets", name: "Linh thú: Cáo Lửa" },
-  { group: "pets", name: "Linh thú: Chim Cánh Cụt" },
-  { group: "pets", name: "Linh thú: Gấu Trúc" },
-] as const;
+const CONSUMABLE_GIFT_CATALOG = DEFAULT_GIFT_CATALOG.filter(item => item.kind === "consumable");
+const PERMANENT_GIFT_CATALOG = DEFAULT_GIFT_CATALOG.filter(item => item.kind === "permanent");
 
 const isConsumableGiftName = (value: unknown) => CONSUMABLE_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
 const isPermanentGiftName = (value: unknown) => PERMANENT_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
@@ -1523,7 +1506,8 @@ interface VocabCard { id: string; word: string; phonetic?: string; pos?: string;
 interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
 interface Session { id: string | number; studentId: string; studentName: string; teacher: string; skills: string[]; date: string; duration: number; rate: number; earnings: number; notes: string; rubric: Rubric; isPaid: boolean; }
-interface Schedule { id: string; date: string; time: string; teacher: string; studentId: string; studentName: string; subject: string; location: string; duration?: number; status?: "PENDING" | "DONE" | "ABSENT"; billed?: boolean; }
+interface ScheduleMaterial { id: string; url: string; label?: string; }
+interface Schedule { id: string; date: string; time: string; teacher: string; studentId: string; studentName: string; subject: string; location: string; duration?: number; status?: "PENDING" | "DONE" | "ABSENT"; billed?: boolean; lessonContent?: string; materials?: ScheduleMaterial[]; }
 interface SharedLink { id: string; title: string; url: string; date: string; audience: "TEACHERS" | "ALL_STUDENTS" | "SPECIFIC_STUDENT"; targetStudentId: string; targetStudentName: string; }
 interface Transaction { id: string; title: string; amount: number; date: string; type: "INCOME" | "EXPENSE"; }
 interface SystemLog { id: string; errorType: string; message: string; context?: string; timestamp: string; email?: string; }
@@ -1539,6 +1523,7 @@ interface CoinOperation {
   permanentName?: string;
   inventoryGrants?: { consumables?: Record<string, number>; permanents?: string[] };
   reviewedQuizId?: string;
+  giftSnapshot?: { id?: string; name: string; price: number; details?: string; kind?: "consumable" | "permanent" };
 }
 
 const applyCoinOperation = (students: any[], operation: CoinOperation) => {
@@ -1572,7 +1557,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   });
 };
 
-type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
+type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL" | "WRITING";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
 interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
 interface ManualExplanationTimestamp { startTime: number; endTime?: number; label: string; }
@@ -1591,10 +1576,10 @@ interface DiagramTextBox {
 interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
-interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; writingTutorialVideoUrl?: string; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1793,7 +1778,10 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
+interface WritingCriterionScore { taskAchievement?: number; coherence?: number; lexical?: number; grammar?: number; overall?: number; }
+interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; }
+interface WritingGrading { status: "awaiting_grading" | "draft" | "published"; taskScores: Record<string, WritingCriterionScore>; correctedAnswers: Record<string, string>; comments: WritingComment[]; finalBand?: number; updatedAt?: number; publishedAt?: number; publishedBy?: string; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; submittedAt?: number; submissionId?: string; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; writingScores?: Record<string, string | number>; writingGrading?: WritingGrading; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
 const normalizeChoiceMultipleIndexes = (value: any): number[] => {
@@ -1936,7 +1924,8 @@ const isSingleQuestionCorrect = (question: any, answer: any) => {
 };
 
 const getQuizScoreSummary = (quizOrQuestions: any, answers: Record<string, any> = {}) => {
-  const questions = Array.isArray(quizOrQuestions) ? quizOrQuestions : (quizOrQuestions?.questions || []);
+  const questions = (Array.isArray(quizOrQuestions) ? quizOrQuestions : (quizOrQuestions?.questions || []))
+    .filter((question: any) => String(question?.type || "").toUpperCase() !== "WRITING");
   let score = 0;
   let total = 0;
   let skipped = 0;
@@ -3452,6 +3441,24 @@ export default function IeltsSupremeOS() {
   const [history, setHistory] = useState<Session[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [giftCatalog, setGiftCatalog] = useState<GiftDefinition[]>(() => normalizeGiftCatalog(null));
+  const [rewardMechanisms, setRewardMechanisms] = useState<RewardMechanism[]>(() => normalizeRewardMechanisms(null));
+  const [rewardConfigSaving, setRewardConfigSaving] = useState(false);
+  const [rewardConfigError, setRewardConfigError] = useState("");
+  const [rewardConfigOpen, setRewardConfigOpen] = useState(false);
+  const [rewardConfigDirty, setRewardConfigDirty] = useState(false);
+  const [giftDraft, setGiftDraft] = useState<Partial<GiftDefinition>>({ kind: "consumable", enabled: true, price: 0, name: "", details: "" });
+  const [rewardDraft, setRewardDraft] = useState<Partial<RewardMechanism>>({ event: "", name: "", coins: 0, enabled: true });
+  const [writingCommentDraft, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
+  const consumableGiftCatalog = giftCatalog.filter(item => item.kind === "consumable");
+  const permanentGiftCatalog = giftCatalog.filter(item => item.kind === "permanent");
+  const configuredRewardCoins = (event: string, fallback = 0) => coinsForRewardEvent(rewardMechanisms, event, fallback);
+  const lessonRewardForSeconds = (seconds: number) => {
+    if (seconds >= 7200) return configuredRewardCoins("LESSON_LONG", 60);
+    if (seconds >= 3600) return configuredRewardCoins("LESSON_STANDARD", 25);
+    if (seconds >= 1800) return configuredRewardCoins("LESSON_SHORT", 10);
+    return 0;
+  };
   const [sharedLinks, setSharedLinks] = useState<SharedLink[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const quizzesRef = useRef<Quiz[]>([]);
@@ -3470,6 +3477,11 @@ export default function IeltsSupremeOS() {
   const [realExamAudioVolume, setRealExamAudioVolume] = useState(80);
   const [realExamAudioMenuOpen, setRealExamAudioMenuOpen] = useState(false);
   const [realExamFullscreenBlocked, setRealExamFullscreenBlocked] = useState(false);
+  const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
+  const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3585,7 +3597,7 @@ export default function IeltsSupremeOS() {
   const [calDate, setCalDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date().toISOString().split('T')[0]);
   const [showSchedForm, setShowSchedForm] = useState(false);
-  const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
+  const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
@@ -3614,6 +3626,13 @@ export default function IeltsSupremeOS() {
   }, [userRole, activeExam]);
   const trueEndTimeRef = useRef<number>(0);
   const [examAnswers, setExamAnswers] = useState<Record<string, any>>({});
+  const [writingSaveState, setWritingSaveState] = useState<"idle" | "saving" | "saved" | "offline" | "error">("idle");
+  const writingAttemptIdRef = useRef("");
+  const writingRevisionRef = useRef(0);
+  const writingAutosaveTimerRef = useRef<number | null>(null);
+  const writingSaveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const writingSubmittingRef = useRef(false);
+  const writingLastSectionRef = useRef(0);
   const [qNotes, setQNotes] = useState<Record<string, string>>({}); 
   const [flaggedQuestions, setFlaggedQuestions] = useState<string[]>([]);
   const [crossedOptions, setCrossedOptions] = useState<Record<string, number>>({}); 
@@ -4271,11 +4290,13 @@ export default function IeltsSupremeOS() {
                   if (diff === 1) newStreak = (meLocal.currentStreak || 0) + 1;
               }
           }
-          let bonusCoins = 20;
-          let msg = `DAILY ATTENDANCE: +20 Coins\n Current streak: ${newStreak} days.`;
+          const dailyCoins = configuredRewardCoins("DAILY_ATTENDANCE", 20);
+          let bonusCoins = dailyCoins;
+          let msg = `DAILY ATTENDANCE: +${dailyCoins} Coins\n Current streak: ${newStreak} days.`;
           if (newStreak > 0 && newStreak % 7 === 0) {
-              bonusCoins += 300;
-              msg += `\n 7-DAY STREAK BONUS: +300 Coins!`;
+              const streakCoins = configuredRewardCoins("WEEKLY_STREAK", 300);
+              bonusCoins += streakCoins;
+              msg += `\n 7-DAY STREAK BONUS: +${streakCoins} Coins!`;
           }
           newCoins += bonusCoins;
           dailyCoinOperation = makeCoinOperation(meLocal.id, bonusCoins, "DAILY_ATTENDANCE");
@@ -4960,6 +4981,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setHistory(clean(d.history));
     setTransactions(clean(d.transactions)); 
     setSchedules(clean(d.schedules));
+    setGiftCatalog(normalizeGiftCatalog(d.giftCatalog));
+    setRewardMechanisms(normalizeRewardMechanisms(d.rewardMechanisms));
     setSharedLinks(clean(d.sharedLinks)); 
     const serverQuizzes = clean(d.quizzes) as Quiz[];
     legacyQuizzesRef.current = serverQuizzes;
@@ -4977,7 +5000,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (pendingQuizWrite) {
       // The prior browser session ended before Firestore acknowledged its write. Retry
       // after this snapshot has settled; syncData clears the record only on success.
-      window.setTimeout(() => { void syncData({ quizzes: recoveredQuizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
+      window.setTimeout(() => { void syncData({ __quizUpserts: pendingQuizWrite.quizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
     }
     if (!quizCatalogMigratedRef.current && userRole === "TEACHER") {
       void migrateLegacyQuizCatalog(serverQuizzes);
@@ -5337,6 +5360,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // FIX: Sync editingQuizRef với editingQuiz state
   useEffect(() => {
       editingQuizRef.current = editingQuiz;
+      if (editingQuiz && examBuilderSaveState === "saved") setExamBuilderSaveState("idle");
   }, [editingQuiz]);
 
   useEffect(() => {
@@ -5779,12 +5803,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
-    const hasQuizCatalogWrite = Array.isArray(newData.quizzes) && userRole === "TEACHER";
+    const quizUpserts = Array.isArray(newData.__quizUpserts)
+      ? newData.__quizUpserts
+      : (Array.isArray(newData.quizzes) ? newData.quizzes : []);
+    const hasQuizCatalogWrite = quizUpserts.length > 0 && userRole === "TEACHER";
     const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
       ? newData.topicAssignments as TopicAssignment[]
       : topicAssignments;
     if (hasQuizCatalogWrite) {
-      writePendingQuizWrite(newData.quizzes, quizDeleteIds);
+      writePendingQuizWrite(quizUpserts, quizDeleteIds);
     }
     if (pendingVocab && userRole === "STUDENT") {
       writePendingVocabWrite(pendingVocab.notebook, pendingVocab.tombstones || []);
@@ -5795,17 +5822,21 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (hasQuizCatalogWrite) {
         // Exams are deliberately written outside the workspace document. A large DOCX
         // import must not be rejected because unrelated workspace data fills that blob.
-        await persistQuizCatalog(newData.quizzes, quizDeleteIds);
+        await persistQuizCatalog(quizUpserts, quizDeleteIds);
         clearPendingQuizWrite();
       }
       // Do not mirror the catalog back into the old single Firestore document.
       newData = { ...newData };
       delete newData.quizzes;
+      delete newData.__quizUpserts;
+      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__vocabPending", "__coinOperation"].includes(key))
+          && !coinOperation && !pendingVocab) return true;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
         if (!sfDoc.exists()) {
           const initialData = { ...newData };
           delete initialData.__quizDeletedIds;
+          delete initialData.__quizUpserts;
           delete initialData.__vocabPending;
           delete initialData.__coinOperation;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
@@ -5845,6 +5876,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
         Object.keys(newData).forEach((key) => {
           if (key === "__quizDeletedIds") return;
+          if (key === "__quizUpserts") return;
           if (key === "__vocabPending") return;
           if (key === "__coinOperation") return;
           const localVal = newData[key];
@@ -5941,6 +5973,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
                 }
                 return localItem;
               });
+            } else if (key === "quizResults") {
+              const mergedResults = [...serverArr];
+              localVal.forEach((localResult: any) => {
+                const index = mergedResults.findIndex((serverResult: any) => serverResult.id === localResult.id);
+                if (index < 0) mergedResults.push(localResult);
+                else mergedResults[index] = { ...mergedResults[index], ...localResult };
+              });
+              finalUpdate[key] = mergedResults;
             } else {
               finalUpdate[key] = localVal;
             }
@@ -7109,7 +7149,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const newExp = (st.exp || 0) + Math.round(totalSecs / 60);
     const oldLevel = st.level || 1;
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoinsByTime = totalSecs >= 7200 ? 60 : (totalSecs >= 3600 ? 25 : (totalSecs >= 1800 ? 10 : 0));
+    const earnedCoinsByTime = lessonRewardForSeconds(totalSecs);
 
     if (newLevel > oldLevel) { 
       setShowCelebration(true); 
@@ -7166,7 +7206,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
     const newExp = (st.exp || 0) + Math.round(elapsed / 60);
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoinsByTime = elapsed >= 7200 ? 60 : (elapsed >= 3600 ? 25 : (elapsed >= 1800 ? 10 : 0));
+    const earnedCoinsByTime = lessonRewardForSeconds(elapsed);
 
     if (newLevel > (st.level || 1)) { 
       setShowCelebration(true); 
@@ -7214,8 +7254,29 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (!schedForm.studentId) { alert("Please select a student!"); return; }
     const st = students.find(x => x.id === schedForm.studentId);
     if (!st) return;
-    const nx = [{ id: getTrueTime().toString(), date: viewDate, time: schedForm.time, location: schedForm.location, teacher: myTeacherName, studentId: schedForm.studentId, studentName: st.name, subject: "IELTS Core", duration: Number(schedForm.duration) || 90, status: "PENDING" as const, billed: false }, ...schedules];
+    const materials: ScheduleMaterial[] = [];
+    for (const rawLine of String(schedForm.materialsText || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
+      const [possibleLabel, possibleUrl] = rawLine.includes("|") ? rawLine.split(/\|(.+)/, 2) : ["", rawLine];
+      const url = String(possibleUrl || "").trim();
+      try {
+        const parsed = new URL(url);
+        if (!["https:", "http:"].includes(parsed.protocol)) throw new Error("protocol");
+        materials.push({ id: `material_${getTrueTime()}_${materials.length}`, url: parsed.toString(), label: String(possibleLabel || "").trim() || undefined });
+      } catch {
+        alert(`Liên kết tài liệu không hợp lệ: ${rawLine}`);
+        return;
+      }
+    }
+    const schedule: Schedule = {
+      id: getTrueTime().toString(), date: viewDate, time: schedForm.time, location: schedForm.location,
+      teacher: myTeacherName, studentId: schedForm.studentId, studentName: st.name, subject: "IELTS Core",
+      duration: Number(schedForm.duration) || 90, status: "PENDING", billed: false,
+      lessonContent: String(schedForm.lessonContent || "").trim() || undefined,
+      materials,
+    };
+    const nx = [schedule, ...schedules];
     setSchedules(nx); syncData({ schedules: nx }); setShowSchedForm(false);
+    setSchedForm({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   };
 
   // Điểm danh: có mặt -> tự tạo buổi học (history) + tính phí; vắng -> đánh dấu, không tính phí
@@ -7241,7 +7302,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     };
     const newExp = (st.exp || 0) + Math.round(secs / 60);
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoins = secs >= 7200 ? 60 : (secs >= 3600 ? 25 : (secs >= 1800 ? 10 : 0));
+    const earnedCoins = lessonRewardForSeconds(secs);
     const nxStudents = students.map(s => s.id === st.id ? { ...s, exp: newExp, level: newLevel, coins: (s.coins || 0) + earnedCoins, debtMessage: s.debtMessage || "" } : s);
     const nxHistory = [session, ...history];
     const nxSched = schedules.map(x => x.id === sched.id ? { ...x, status: "DONE" as const, billed: true } : x);
@@ -7311,6 +7372,34 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
+  };
+
+  const exportMyVocabXlsx = async () => {
+    if (userRole !== "STUDENT" || !currentUser?.email) return;
+    const me = students.find(student => String(student.email || "").toLowerCase() === currentUser.email!.toLowerCase());
+    const cards = newestVocabFirst(Array.isArray(me?.vocabNotebook) ? me!.vocabNotebook! : []);
+    if (!cards.length) {
+      alert("Chưa có từ vựng để xuất.");
+      return;
+    }
+    try {
+      await downloadXLSX(
+        `IELTS_OS_Vocabulary_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        "Vocabulary",
+        [
+          { header: "No.", width: 8 },
+          { header: "Word / Vocabulary", width: 26 },
+          { header: "IPA", width: 19 },
+          { header: "English Definition", width: 44 },
+          { header: "Example", width: 54 },
+        ],
+        cards.map((card, index) => [index + 1, card.word || "", card.phonetic || "", card.meaning || "", card.example || ""]),
+        "IELTS OS Vocabulary"
+      );
+    } catch (error) {
+      console.error("Vocabulary XLSX export failed:", error);
+      alert("Không thể tạo file Excel. Vui lòng thử lại.");
+    }
   };
 
   const exportCSV = () => {
@@ -7494,6 +7583,115 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     } catch (error: any) { 
         logErrorToSystem("CONNECTION_ERROR", error.message || String(error), { action: "upload_docx" });
         alert("Connection error to FastAPI backend!"); 
+    }
+  };
+
+  const setQuestDocxFiles = async (incoming: FileList | File[]) => {
+    const files = Array.from(incoming || []).filter(file => /\.docx$/i.test(file.name));
+    if (!files.length) return;
+    if (files.length > 20) {
+      alert("Mỗi lần chỉ có thể xử lý tối đa 20 file DOCX.");
+      return;
+    }
+    const staged = files.map((file, index) => ({
+      id: `quest_docx_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+      file,
+      status: "parsing" as const,
+    }));
+    setQuestDocxBatch(staged);
+    setQuestDocxBatchBusy(true);
+    try {
+      const formData = new FormData();
+      staged.forEach(item => formData.append("files", item.file));
+      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
+      const data = await readApiJson(response);
+      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
+      const results = Array.isArray(data?.results) ? data.results : [];
+      setQuestDocxBatch(staged.map((item, index) => {
+        const result = results.find((entry: any) => Number(entry?.index) === index);
+        return result?.success && result?.quiz
+          ? { ...item, status: "ready" as const, quiz: result.quiz as Quiz }
+          : { ...item, status: "error" as const, error: String(result?.error || "Không thể phân tích file này.") };
+      }));
+    } catch (error: any) {
+      const message = error?.message || "Không thể phân tích batch DOCX.";
+      setQuestDocxBatch(staged.map(item => ({ ...item, status: "error" as const, error: message })));
+    } finally {
+      setQuestDocxBatchBusy(false);
+    }
+  };
+
+  const moveQuestDocxFile = (index: number, direction: -1 | 1) => {
+    setQuestDocxBatch(previous => {
+      const target = index + direction;
+      if (target < 0 || target >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const confirmQuestDocxBatch = async () => {
+    if (userRole !== "TEACHER" || questDocxBatchBusy || !questDocxBatch.length) return;
+    if (questDocxBatch.some(item => item.status !== "ready" || !item.quiz)) {
+      alert("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.");
+      return;
+    }
+    const createdAt = getTrueTime();
+    const preparedQuizzes = questDocxBatch.map((item, index) => ({
+      ...(item.quiz as Quiz),
+      id: `quest_import_${createdAt}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+      title: String(item.quiz?.title || item.file.name.replace(/\.docx$/i, "")).trim(),
+      active: false,
+      audience: "ALL" as const,
+      targetStudentIds: [],
+      maxAttempts: Math.max(1, Number(item.quiz?.maxAttempts) || 1),
+      folder: "Quest imports",
+      updatedAt: createdAt,
+    }));
+    const assignment: TopicAssignment = {
+      id: `topic_${createdAt}_${Math.random().toString(36).slice(2, 7)}`,
+      title: `Quest: ${preparedQuizzes[0]?.title || "DOCX import"}`,
+      topicCategory: "DOCX import",
+      description: "Các bài được tạo theo thứ tự file DOCX đã xác nhận.",
+      audience: "ALL",
+      targetStudentIds: [],
+      nodes: preparedQuizzes.map((quiz, index) => ({
+        id: `node_${createdAt}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+        testId: quiz.id,
+        title: quiz.title,
+        description: "",
+        passingThresholdPercent: 0,
+        mode: "practice" as const,
+        timeLimitMinutes: quiz.timeLimit,
+        questionCount: quiz.questions.length,
+      })),
+      rewards: [],
+      createdBy: currentUser?.email || "",
+      createdAt,
+      updatedAt: createdAt,
+    };
+
+    setQuestDocxBatchBusy(true);
+    try {
+      await runTransaction(db, async transaction => {
+        const workspace = await transaction.get(DB_DOC_REF);
+        if (!workspace.exists()) throw new Error("Không tìm thấy workspace để tạo chuyên đề.");
+        const storedAssignments = workspace.data()?.topicAssignments;
+        const existingAssignments = (Array.isArray(storedAssignments) ? storedAssignments : []) as TopicAssignment[];
+        preparedQuizzes.forEach(quiz => transaction.set(doc(QUIZZES_COLLECTION_REF, quiz.id), JSON.parse(JSON.stringify(quiz))));
+        transaction.update(DB_DOC_REF, { topicAssignments: [...existingAssignments, assignment] });
+      });
+      setQuizzes(previous => [...preparedQuizzes, ...previous.filter(quiz => !preparedQuizzes.some(item => item.id === quiz.id))]);
+      setTopicAssignments(previous => [...previous, assignment]);
+      setQuestDocxBatch([]);
+      setTopicAssignmentEditor(assignment);
+      alert("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.");
+    } catch (error: any) {
+      console.error("Quest DOCX batch confirmation failed:", error);
+      alert(error?.message || "Không thể tạo chuyên đề từ batch DOCX.");
+    } finally {
+      setQuestDocxBatchBusy(false);
     }
   };
 
@@ -7816,12 +8014,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     const skill = realExamSkillLabel(source);
-    const videoUrl = officialInstructionVideoUrl(skill);
+    const videoUrl = skill === "Writing" ? String(source?.writingTutorialVideoUrl || "").trim() : officialInstructionVideoUrl(skill);
     if (videoUrl && realExamSession?.packageId === pkg.id) {
       setRealExamInstructionGate({
         packageId: pkg.id,
         quizId,
-        skill: skill as "Listening" | "Reading",
+        skill: skill as "Listening" | "Reading" | "Writing",
         videoUrl,
         ready: false,
         nonce: Date.now(),
@@ -7840,6 +8038,84 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (pkg) window.setTimeout(() => launchRealExamPackageQuiz(pkg, quizId), 0);
   };
 
+  const writingLocalDraftKey = (quiz: Quiz, attemptId: string) =>
+    `ielts_writing_draft_${writingDraftKey(currentUser?.email || "anonymous", quiz.id, attemptId)}`;
+
+  const queueWritingDraftSave = (quiz: Quiz, answers: Record<string, any>, immediate = false) => {
+    if (!isWritingQuiz(quiz) || isPreview || !currentUser?.email || !writingAttemptIdRef.current) return Promise.resolve(true);
+    const revision = ++writingRevisionRef.current;
+    const payload = {
+      quizId: quiz.id,
+      attemptId: writingAttemptIdRef.current,
+      ownerEmail: currentUser.email.toLowerCase(),
+      answers,
+      revision,
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      submitted: false,
+    };
+    try { localStorage.setItem(writingLocalDraftKey(quiz, writingAttemptIdRef.current), JSON.stringify(payload)); } catch {}
+    if (writingAutosaveTimerRef.current) window.clearTimeout(writingAutosaveTimerRef.current);
+    const persist = async () => {
+      if (!navigator.onLine) { setWritingSaveState("offline"); return false; }
+      setWritingSaveState("saving");
+      try {
+        await setDoc(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email!, quiz.id, payload.attemptId)), payload, { merge: true });
+        if (writingRevisionRef.current === revision) setWritingSaveState("saved");
+        return true;
+      } catch (error) {
+        console.error("Writing autosave failed:", error);
+        setWritingSaveState(navigator.onLine ? "error" : "offline");
+        return false;
+      }
+    };
+    if (immediate) {
+      const task = writingSaveChainRef.current.then(persist, persist);
+      writingSaveChainRef.current = task.then(() => undefined, () => undefined);
+      return task;
+    }
+    writingAutosaveTimerRef.current = window.setTimeout(() => {
+      const task = writingSaveChainRef.current.then(persist, persist);
+      writingSaveChainRef.current = task.then(() => undefined, () => undefined);
+    }, 900);
+    return Promise.resolve(true);
+  };
+
+  const restoreWritingDraft = async (quiz: Quiz, attemptId: string) => {
+    const localKey = writingLocalDraftKey(quiz, attemptId);
+    let localDraft: any = null;
+    try { localDraft = JSON.parse(localStorage.getItem(localKey) || "null"); } catch {}
+    let remoteDraft: any = null;
+    if (currentUser?.email && navigator.onLine) {
+      try {
+        const snapshot = await getDocFromServer(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email, quiz.id, attemptId)));
+        if (snapshot.exists()) remoteDraft = snapshot.data();
+      } catch (error) {
+        console.warn("Writing draft restore deferred:", error);
+      }
+    }
+    const newest = [localDraft, remoteDraft]
+      .filter(item => item && item.submitted !== true && item.attemptId === attemptId)
+      .sort((a, b) => Number(b.revision || b.updatedAt || 0) - Number(a.revision || a.updatedAt || 0))[0];
+    if (!newest || writingAttemptIdRef.current !== attemptId) return;
+    writingRevisionRef.current = Math.max(writingRevisionRef.current, Number(newest.revision) || 0);
+    setExamAnswers((previous) => Object.keys(previous).length ? previous : { ...(newest.answers || {}) });
+    setWritingSaveState(remoteDraft && newest === remoteDraft ? "saved" : navigator.onLine ? "idle" : "offline");
+  };
+
+  useEffect(() => {
+    if (!activeExam || !isWritingQuiz(activeExam) || isPreview) return;
+    void queueWritingDraftSave(activeExam, examAnswers);
+  }, [activeExam?.id, examAnswers, isPreview]);
+
+  useEffect(() => {
+    if (!activeExam || !isWritingQuiz(activeExam) || isPreview) return;
+    if (writingLastSectionRef.current !== currentSectionIndex) {
+      writingLastSectionRef.current = currentSectionIndex;
+      void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true);
+    }
+  }, [currentSectionIndex, activeExam?.id, isPreview]);
+
   const handleAnswerChange = (questionId: string, answer: any, _type?: string) => {
     // FIX: Sử dụng Functional Update để đảm bảo State mới nhất không bị ghi đè khi gõ nhanh
     const question =
@@ -7847,8 +8123,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       || activeExam?.sections?.flatMap((section: any) => section?.questions || []).find((item: any) => String(item?.id || "") === String(questionId));
     const nextAnswer = question?.type === "MATCHING" ? resolveMatchingAnswerText(question, answer) : answer;
     setExamAnswers(prev => ({...prev, [questionId]: nextAnswer}));
-    setSaveStatus("Saving...");
-    setTimeout(() => setSaveStatus("Saved"), 500);
+    if (!activeExam || !isWritingQuiz(activeExam)) {
+      setSaveStatus("Saving...");
+      setTimeout(() => setSaveStatus("Saved"), 500);
+    }
   };
   
   const handleAutoScrollNext = (qIndex: number, totalQ: number) => {
@@ -7978,12 +8256,32 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
-      const quizToLoad = stripExamExplanations(normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz));
+      const sourceQuiz = isStudentTestUI ? createTestUIQuiz(quiz) : quiz;
+      const writingTasks = normalizeWritingTasks(sourceQuiz);
+      const quizWithWriting = isWritingQuiz(sourceQuiz)
+        ? { ...sourceQuiz, writingTasks, questions: writingQuestions({ ...sourceQuiz, writingTasks }) }
+        : sourceQuiz;
+      const quizToLoad = stripExamExplanations(normalizeExamSections(quizWithWriting));
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
       const now = getRealTime();
       const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
 
       setExamAnswers({});
+      if (isWritingQuiz(quizToLoad)) {
+          const sessionKey = `ielts_writing_active_${String(currentUser?.email || "preview").toLowerCase()}_${quizToLoad.id}`;
+          let attemptId = "";
+          try { attemptId = String(JSON.parse(localStorage.getItem(sessionKey) || "null")?.attemptId || ""); } catch {}
+          if (!attemptId || isPreviewMode) attemptId = `writing_${quizToLoad.id}_${getTrueTime()}_${Math.random().toString(36).slice(2, 8)}`;
+          writingAttemptIdRef.current = attemptId;
+          writingRevisionRef.current = 0;
+          setWritingSaveState("idle");
+          if (!isPreviewMode) {
+              try { localStorage.setItem(sessionKey, JSON.stringify({ attemptId, startedAt: now })); } catch {}
+              void restoreWritingDraft(quizToLoad, attemptId);
+          }
+      } else {
+          writingAttemptIdRef.current = "";
+      }
       setExamTimeLeft(quizToLoad.timeLimit * 60);
       setExamStartTime(delayTimerUntilAudioPlay ? 0 : now);
       trueEndTimeRef.current = delayTimerUntilAudioPlay ? 0 : now + quizToLoad.timeLimit * 60000;
@@ -8042,23 +8340,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const forceSubmitExam = () => {
       const state = latestExamState.current;
       if (!state.activeExam) return;
+      const writingExam = isWritingQuiz(state.activeExam);
+      if (writingExam && writingSubmittingRef.current) return;
+      if (writingExam) {
+          writingSubmittingRef.current = true;
+          void queueWritingDraftSave(state.activeExam, state.examAnswers, true);
+      }
 
       const scoreSummary = getQuizScoreSummary(state.activeExam, state.examAnswers);
       const score = scoreSummary.score;
       const totalQ = scoreSummary.total;
 
-      const band = getIeltsBand(score, totalQ, state.activeExam.type);
+      const band = writingExam ? "Pending" : getIeltsBand(score, totalQ, state.activeExam.type);
 
      if (state.isPreview) {
-            alert(`PREVIEW COMPLETE! Score: ${score}/${totalQ}. Band: ${band}.`);
+            alert(writingExam ? "WRITING PREVIEW COMPLETE." : `PREVIEW COMPLETE! Score: ${score}/${totalQ}. Band: ${band}.`);
             setActiveExam(null); 
             setIsPreview(false); 
             if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            writingSubmittingRef.current = false;
             return;
         }
 
       const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
-      if (!me) return;
+      if (!me) { writingSubmittingRef.current = false; return; }
 
       const endTime = getRealTime();
       const effectiveStartTime = examStartTime || endTime;
@@ -8074,10 +8379,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         : undefined;
       const percentage = totalQ > 0 ? Number(((score / totalQ) * 100).toFixed(2)) : 0;
       const questPassed = Boolean(node && percentage >= Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)));
-      const resultId = `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
+      const resultId = writingExam && writingAttemptIdRef.current
+        ? writingAttemptIdRef.current
+        : `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
       const result: QuizResult = {
           id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
-          date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
+          date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount, submittedAt: endTime,
+          ...(writingExam ? { submissionId: resultId, writingGrading: { status: "awaiting_grading" as const, taskScores: {}, correctedAnswers: {}, comments: [] } } : {}),
           startTime: new Date(effectiveStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
           scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
@@ -8101,7 +8409,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       let nextStudents = students;
       let nextQuestProgress = questProgress;
       let coinOperation: CoinOperation | null = null;
-      let submissionMessage = `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
+      let submissionMessage = writingExam ? "WRITING SUBMITTED. Both tasks are saved in one attempt." : `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
       let questNotice: QuestStatusNotice | null = null;
       const questTx = (vi: string, en: string) => i18n.language === 'vi' ? vi : en;
 
@@ -8153,12 +8461,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             const permanentGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "permanent_gift")
               .map(reward => String(reward.rewardValue || "").trim())
-              .filter(isPermanentGiftName);
+              .filter(name => permanentGiftCatalog.some(item => item.enabled && item.name === name));
             const consumableGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "consumable_gift")
               .reduce<Record<string, number>>((grants, reward) => {
                 const name = String(reward.rewardValue || "").trim();
-                if (isConsumableGiftName(name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
+                if (consumableGiftCatalog.some(item => item.enabled && item.name === name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
                 return grants;
               }, {});
             const hasConsumableGifts = Object.keys(consumableGifts).length > 0;
@@ -8263,12 +8571,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               void syncData({ quizResults: [result] });
           }
       } else {
-          let earnedCoins = 50;
+          let earnedCoins = configuredRewardCoins("EXAM_COMPLETE", 50);
           if (state.activeExam.scheduledEnd) {
               const endMs = parseVNTime(state.activeExam.scheduledEnd);
               const diffHour = (endMs - endTime) / (1000 * 3600);
-              if (diffHour >= 24) earnedCoins += 150;
-              else if (diffHour >= 12) earnedCoins += 100;
+              if (diffHour >= 24) earnedCoins += configuredRewardCoins("EXAM_EARLY_HIGH", 150);
+              else if (diffHour >= 12) earnedCoins += configuredRewardCoins("EXAM_EARLY", 100);
           }
           nextStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
           coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
@@ -8293,6 +8601,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       }
 
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
+      if (writingExam && writingAttemptIdRef.current) {
+          const attemptId = writingAttemptIdRef.current;
+          try {
+              localStorage.removeItem(writingLocalDraftKey(state.activeExam, attemptId));
+              localStorage.removeItem(`ielts_writing_active_${String(currentUser?.email || "").toLowerCase()}_${state.activeExam.id}`);
+          } catch {}
+          if (currentUser?.email && navigator.onLine) {
+              void deleteDoc(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email, state.activeExam.id, attemptId))).catch(error => console.warn("Writing draft cleanup deferred:", error));
+          }
+          writingAttemptIdRef.current = "";
+      }
+      writingSubmittingRef.current = false;
       _setAudioTested(false);
       if (!realExamContext && Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
         if (realExamContext) {
@@ -8402,6 +8722,46 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const task = workspaceSyncChainRef.current.then(run, run) as Promise<boolean>;
     workspaceSyncChainRef.current = task.then(() => undefined, () => undefined);
     return task;
+  };
+
+  const stageGiftCatalog = (next: GiftDefinition[]) => {
+    setGiftCatalog(normalizeGiftCatalog(next));
+    setRewardConfigDirty(true);
+    setRewardConfigError("");
+  };
+  const stageRewardMechanisms = (next: RewardMechanism[]) => {
+    setRewardMechanisms(normalizeRewardMechanisms(next));
+    setRewardConfigDirty(true);
+    setRewardConfigError("");
+  };
+  const saveReleaseConfiguration = async () => {
+    if (userRole !== "TEACHER" || rewardConfigSaving) return;
+    const nextGifts = normalizeGiftCatalog(giftCatalog);
+    const nextRewards = normalizeRewardMechanisms(rewardMechanisms);
+    const duplicateGiftName = nextGifts.some((gift, index) => nextGifts.some((other, otherIndex) =>
+      otherIndex !== index && other.name.trim().toLocaleLowerCase() === gift.name.trim().toLocaleLowerCase()
+    ));
+    const duplicateEvent = nextRewards.some((rule, index) => nextRewards.some((other, otherIndex) =>
+      otherIndex !== index && other.event === rule.event
+    ));
+    if (duplicateGiftName || duplicateEvent) {
+      setRewardConfigError(duplicateGiftName ? "Tên quà không được trùng." : "Mỗi sự kiện thưởng chỉ được có một quy tắc.");
+      return;
+    }
+    setRewardConfigSaving(true);
+    setRewardConfigError("");
+    try {
+      const saved = await syncData({ giftCatalog: nextGifts, rewardMechanisms: nextRewards });
+      if (!saved) {
+        setRewardConfigError("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.");
+        return;
+      }
+      setGiftCatalog(nextGifts);
+      setRewardMechanisms(nextRewards);
+      setRewardConfigDirty(false);
+    } finally {
+      setRewardConfigSaving(false);
+    }
   };
 
   const flushPendingWorkspaceMutations = async () => {
@@ -8976,6 +9336,107 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   ) : null;
 
   if (reviewQuiz) {
+      if (isWritingQuiz(reviewQuiz.quiz)) {
+          const writingTasks = normalizeWritingTasks(reviewQuiz.quiz);
+          const isTeacherWritingReview = userRole === "TEACHER";
+          const writingReviewWide = window.innerWidth > 900;
+          const persistedGrading = reviewQuiz.result.writingGrading || {
+              status: "awaiting_grading" as const,
+              taskScores: {}, correctedAnswers: {}, comments: [],
+          };
+          const writingGrading: WritingGrading = {
+              ...persistedGrading,
+              status: persistedGrading.status || "awaiting_grading",
+              taskScores: persistedGrading.taskScores || {},
+              correctedAnswers: persistedGrading.correctedAnswers || {},
+              comments: Array.isArray(persistedGrading.comments) ? persistedGrading.comments : [],
+          };
+          const rubricKeys: Array<keyof WritingCriterionScore> = ["taskAchievement", "coherence", "lexical", "grammar"];
+          const scoreIsValid = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 9;
+          const roundedBand = (value: number) => Math.floor((Math.max(0, value) + 0.0001) * 2) / 2;
+          const taskBand = (taskId: string) => {
+              const scores = writingGrading.taskScores[taskId] || {};
+              const values = rubricKeys.map(key => Number(scores[key]));
+              return values.every(scoreIsValid) ? roundedBand(values.reduce((sum, value) => sum + value, 0) / values.length) : undefined;
+          };
+          const taskBands = writingTasks.map(task => taskBand(task.id));
+          const calculatedFinalBand = taskBands.length === 2 && taskBands.every(scoreIsValid)
+              ? roundedBand((Number(taskBands[0]) + Number(taskBands[1]) * 2) / 3)
+              : undefined;
+          const updateWritingGrading = (patch: Partial<WritingGrading>) => {
+              setReviewQuiz(previous => previous ? {
+                  ...previous,
+                  result: { ...previous.result, writingGrading: { ...writingGrading, ...patch, updatedAt: getTrueTime() } },
+              } : previous);
+          };
+          const updateTaskScore = (taskId: string, criterion: keyof WritingCriterionScore, rawValue: string) => {
+              const value = rawValue === "" ? undefined : Math.max(0, Math.min(9, Number(rawValue)));
+              updateWritingGrading({ taskScores: {
+                  ...writingGrading.taskScores,
+                  [taskId]: { ...(writingGrading.taskScores[taskId] || {}), [criterion]: value },
+              } });
+          };
+          const saveWritingGrade = async (publish: boolean) => {
+              if (publish && writingTasks.some(task => !rubricKeys.every(key => scoreIsValid(writingGrading.taskScores[task.id]?.[key])))) {
+                  alert("Nhập đủ bốn tiêu chí cho cả Task 1 và Task 2 trước khi publish.");
+                  return;
+              }
+              const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
+              const nextGrading: WritingGrading = {
+                  ...writingGrading,
+                  status: publish ? "published" : "draft",
+                  finalBand,
+                  updatedAt: getTrueTime(),
+                  ...(publish ? { publishedAt: getTrueTime(), publishedBy: currentUser?.email || "" } : {}),
+              };
+              const nextResult: QuizResult = {
+                  ...reviewQuiz.result,
+                  band: publish && finalBand !== undefined ? finalBand : reviewQuiz.result.band,
+                  writingScores: publish ? Object.fromEntries(writingTasks.map((task, index) => [`task${index + 1}`, taskBand(task.id) ?? ""])) : reviewQuiz.result.writingScores,
+                  writingGrading: nextGrading,
+              };
+              setReviewQuiz(previous => previous ? { ...previous, result: nextResult } : previous);
+              const nextResults = quizResults.some(result => result.id === nextResult.id)
+                  ? quizResults.map(result => result.id === nextResult.id ? nextResult : result)
+                  : [...quizResults, nextResult];
+              setQuizResults(nextResults);
+              const saved = await syncData({ quizResults: nextResults });
+              if (!saved) alert("Bản chấm vẫn còn trên thiết bị này và sẽ tự đồng bộ lại khi có mạng.");
+          };
+          const studentCanSeeGrade = writingGrading.status === "published";
+          return <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+              {globalStyles}
+              <main style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 20px 56px" }}>
+                  <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", paddingBottom: 18, borderBottom: `2px solid ${C.accent}` }}>
+                      <div><div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>Writing review</div><h1 style={{ margin: "5px 0 0", fontFamily: "var(--display)", fontSize: 30 }}>{reviewQuiz.quiz.title}</h1><div style={{ color: C.sub, fontSize: 13, marginTop: 6 }}>{reviewQuiz.result.studentName} · {reviewQuiz.result.date}</div></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span style={{ padding: "6px 9px", borderRadius: 999, background: writingGrading.status === "published" ? `${C.succ}12` : `${C.warn}12`, color: writingGrading.status === "published" ? C.succ : C.warn, fontSize: 11, fontWeight: 900 }}>{writingGrading.status === "published" ? "Published" : writingGrading.status === "draft" ? "Draft" : "Awaiting grading"}</span><button onClick={() => setReviewQuiz(null)} style={{ background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: "8px 11px", fontWeight: 800 }}><Ico name="arrowLeft" size={14} /> Back</button></div>
+                  </header>
+                  {!isTeacherWritingReview && !studentCanSeeGrade && <section className="card" style={{ marginTop: 20, borderTop: `3px solid ${C.warn}` }}><h2 style={{ margin: 0, fontSize: 19 }}>Bài đã nộp</h2><p style={{ color: C.sub, lineHeight: 1.6, marginBottom: 0 }}>Giáo viên đang chấm cả hai task. Band, bài sửa và nhận xét sẽ chỉ xuất hiện sau khi được publish.</p></section>}
+                  {(isTeacherWritingReview || studentCanSeeGrade) && <section className="card" style={{ marginTop: 20, padding: 18, borderLeft: `4px solid ${C.accent}` }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}><div><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, letterSpacing: .7, textTransform: "uppercase" }}>Final band</div><div style={{ fontFamily: "var(--display)", fontSize: 38, color: C.accent, lineHeight: 1, marginTop: 4 }}>{calculatedFinalBand ?? writingGrading.finalBand ?? "—"}</div></div><div style={{ color: C.sub, fontSize: 12, maxWidth: 430 }}>Task 1 và Task 2 được chấm độc lập; kết quả cuối tính Task 1 một phần, Task 2 hai phần và làm tròn xuống theo nửa band.</div></div></section>}
+                  <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
+                    {writingTasks.map(task => {
+                      const scores = writingGrading.taskScores[task.id] || {};
+                      const labels: Record<keyof WritingCriterionScore, string> = { taskAchievement: task.taskNumber === 1 ? "Task Achievement" : "Task Response", coherence: "Coherence & Cohesion", lexical: "Lexical Resource", grammar: "Grammar Range & Accuracy", overall: "Overall" };
+                      const comments = writingGrading.comments.filter(comment => comment.taskId === task.id);
+                      const original = String(reviewQuiz.result.answers?.[task.id] || "");
+                      return <section key={task.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
+                        <div style={{ padding: "17px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}><div><div style={{ fontSize: 11, color: C.accent, fontWeight: 900, letterSpacing: .8, textTransform: "uppercase" }}>Task {task.taskNumber}</div><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>{task.title}</h2></div><div style={{ color: taskBand(task.id) === undefined ? C.sub : C.succ, fontWeight: 900, fontSize: 15 }}>Band {taskBand(task.id) ?? "—"}</div></div>
+                        <div style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
+                          <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, minHeight: 110, padding: "13px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10 }}>{original || "No response submitted."}</div></div>
+                          {isTeacherWritingReview && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><textarea value={writingGrading.correctedAnswers[task.id] || ""} onChange={event => updateWritingGrading({ correctedAnswers: { ...writingGrading.correctedAnswers, [task.id]: event.target.value } })} placeholder="Write a corrected version or model answer…" rows={9} style={{ resize: "vertical", fontSize: 13, lineHeight: 1.6 }} /></div>}
+                          {!isTeacherWritingReview && studentCanSeeGrade && writingGrading.correctedAnswers[task.id] && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, padding: "13px 14px", background: `${C.succ}08`, border: `1px solid ${C.succ}35`, borderRadius: 10 }}>{writingGrading.correctedAnswers[task.id]}</div></div>}
+                        </div>
+                        {(isTeacherWritingReview || studentCanSeeGrade) && <div style={{ padding: "0 20px 20px" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 9 }}>{rubricKeys.map(criterion => <label key={criterion} style={{ display: "grid", gap: 5, padding: "10px 11px", background: C.bg, borderRadius: 9, border: `1px solid ${C.border}` }}><span style={{ fontSize: 10, color: C.sub, fontWeight: 900, letterSpacing: .45, textTransform: "uppercase" }}>{labels[criterion]}</span>{isTeacherWritingReview ? <input type="number" min="0" max="9" step="0.5" value={scores[criterion] ?? ""} onChange={event => updateTaskScore(task.id, criterion, event.target.value)} aria-label={`${labels[criterion]} score`} style={{ padding: "7px 8px", fontSize: 15, fontWeight: 800 }} /> : <strong style={{ fontSize: 17, color: C.accent }}>{scores[criterion] ?? "—"}</strong>}</label>)}</div>
+                          {(comments.length > 0 || isTeacherWritingReview) && <div style={{ marginTop: 14, borderTop: `1px dashed ${C.border}`, paddingTop: 13 }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, textTransform: "uppercase", letterSpacing: .6, marginBottom: 8 }}>Anchored comments</div>{comments.map(comment => <div key={comment.id} style={{ padding: "9px 10px", background: C.bg, borderLeft: `3px solid ${C.accent}`, marginBottom: 7, fontSize: 13 }}><strong>{comment.anchorQuote || "General feedback"}</strong><div style={{ marginTop: 3, color: C.sub, whiteSpace: "pre-wrap" }}>{comment.comment}</div></div>)}{isTeacherWritingReview && <div style={{ display: "grid", gridTemplateColumns: writingReviewWide ? "minmax(150px, .75fr) minmax(0, 1.6fr) auto" : "1fr", gap: 7, marginTop: 8 }}><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: event.target.value, comment: writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : "" })} placeholder="Quote anchor (optional)" style={{ padding: "8px 9px", fontSize: 12 }} /><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : "", comment: event.target.value })} placeholder="Actionable comment" style={{ padding: "8px 9px", fontSize: 12 }} /><button onClick={() => { const comment = writingCommentDraft.taskId === task.id ? writingCommentDraft.comment.trim() : ""; if (!comment) return; updateWritingGrading({ comments: [...writingGrading.comments, { id: `writing_comment_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, taskId: task.id, anchorQuote: writingCommentDraft.anchorQuote.trim(), comment, createdAt: getTrueTime() }] }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: "8px 10px", fontWeight: 800 }}><Ico name="plus" size={13} /> Add</button></div>}</div>}
+                        </div>}
+                      </section>;
+                    })}
+                  </div>
+                  {isTeacherWritingReview && <footer style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20, flexWrap: "wrap" }}><button onClick={() => void saveWritingGrade(false)} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, padding: "10px 13px", fontWeight: 800 }}><Ico name="save" size={14} /> Save draft</button><button onClick={() => void saveWritingGrade(true)} disabled={calculatedFinalBand === undefined} style={{ background: C.accent, color: "#fff", padding: "10px 14px", fontWeight: 800, opacity: calculatedFinalBand === undefined ? .55 : 1 }}><Ico name="check" size={14} /> Publish to student</button></footer>}
+              </main>
+          </div>;
+      }
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -10457,6 +10918,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (activeExam) {
           const isIntegrated = activeExam.type === "Integrated";
           const isPractice = isPracticeQuiz(activeExam);
+          const isWriting = isWritingQuiz(activeExam);
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
@@ -10473,6 +10935,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               if (!Array.isArray(qs) || qs.length === 0) return [];
               const totalQs = qs.length;
               const groups: { title: string, questions: any[], startIndex: number }[] = [];
+              if (isWriting) {
+                  return qs.slice(0, 2).map((question: any, index: number) => ({ title: `Part ${index + 1}`, questions: [question], startIndex: index }));
+              }
               
               // Tự động chia nhóm Sa bàn theo các Section (Passage) do Backend trả về
               if (activeExam?.sections && activeExam.sections.length > 0) {
@@ -11238,17 +11703,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
+                      .idp-flowchart-wrap { max-width: 940px; margin: 0 auto 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, 0.42fr); gap:18px; align-items:start; }
                       .idp-flowchart-panel { border: 1.5px solid #0969da; border-radius: 8px; padding: 18px 24px; background: var(--ebg); max-width: 680px; margin: 0 auto 18px; }
-                      .idp-flowchart-wrap { max-width: 760px; margin: 0 auto 18px; }
-                      .idp-flowchart-bank { margin: 0 auto 14px; padding: 14px 16px; border: 1px solid var(--eborder); border-radius: 8px; background: var(--epanel); }
+                      .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
+                      .idp-flowchart-bank { margin:0; padding:14px 16px; border:1px solid var(--eborder); border-radius:8px; background:var(--epanel); position:sticky; top:16px; }
                       .idp-flowchart-bank-label { margin-bottom: 9px; color: var(--esub); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-                      .idp-flowchart-bank-items { display: flex; flex-wrap: wrap; gap: 8px; }
-                      .idp-flowchart-bank .idp-wordbank-item { margin: 0; }
+                      .idp-flowchart-bank-items { display:flex; flex-direction:column; gap:8px; }
+                      .idp-flowchart-bank .idp-wordbank-item { width:100%; margin:0; text-align:left; justify-content:flex-start; }
                       .idp-flowchart-node { border: 1px solid #d8dee4; border-radius: 6px; background: rgba(255,255,255,0.65); padding: 10px 12px; line-height: 1.45; font-size: var(--efont); font-weight: 600; color: var(--etext); }
                       .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
                       .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
+                      .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
+                      .writing-pane { min-width:0; height:100%; overflow:auto; box-sizing:border-box; }
+                      .writing-prompt { padding:28px 36px 44px; line-height:1.62; color:var(--etext); }
+                      .writing-prompt img { display:block; max-width:100%; max-height:70vh; object-fit:contain; margin:22px auto 0; }
+                      .writing-editor-pane { padding:24px 30px 54px; display:flex; flex-direction:column; }
+                      .writing-editor { flex:1; min-height:260px; width:100%; resize:none; box-sizing:border-box; padding:18px; border:1px solid #8c959f; border-radius:0; background:var(--einput); color:var(--etext); font:400 var(--efont)/1.62 Arial,sans-serif; outline:none; }
+                      .writing-editor:focus { border-color:#0969da; box-shadow:0 0 0 1px #0969da; }
+                      .writing-editor-meta { display:flex; justify-content:flex-end; align-items:center; gap:18px; min-height:32px; padding-top:8px; color:var(--esub); font-size:12px; }
+                      .writing-save-state { font-weight:700; }
+                      .writing-divider { width:28px; margin:0 -9px; cursor:col-resize; z-index:30; display:flex; align-items:stretch; justify-content:center; flex:none; position:relative; touch-action:none; }
+                      .writing-divider-track { width:10px; background:#ededed; border-left:1px solid #d1d5db; border-right:1px solid #d1d5db; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+                      @media (max-width:820px) { .idp-flowchart-layout { grid-template-columns:1fr; } .idp-flowchart-layout .idp-flowchart-panel { order:1; } .idp-flowchart-layout .idp-flowchart-bank { order:2; position:static; } .idp-flowchart-bank-items { flex-direction:row; flex-wrap:wrap; } .idp-flowchart-bank .idp-wordbank-item { width:auto; } }
+                      @media (max-width:720px) { .writing-workspace { flex-direction:column; overflow:auto; } .writing-pane { width:100% !important; height:auto; overflow:visible; } .writing-prompt { padding:20px; } .writing-editor-pane { padding:16px 20px 28px; min-height:55vh; } .writing-divider { display:none; } }
                       
                       /* ĐàFIX: Ép văn bản câu hỏi thành Inline, Line spacing khít khịt theo yêu cầu */
                       .idp-q-text-inline p, .idp-q-text-inline div { margin: 0; padding: 0; }
@@ -12141,20 +12621,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         const reuseTags = group.questions.length > flowOptions.length;
                         return (
                         <div className="idp-flowchart-wrap">
-                          {isDragFlow && <div className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
-                              <div className="idp-flowchart-bank-label">Answer choices</div>
-                              <div className="idp-flowchart-bank-items">
-                                  {flowOptions.map((option: string, index: number) => {
-                                      const used = !reuseTags && assigned.includes(option);
-                                      return <button type="button" key={`${option}-${index}`} draggable={!used}
-                                          className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
-                                          onClick={() => { if (!used) selectBankAnswer(option); }}
-                                          onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
-                                          <span>{option}</span>
-                                      </button>;
-                                  })}
-                              </div>
-                          </div>}
+                        <div className={isDragFlow ? "idp-flowchart-layout" : ""}>
                         <div className="idp-flowchart-panel">
                           {group.questions.map((q, flowIdx) => {
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
@@ -12203,6 +12670,21 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   </React.Fragment>
                               );
                           })}
+                        </div>
+                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
+                            <div className="idp-flowchart-bank-label">Answer choices</div>
+                            <div className="idp-flowchart-bank-items">
+                                {flowOptions.map((option: string, index: number) => {
+                                    const used = !reuseTags && assigned.includes(option);
+                                    return <button type="button" key={`${option}-${index}`} draggable={!used}
+                                        className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
+                                        onClick={() => { if (!used) selectBankAnswer(option); }}
+                                        onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
+                                        <span>{option}</span>
+                                    </button>;
+                                })}
+                            </div>
+                        </aside>}
                         </div>
                         </div>
                         );
@@ -12971,7 +13453,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const completed = new Set(realExamSession.completedQuizIds || []);
     const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
     const nextQuiz = exams.find(quiz => quiz.id === nextQuizId);
-    const nextInstructionVideoUrl = officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
+    const nextInstructionVideoUrl = realExamSkillLabel(nextQuiz) === "Writing"
+      ? String(nextQuiz?.writingTutorialVideoUrl || "").trim()
+      : officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
     const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
     const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
       ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
@@ -13468,6 +13952,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
+    const quizSkill = (quiz: Quiz | undefined) => isWritingQuiz(quiz) ? "Writing" as const : String(quiz?.type || "").toLowerCase().includes("listen") ? "Listening" as const : "Reading" as const;
+    const activeQuizzesForSkill = activeQuizzes.filter(quiz => quizSkill(quiz) === studentExamSkillTab);
+    const resultsForSkill = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
     const getMyQuestProgress = (assignment: TopicAssignment) => deriveQuestProgress(
       questProgress.find(progress => progress.studentId === me.id && progress.topicAssignmentId === assignment.id),
       assignment
@@ -13510,6 +13997,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const trendIcon = recentScores.length >= 2 ? (Number(recentScores[recentScores.length - 1].band) >= Number(recentScores[recentScores.length - 2].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
     const targetGap = me.target && avgBand !== "N/A" ? (Number(me.target) - Number(avgBand)) : 0;
     const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
+    const gachaSpinCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
 
     const handleReviewQuiz = (r: QuizResult) => {
         if (r.topicAssignmentId && r.questPassed !== true) {
@@ -13531,19 +14019,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
-            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + 20, inventory: newInv } : s);
+            const reviewReward = configuredRewardCoins("REVIEW_REWARD", 20);
+            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + reviewReward, inventory: newInv } : s);
             // One immutable claim per submitted result. The transaction also checks
             // reviewedQuizzes, so stale tabs/devices cannot mint the reward again.
-            const coinOperation = makeCoinOperation(me.id, 20, "REVIEW_REWARD", {
+            const coinOperation = makeCoinOperation(me.id, reviewReward, "REVIEW_REWARD", {
                 id: `review_reward_${me.id}_${r.id}`,
                 reviewedQuizId: r.id,
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert("CHIẾN THẦN REVIEW: +20 Xu vì đã xem lại lỗi sai trong bài thi!");
+            alert(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`);
         }
     };
 
-    const handleBuyConsumable = (itemName: string, price: number) => {
+    const handleBuyConsumable = (gift: GiftDefinition) => {
+        const itemName = gift.name;
+        const price = Math.max(0, Number(gift.price) || 0);
         if ((me.coins || 0) < price) { alert("Bạn không đủ OS Coins!"); return; }
         if (confirm(`Dùng ${price} xu để đổi "${itemName}"?`)) {
             const currentCons = { ...(me.inventory?.consumables || {}) };
@@ -13554,7 +14045,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 consumables: { ...currentCons, [itemName]: (currentCons[itemName] || 0) + 1 } 
             };
             const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) - price, inventory: newInv } : s);
-            const coinOperation = makeCoinOperation(me.id, -price, "STORE_PURCHASE", { consumableName: itemName });
+            const coinOperation = makeCoinOperation(me.id, -price, "STORE_PURCHASE", {
+                consumableName: itemName,
+                giftSnapshot: { id: gift.id, name: gift.name, price, details: gift.details, kind: gift.kind },
+            });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
             setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
@@ -13562,16 +14056,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     };
 
     const handleRollGacha = () => {
-        if ((me.coins || 0) < 500) { alert("Cần 500 Xu để quay Gacha!"); return; }
-        if (confirm("Dùng 500 Xu để mở Hộp Quà Ngẫu Nhiên?")) {
-            const pool = [
-                ...PERMANENT_GIFT_CATALOG.map(item => ({ type: "PERMANENT", name: item.name })),
-                ...CONSUMABLE_GIFT_CATALOG.map(item => ({ type: "CONSUMABLE", name: item.name })),
-                { type: "NONE", name: "Chúc bạn may mắn lần sau" },
-                { type: "NONE", name: "Chúc bạn may mắn lần sau" }
+        const gachaCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
+        const duplicateRefund = configuredRewardCoins("GACHA_DUPLICATE_REFUND", 200);
+        if ((me.coins || 0) < gachaCost) { alert(`Cần ${gachaCost} Xu để quay Gacha!`); return; }
+        if (confirm(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`)) {
+            const pool: Array<{ type: "PERMANENT" | "CONSUMABLE" | "NONE"; name: string; gift?: GiftDefinition }> = [
+                ...permanentGiftCatalog.filter(item => item.enabled).map(item => ({ type: "PERMANENT" as const, name: item.name, gift: item })),
+                ...consumableGiftCatalog.filter(item => item.enabled).map(item => ({ type: "CONSUMABLE" as const, name: item.name, gift: item })),
+                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" },
+                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" }
             ];
             const reward = pool[Math.floor(Math.random() * pool.length)];
-            let newCoins = (me.coins || 0) - 500;
+            let newCoins = (me.coins || 0) - gachaCost;
             const currentCons = { ...(me.inventory?.consumables || {}) };
             let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             let addedPermanentName = "";
@@ -13579,8 +14075,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
             if (reward.type === "PERMANENT") {
                 if (currentPerms.includes(reward.name)) {
-                    newCoins += 200;
-                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +200 Xu đền bù!`;
+                    newCoins += duplicateRefund;
+                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`;
                 } else {
                     currentPerms = [...currentPerms, reward.name];
                     addedPermanentName = reward.name;
@@ -13598,6 +14094,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             const coinOperation = makeCoinOperation(me.id, newCoins - (me.coins || 0), "GACHA_SPIN", {
               ...(reward.type === "CONSUMABLE" ? { consumableName: reward.name } : {}),
               ...(addedPermanentName ? { permanentName: addedPermanentName } : {}),
+              ...(reward.gift ? { giftSnapshot: { id: reward.gift.id, name: reward.gift.name, price: reward.gift.price, details: reward.gift.details, kind: reward.gift.kind } } : {}),
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert(msg);
@@ -13945,7 +14442,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   <Ico name="sparkles" size={30} color={C.accent} />
                   <div style={{ textAlign: 'left', lineHeight: 1.2 }}>
                       <div>{t('gacha_spin')}</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{t('gacha_cost')}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{gachaSpinCost} OS Coins</div>
                   </div>
               </button>
           </div>
@@ -13960,38 +14457,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               </div>
               
               <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16}}>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                  {consumableGiftCatalog.filter(gift => gift.enabled).map(gift => (
+                    <div key={gift.id} style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
                       <div>
-                          <div style={{fontSize: 28, marginBottom: 8}}>⏳</div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>Thẻ dời deadline (24h)</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Gia hạn thêm thời gian nộp bài.</div>
+                        <Ico name="gift" size={26} color={C.warn} style={{marginBottom: 8}} />
+                        <div style={{fontWeight: 800, fontSize: 16}}>{gift.name}</div>
+                        {gift.details && <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>{gift.details}</div>}
                       </div>
-                      <button onClick={() => handleBuyConsumable("Thẻ dời deadline (24h)", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Hộp sữa Milo</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Cứu trợ năng lượng giữa giờ học.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Hộp Milo", 500)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>500 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Ly nước Trái Chò</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Giải nhiệt tuyệt đỉnh.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Ly Trái Chò", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Trà sữa Viên Viên</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Đánh bay cơn buồn ngủ.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Trà sữa Viên Viên", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
+                      <button onClick={() => handleBuyConsumable(gift)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>{gift.price} <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                    </div>
+                  ))}
+                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>Cửa hàng hiện chưa có quà tiêu hao.</div>}
               </div>
               {Array.isArray(me.myRewards) && me.myRewards!.length > 0 && (
                  <div style={{marginTop: 24, paddingTop: 20, borderTop: `1px dashed ${C.border}`, fontSize: 13}}>
@@ -14011,6 +14487,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   <h3 style={{margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="book" size={17} color={C.accent} /> {t('vocab_notebook')}</h3>
                   <div style={{display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap'}}>
                       <span style={{fontSize: 12, color: C.sub, fontWeight: 700}}>{vocabCards.length} {t('vocab_words')}{dueCount > 0 ? ` · ${dueCount} ${t('vocab_due')}` : ''}</span>
+                      <button onClick={() => void exportMyVocabXlsx()} disabled={!vocabCards.length} title="Export Excel" style={{background: C.bg, color: C.accent, fontSize: 12, fontWeight: 800, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, whiteSpace: 'nowrap', opacity: vocabCards.length ? 1 : .5, display: 'inline-flex', alignItems: 'center', gap: 5}}><Ico name="download" size={14} /> XLSX</button>
                       <button onClick={() => setShowVocabKinds(v => !v)} title={t('vocab_kinds_title')} style={{background: showVocabKinds ? C.accent : C.bg, color: showVocabKinds ? '#fff' : C.text, fontSize: 13, fontWeight: 800, padding: '8px 11px', borderRadius: 9, border: `1px solid ${showVocabKinds ? C.accent : C.border}`, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center'}}><Ico name="gear" size={16} /></button>
                       <button onClick={handleGenerateVocab} disabled={vocabGenLoading} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '8px 13px', borderRadius: 9, opacity: vocabGenLoading ? 0.7 : 1, whiteSpace: 'nowrap'}}>{vocabGenLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {t('vocab_generating')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="sparkles" size={14} /> {t('vocab_generate')}</span>}</button>
                   </div>
@@ -14199,6 +14676,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             )
                         }
                     </div>
+                    {nextClass!.lessonContent && <div style={{ fontSize: 13, lineHeight: 1.55, color: C.text, marginTop: 10, whiteSpace: 'pre-wrap' }}>{nextClass!.lessonContent}</div>}
+                    {!!nextClass!.materials?.length && <div style={{ display: 'grid', gap: 5, marginTop: 10 }}>{nextClass!.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, fontSize: 12, fontWeight: 800, overflowWrap: 'anywhere' }}>{material.label || material.url}</a>)}</div>}
                  </div>
               </div>
             </div>
@@ -14388,6 +14867,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 );
               })}
             </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 12, paddingBottom: 2, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
+              {(["Listening", "Reading", "Writing"] as const).map(skill => { const active = studentExamSkillTab === skill; const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length; const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length; return <button key={skill} onClick={() => setStudentExamSkillTab(skill)} style={{ background: 'transparent', color: active ? C.accent : C.sub, borderRadius: 0, borderBottom: `2px solid ${active ? C.accent : 'transparent'}`, padding: '8px 11px', fontSize: 12, fontWeight: 900, whiteSpace: 'nowrap' }}>{skill} <span style={{ fontWeight: 700, opacity: .75 }}>{examRoomTab === 'available' ? availableCount : resultCount}</span></button>; })}
+            </div>
             {examRoomTab === "available" && myRealExamPackages.length > 0 && (
               <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
                 {myRealExamPackages.map((pkg: RealExamPackage) => {
@@ -14407,7 +14889,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             )}
             {examRoomTab === "available" && (
             <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-              {activeQuizzes.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
+              {activeQuizzesForSkill.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
                   const attemptCount = myQuizResults.filter(r => r && r.quizId === q.id).length;
                   const now = getRealTime();
                   const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
@@ -14482,14 +14964,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )
               })}
-              {activeQuizzes.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
+              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>Chưa có đề {studentExamSkillTab} khả dụng.</div>}
             </div>
             )}
 
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
-                    {myQuizResults.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{t('no_quizzes')}</div>}
-                    {myQuizResults.map(r => {
+                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>Chưa có kết quả {studentExamSkillTab}.</div>}
+                    {resultsForSkill.map(r => {
                         if (!r) return null;
                         return (
                         <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>
@@ -14709,6 +15191,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         </div>
                       ))}
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: window.innerWidth > 760 ? 'minmax(0, 1fr) minmax(260px, .8fr)' : '1fr', gap: 14, marginTop: 14 }}>
+                      <div><label style={{ display: 'block', fontFamily: 'var(--heading)', fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: C.sub, marginBottom: 6 }}>Lesson content</label><textarea value={schedForm.lessonContent} onChange={(e: any) => setSchedForm({ ...schedForm, lessonContent: e.target.value })} placeholder="Topic, goals, or homework" rows={3} style={{ width: '100%', resize: 'vertical' }} /></div>
+                      <div><label style={{ display: 'block', fontFamily: 'var(--heading)', fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: C.sub, marginBottom: 6 }}>Materials</label><textarea value={schedForm.materialsText} onChange={(e: any) => setSchedForm({ ...schedForm, materialsText: e.target.value })} placeholder={"One link per line\nOptional label | https://..."} rows={3} style={{ width: '100%', resize: 'vertical' }} /></div>
+                    </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginTop: 16 }}>
                       <div style={{ fontSize: 11.5, color: C.sub, marginRight: 'auto', fontFamily: 'var(--mono)' }}>{viewDate} - {schedForm.time || "--:--"}{schedForm.duration ? ` - ${schedForm.duration} min` : ""}</div>
                       <button onClick={() => setShowSchedForm(false)} style={{ background: 'transparent', color: C.sub, border: 'none', fontSize: 12.5, fontWeight: 600, padding: '9px 6px', cursor: 'pointer' }}>{t('common_cancel')}</button>
@@ -14727,6 +15213,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           {s.status === 'ABSENT' && <span style={{background: `${C.err}20`, color: C.err, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_was_absent')}<Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
                         </div>
                         <div style={{fontSize:12, color:C.sub, marginTop: 4}}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
+                        {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
+                        {!!s.materials?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 8 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>{material.label || material.url}</a>)}</div>}
                       </div>
                       <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
                           {(!s.status || s.status === 'PENDING') ? (
@@ -14843,6 +15331,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   </div>
                   <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>{t('location_link')}</label><input placeholder={t('zoom_ph')} value={schedForm.location} onChange={(e: any)=>setSchedForm({...schedForm, location:e.target.value})} /></div>
                   <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>{t('sched_duration')}</label><input type="number" value={schedForm.duration} onChange={(e: any)=>setSchedForm({...schedForm, duration:Number(e.target.value)})} /></div>
+                  <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>Lesson content</label><textarea value={schedForm.lessonContent} onChange={(e: any)=>setSchedForm({...schedForm, lessonContent:e.target.value})} rows={3} placeholder="Topic, goals, or homework" /></div>
+                  <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>Materials</label><textarea value={schedForm.materialsText} onChange={(e: any)=>setSchedForm({...schedForm, materialsText:e.target.value})} rows={3} placeholder={"One link per line\nOptional label | https://..."} /></div>
                   <button onClick={handleAddSchedule} style={{ background: C.succ, color: '#fff', padding:'11px' }}>{t('save_schedule')}</button>
                 </div>
               )}
@@ -14855,6 +15345,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <span style={{ background: `${C.accent}20`, color: C.accent, padding: '2px 7px', borderRadius: 6, fontSize: 11, fontWeight: 800, flexShrink: 0 }}>{safeString(s.time)}</span>
                     </div>
                     <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
+                    {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.45, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
+                    {!!s.materials?.length && <div style={{ display: 'grid', gap: 4, marginTop: 7 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, color: C.accent, fontWeight: 700, overflowWrap: 'anywhere' }}>{material.label || material.url}</a>)}</div>}
                     <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
                       {(!s.status || s.status === 'PENDING') ? (
                         <>
@@ -15039,19 +15531,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
             // CHỮA BỆNH STALE CLOSURE: Hàm LƯU BẤT TỬ
             const handleForceSave = async () => {
+                if (examBuilderSaveState === "saving") return;
                 const currentLatestQuiz: any = editingQuizRef.current;
                 if (!currentLatestQuiz) return;
                 const quizForSave = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(currentLatestQuiz)));
+                if (isWritingQuiz(quizForSave)) {
+                    const incomplete = normalizeWritingTasks(quizForSave).find((task: WritingTaskDefinition) => !String(task.prompt || "").replace(/<[^>]+>/g, "").trim());
+                    if (incomplete) {
+                        alert(`${incomplete.title} needs a prompt before this Writing test can be saved.`);
+                        return;
+                    }
+                }
                 const idx = quizzesRef.current.findIndex((q: any) => q.id === quizForSave.id);
                 const nx = [...quizzesRef.current];
                 if (idx > -1) nx[idx] = quizForSave;
                 else nx.unshift(quizForSave);
                 setEditingQuiz(quizForSave);
                 setQuizCatalogState(nx);
-                const saved = await syncData({ quizzes: nx });
-                alert(saved
-                    ? "Đã lưu và đồng bộ đề trên mọi thiết bị."
-                    : "Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại và sẽ tự thử lại khi có mạng.");
+                setExamBuilderSaveState("saving");
+                const saved = await syncData({ __quizUpserts: [quizForSave] });
+                setExamBuilderSaveState(saved ? "saved" : "error");
+                if (!saved) alert("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.");
             };
 
             // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====
@@ -15299,7 +15799,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     </div>
                                 )})}
                             </div>
-                            <div style={{padding: 14, borderTop: `1px solid ${EB.line}`, display: 'grid', gap: 8}}>
+                            <div style={{padding: 14, borderTop: `1px solid ${EB.line}`, display: isWritingQuiz(editingQuiz) ? 'none' : 'grid', gap: 8}}>
                                 <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: "Câu hỏi mới", options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
                                 <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "BLANK", text: "", groupContext: "", correctAnswer: ""}]} : prev)} style={{background: EB.accentWash, color: EB.accent, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${C.accent}22`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="edit" size={13} />{t('eb_add_blank_group')}</button>
                             </div>
@@ -15315,7 +15815,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 </div>
                                 <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
                                     <button className="ebx-soft" onClick={() => setEditingQuiz(null)} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
-                                    <button className="ebx-primary" onClick={handleForceSave} style={{background: EB.accent, color: '#fff', padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: EB.radiusSm, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="save" size={14} />{t('eb_save')}</button>
+                                    <button className="ebx-primary" disabled={examBuilderSaveState === "saving"} onClick={handleForceSave} style={{background: EB.accent, color: '#fff', padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: EB.radiusSm, border: 'none', cursor: examBuilderSaveState === "saving" ? 'wait' : 'pointer', opacity: examBuilderSaveState === "saving" ? .7 : 1, display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name={examBuilderSaveState === "saving" ? "refresh" : "save"} size={14} />{examBuilderSaveState === "saving" ? "Synchronizing..." : examBuilderSaveState === "saved" ? "Synced" : examBuilderSaveState === "error" ? "Retry save" : t('eb_save')}</button>
                                 </div>
                             </div>
 
@@ -15329,8 +15829,33 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 <div style={{height: 2, width: 56, background: EB.accent, borderRadius: 2, marginTop: 18}} />
                             </div>
 
+                            {isWritingQuiz(editingQuiz) && (() => {
+                                const tasks = normalizeWritingTasks(editingQuiz);
+                                const updateWritingTask = (taskId: string, patch: Partial<WritingTaskDefinition>) => setEditingQuiz((previous: any) => {
+                                    if (!previous) return previous;
+                                    const writingTasks = normalizeWritingTasks(previous).map((task: WritingTaskDefinition) => task.id === taskId ? { ...task, ...patch } : task);
+                                    return { ...previous, type: "Writing", writingTasks, questions: writingQuestions({ ...previous, type: "Writing", writingTasks }) };
+                                });
+                                return <div className="eb-writing-editor" style={{ display: 'grid', gap: 26 }}>
+                                    <label style={{ display: 'grid', gap: 6, padding: '14px 15px', border: `1px solid ${EB.line}`, borderRadius: 8, background: EB.wash }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>WRITING TUTORIAL VIDEO URL (OPTIONAL)</span><input type="url" value={editingQuiz.writingTutorialVideoUrl || ''} onChange={event => setEditingQuiz((previous: any) => previous ? { ...previous, writingTutorialVideoUrl: event.target.value } : previous)} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /><span style={{ fontSize: 11, color: EB.sub }}>Used as the separate instruction hook for this Writing test in a real-exam package.</span></label>
+                                    {tasks.map((task: WritingTaskDefinition) => <section key={task.id} style={{ borderTop: `1px solid ${EB.line}`, paddingTop: 22 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
+                                            <div><div style={ebEyebrow}>Part {task.taskNumber}</div><h3 style={{ margin: '5px 0 0', fontSize: 20, color: EB.ink }}>{task.title}</h3></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '110px 110px', gap: 8 }}>
+                                                <label style={{ fontSize: 10, fontWeight: 800, color: EB.sub }}>MINUTES<input type="number" min={1} value={task.recommendedMinutes} onChange={event => updateWritingTask(task.id, { recommendedMinutes: Math.max(1, Number(event.target.value) || 1) })} style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '7px 8px', border: `1px solid ${EB.line}`, borderRadius: 6 }} /></label>
+                                                <label style={{ fontSize: 10, fontWeight: 800, color: EB.sub }}>MIN. WORDS<input type="number" min={1} value={task.minimumWords} onChange={event => updateWritingTask(task.id, { minimumWords: Math.max(1, Number(event.target.value) || 1) })} style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '7px 8px', border: `1px solid ${EB.line}`, borderRadius: 6 }} /></label>
+                                            </div>
+                                        </div>
+                                        <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>TASK INSTRUCTION</span><input value={task.instructions} onChange={event => updateWritingTask(task.id, { instructions: event.target.value })} style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
+                                        <div style={{ marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 800, color: EB.sub, marginBottom: 6 }}>PROMPT</div><div style={{ border: `1px solid ${EB.line}`, borderRadius: 8, overflow: 'hidden', background: EB.sheet }}><RichTextEditor value={task.prompt} onChange={(value: string) => updateWritingTask(task.id, { prompt: value })} placeholder={`Enter ${task.title} prompt`} /></div></div>
+                                        <label style={{ display: 'grid', gap: 6 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>OPTIONAL MEDIA URL</span><input type="url" value={task.mediaUrl || ''} onChange={event => updateWritingTask(task.id, { mediaUrl: event.target.value })} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
+                                        {!!task.mediaUrl && <img src={task.mediaUrl} alt={`${task.title} prompt`} style={{ display: 'block', maxWidth: '100%', maxHeight: 360, objectFit: 'contain', margin: '16px auto 0', border: `1px solid ${EB.line}` }} />}
+                                    </section>)}
+                                </div>;
+                            })()}
+
                             {/* SOẠN THẢO BÀI ĐỌC / NGỮ CẢNH — phẳng trên giấy, phân cách bằng hairline */}
-                            <div className="no-print ebx-block" style={{ marginBottom: 38 }}>
+                            <div className="no-print ebx-block" style={{ marginBottom: 38, display: isWritingQuiz(editingQuiz) ? 'none' : undefined }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
                                     <div style={ebEyebrow}><Ico name="book" size={13} />{t('eb_passage_title')}</div>
                                     <div style={{ display: 'flex', gap: 2, background: EB.wash, padding: 4, borderRadius: EB.radiusSm, overflowX: 'auto', maxWidth: '100%' }}>
@@ -15379,9 +15904,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 </div>
                             </div>
 
-                            <div style={{...ebEyebrow, marginBottom: 22, paddingBottom: 14, borderBottom: `1px solid ${EB.line}`, width: '100%', justifyContent: 'flex-start'}}><Ico name="clipboard" size={13} />{t('eb_question_list')} <span style={{fontFamily: EB.fMono, color: EB.accent, marginLeft: 2}}>({(editingQuiz.questions || []).length})</span></div>
+                            <div style={{...ebEyebrow, marginBottom: 22, paddingBottom: 14, borderBottom: `1px solid ${EB.line}`, width: '100%', justifyContent: 'flex-start', display: isWritingQuiz(editingQuiz) ? 'none' : undefined}}><Ico name="clipboard" size={13} />{t('eb_question_list')} <span style={{fontFamily: EB.fMono, color: EB.accent, marginLeft: 2}}>({(editingQuiz.questions || []).length})</span></div>
 
-                            <div style={{display: 'grid', gap: 0}}>
+                            <div style={{display: isWritingQuiz(editingQuiz) ? 'none' : 'grid', gap: 0}}>
                                 {builderGroups.map((grp: any) => {
                                     const q = grp.questions[0];
                                     const qIndex = grp.startIndex;
@@ -15983,8 +16508,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         <div style={{display: 'grid', gap: 12}}>
                                             <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_folder')}</label><input className="idp-input" value={editingQuiz.folder || "Root"} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, folder:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                             <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_exam_type')}</label>
-                                                <select className="idp-input" value={editingQuiz.type} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, type:e.target.value as any}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}>
-                                                    <option value="Reading">Reading</option><option value="Listening">Listening</option><option value="Integrated">Integrated</option>
+                                                <select className="idp-input" value={editingQuiz.type} onChange={(e)=>setEditingQuiz((prev: any)=>{
+                                                    if (!prev) return prev;
+                                                    if (e.target.value === "Writing") {
+                                                        const writingTasks = normalizeWritingTasks({ ...prev, type: "Writing" });
+                                                        return { ...prev, type: "Writing", timeLimit: prev.timeLimit || 60, writingTasks, questions: writingQuestions({ ...prev, type: "Writing", writingTasks }) };
+                                                    }
+                                                    return { ...prev, type:e.target.value as any };
+                                                })} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}>
+                                                    <option value="Reading">Reading</option><option value="Listening">Listening</option><option value="Writing">Writing</option><option value="Integrated">Integrated</option>
                                                 </select>
                                             </div>
                                             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12}}>
@@ -16296,7 +16828,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         const normaliseReward = (reward: any) => {
           const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward?.rewardType || ""))
             ? String(reward.rewardType)
-            : (isPermanentGiftName(reward?.rewardValue) ? "permanent_gift" : "consumable_gift");
+            : (permanentGiftCatalog.some(item => item.enabled && item.name === String(reward?.rewardValue || "").trim()) ? "permanent_gift" : "consumable_gift");
           return {
             ...reward,
             rewardType,
@@ -16309,8 +16841,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           const rewards = topicAssignmentEditor.rewards.map(normaliseReward);
           const invalidReward = rewards.find(reward =>
             (reward.rewardType === "coins" && parseQuestCoinReward(reward.rewardValue) < 1)
-            || (reward.rewardType === "permanent_gift" && !isPermanentGiftName(reward.rewardValue))
-            || (reward.rewardType === "consumable_gift" && !isConsumableGiftName(reward.rewardValue))
+            || (reward.rewardType === "permanent_gift" && !permanentGiftCatalog.some(item => item.enabled && item.name === reward.rewardValue))
+            || (reward.rewardType === "consumable_gift" && !consumableGiftCatalog.some(item => item.enabled && item.name === reward.rewardValue))
           );
           if (invalidReward) {
             alert(tx("Mỗi phần thưởng phải chọn từ kho quà có sẵn; quà vĩnh viễn luôn có số lượng 1.", "Each reward must be chosen from the existing gift catalog; permanent gifts always have quantity 1."));
@@ -16449,15 +16981,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 <div style={{ display: "grid", gap: 9 }}>{draft.rewards.map(reward => {
                   const rewardType = ["coins", "permanent_gift", "consumable_gift"].includes(String(reward.rewardType || ""))
                     ? String(reward.rewardType)
-                    : (isPermanentGiftName(reward.rewardValue) ? "permanent_gift" : "consumable_gift");
-                  const catalog = rewardType === "permanent_gift" ? PERMANENT_GIFT_CATALOG : CONSUMABLE_GIFT_CATALOG;
+                    : (permanentGiftCatalog.some(item => item.enabled && item.name === String(reward.rewardValue || "").trim()) ? "permanent_gift" : "consumable_gift");
+                  const catalog = (rewardType === "permanent_gift" ? permanentGiftCatalog : consumableGiftCatalog).filter(item => item.enabled);
                   const selectedGift = catalog.some(item => item.name === String(reward.rewardValue || "").trim())
                     ? String(reward.rewardValue || "").trim()
                     : "";
                   return <div key={reward.id} style={{ display: "grid", gridTemplateColumns: "minmax(145px, 1fr) 90px minmax(155px, 1fr) minmax(185px, 1.35fr) 74px 34px", gap: 8, alignItems: "end", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
                     <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Điều kiện", "Trigger")}</span><select value={reward.type} onChange={event => updateReward(reward.id, { type: event.target.value })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="milestone">{tx("Mốc chặng", "Milestone")}</option><option value="total_score">{tx("Tổng điểm", "Total score")}</option><option value="streak">{tx("Chuỗi first-pass", "First-pass streak")}</option></select></label>
                     <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Mốc", "Target")}</span><input type="number" min="1" value={reward.targetValue} onChange={event => updateReward(reward.id, { targetValue: Number(event.target.value) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label>
-                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={rewardType} onChange={event => { const nextType = event.target.value; updateReward(reward.id, { rewardType: nextType, rewardValue: nextType === "coins" ? "50" : (nextType === "permanent_gift" ? PERMANENT_GIFT_CATALOG[0].name : CONSUMABLE_GIFT_CATALOG[0].name), rewardQuantity: 1, description: "" }); }} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="consumable_gift">{tx("Quà tiêu hao", "Consumable gift")}</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option></select></label>
+                    <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Loại", "Reward type")}</span><select value={rewardType} onChange={event => { const nextType = event.target.value; const firstGift = nextType === "permanent_gift" ? permanentGiftCatalog.find(item => item.enabled) : consumableGiftCatalog.find(item => item.enabled); updateReward(reward.id, { rewardType: nextType, rewardValue: nextType === "coins" ? "50" : (firstGift?.name || ""), rewardQuantity: 1, description: "" }); }} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="coins">OS Coins</option><option value="consumable_gift">{tx("Quà tiêu hao", "Consumable gift")}</option><option value="permanent_gift">{tx("Quà vĩnh viễn", "Permanent gift")}</option></select></label>
                     <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{rewardType === "coins" ? tx("Số xu", "Coins") : tx("Vật phẩm", "Item")}</span>{rewardType === "coins" ? <input type="number" min="1" value={reward.rewardValue} onChange={event => updateReward(reward.id, { rewardValue: event.target.value, rewardQuantity: 1 })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /> : <select value={selectedGift} onChange={event => updateReward(reward.id, { rewardType, rewardValue: event.target.value, rewardQuantity: rewardType === "permanent_gift" ? 1 : Math.max(1, Number(reward.rewardQuantity) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }}><option value="">{tx("Chọn từ kho quà", "Choose from catalog")}</option>{catalog.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select>}</label>
                     {rewardType === "consumable_gift" ? <label style={{ display: "grid", gap: 5 }}><span style={{ fontSize: 11, fontWeight: 800, color: C.sub }}>{tx("Số lượng", "Qty")}</span><input type="number" min="1" value={getQuestRewardQuantity(reward)} onChange={event => updateReward(reward.id, { rewardQuantity: Math.max(1, Number(event.target.value) || 1) })} style={{ padding: "8px", border: `1px solid ${C.border}`, background: C.card, color: C.text, borderRadius: 7 }} /></label> : <div />}
                     <button onClick={() => setTopicAssignmentEditor(previous => previous ? { ...previous, rewards: previous.rewards.filter(item => item.id !== reward.id) } : previous)} style={{ border: "none", background: "transparent", color: C.err, cursor: "pointer", padding: 7 }} title={tx("Xóa", "Delete")}><Ico name="trash" size={15} /></button>
@@ -16480,6 +17012,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         }
 
         return <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+          <section style={{ marginBottom: 28, padding: "18px 0 22px", borderTop: `2px solid ${C.accent}`, borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+              <div><h2 style={{ margin: 0, fontSize: 18, fontFamily: "var(--display)" }}>{tx("Nhập nhiều DOCX thành chuyên đề", "Bulk import DOCX into a quest")}</h2><p style={{ margin: "5px 0 0", maxWidth: 640, color: C.sub, fontSize: 13, lineHeight: 1.55 }}>{tx("Chọn tối đa 20 file đã đúng playbook. Hệ thống chỉ tạo chuỗi bài sau khi mọi file phân tích thành công và bạn xác nhận.", "Select up to 20 playbook-ready files. The test chain is created only after every file parses successfully and you confirm.")}</p></div>
+              <label style={{ border: `1px solid ${C.accent}`, background: `${C.accent}10`, color: C.accent, padding: "9px 12px", borderRadius: 7, cursor: questDocxBatchBusy ? "wait" : "pointer", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7, opacity: questDocxBatchBusy ? .65 : 1 }}><Ico name="upload" size={15} /> {questDocxBatchBusy ? tx("Đang phân tích", "Parsing") : tx("Chọn DOCX", "Select DOCX")}<input type="file" accept=".docx" multiple disabled={questDocxBatchBusy} onChange={event => { if (event.target.files?.length) void setQuestDocxFiles(event.target.files); event.target.value = ""; }} style={{ display: "none" }} /></label>
+            </div>
+            {!!questDocxBatch.length && <div style={{ marginTop: 16, display: "grid", gap: 7 }}>
+              {questDocxBatch.map((item, index) => <div key={item.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: 10, padding: "9px 0", borderTop: index ? `1px solid ${C.border}` : "none" }}>
+                <div style={{ minWidth: 0 }}><div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 800 }}><Ico name={item.status === "ready" ? "check" : item.status === "error" ? "alert" : "refresh"} size={14} color={item.status === "ready" ? C.succ : item.status === "error" ? C.err : C.warn} /><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{index + 1}. {item.file.name}</span></div>{item.status === "ready" && <div style={{ marginTop: 3, color: C.sub, fontSize: 11 }}>{item.quiz?.title} · {item.quiz?.questions.length || 0} {tx("câu", "questions")}</div>}{item.status === "error" && <div role="alert" style={{ marginTop: 3, color: C.err, fontSize: 11 }}>{item.error}</div>}</div>
+                <div style={{ display: "flex", gap: 5 }}><button disabled={questDocxBatchBusy || index === 0} onClick={() => moveQuestDocxFile(index, -1)} style={{ width: 29, height: 28, background: C.card, border: `1px solid ${C.border}`, color: C.text, opacity: index === 0 ? .45 : 1 }} title={tx("Đưa lên", "Move up")}><Ico name="arrowUp" size={13} /></button><button disabled={questDocxBatchBusy || index === questDocxBatch.length - 1} onClick={() => moveQuestDocxFile(index, 1)} style={{ width: 29, height: 28, background: C.card, border: `1px solid ${C.border}`, color: C.text, opacity: index === questDocxBatch.length - 1 ? .45 : 1 }} title={tx("Đưa xuống", "Move down")}><Ico name="arrowDown" size={13} /></button><button disabled={questDocxBatchBusy} onClick={() => setQuestDocxBatch(previous => previous.filter(entry => entry.id !== item.id))} style={{ width: 29, height: 28, background: `${C.err}0d`, border: `1px solid ${C.err}45`, color: C.err }} title={tx("Bỏ file", "Remove file")}><Ico name="trash" size={13} /></button></div>
+              </div>)}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 }}><button onClick={() => setQuestDocxBatch([])} disabled={questDocxBatchBusy} style={{ background: "transparent", color: C.sub, border: `1px solid ${C.border}`, padding: "8px 11px", borderRadius: 7 }}>{tx("Xóa danh sách", "Clear list")}</button><button onClick={() => void confirmQuestDocxBatch()} disabled={questDocxBatchBusy || questDocxBatch.some(item => item.status !== "ready")} style={{ background: C.accent, color: "#fff", padding: "8px 12px", borderRadius: 7, opacity: questDocxBatchBusy || questDocxBatch.some(item => item.status !== "ready") ? .55 : 1 }}>{tx("Xác nhận tạo chuyên đề", "Confirm quest")}</button></div>
+            </div>}
+          </section>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 16, flexWrap: "wrap", marginBottom: 24 }}><div><div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Lộ trình có điều kiện", "Gated learning paths")}</div><h2 style={{ margin: 0, fontSize: 30, fontFamily: "var(--display)", letterSpacing: 0 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</h2><p style={{ margin: "7px 0 0", color: C.sub, maxWidth: 620, lineHeight: 1.55 }}>{tx("Ghép các đề có sẵn thành hành trình theo dạng bài. Học sinh chỉ mở chặng kế tiếp sau khi đạt ngưỡng bạn đặt.", "Sequence existing tests by skill. Students unlock the next step only after reaching your threshold.")}</p></div><button onClick={() => setTopicAssignmentEditor(makeAssignment())} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "10px 15px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="plus" size={16} /> {tx("Tạo chuyên đề", "Create quest")}</button></div>
           <div style={{ borderTop: `2px solid ${C.accent}` }}>{topicAssignments.map(assignment => {
             const assignedCount = assignment.audience === "SPECIFIC" ? (assignment.targetStudentIds || []).length : students.length;
@@ -16659,6 +17204,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${C.border}`, flexWrap: 'wrap' }}>
+                  {isWritingQuiz(quizzes.find(quiz => quiz.id === r.quizId)) && <button onClick={() => { const source = quizzes.find(quiz => quiz.id === r.quizId); if (source) { setReviewQuiz({ quiz: source, result: r }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); } }} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="edit" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Chấm Writing</button>}
                   <button onClick={() => copyToClipboard(copyText)} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="clipboard" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_copy_zalo')}</button>
                   <button onClick={() => exportDetailedQuizResult(r)} style={{ background: `${C.succ}12`, color: C.succ, fontSize: 11, padding: '6px 11px' }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_export_detail')}</button>
                   <button onClick={() => { if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) { const nx = [...bannedIps, r.ipAddress]; setBannedIps(nx); syncData({ bannedIps: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px' }}><Ico name="ban" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_ban_ip')}</button>
@@ -16861,6 +17407,56 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           </div>
                         )}
                       </div>
+
+                      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ padding: '16px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: rewardConfigOpen ? `1px solid ${C.border}` : 'none', flexWrap: 'wrap' }}>
+                          <div><div style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7 }}><Ico name="gift" size={16} color={C.accent} /> Quà và cơ chế thưởng</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.</div></div>
+                          <button onClick={() => setRewardConfigOpen(value => !value)} style={{ background: rewardConfigOpen ? `${C.accent}12` : C.accent, color: rewardConfigOpen ? C.accent : '#fff', border: `1px solid ${C.accent}`, padding: '8px 11px', fontSize: 12, fontWeight: 800 }}>{rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}</button>
+                        </div>
+                        {rewardConfigOpen && <div style={{ padding: 18, display: 'grid', gap: 22 }}>
+                          <section>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}><div><div style={{ fontSize: 13, fontWeight: 800 }}>Catalog quà</div><div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div></div><span style={{ color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span></div>
+                            <div style={{ display: 'grid', gap: 7 }}>
+                              {giftCatalog.map(gift => <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
+                                <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{gift.enabled ? 'Bật' : 'Tắt'}</label>
+                                <button onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
+                              </div>)}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                              <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
+                              <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <button onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm quà</button>
+                            </div>
+                          </section>
+                          <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>Cơ chế thưởng</div><div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
+                            <div style={{ display: 'grid', gap: 7 }}>
+                              {rewardMechanisms.map(rule => <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
+                                <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{rule.enabled ? 'Bật' : 'Tắt'}</label>
+                                <button onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
+                              </div>)}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                              <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
+                              <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />Bật</label>
+                              <button onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
+                            </div>
+                          </section>
+                          {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}><span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700 }}>{rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}</span><button onClick={() => void saveReleaseConfiguration()} disabled={!rewardConfigDirty || rewardConfigSaving} style={{ background: C.accent, color: '#fff', padding: '9px 12px', fontWeight: 800, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1 }}><Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={14} /> {rewardConfigSaving ? 'Đang lưu' : 'Lưu cấu hình'}</button></div>
+                        </div>}
+                      </div>
                     </>
                   )}
 
@@ -16983,34 +17579,36 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
                 const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
-                const giveConsumable = (name: string) => {
-                  if (!isConsumableGiftName(name)) return;
+                const giveConsumable = (gift: GiftDefinition) => {
+                  const name = gift.name;
+                  if (!consumableGiftCatalog.some(item => item.enabled && item.id === gift.id)) return;
                   const nx = students.map(s => s.id === giftFor ? {
                     ...s,
                     inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
                   } : s);
-                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1 });
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
                   alert(`${t('gift_done')} (${name})`);
                 };
-                const givePermanent = (name: string) => {
-                  if (!isPermanentGiftName(name) || owned.includes(name)) return;
+                const givePermanent = (gift: GiftDefinition) => {
+                  const name = gift.name;
+                  if (!permanentGiftCatalog.some(item => item.enabled && item.id === gift.id) || owned.includes(name)) return;
                   const nx = students.map(s => s.id === giftFor ? {
                     ...s,
                     inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
                   } : s);
-                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name });
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
                   alert(`${t('gift_done')} (${name})`);
                 };
-                const permChip = (name: string) => {
-                  const has = owned.includes(name);
-                  return <button key={name} disabled={has} onClick={() => givePermanent(name)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{name.split(': ')[1] || name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
+                const permChip = (gift: GiftDefinition) => {
+                  const has = owned.includes(gift.name);
+                  return <button key={gift.id} disabled={has} onClick={() => givePermanent(gift)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{gift.name.split(': ')[1] || gift.name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
                 };
                 const grp = (title: string, group: string) => (
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{title}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{PERMANENT_GIFT_CATALOG.filter(item => item.group === group).map(item => permChip(item.name))}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && item.group === group).map(permChip)}</div>
                   </div>
                 );
                 return (
@@ -17029,7 +17627,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                            {CONSUMABLE_GIFT_CATALOG.map(item => <button key={item.name} onClick={() => giveConsumable(item.name)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
+                            {consumableGiftCatalog.filter(item => item.enabled).map(item => <button key={item.id} onClick={() => giveConsumable(item)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -17038,6 +17636,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           {grp('Giao diện', 'themes')}
                           {grp('Khung avatar', 'frames')}
                           {grp('Linh thú', 'pets')}
+                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Khác</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
                         </div>
                       </div>
                     </div>

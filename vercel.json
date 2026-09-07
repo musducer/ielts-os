@@ -4,6 +4,12 @@
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/maintenance/cleanup_attempts",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/instruction-videos/(.*)",

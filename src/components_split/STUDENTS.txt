@@ -95,6 +95,7 @@
                   ))}
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${C.border}`, flexWrap: 'wrap' }}>
+                  {isWritingQuiz(quizzes.find(quiz => quiz.id === r.quizId)) && <button onClick={() => { const source = quizzes.find(quiz => quiz.id === r.quizId); if (source) { setReviewQuiz({ quiz: source, result: r }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); } }} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="edit" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Chấm Writing</button>}
                   <button onClick={() => copyToClipboard(copyText)} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="clipboard" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_copy_zalo')}</button>
                   <button onClick={() => exportDetailedQuizResult(r)} style={{ background: `${C.succ}12`, color: C.succ, fontSize: 11, padding: '6px 11px' }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_export_detail')}</button>
                   <button onClick={() => { if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) { const nx = [...bannedIps, r.ipAddress]; setBannedIps(nx); syncData({ bannedIps: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px' }}><Ico name="ban" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_ban_ip')}</button>
@@ -297,6 +298,56 @@
                           </div>
                         )}
                       </div>
+
+                      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ padding: '16px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: rewardConfigOpen ? `1px solid ${C.border}` : 'none', flexWrap: 'wrap' }}>
+                          <div><div style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7 }}><Ico name="gift" size={16} color={C.accent} /> Quà và cơ chế thưởng</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.</div></div>
+                          <button onClick={() => setRewardConfigOpen(value => !value)} style={{ background: rewardConfigOpen ? `${C.accent}12` : C.accent, color: rewardConfigOpen ? C.accent : '#fff', border: `1px solid ${C.accent}`, padding: '8px 11px', fontSize: 12, fontWeight: 800 }}>{rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}</button>
+                        </div>
+                        {rewardConfigOpen && <div style={{ padding: 18, display: 'grid', gap: 22 }}>
+                          <section>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}><div><div style={{ fontSize: 13, fontWeight: 800 }}>Catalog quà</div><div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div></div><span style={{ color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span></div>
+                            <div style={{ display: 'grid', gap: 7 }}>
+                              {giftCatalog.map(gift => <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
+                                <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{gift.enabled ? 'Bật' : 'Tắt'}</label>
+                                <button onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
+                              </div>)}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                              <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
+                              <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <button onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm quà</button>
+                            </div>
+                          </section>
+                          <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>Cơ chế thưởng</div><div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
+                            <div style={{ display: 'grid', gap: 7 }}>
+                              {rewardMechanisms.map(rule => <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
+                                <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12 }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{rule.enabled ? 'Bật' : 'Tắt'}</label>
+                                <button onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
+                              </div>)}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                              <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
+                              <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12 }} />
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />Bật</label>
+                              <button onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
+                            </div>
+                          </section>
+                          {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}><span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700 }}>{rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}</span><button onClick={() => void saveReleaseConfiguration()} disabled={!rewardConfigDirty || rewardConfigSaving} style={{ background: C.accent, color: '#fff', padding: '9px 12px', fontWeight: 800, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1 }}><Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={14} /> {rewardConfigSaving ? 'Đang lưu' : 'Lưu cấu hình'}</button></div>
+                        </div>}
+                      </div>
                     </>
                   )}
 
@@ -419,34 +470,36 @@
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
                 const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
-                const giveConsumable = (name: string) => {
-                  if (!isConsumableGiftName(name)) return;
+                const giveConsumable = (gift: GiftDefinition) => {
+                  const name = gift.name;
+                  if (!consumableGiftCatalog.some(item => item.enabled && item.id === gift.id)) return;
                   const nx = students.map(s => s.id === giftFor ? {
                     ...s,
                     inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
                   } : s);
-                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1 });
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
                   alert(`${t('gift_done')} (${name})`);
                 };
-                const givePermanent = (name: string) => {
-                  if (!isPermanentGiftName(name) || owned.includes(name)) return;
+                const givePermanent = (gift: GiftDefinition) => {
+                  const name = gift.name;
+                  if (!permanentGiftCatalog.some(item => item.enabled && item.id === gift.id) || owned.includes(name)) return;
                   const nx = students.map(s => s.id === giftFor ? {
                     ...s,
                     inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
                   } : s);
-                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name });
+                  const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
                   alert(`${t('gift_done')} (${name})`);
                 };
-                const permChip = (name: string) => {
-                  const has = owned.includes(name);
-                  return <button key={name} disabled={has} onClick={() => givePermanent(name)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{name.split(': ')[1] || name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
+                const permChip = (gift: GiftDefinition) => {
+                  const has = owned.includes(gift.name);
+                  return <button key={gift.id} disabled={has} onClick={() => givePermanent(gift)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{gift.name.split(': ')[1] || gift.name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
                 };
                 const grp = (title: string, group: string) => (
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{title}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{PERMANENT_GIFT_CATALOG.filter(item => item.group === group).map(item => permChip(item.name))}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && item.group === group).map(permChip)}</div>
                   </div>
                 );
                 return (
@@ -465,7 +518,7 @@
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                            {CONSUMABLE_GIFT_CATALOG.map(item => <button key={item.name} onClick={() => giveConsumable(item.name)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
+                            {consumableGiftCatalog.filter(item => item.enabled).map(item => <button key={item.id} onClick={() => giveConsumable(item)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -474,6 +527,7 @@
                           {grp('Giao diện', 'themes')}
                           {grp('Khung avatar', 'frames')}
                           {grp('Linh thú', 'pets')}
+                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Khác</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
                         </div>
                       </div>
                     </div>

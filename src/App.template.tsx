@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import {
@@ -21,6 +21,20 @@ import type {
   StudentQuestProgress,
   TopicAssignment,
 } from "./quest";
+import {
+  DEFAULT_GIFT_CATALOG,
+  DEFAULT_REWARD_MECHANISMS,
+  coinsForRewardEvent,
+  countWritingWords,
+  isWritingQuiz,
+  normalizeGiftCatalog,
+  normalizeRewardMechanisms,
+  normalizeWritingTasks,
+  resultSubmittedAt,
+  writingDraftKey,
+  writingQuestions,
+} from "./publicRelease";
+import type { GiftDefinition, RewardMechanism, WritingTaskDefinition } from "./publicRelease";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -47,6 +61,7 @@ const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
 // A full exam can exceed Firestore's 1 MiB document limit. Keep every exam in its
 // own document so a successful local edit is always deliverable to every device.
 const QUIZZES_COLLECTION_REF = collection(DB_DOC_REF, "quizzes");
+const WRITING_DRAFTS_COLLECTION_REF = collection(DB_DOC_REF, "writingDrafts");
 const VOCAB_ROOT_COLLECTION = "ielts_vocab";
 const vocabStudentKey = (email: string) => encodeURIComponent(String(email || "").trim().toLowerCase());
 const vocabCardsRef = (email: string) => collection(db, VOCAB_ROOT_COLLECTION, vocabStudentKey(email), "cards");
@@ -1472,40 +1487,8 @@ const QUICK_NOTES = ["Well done", "Improve pronunciation", "Homework incomplete"
 
 // One source of truth for every item that can enter a student's bag. Quest rewards,
 // manual teacher grants, and Gacha must all use these exact inventory names.
-const CONSUMABLE_GIFT_CATALOG = [
-  { name: "Thẻ dời deadline (24h)" },
-  { name: "1 Hộp Milo" },
-  { name: "1 Ly Trái Chò" },
-  { name: "1 Trà sữa Viên Viên" },
-] as const;
-
-const PERMANENT_GIFT_CATALOG = [
-  { group: "titles", name: "Danh hiệu: Chiến Thần IELTS" },
-  { group: "titles", name: "Danh hiệu: Kẻ Hủy Diệt Đề" },
-  { group: "titles", name: "Danh hiệu: Học Bá Thượng Đẳng" },
-  { group: "titles", name: "Danh hiệu: Cao Thủ Reading" },
-  { group: "titles", name: "Danh hiệu: Bậc Thầy Từ Vựng" },
-  { group: "titles", name: "Danh hiệu: Vua Tốc Độ" },
-  { group: "titles", name: "Danh hiệu: Huyền Thoại 8.0+" },
-  { group: "titles", name: "Danh hiệu: Mọt Sách Bất Bại" },
-  { group: "titles", name: "Danh hiệu: Thợ Săn Band Điểm" },
-  { group: "titles", name: "Danh hiệu: Ninja Phòng Thi" },
-  { group: "themes", name: "Giao diện: Hoàng Kim" },
-  { group: "themes", name: "Giao diện: Nửa Đêm" },
-  { group: "themes", name: "Giao diện: Anh Đào" },
-  { group: "themes", name: "Giao diện: Rừng Sâu" },
-  { group: "frames", name: "Khung avatar: Vương Miện" },
-  { group: "frames", name: "Khung avatar: Rồng Lửa" },
-  { group: "frames", name: "Khung avatar: Băng Giá" },
-  { group: "frames", name: "Khung avatar: Cầu Vồng" },
-  { group: "frames", name: "Khung avatar: Sao Băng" },
-  { group: "pets", name: "Linh thú: Cú Mèo" },
-  { group: "pets", name: "Linh thú: Mèo Thần Tài" },
-  { group: "pets", name: "Linh thú: Rồng Con" },
-  { group: "pets", name: "Linh thú: Cáo Lửa" },
-  { group: "pets", name: "Linh thú: Chim Cánh Cụt" },
-  { group: "pets", name: "Linh thú: Gấu Trúc" },
-] as const;
+const CONSUMABLE_GIFT_CATALOG = DEFAULT_GIFT_CATALOG.filter(item => item.kind === "consumable");
+const PERMANENT_GIFT_CATALOG = DEFAULT_GIFT_CATALOG.filter(item => item.kind === "permanent");
 
 const isConsumableGiftName = (value: unknown) => CONSUMABLE_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
 const isPermanentGiftName = (value: unknown) => PERMANENT_GIFT_CATALOG.some(item => item.name === String(value || "").trim());
@@ -1523,7 +1506,8 @@ interface VocabCard { id: string; word: string; phonetic?: string; pos?: string;
 interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
 interface Session { id: string | number; studentId: string; studentName: string; teacher: string; skills: string[]; date: string; duration: number; rate: number; earnings: number; notes: string; rubric: Rubric; isPaid: boolean; }
-interface Schedule { id: string; date: string; time: string; teacher: string; studentId: string; studentName: string; subject: string; location: string; duration?: number; status?: "PENDING" | "DONE" | "ABSENT"; billed?: boolean; }
+interface ScheduleMaterial { id: string; url: string; label?: string; }
+interface Schedule { id: string; date: string; time: string; teacher: string; studentId: string; studentName: string; subject: string; location: string; duration?: number; status?: "PENDING" | "DONE" | "ABSENT"; billed?: boolean; lessonContent?: string; materials?: ScheduleMaterial[]; }
 interface SharedLink { id: string; title: string; url: string; date: string; audience: "TEACHERS" | "ALL_STUDENTS" | "SPECIFIC_STUDENT"; targetStudentId: string; targetStudentName: string; }
 interface Transaction { id: string; title: string; amount: number; date: string; type: "INCOME" | "EXPENSE"; }
 interface SystemLog { id: string; errorType: string; message: string; context?: string; timestamp: string; email?: string; }
@@ -1539,6 +1523,7 @@ interface CoinOperation {
   permanentName?: string;
   inventoryGrants?: { consumables?: Record<string, number>; permanents?: string[] };
   reviewedQuizId?: string;
+  giftSnapshot?: { id?: string; name: string; price: number; details?: string; kind?: "consumable" | "permanent" };
 }
 
 const applyCoinOperation = (students: any[], operation: CoinOperation) => {
@@ -1572,7 +1557,7 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   });
 };
 
-type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL";
+type QuestionType = "CHOICE" | "BLANK" | "CHOICE_MULTIPLE" | "MATCHING" | "DRAG_DROP" | "DRAG_DROP_HEADING" | "SHORT_ANSWER" | "MAP_DRAG" | "DIAGRAM_LABEL" | "WRITING";
 interface MapDragSlot { questionNumber: number; x: number; y: number; width?: number; height?: number; }
 interface DiagramLabelBox extends MapDragSlot { targetX?: number; targetY?: number; html?: string; }
 interface ManualExplanationTimestamp { startTime: number; endTime?: number; label: string; }
@@ -1591,10 +1576,10 @@ interface DiagramTextBox {
 interface RealExamPackage { id: string; title: string; active: boolean; mode: "LR" | "LRW"; quizIds: string[]; passcode?: string; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; maxAttempts?: number; createdAt?: number; updatedAt?: number; }
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
-interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
+interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; writingTutorialVideoUrl?: string; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1793,7 +1778,10 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
-interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
+interface WritingCriterionScore { taskAchievement?: number; coherence?: number; lexical?: number; grammar?: number; overall?: number; }
+interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; }
+interface WritingGrading { status: "awaiting_grading" | "draft" | "published"; taskScores: Record<string, WritingCriterionScore>; correctedAnswers: Record<string, string>; comments: WritingComment[]; finalBand?: number; updatedAt?: number; publishedAt?: number; publishedBy?: string; }
+interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; submittedAt?: number; submissionId?: string; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; writingScores?: Record<string, string | number>; writingGrading?: WritingGrading; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 
 const normalizeChoiceMultipleIndexes = (value: any): number[] => {
@@ -1936,7 +1924,8 @@ const isSingleQuestionCorrect = (question: any, answer: any) => {
 };
 
 const getQuizScoreSummary = (quizOrQuestions: any, answers: Record<string, any> = {}) => {
-  const questions = Array.isArray(quizOrQuestions) ? quizOrQuestions : (quizOrQuestions?.questions || []);
+  const questions = (Array.isArray(quizOrQuestions) ? quizOrQuestions : (quizOrQuestions?.questions || []))
+    .filter((question: any) => String(question?.type || "").toUpperCase() !== "WRITING");
   let score = 0;
   let total = 0;
   let skipped = 0;
@@ -3452,6 +3441,24 @@ export default function IeltsSupremeOS() {
   const [history, setHistory] = useState<Session[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [giftCatalog, setGiftCatalog] = useState<GiftDefinition[]>(() => normalizeGiftCatalog(null));
+  const [rewardMechanisms, setRewardMechanisms] = useState<RewardMechanism[]>(() => normalizeRewardMechanisms(null));
+  const [rewardConfigSaving, setRewardConfigSaving] = useState(false);
+  const [rewardConfigError, setRewardConfigError] = useState("");
+  const [rewardConfigOpen, setRewardConfigOpen] = useState(false);
+  const [rewardConfigDirty, setRewardConfigDirty] = useState(false);
+  const [giftDraft, setGiftDraft] = useState<Partial<GiftDefinition>>({ kind: "consumable", enabled: true, price: 0, name: "", details: "" });
+  const [rewardDraft, setRewardDraft] = useState<Partial<RewardMechanism>>({ event: "", name: "", coins: 0, enabled: true });
+  const [writingCommentDraft, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
+  const consumableGiftCatalog = giftCatalog.filter(item => item.kind === "consumable");
+  const permanentGiftCatalog = giftCatalog.filter(item => item.kind === "permanent");
+  const configuredRewardCoins = (event: string, fallback = 0) => coinsForRewardEvent(rewardMechanisms, event, fallback);
+  const lessonRewardForSeconds = (seconds: number) => {
+    if (seconds >= 7200) return configuredRewardCoins("LESSON_LONG", 60);
+    if (seconds >= 3600) return configuredRewardCoins("LESSON_STANDARD", 25);
+    if (seconds >= 1800) return configuredRewardCoins("LESSON_SHORT", 10);
+    return 0;
+  };
   const [sharedLinks, setSharedLinks] = useState<SharedLink[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const quizzesRef = useRef<Quiz[]>([]);
@@ -3470,6 +3477,11 @@ export default function IeltsSupremeOS() {
   const [realExamAudioVolume, setRealExamAudioVolume] = useState(80);
   const [realExamAudioMenuOpen, setRealExamAudioMenuOpen] = useState(false);
   const [realExamFullscreenBlocked, setRealExamFullscreenBlocked] = useState(false);
+  const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
+  const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
   const [liveSessions, setLiveSessions] = useState<LiveSession[]>([]);
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
@@ -3585,7 +3597,7 @@ export default function IeltsSupremeOS() {
   const [calDate, setCalDate] = useState(new Date());
   const [viewDate, setViewDate] = useState(new Date().toISOString().split('T')[0]);
   const [showSchedForm, setShowSchedForm] = useState(false);
-  const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90 });
+  const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
@@ -3614,6 +3626,13 @@ export default function IeltsSupremeOS() {
   }, [userRole, activeExam]);
   const trueEndTimeRef = useRef<number>(0);
   const [examAnswers, setExamAnswers] = useState<Record<string, any>>({});
+  const [writingSaveState, setWritingSaveState] = useState<"idle" | "saving" | "saved" | "offline" | "error">("idle");
+  const writingAttemptIdRef = useRef("");
+  const writingRevisionRef = useRef(0);
+  const writingAutosaveTimerRef = useRef<number | null>(null);
+  const writingSaveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const writingSubmittingRef = useRef(false);
+  const writingLastSectionRef = useRef(0);
   const [qNotes, setQNotes] = useState<Record<string, string>>({}); 
   const [flaggedQuestions, setFlaggedQuestions] = useState<string[]>([]);
   const [crossedOptions, setCrossedOptions] = useState<Record<string, number>>({}); 
@@ -4271,11 +4290,13 @@ export default function IeltsSupremeOS() {
                   if (diff === 1) newStreak = (meLocal.currentStreak || 0) + 1;
               }
           }
-          let bonusCoins = 20;
-          let msg = `DAILY ATTENDANCE: +20 Coins\n Current streak: ${newStreak} days.`;
+          const dailyCoins = configuredRewardCoins("DAILY_ATTENDANCE", 20);
+          let bonusCoins = dailyCoins;
+          let msg = `DAILY ATTENDANCE: +${dailyCoins} Coins\n Current streak: ${newStreak} days.`;
           if (newStreak > 0 && newStreak % 7 === 0) {
-              bonusCoins += 300;
-              msg += `\n 7-DAY STREAK BONUS: +300 Coins!`;
+              const streakCoins = configuredRewardCoins("WEEKLY_STREAK", 300);
+              bonusCoins += streakCoins;
+              msg += `\n 7-DAY STREAK BONUS: +${streakCoins} Coins!`;
           }
           newCoins += bonusCoins;
           dailyCoinOperation = makeCoinOperation(meLocal.id, bonusCoins, "DAILY_ATTENDANCE");
@@ -4960,6 +4981,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setHistory(clean(d.history));
     setTransactions(clean(d.transactions)); 
     setSchedules(clean(d.schedules));
+    setGiftCatalog(normalizeGiftCatalog(d.giftCatalog));
+    setRewardMechanisms(normalizeRewardMechanisms(d.rewardMechanisms));
     setSharedLinks(clean(d.sharedLinks)); 
     const serverQuizzes = clean(d.quizzes) as Quiz[];
     legacyQuizzesRef.current = serverQuizzes;
@@ -4977,7 +5000,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (pendingQuizWrite) {
       // The prior browser session ended before Firestore acknowledged its write. Retry
       // after this snapshot has settled; syncData clears the record only on success.
-      window.setTimeout(() => { void syncData({ quizzes: recoveredQuizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
+      window.setTimeout(() => { void syncData({ __quizUpserts: pendingQuizWrite.quizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
     }
     if (!quizCatalogMigratedRef.current && userRole === "TEACHER") {
       void migrateLegacyQuizCatalog(serverQuizzes);
@@ -5337,6 +5360,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // FIX: Sync editingQuizRef với editingQuiz state
   useEffect(() => {
       editingQuizRef.current = editingQuiz;
+      if (editingQuiz && examBuilderSaveState === "saved") setExamBuilderSaveState("idle");
   }, [editingQuiz]);
 
   useEffect(() => {
@@ -5779,12 +5803,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
       ? newData.__vocabPending : null;
-    const hasQuizCatalogWrite = Array.isArray(newData.quizzes) && userRole === "TEACHER";
+    const quizUpserts = Array.isArray(newData.__quizUpserts)
+      ? newData.__quizUpserts
+      : (Array.isArray(newData.quizzes) ? newData.quizzes : []);
+    const hasQuizCatalogWrite = quizUpserts.length > 0 && userRole === "TEACHER";
     const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
       ? newData.topicAssignments as TopicAssignment[]
       : topicAssignments;
     if (hasQuizCatalogWrite) {
-      writePendingQuizWrite(newData.quizzes, quizDeleteIds);
+      writePendingQuizWrite(quizUpserts, quizDeleteIds);
     }
     if (pendingVocab && userRole === "STUDENT") {
       writePendingVocabWrite(pendingVocab.notebook, pendingVocab.tombstones || []);
@@ -5795,17 +5822,21 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (hasQuizCatalogWrite) {
         // Exams are deliberately written outside the workspace document. A large DOCX
         // import must not be rejected because unrelated workspace data fills that blob.
-        await persistQuizCatalog(newData.quizzes, quizDeleteIds);
+        await persistQuizCatalog(quizUpserts, quizDeleteIds);
         clearPendingQuizWrite();
       }
       // Do not mirror the catalog back into the old single Firestore document.
       newData = { ...newData };
       delete newData.quizzes;
+      delete newData.__quizUpserts;
+      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__vocabPending", "__coinOperation"].includes(key))
+          && !coinOperation && !pendingVocab) return true;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
         if (!sfDoc.exists()) {
           const initialData = { ...newData };
           delete initialData.__quizDeletedIds;
+          delete initialData.__quizUpserts;
           delete initialData.__vocabPending;
           delete initialData.__coinOperation;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
@@ -5845,6 +5876,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
         Object.keys(newData).forEach((key) => {
           if (key === "__quizDeletedIds") return;
+          if (key === "__quizUpserts") return;
           if (key === "__vocabPending") return;
           if (key === "__coinOperation") return;
           const localVal = newData[key];
@@ -5941,6 +5973,14 @@ const applyWorkspaceSnapshot = (snap: any) => {
                 }
                 return localItem;
               });
+            } else if (key === "quizResults") {
+              const mergedResults = [...serverArr];
+              localVal.forEach((localResult: any) => {
+                const index = mergedResults.findIndex((serverResult: any) => serverResult.id === localResult.id);
+                if (index < 0) mergedResults.push(localResult);
+                else mergedResults[index] = { ...mergedResults[index], ...localResult };
+              });
+              finalUpdate[key] = mergedResults;
             } else {
               finalUpdate[key] = localVal;
             }
@@ -7109,7 +7149,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const newExp = (st.exp || 0) + Math.round(totalSecs / 60);
     const oldLevel = st.level || 1;
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoinsByTime = totalSecs >= 7200 ? 60 : (totalSecs >= 3600 ? 25 : (totalSecs >= 1800 ? 10 : 0));
+    const earnedCoinsByTime = lessonRewardForSeconds(totalSecs);
 
     if (newLevel > oldLevel) { 
       setShowCelebration(true); 
@@ -7166,7 +7206,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
     const newExp = (st.exp || 0) + Math.round(elapsed / 60);
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoinsByTime = elapsed >= 7200 ? 60 : (elapsed >= 3600 ? 25 : (elapsed >= 1800 ? 10 : 0));
+    const earnedCoinsByTime = lessonRewardForSeconds(elapsed);
 
     if (newLevel > (st.level || 1)) { 
       setShowCelebration(true); 
@@ -7214,8 +7254,29 @@ const applyWorkspaceSnapshot = (snap: any) => {
     if (!schedForm.studentId) { alert("Please select a student!"); return; }
     const st = students.find(x => x.id === schedForm.studentId);
     if (!st) return;
-    const nx = [{ id: getTrueTime().toString(), date: viewDate, time: schedForm.time, location: schedForm.location, teacher: myTeacherName, studentId: schedForm.studentId, studentName: st.name, subject: "IELTS Core", duration: Number(schedForm.duration) || 90, status: "PENDING" as const, billed: false }, ...schedules];
+    const materials: ScheduleMaterial[] = [];
+    for (const rawLine of String(schedForm.materialsText || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean)) {
+      const [possibleLabel, possibleUrl] = rawLine.includes("|") ? rawLine.split(/\|(.+)/, 2) : ["", rawLine];
+      const url = String(possibleUrl || "").trim();
+      try {
+        const parsed = new URL(url);
+        if (!["https:", "http:"].includes(parsed.protocol)) throw new Error("protocol");
+        materials.push({ id: `material_${getTrueTime()}_${materials.length}`, url: parsed.toString(), label: String(possibleLabel || "").trim() || undefined });
+      } catch {
+        alert(`Liên kết tài liệu không hợp lệ: ${rawLine}`);
+        return;
+      }
+    }
+    const schedule: Schedule = {
+      id: getTrueTime().toString(), date: viewDate, time: schedForm.time, location: schedForm.location,
+      teacher: myTeacherName, studentId: schedForm.studentId, studentName: st.name, subject: "IELTS Core",
+      duration: Number(schedForm.duration) || 90, status: "PENDING", billed: false,
+      lessonContent: String(schedForm.lessonContent || "").trim() || undefined,
+      materials,
+    };
+    const nx = [schedule, ...schedules];
     setSchedules(nx); syncData({ schedules: nx }); setShowSchedForm(false);
+    setSchedForm({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   };
 
   // Điểm danh: có mặt -> tự tạo buổi học (history) + tính phí; vắng -> đánh dấu, không tính phí
@@ -7241,7 +7302,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     };
     const newExp = (st.exp || 0) + Math.round(secs / 60);
     const newLevel = Math.floor(newExp / 500) + 1;
-    const earnedCoins = secs >= 7200 ? 60 : (secs >= 3600 ? 25 : (secs >= 1800 ? 10 : 0));
+    const earnedCoins = lessonRewardForSeconds(secs);
     const nxStudents = students.map(s => s.id === st.id ? { ...s, exp: newExp, level: newLevel, coins: (s.coins || 0) + earnedCoins, debtMessage: s.debtMessage || "" } : s);
     const nxHistory = [session, ...history];
     const nxSched = schedules.map(x => x.id === sched.id ? { ...x, status: "DONE" as const, billed: true } : x);
@@ -7311,6 +7372,34 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const buf = await wb.xlsx.writeBuffer();
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click();
+  };
+
+  const exportMyVocabXlsx = async () => {
+    if (userRole !== "STUDENT" || !currentUser?.email) return;
+    const me = students.find(student => String(student.email || "").toLowerCase() === currentUser.email!.toLowerCase());
+    const cards = newestVocabFirst(Array.isArray(me?.vocabNotebook) ? me!.vocabNotebook! : []);
+    if (!cards.length) {
+      alert("Chưa có từ vựng để xuất.");
+      return;
+    }
+    try {
+      await downloadXLSX(
+        `IELTS_OS_Vocabulary_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        "Vocabulary",
+        [
+          { header: "No.", width: 8 },
+          { header: "Word / Vocabulary", width: 26 },
+          { header: "IPA", width: 19 },
+          { header: "English Definition", width: 44 },
+          { header: "Example", width: 54 },
+        ],
+        cards.map((card, index) => [index + 1, card.word || "", card.phonetic || "", card.meaning || "", card.example || ""]),
+        "IELTS OS Vocabulary"
+      );
+    } catch (error) {
+      console.error("Vocabulary XLSX export failed:", error);
+      alert("Không thể tạo file Excel. Vui lòng thử lại.");
+    }
   };
 
   const exportCSV = () => {
@@ -7494,6 +7583,115 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     } catch (error: any) { 
         logErrorToSystem("CONNECTION_ERROR", error.message || String(error), { action: "upload_docx" });
         alert("Connection error to FastAPI backend!"); 
+    }
+  };
+
+  const setQuestDocxFiles = async (incoming: FileList | File[]) => {
+    const files = Array.from(incoming || []).filter(file => /\.docx$/i.test(file.name));
+    if (!files.length) return;
+    if (files.length > 20) {
+      alert("Mỗi lần chỉ có thể xử lý tối đa 20 file DOCX.");
+      return;
+    }
+    const staged = files.map((file, index) => ({
+      id: `quest_docx_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+      file,
+      status: "parsing" as const,
+    }));
+    setQuestDocxBatch(staged);
+    setQuestDocxBatchBusy(true);
+    try {
+      const formData = new FormData();
+      staged.forEach(item => formData.append("files", item.file));
+      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
+      const data = await readApiJson(response);
+      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
+      const results = Array.isArray(data?.results) ? data.results : [];
+      setQuestDocxBatch(staged.map((item, index) => {
+        const result = results.find((entry: any) => Number(entry?.index) === index);
+        return result?.success && result?.quiz
+          ? { ...item, status: "ready" as const, quiz: result.quiz as Quiz }
+          : { ...item, status: "error" as const, error: String(result?.error || "Không thể phân tích file này.") };
+      }));
+    } catch (error: any) {
+      const message = error?.message || "Không thể phân tích batch DOCX.";
+      setQuestDocxBatch(staged.map(item => ({ ...item, status: "error" as const, error: message })));
+    } finally {
+      setQuestDocxBatchBusy(false);
+    }
+  };
+
+  const moveQuestDocxFile = (index: number, direction: -1 | 1) => {
+    setQuestDocxBatch(previous => {
+      const target = index + direction;
+      if (target < 0 || target >= previous.length) return previous;
+      const next = [...previous];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
+
+  const confirmQuestDocxBatch = async () => {
+    if (userRole !== "TEACHER" || questDocxBatchBusy || !questDocxBatch.length) return;
+    if (questDocxBatch.some(item => item.status !== "ready" || !item.quiz)) {
+      alert("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.");
+      return;
+    }
+    const createdAt = getTrueTime();
+    const preparedQuizzes = questDocxBatch.map((item, index) => ({
+      ...(item.quiz as Quiz),
+      id: `quest_import_${createdAt}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+      title: String(item.quiz?.title || item.file.name.replace(/\.docx$/i, "")).trim(),
+      active: false,
+      audience: "ALL" as const,
+      targetStudentIds: [],
+      maxAttempts: Math.max(1, Number(item.quiz?.maxAttempts) || 1),
+      folder: "Quest imports",
+      updatedAt: createdAt,
+    }));
+    const assignment: TopicAssignment = {
+      id: `topic_${createdAt}_${Math.random().toString(36).slice(2, 7)}`,
+      title: `Quest: ${preparedQuizzes[0]?.title || "DOCX import"}`,
+      topicCategory: "DOCX import",
+      description: "Các bài được tạo theo thứ tự file DOCX đã xác nhận.",
+      audience: "ALL",
+      targetStudentIds: [],
+      nodes: preparedQuizzes.map((quiz, index) => ({
+        id: `node_${createdAt}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+        testId: quiz.id,
+        title: quiz.title,
+        description: "",
+        passingThresholdPercent: 0,
+        mode: "practice" as const,
+        timeLimitMinutes: quiz.timeLimit,
+        questionCount: quiz.questions.length,
+      })),
+      rewards: [],
+      createdBy: currentUser?.email || "",
+      createdAt,
+      updatedAt: createdAt,
+    };
+
+    setQuestDocxBatchBusy(true);
+    try {
+      await runTransaction(db, async transaction => {
+        const workspace = await transaction.get(DB_DOC_REF);
+        if (!workspace.exists()) throw new Error("Không tìm thấy workspace để tạo chuyên đề.");
+        const storedAssignments = workspace.data()?.topicAssignments;
+        const existingAssignments = (Array.isArray(storedAssignments) ? storedAssignments : []) as TopicAssignment[];
+        preparedQuizzes.forEach(quiz => transaction.set(doc(QUIZZES_COLLECTION_REF, quiz.id), JSON.parse(JSON.stringify(quiz))));
+        transaction.update(DB_DOC_REF, { topicAssignments: [...existingAssignments, assignment] });
+      });
+      setQuizzes(previous => [...preparedQuizzes, ...previous.filter(quiz => !preparedQuizzes.some(item => item.id === quiz.id))]);
+      setTopicAssignments(previous => [...previous, assignment]);
+      setQuestDocxBatch([]);
+      setTopicAssignmentEditor(assignment);
+      alert("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.");
+    } catch (error: any) {
+      console.error("Quest DOCX batch confirmation failed:", error);
+      alert(error?.message || "Không thể tạo chuyên đề từ batch DOCX.");
+    } finally {
+      setQuestDocxBatchBusy(false);
     }
   };
 
@@ -7816,12 +8014,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     const skill = realExamSkillLabel(source);
-    const videoUrl = officialInstructionVideoUrl(skill);
+    const videoUrl = skill === "Writing" ? String(source?.writingTutorialVideoUrl || "").trim() : officialInstructionVideoUrl(skill);
     if (videoUrl && realExamSession?.packageId === pkg.id) {
       setRealExamInstructionGate({
         packageId: pkg.id,
         quizId,
-        skill: skill as "Listening" | "Reading",
+        skill: skill as "Listening" | "Reading" | "Writing",
         videoUrl,
         ready: false,
         nonce: Date.now(),
@@ -7840,6 +8038,84 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (pkg) window.setTimeout(() => launchRealExamPackageQuiz(pkg, quizId), 0);
   };
 
+  const writingLocalDraftKey = (quiz: Quiz, attemptId: string) =>
+    `ielts_writing_draft_${writingDraftKey(currentUser?.email || "anonymous", quiz.id, attemptId)}`;
+
+  const queueWritingDraftSave = (quiz: Quiz, answers: Record<string, any>, immediate = false) => {
+    if (!isWritingQuiz(quiz) || isPreview || !currentUser?.email || !writingAttemptIdRef.current) return Promise.resolve(true);
+    const revision = ++writingRevisionRef.current;
+    const payload = {
+      quizId: quiz.id,
+      attemptId: writingAttemptIdRef.current,
+      ownerEmail: currentUser.email.toLowerCase(),
+      answers,
+      revision,
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      submitted: false,
+    };
+    try { localStorage.setItem(writingLocalDraftKey(quiz, writingAttemptIdRef.current), JSON.stringify(payload)); } catch {}
+    if (writingAutosaveTimerRef.current) window.clearTimeout(writingAutosaveTimerRef.current);
+    const persist = async () => {
+      if (!navigator.onLine) { setWritingSaveState("offline"); return false; }
+      setWritingSaveState("saving");
+      try {
+        await setDoc(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email!, quiz.id, payload.attemptId)), payload, { merge: true });
+        if (writingRevisionRef.current === revision) setWritingSaveState("saved");
+        return true;
+      } catch (error) {
+        console.error("Writing autosave failed:", error);
+        setWritingSaveState(navigator.onLine ? "error" : "offline");
+        return false;
+      }
+    };
+    if (immediate) {
+      const task = writingSaveChainRef.current.then(persist, persist);
+      writingSaveChainRef.current = task.then(() => undefined, () => undefined);
+      return task;
+    }
+    writingAutosaveTimerRef.current = window.setTimeout(() => {
+      const task = writingSaveChainRef.current.then(persist, persist);
+      writingSaveChainRef.current = task.then(() => undefined, () => undefined);
+    }, 900);
+    return Promise.resolve(true);
+  };
+
+  const restoreWritingDraft = async (quiz: Quiz, attemptId: string) => {
+    const localKey = writingLocalDraftKey(quiz, attemptId);
+    let localDraft: any = null;
+    try { localDraft = JSON.parse(localStorage.getItem(localKey) || "null"); } catch {}
+    let remoteDraft: any = null;
+    if (currentUser?.email && navigator.onLine) {
+      try {
+        const snapshot = await getDocFromServer(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email, quiz.id, attemptId)));
+        if (snapshot.exists()) remoteDraft = snapshot.data();
+      } catch (error) {
+        console.warn("Writing draft restore deferred:", error);
+      }
+    }
+    const newest = [localDraft, remoteDraft]
+      .filter(item => item && item.submitted !== true && item.attemptId === attemptId)
+      .sort((a, b) => Number(b.revision || b.updatedAt || 0) - Number(a.revision || a.updatedAt || 0))[0];
+    if (!newest || writingAttemptIdRef.current !== attemptId) return;
+    writingRevisionRef.current = Math.max(writingRevisionRef.current, Number(newest.revision) || 0);
+    setExamAnswers((previous) => Object.keys(previous).length ? previous : { ...(newest.answers || {}) });
+    setWritingSaveState(remoteDraft && newest === remoteDraft ? "saved" : navigator.onLine ? "idle" : "offline");
+  };
+
+  useEffect(() => {
+    if (!activeExam || !isWritingQuiz(activeExam) || isPreview) return;
+    void queueWritingDraftSave(activeExam, examAnswers);
+  }, [activeExam?.id, examAnswers, isPreview]);
+
+  useEffect(() => {
+    if (!activeExam || !isWritingQuiz(activeExam) || isPreview) return;
+    if (writingLastSectionRef.current !== currentSectionIndex) {
+      writingLastSectionRef.current = currentSectionIndex;
+      void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true);
+    }
+  }, [currentSectionIndex, activeExam?.id, isPreview]);
+
   const handleAnswerChange = (questionId: string, answer: any, _type?: string) => {
     // FIX: Sử dụng Functional Update để đảm bảo State mới nhất không bị ghi đè khi gõ nhanh
     const question =
@@ -7847,8 +8123,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       || activeExam?.sections?.flatMap((section: any) => section?.questions || []).find((item: any) => String(item?.id || "") === String(questionId));
     const nextAnswer = question?.type === "MATCHING" ? resolveMatchingAnswerText(question, answer) : answer;
     setExamAnswers(prev => ({...prev, [questionId]: nextAnswer}));
-    setSaveStatus("Saving...");
-    setTimeout(() => setSaveStatus("Saved"), 500);
+    if (!activeExam || !isWritingQuiz(activeExam)) {
+      setSaveStatus("Saving...");
+      setTimeout(() => setSaveStatus("Saved"), 500);
+    }
   };
   
   const handleAutoScrollNext = (qIndex: number, totalQ: number) => {
@@ -7978,12 +8256,32 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
-      const quizToLoad = stripExamExplanations(normalizeExamSections(isStudentTestUI ? createTestUIQuiz(quiz) : quiz));
+      const sourceQuiz = isStudentTestUI ? createTestUIQuiz(quiz) : quiz;
+      const writingTasks = normalizeWritingTasks(sourceQuiz);
+      const quizWithWriting = isWritingQuiz(sourceQuiz)
+        ? { ...sourceQuiz, writingTasks, questions: writingQuestions({ ...sourceQuiz, writingTasks }) }
+        : sourceQuiz;
+      const quizToLoad = stripExamExplanations(normalizeExamSections(quizWithWriting));
       const isPreviewMode = isTeacherPreview || isStudentTestUI;
       const now = getRealTime();
       const delayTimerUntilAudioPlay = shouldDelayListeningExamTimer(quizToLoad, isPreviewMode);
 
       setExamAnswers({});
+      if (isWritingQuiz(quizToLoad)) {
+          const sessionKey = `ielts_writing_active_${String(currentUser?.email || "preview").toLowerCase()}_${quizToLoad.id}`;
+          let attemptId = "";
+          try { attemptId = String(JSON.parse(localStorage.getItem(sessionKey) || "null")?.attemptId || ""); } catch {}
+          if (!attemptId || isPreviewMode) attemptId = `writing_${quizToLoad.id}_${getTrueTime()}_${Math.random().toString(36).slice(2, 8)}`;
+          writingAttemptIdRef.current = attemptId;
+          writingRevisionRef.current = 0;
+          setWritingSaveState("idle");
+          if (!isPreviewMode) {
+              try { localStorage.setItem(sessionKey, JSON.stringify({ attemptId, startedAt: now })); } catch {}
+              void restoreWritingDraft(quizToLoad, attemptId);
+          }
+      } else {
+          writingAttemptIdRef.current = "";
+      }
       setExamTimeLeft(quizToLoad.timeLimit * 60);
       setExamStartTime(delayTimerUntilAudioPlay ? 0 : now);
       trueEndTimeRef.current = delayTimerUntilAudioPlay ? 0 : now + quizToLoad.timeLimit * 60000;
@@ -8042,23 +8340,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const forceSubmitExam = () => {
       const state = latestExamState.current;
       if (!state.activeExam) return;
+      const writingExam = isWritingQuiz(state.activeExam);
+      if (writingExam && writingSubmittingRef.current) return;
+      if (writingExam) {
+          writingSubmittingRef.current = true;
+          void queueWritingDraftSave(state.activeExam, state.examAnswers, true);
+      }
 
       const scoreSummary = getQuizScoreSummary(state.activeExam, state.examAnswers);
       const score = scoreSummary.score;
       const totalQ = scoreSummary.total;
 
-      const band = getIeltsBand(score, totalQ, state.activeExam.type);
+      const band = writingExam ? "Pending" : getIeltsBand(score, totalQ, state.activeExam.type);
 
      if (state.isPreview) {
-            alert(`PREVIEW COMPLETE! Score: ${score}/${totalQ}. Band: ${band}.`);
+            alert(writingExam ? "WRITING PREVIEW COMPLETE." : `PREVIEW COMPLETE! Score: ${score}/${totalQ}. Band: ${band}.`);
             setActiveExam(null); 
             setIsPreview(false); 
             if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            writingSubmittingRef.current = false;
             return;
         }
 
       const me = students.find(s => s.email?.toLowerCase() === currentUser?.email?.toLowerCase());
-      if (!me) return;
+      if (!me) { writingSubmittingRef.current = false; return; }
 
       const endTime = getRealTime();
       const effectiveStartTime = examStartTime || endTime;
@@ -8074,10 +8379,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         : undefined;
       const percentage = totalQ > 0 ? Number(((score / totalQ) * 100).toFixed(2)) : 0;
       const questPassed = Boolean(node && percentage >= Math.max(0, Math.min(100, Number(node.passingThresholdPercent) || 0)));
-      const resultId = `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
+      const resultId = writingExam && writingAttemptIdRef.current
+        ? writingAttemptIdRef.current
+        : `${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`;
       const result: QuizResult = {
           id: resultId, quizId: state.activeExam.id, quizTitle: state.activeExam.title, studentId: me.id, studentName: me.name,
-          date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount,
+          date: new Date().toLocaleString("vi-VN"), score, total: totalQ, band, cheatCount: state.examCheatCount, submittedAt: endTime,
+          ...(writingExam ? { submissionId: resultId, writingGrading: { status: "awaiting_grading" as const, taskScores: {}, correctedAnswers: {}, comments: [] } } : {}),
           startTime: new Date(effectiveStartTime).toLocaleString("vi-VN"), endTime: new Date(endTime).toLocaleString("vi-VN"),
           durationSeconds: durationSecs, deviceInfo: navigator.userAgent, ipAddress: studentIp, answers: state.examAnswers,
           scratchpad: state.scratchpadText, flaggedQuestions: state.flaggedQuestions, isRead: false,
@@ -8101,7 +8409,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       let nextStudents = students;
       let nextQuestProgress = questProgress;
       let coinOperation: CoinOperation | null = null;
-      let submissionMessage = `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
+      let submissionMessage = writingExam ? "WRITING SUBMITTED. Both tasks are saved in one attempt." : `EXAM SUBMITTED! Score: ${score}/${totalQ}. Band: ${band}.`;
       let questNotice: QuestStatusNotice | null = null;
       const questTx = (vi: string, en: string) => i18n.language === 'vi' ? vi : en;
 
@@ -8153,12 +8461,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             const permanentGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "permanent_gift")
               .map(reward => String(reward.rewardValue || "").trim())
-              .filter(isPermanentGiftName);
+              .filter(name => permanentGiftCatalog.some(item => item.enabled && item.name === name));
             const consumableGifts = newlyUnlocked
               .filter(reward => reward.rewardType === "consumable_gift")
               .reduce<Record<string, number>>((grants, reward) => {
                 const name = String(reward.rewardValue || "").trim();
-                if (isConsumableGiftName(name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
+                if (consumableGiftCatalog.some(item => item.enabled && item.name === name)) grants[name] = (grants[name] || 0) + getQuestRewardQuantity(reward);
                 return grants;
               }, {});
             const hasConsumableGifts = Object.keys(consumableGifts).length > 0;
@@ -8263,12 +8571,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               void syncData({ quizResults: [result] });
           }
       } else {
-          let earnedCoins = 50;
+          let earnedCoins = configuredRewardCoins("EXAM_COMPLETE", 50);
           if (state.activeExam.scheduledEnd) {
               const endMs = parseVNTime(state.activeExam.scheduledEnd);
               const diffHour = (endMs - endTime) / (1000 * 3600);
-              if (diffHour >= 24) earnedCoins += 150;
-              else if (diffHour >= 12) earnedCoins += 100;
+              if (diffHour >= 24) earnedCoins += configuredRewardCoins("EXAM_EARLY_HIGH", 150);
+              else if (diffHour >= 12) earnedCoins += configuredRewardCoins("EXAM_EARLY", 100);
           }
           nextStudents = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + earnedCoins } : s);
           coinOperation = makeCoinOperation(me.id, earnedCoins, "EXAM_COMPLETION");
@@ -8293,6 +8601,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       }
 
       localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
+      if (writingExam && writingAttemptIdRef.current) {
+          const attemptId = writingAttemptIdRef.current;
+          try {
+              localStorage.removeItem(writingLocalDraftKey(state.activeExam, attemptId));
+              localStorage.removeItem(`ielts_writing_active_${String(currentUser?.email || "").toLowerCase()}_${state.activeExam.id}`);
+          } catch {}
+          if (currentUser?.email && navigator.onLine) {
+              void deleteDoc(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email, state.activeExam.id, attemptId))).catch(error => console.warn("Writing draft cleanup deferred:", error));
+          }
+          writingAttemptIdRef.current = "";
+      }
+      writingSubmittingRef.current = false;
       _setAudioTested(false);
       if (!realExamContext && Number(band) >= 7.0) { setShowCelebration(true); setTimeout(() => setShowCelebration(false), 8000); }
         if (realExamContext) {
@@ -8402,6 +8722,46 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const task = workspaceSyncChainRef.current.then(run, run) as Promise<boolean>;
     workspaceSyncChainRef.current = task.then(() => undefined, () => undefined);
     return task;
+  };
+
+  const stageGiftCatalog = (next: GiftDefinition[]) => {
+    setGiftCatalog(normalizeGiftCatalog(next));
+    setRewardConfigDirty(true);
+    setRewardConfigError("");
+  };
+  const stageRewardMechanisms = (next: RewardMechanism[]) => {
+    setRewardMechanisms(normalizeRewardMechanisms(next));
+    setRewardConfigDirty(true);
+    setRewardConfigError("");
+  };
+  const saveReleaseConfiguration = async () => {
+    if (userRole !== "TEACHER" || rewardConfigSaving) return;
+    const nextGifts = normalizeGiftCatalog(giftCatalog);
+    const nextRewards = normalizeRewardMechanisms(rewardMechanisms);
+    const duplicateGiftName = nextGifts.some((gift, index) => nextGifts.some((other, otherIndex) =>
+      otherIndex !== index && other.name.trim().toLocaleLowerCase() === gift.name.trim().toLocaleLowerCase()
+    ));
+    const duplicateEvent = nextRewards.some((rule, index) => nextRewards.some((other, otherIndex) =>
+      otherIndex !== index && other.event === rule.event
+    ));
+    if (duplicateGiftName || duplicateEvent) {
+      setRewardConfigError(duplicateGiftName ? "Tên quà không được trùng." : "Mỗi sự kiện thưởng chỉ được có một quy tắc.");
+      return;
+    }
+    setRewardConfigSaving(true);
+    setRewardConfigError("");
+    try {
+      const saved = await syncData({ giftCatalog: nextGifts, rewardMechanisms: nextRewards });
+      if (!saved) {
+        setRewardConfigError("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.");
+        return;
+      }
+      setGiftCatalog(nextGifts);
+      setRewardMechanisms(nextRewards);
+      setRewardConfigDirty(false);
+    } finally {
+      setRewardConfigSaving(false);
+    }
   };
 
   const flushPendingWorkspaceMutations = async () => {
@@ -8988,7 +9348,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const completed = new Set(realExamSession.completedQuizIds || []);
     const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
     const nextQuiz = exams.find(quiz => quiz.id === nextQuizId);
-    const nextInstructionVideoUrl = officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
+    const nextInstructionVideoUrl = realExamSkillLabel(nextQuiz) === "Writing"
+      ? String(nextQuiz?.writingTutorialVideoUrl || "").trim()
+      : officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
     const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
     const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
       ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`

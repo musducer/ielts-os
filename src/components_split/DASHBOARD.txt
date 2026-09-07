@@ -89,6 +89,10 @@
                         </div>
                       ))}
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: window.innerWidth > 760 ? 'minmax(0, 1fr) minmax(260px, .8fr)' : '1fr', gap: 14, marginTop: 14 }}>
+                      <div><label style={{ display: 'block', fontFamily: 'var(--heading)', fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: C.sub, marginBottom: 6 }}>Lesson content</label><textarea value={schedForm.lessonContent} onChange={(e: any) => setSchedForm({ ...schedForm, lessonContent: e.target.value })} placeholder="Topic, goals, or homework" rows={3} style={{ width: '100%', resize: 'vertical' }} /></div>
+                      <div><label style={{ display: 'block', fontFamily: 'var(--heading)', fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: C.sub, marginBottom: 6 }}>Materials</label><textarea value={schedForm.materialsText} onChange={(e: any) => setSchedForm({ ...schedForm, materialsText: e.target.value })} placeholder={"One link per line\nOptional label | https://..."} rows={3} style={{ width: '100%', resize: 'vertical' }} /></div>
+                    </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginTop: 16 }}>
                       <div style={{ fontSize: 11.5, color: C.sub, marginRight: 'auto', fontFamily: 'var(--mono)' }}>{viewDate} - {schedForm.time || "--:--"}{schedForm.duration ? ` - ${schedForm.duration} min` : ""}</div>
                       <button onClick={() => setShowSchedForm(false)} style={{ background: 'transparent', color: C.sub, border: 'none', fontSize: 12.5, fontWeight: 600, padding: '9px 6px', cursor: 'pointer' }}>{t('common_cancel')}</button>
@@ -107,6 +111,8 @@
                           {s.status === 'ABSENT' && <span style={{background: `${C.err}20`, color: C.err, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_was_absent')}<Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
                         </div>
                         <div style={{fontSize:12, color:C.sub, marginTop: 4}}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
+                        {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
+                        {!!s.materials?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 8 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>{material.label || material.url}</a>)}</div>}
                       </div>
                       <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
                           {(!s.status || s.status === 'PENDING') ? (
@@ -223,6 +229,8 @@
                   </div>
                   <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>{t('location_link')}</label><input placeholder={t('zoom_ph')} value={schedForm.location} onChange={(e: any)=>setSchedForm({...schedForm, location:e.target.value})} /></div>
                   <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>{t('sched_duration')}</label><input type="number" value={schedForm.duration} onChange={(e: any)=>setSchedForm({...schedForm, duration:Number(e.target.value)})} /></div>
+                  <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>Lesson content</label><textarea value={schedForm.lessonContent} onChange={(e: any)=>setSchedForm({...schedForm, lessonContent:e.target.value})} rows={3} placeholder="Topic, goals, or homework" /></div>
+                  <div><label style={{fontSize:10, fontWeight: 800, color: C.sub}}>Materials</label><textarea value={schedForm.materialsText} onChange={(e: any)=>setSchedForm({...schedForm, materialsText:e.target.value})} rows={3} placeholder={"One link per line\nOptional label | https://..."} /></div>
                   <button onClick={handleAddSchedule} style={{ background: C.succ, color: '#fff', padding:'11px' }}>{t('save_schedule')}</button>
                 </div>
               )}
@@ -235,6 +243,8 @@
                       <span style={{ background: `${C.accent}20`, color: C.accent, padding: '2px 7px', borderRadius: 6, fontSize: 11, fontWeight: 800, flexShrink: 0 }}>{safeString(s.time)}</span>
                     </div>
                     <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3 }}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
+                    {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.45, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
+                    {!!s.materials?.length && <div style={{ display: 'grid', gap: 4, marginTop: 7 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11.5, color: C.accent, fontWeight: 700, overflowWrap: 'anywhere' }}>{material.label || material.url}</a>)}</div>}
                     <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
                       {(!s.status || s.status === 'PENDING') ? (
                         <>

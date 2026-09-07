@@ -264,6 +264,9 @@
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
+    const quizSkill = (quiz: Quiz | undefined) => isWritingQuiz(quiz) ? "Writing" as const : String(quiz?.type || "").toLowerCase().includes("listen") ? "Listening" as const : "Reading" as const;
+    const activeQuizzesForSkill = activeQuizzes.filter(quiz => quizSkill(quiz) === studentExamSkillTab);
+    const resultsForSkill = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
     const getMyQuestProgress = (assignment: TopicAssignment) => deriveQuestProgress(
       questProgress.find(progress => progress.studentId === me.id && progress.topicAssignmentId === assignment.id),
       assignment
@@ -306,6 +309,7 @@
     const trendIcon = recentScores.length >= 2 ? (Number(recentScores[recentScores.length - 1].band) >= Number(recentScores[recentScores.length - 2].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
     const targetGap = me.target && avgBand !== "N/A" ? (Number(me.target) - Number(avgBand)) : 0;
     const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
+    const gachaSpinCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
 
     const handleReviewQuiz = (r: QuizResult) => {
         if (r.topicAssignmentId && r.questPassed !== true) {
@@ -327,19 +331,22 @@
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
             const newInv = { ...(me.inventory || {}), consumables: me.inventory?.consumables || {}, permanents: me.inventory?.permanents || [], reviewedQuizzes: [...reviewed, r.id] };
-            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + 20, inventory: newInv } : s);
+            const reviewReward = configuredRewardCoins("REVIEW_REWARD", 20);
+            const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) + reviewReward, inventory: newInv } : s);
             // One immutable claim per submitted result. The transaction also checks
             // reviewedQuizzes, so stale tabs/devices cannot mint the reward again.
-            const coinOperation = makeCoinOperation(me.id, 20, "REVIEW_REWARD", {
+            const coinOperation = makeCoinOperation(me.id, reviewReward, "REVIEW_REWARD", {
                 id: `review_reward_${me.id}_${r.id}`,
                 reviewedQuizId: r.id,
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert("CHIẾN THẦN REVIEW: +20 Xu vì đã xem lại lỗi sai trong bài thi!");
+            alert(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`);
         }
     };
 
-    const handleBuyConsumable = (itemName: string, price: number) => {
+    const handleBuyConsumable = (gift: GiftDefinition) => {
+        const itemName = gift.name;
+        const price = Math.max(0, Number(gift.price) || 0);
         if ((me.coins || 0) < price) { alert("Bạn không đủ OS Coins!"); return; }
         if (confirm(`Dùng ${price} xu để đổi "${itemName}"?`)) {
             const currentCons = { ...(me.inventory?.consumables || {}) };
@@ -350,7 +357,10 @@
                 consumables: { ...currentCons, [itemName]: (currentCons[itemName] || 0) + 1 } 
             };
             const nx = students.map(s => s.id === me.id ? { ...s, coins: (s.coins || 0) - price, inventory: newInv } : s);
-            const coinOperation = makeCoinOperation(me.id, -price, "STORE_PURCHASE", { consumableName: itemName });
+            const coinOperation = makeCoinOperation(me.id, -price, "STORE_PURCHASE", {
+                consumableName: itemName,
+                giftSnapshot: { id: gift.id, name: gift.name, price, details: gift.details, kind: gift.kind },
+            });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
             setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
@@ -358,16 +368,18 @@
     };
 
     const handleRollGacha = () => {
-        if ((me.coins || 0) < 500) { alert("Cần 500 Xu để quay Gacha!"); return; }
-        if (confirm("Dùng 500 Xu để mở Hộp Quà Ngẫu Nhiên?")) {
-            const pool = [
-                ...PERMANENT_GIFT_CATALOG.map(item => ({ type: "PERMANENT", name: item.name })),
-                ...CONSUMABLE_GIFT_CATALOG.map(item => ({ type: "CONSUMABLE", name: item.name })),
-                { type: "NONE", name: "Chúc bạn may mắn lần sau" },
-                { type: "NONE", name: "Chúc bạn may mắn lần sau" }
+        const gachaCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
+        const duplicateRefund = configuredRewardCoins("GACHA_DUPLICATE_REFUND", 200);
+        if ((me.coins || 0) < gachaCost) { alert(`Cần ${gachaCost} Xu để quay Gacha!`); return; }
+        if (confirm(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`)) {
+            const pool: Array<{ type: "PERMANENT" | "CONSUMABLE" | "NONE"; name: string; gift?: GiftDefinition }> = [
+                ...permanentGiftCatalog.filter(item => item.enabled).map(item => ({ type: "PERMANENT" as const, name: item.name, gift: item })),
+                ...consumableGiftCatalog.filter(item => item.enabled).map(item => ({ type: "CONSUMABLE" as const, name: item.name, gift: item })),
+                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" },
+                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" }
             ];
             const reward = pool[Math.floor(Math.random() * pool.length)];
-            let newCoins = (me.coins || 0) - 500;
+            let newCoins = (me.coins || 0) - gachaCost;
             const currentCons = { ...(me.inventory?.consumables || {}) };
             let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             let addedPermanentName = "";
@@ -375,8 +387,8 @@
 
             if (reward.type === "PERMANENT") {
                 if (currentPerms.includes(reward.name)) {
-                    newCoins += 200;
-                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +200 Xu đền bù!`;
+                    newCoins += duplicateRefund;
+                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`;
                 } else {
                     currentPerms = [...currentPerms, reward.name];
                     addedPermanentName = reward.name;
@@ -394,6 +406,7 @@
             const coinOperation = makeCoinOperation(me.id, newCoins - (me.coins || 0), "GACHA_SPIN", {
               ...(reward.type === "CONSUMABLE" ? { consumableName: reward.name } : {}),
               ...(addedPermanentName ? { permanentName: addedPermanentName } : {}),
+              ...(reward.gift ? { giftSnapshot: { id: reward.gift.id, name: reward.gift.name, price: reward.gift.price, details: reward.gift.details, kind: reward.gift.kind } } : {}),
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
             alert(msg);
@@ -741,7 +754,7 @@
                   <Ico name="sparkles" size={30} color={C.accent} />
                   <div style={{ textAlign: 'left', lineHeight: 1.2 }}>
                       <div>{t('gacha_spin')}</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{t('gacha_cost')}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{gachaSpinCost} OS Coins</div>
                   </div>
               </button>
           </div>
@@ -756,38 +769,17 @@
               </div>
               
               <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16}}>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
+                  {consumableGiftCatalog.filter(gift => gift.enabled).map(gift => (
+                    <div key={gift.id} style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
                       <div>
-                          <div style={{fontSize: 28, marginBottom: 8}}>⏳</div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>Thẻ dời deadline (24h)</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Gia hạn thêm thời gian nộp bài.</div>
+                        <Ico name="gift" size={26} color={C.warn} style={{marginBottom: 8}} />
+                        <div style={{fontWeight: 800, fontSize: 16}}>{gift.name}</div>
+                        {gift.details && <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>{gift.details}</div>}
                       </div>
-                      <button onClick={() => handleBuyConsumable("Thẻ dời deadline (24h)", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Hộp sữa Milo</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Cứu trợ năng lượng giữa giờ học.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Hộp Milo", 500)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>500 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Ly nước Trái Chò</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Giải nhiệt tuyệt đỉnh.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Ly Trái Chò", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
-                  <div style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
-                      <div>
-                          <div style={{marginBottom: 8}}><Ico name="cup" size={26} color={C.warn} /></div>
-                          <div style={{fontWeight: 800, fontSize: 16}}>1 Trà sữa Viên Viên</div>
-                          <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>Đánh bay cơn buồn ngủ.</div>
-                      </div>
-                      <button onClick={() => handleBuyConsumable("1 Trà sữa Viên Viên", 1000)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>1000 <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
-                  </div>
+                      <button onClick={() => handleBuyConsumable(gift)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>{gift.price} <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
+                    </div>
+                  ))}
+                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>Cửa hàng hiện chưa có quà tiêu hao.</div>}
               </div>
               {Array.isArray(me.myRewards) && me.myRewards!.length > 0 && (
                  <div style={{marginTop: 24, paddingTop: 20, borderTop: `1px dashed ${C.border}`, fontSize: 13}}>
@@ -807,6 +799,7 @@
                   <h3 style={{margin: 0, fontSize: 15, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="book" size={17} color={C.accent} /> {t('vocab_notebook')}</h3>
                   <div style={{display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap'}}>
                       <span style={{fontSize: 12, color: C.sub, fontWeight: 700}}>{vocabCards.length} {t('vocab_words')}{dueCount > 0 ? ` · ${dueCount} ${t('vocab_due')}` : ''}</span>
+                      <button onClick={() => void exportMyVocabXlsx()} disabled={!vocabCards.length} title="Export Excel" style={{background: C.bg, color: C.accent, fontSize: 12, fontWeight: 800, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, whiteSpace: 'nowrap', opacity: vocabCards.length ? 1 : .5, display: 'inline-flex', alignItems: 'center', gap: 5}}><Ico name="download" size={14} /> XLSX</button>
                       <button onClick={() => setShowVocabKinds(v => !v)} title={t('vocab_kinds_title')} style={{background: showVocabKinds ? C.accent : C.bg, color: showVocabKinds ? '#fff' : C.text, fontSize: 13, fontWeight: 800, padding: '8px 11px', borderRadius: 9, border: `1px solid ${showVocabKinds ? C.accent : C.border}`, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center'}}><Ico name="gear" size={16} /></button>
                       <button onClick={handleGenerateVocab} disabled={vocabGenLoading} style={{background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', fontSize: 12, fontWeight: 800, padding: '8px 13px', borderRadius: 9, opacity: vocabGenLoading ? 0.7 : 1, whiteSpace: 'nowrap'}}>{vocabGenLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {t('vocab_generating')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="sparkles" size={14} /> {t('vocab_generate')}</span>}</button>
                   </div>
@@ -995,6 +988,8 @@
                             )
                         }
                     </div>
+                    {nextClass!.lessonContent && <div style={{ fontSize: 13, lineHeight: 1.55, color: C.text, marginTop: 10, whiteSpace: 'pre-wrap' }}>{nextClass!.lessonContent}</div>}
+                    {!!nextClass!.materials?.length && <div style={{ display: 'grid', gap: 5, marginTop: 10 }}>{nextClass!.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, fontSize: 12, fontWeight: 800, overflowWrap: 'anywhere' }}>{material.label || material.url}</a>)}</div>}
                  </div>
               </div>
             </div>
@@ -1184,6 +1179,9 @@
                 );
               })}
             </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 12, paddingBottom: 2, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
+              {(["Listening", "Reading", "Writing"] as const).map(skill => { const active = studentExamSkillTab === skill; const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length; const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length; return <button key={skill} onClick={() => setStudentExamSkillTab(skill)} style={{ background: 'transparent', color: active ? C.accent : C.sub, borderRadius: 0, borderBottom: `2px solid ${active ? C.accent : 'transparent'}`, padding: '8px 11px', fontSize: 12, fontWeight: 900, whiteSpace: 'nowrap' }}>{skill} <span style={{ fontWeight: 700, opacity: .75 }}>{examRoomTab === 'available' ? availableCount : resultCount}</span></button>; })}
+            </div>
             {examRoomTab === "available" && myRealExamPackages.length > 0 && (
               <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
                 {myRealExamPackages.map((pkg: RealExamPackage) => {
@@ -1203,7 +1201,7 @@
             )}
             {examRoomTab === "available" && (
             <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-              {activeQuizzes.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
+              {activeQuizzesForSkill.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
                   const attemptCount = myQuizResults.filter(r => r && r.quizId === q.id).length;
                   const now = getRealTime();
                   const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
@@ -1278,14 +1276,14 @@
                       </div>
                   )
               })}
-              {activeQuizzes.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{t('no_quizzes')}</div>}
+              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>Chưa có đề {studentExamSkillTab} khả dụng.</div>}
             </div>
             )}
 
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
-                    {myQuizResults.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{t('no_quizzes')}</div>}
-                    {myQuizResults.map(r => {
+                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>Chưa có kết quả {studentExamSkillTab}.</div>}
+                    {resultsForSkill.map(r => {
                         if (!r) return null;
                         return (
                         <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>

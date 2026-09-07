@@ -1,5 +1,29 @@
 # IELTS OS
 
+## Public release additions
+
+- Writing is a first-class test type with Task 1/Task 2, attempt autosave, four-criterion grading, corrected versions, anchored comments, draft, and teacher-controlled publish.
+- The student test room separates Listening, Reading, and Writing lists. Vocabulary Notebook can export to XLSX; scheduled lessons can contain lesson content and safe external material links.
+- Teachers configure a shared consumable/permanent gift catalog and reward mechanisms. New ledger operations capture a gift/price snapshot so history remains meaningful after a catalog edit.
+- Quest import accepts up to 20 DOCX files, reports validation per file, permits reordering, and creates the quiz chain only after confirmation.
+
+### Retention cron
+
+`vercel.json` invokes `/api/maintenance/cleanup_attempts` at 03:00 daily. It removes ordinary attempts 30 days after `submittedAt`, expired Writing drafts, and Writing attempts only 30 days after grading has been published.
+
+The endpoint is server-only. Before deploy, configure these Vercel environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase Admin service-account JSON used by the maintenance job |
+| `CRON_SECRET` | Bearer secret required by the Vercel Cron request |
+
+If either server dependency is unavailable, the job returns an error and deletes nothing. Install Python dependencies with:
+
+```powershell
+python -m pip install -r requirements.txt uvicorn
+```
+
 IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính dành cho giáo viên và học sinh. Hệ thống gom quy trình tạo đề, nhập đề từ DOCX, tổ chức bài thi, chấm và review, quản lý lớp học, từ vựng, nhiệm vụ học tập và kỳ thi thật vào một ứng dụng web.
 
 - Production: <https://ielts-os-sandy.vercel.app>

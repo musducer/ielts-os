@@ -1,5 +1,16 @@
 # IELTS OS: DOCX Formatter Playbook
 
+## Batch DOCX import into a Quest
+
+Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up to 20 DOCX files.
+
+- Each file is validated using the same ZIP limits and parsed using the normal `parse_docx_to_quiz` contract.
+- The result is ordered exactly as submitted and reports success/error for every file. A failure never creates a partial Quest.
+- Teachers may remove or reorder rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
+- Every DOCX remains independently valid under this playbook. Do not split one passage, answer bank, or question group across files.
+
+**Changelog:** 2026-09-07 — Added validated, ordered multi-DOCX Quest import through `/api/upload_docx_batch` (maximum 20 files).
+
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
 **Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-31 by the commit that updates this changelog.

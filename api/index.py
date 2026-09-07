@@ -11,6 +11,7 @@ import urllib.error
 import html
 import zipfile
 import threading
+import json
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -18,6 +19,15 @@ import docx
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from typing import List, Dict, Any, Optional, Tuple
+
+try:
+    import firebase_admin
+    from firebase_admin import credentials as firebase_credentials
+    from firebase_admin import firestore as firebase_firestore
+except ImportError:  # Local DOCX work must not require production credentials.
+    firebase_admin = None
+    firebase_credentials = None
+    firebase_firestore = None
 
 _DEFAULT_ALLOWED_ORIGINS = (
     "https://ielts-os-sandy.vercel.app,https://ielts-os.vercel.app,"
@@ -32,8 +42,11 @@ ENABLE_API_DOCS = os.environ.get("API_DOCS_ENABLED", "").strip().lower() in {"1"
 MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
 MAX_DOCX_ZIP_MEMBERS = 2500
+MAX_DOCX_BATCH_FILES = 20
 _AI_KEY_LOCK = threading.Lock()
 _AI_KEY_CURSOR: Dict[str, int] = {}
+_FIREBASE_ADMIN_LOCK = threading.Lock()
+_FIREBASE_ADMIN_DB = None
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -60,6 +73,53 @@ async def unexpected_api_error(request: Request, exc: Exception):
     })
 
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
+
+
+def _firebase_admin_firestore_client():
+    """Return the Admin SDK client only for protected server maintenance jobs."""
+    global _FIREBASE_ADMIN_DB
+    if _FIREBASE_ADMIN_DB is not None:
+        return _FIREBASE_ADMIN_DB
+    if not firebase_admin or not firebase_credentials or not firebase_firestore:
+        raise RuntimeError("firebase-admin is unavailable; install server dependencies first")
+
+    raw_credentials = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw_credentials:
+        raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON is not configured")
+    try:
+        service_account = json.loads(raw_credentials)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON must contain valid JSON") from exc
+
+    with _FIREBASE_ADMIN_LOCK:
+        if _FIREBASE_ADMIN_DB is None:
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
+            _FIREBASE_ADMIN_DB = firebase_firestore.client()
+    return _FIREBASE_ADMIN_DB
+
+
+def _retention_epoch(value: Any) -> int:
+    try:
+        direct = int(float(value))
+        return direct if direct > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _attempt_is_expired(result: Dict[str, Any], now_epoch: int) -> bool:
+    """Normal attempts expire 30 days after submit; Writing waits for published grading."""
+    retention_ms = 30 * 24 * 60 * 60 * 1000
+    quiz_type = str(result.get("quizType") or result.get("type") or "").lower()
+    writing = "writ" in quiz_type or bool(result.get("writingGrading")) or str(result.get("submissionId") or "").startswith("writing_")
+    if writing:
+        grading = result.get("writingGrading") if isinstance(result.get("writingGrading"), dict) else {}
+        if grading.get("status") != "published":
+            return False
+        published_at = _retention_epoch(grading.get("publishedAt"))
+        return bool(published_at and now_epoch - published_at >= retention_ms)
+    submitted_at = _retention_epoch(result.get("submittedAt"))
+    return bool(submitted_at and now_epoch - submitted_at >= retention_ms)
 
 VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG", "DIAGRAM_LABEL"]
 
@@ -1058,6 +1118,47 @@ async def upload_docx(
         print(f"DOCX parse failed: {e}")
         traceback.print_exc()
         return {"success": False, "error": "Không thể xử lý file DOCX này. Hãy kiểm tra lại định dạng file và thử lại."}
+
+
+@app.post("/api/upload_docx_batch")
+async def upload_docx_batch(
+    files: List[UploadFile] = File(...),
+):
+    """Parse each selected formatted DOCX without persisting a partial Quest chain.
+
+    The client receives ordered, per-file results and can only create the Quest after
+    every file has parsed successfully and the teacher explicitly confirms it.
+    """
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one DOCX file.")
+    if len(files) > MAX_DOCX_BATCH_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"A batch can contain at most {MAX_DOCX_BATCH_FILES} DOCX files.",
+        )
+
+    results: List[Dict[str, Any]] = []
+    for index, file in enumerate(files):
+        filename = str(file.filename or f"document-{index + 1}.docx")
+        try:
+            document = await read_validated_docx_upload(file)
+            quiz = parse_docx_to_quiz(document)
+            if not quiz.get("questions"):
+                raise ValueError("Không trích xuất được câu hỏi nào. Kiểm tra thẻ [PASSAGE] và [QUESTIONS].")
+            results.append({"index": index, "filename": filename, "success": True, "quiz": quiz})
+        except HTTPException as exc:
+            results.append({"index": index, "filename": filename, "success": False, "error": str(exc.detail)})
+        except Exception as exc:
+            print(f"DOCX batch parse failed for {filename}: {exc}")
+            traceback.print_exc()
+            results.append({
+                "index": index,
+                "filename": filename,
+                "success": False,
+                "error": "Không thể xử lý file DOCX này. Kiểm tra định dạng rồi thử lại.",
+            })
+
+    return {"success": all(item["success"] for item in results), "results": results}
 
 @app.post("/api/upload_docx_supplement")
 async def upload_docx_supplement(
@@ -3049,6 +3150,49 @@ async def ai_transcribe(
     if not text:
         return {"success": False, "error": "Không nghe được nội dung (audio rỗng?)."}
     return {"success": True, "transcript": text}
+
+
+@app.get("/api/maintenance/cleanup_attempts")
+async def cleanup_expired_attempts(request: Request):
+    """Vercel Cron target: compact expired attempts without exposing a public delete API."""
+    cron_secret = os.environ.get("CRON_SECRET", "")
+    supplied = request.headers.get("Authorization", "")
+    if not cron_secret or supplied != f"Bearer {cron_secret}":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized maintenance request")
+
+    try:
+        database = _firebase_admin_firestore_client()
+        workspace = database.collection("ielts_workspace").document("trung_linh_data")
+        now_epoch = int(time.time() * 1000)
+        transaction = database.transaction()
+        snapshot = workspace.get(transaction=transaction)
+        if not snapshot.exists:
+            return {"success": True, "deletedAttempts": 0, "deletedDrafts": 0, "workspace": "missing"}
+
+        payload = snapshot.to_dict() or {}
+        results = payload.get("quizResults") if isinstance(payload.get("quizResults"), list) else []
+        retained = [result for result in results if not isinstance(result, dict) or not _attempt_is_expired(result, now_epoch)]
+        deleted_attempts = len(results) - len(retained)
+        if deleted_attempts:
+            transaction.update(workspace, {"quizResults": retained})
+            transaction.commit()
+
+        expired_drafts = list(workspace.collection("writingDrafts").where("expiresAt", "<=", now_epoch).stream())
+        deleted_drafts = 0
+        for offset in range(0, len(expired_drafts), 400):
+            batch = database.batch()
+            for draft in expired_drafts[offset:offset + 400]:
+                batch.delete(draft.reference)
+                deleted_drafts += 1
+            batch.commit()
+        return {
+            "success": True,
+            "deletedAttempts": deleted_attempts,
+            "deletedDrafts": deleted_drafts,
+            "checkedAt": now_epoch,
+        }
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 @app.get("/api/health")

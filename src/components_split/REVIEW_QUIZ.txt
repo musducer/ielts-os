@@ -1,4 +1,105 @@
   if (reviewQuiz) {
+      if (isWritingQuiz(reviewQuiz.quiz)) {
+          const writingTasks = normalizeWritingTasks(reviewQuiz.quiz);
+          const isTeacherWritingReview = userRole === "TEACHER";
+          const writingReviewWide = window.innerWidth > 900;
+          const persistedGrading = reviewQuiz.result.writingGrading || {
+              status: "awaiting_grading" as const,
+              taskScores: {}, correctedAnswers: {}, comments: [],
+          };
+          const writingGrading: WritingGrading = {
+              ...persistedGrading,
+              status: persistedGrading.status || "awaiting_grading",
+              taskScores: persistedGrading.taskScores || {},
+              correctedAnswers: persistedGrading.correctedAnswers || {},
+              comments: Array.isArray(persistedGrading.comments) ? persistedGrading.comments : [],
+          };
+          const rubricKeys: Array<keyof WritingCriterionScore> = ["taskAchievement", "coherence", "lexical", "grammar"];
+          const scoreIsValid = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 9;
+          const roundedBand = (value: number) => Math.floor((Math.max(0, value) + 0.0001) * 2) / 2;
+          const taskBand = (taskId: string) => {
+              const scores = writingGrading.taskScores[taskId] || {};
+              const values = rubricKeys.map(key => Number(scores[key]));
+              return values.every(scoreIsValid) ? roundedBand(values.reduce((sum, value) => sum + value, 0) / values.length) : undefined;
+          };
+          const taskBands = writingTasks.map(task => taskBand(task.id));
+          const calculatedFinalBand = taskBands.length === 2 && taskBands.every(scoreIsValid)
+              ? roundedBand((Number(taskBands[0]) + Number(taskBands[1]) * 2) / 3)
+              : undefined;
+          const updateWritingGrading = (patch: Partial<WritingGrading>) => {
+              setReviewQuiz(previous => previous ? {
+                  ...previous,
+                  result: { ...previous.result, writingGrading: { ...writingGrading, ...patch, updatedAt: getTrueTime() } },
+              } : previous);
+          };
+          const updateTaskScore = (taskId: string, criterion: keyof WritingCriterionScore, rawValue: string) => {
+              const value = rawValue === "" ? undefined : Math.max(0, Math.min(9, Number(rawValue)));
+              updateWritingGrading({ taskScores: {
+                  ...writingGrading.taskScores,
+                  [taskId]: { ...(writingGrading.taskScores[taskId] || {}), [criterion]: value },
+              } });
+          };
+          const saveWritingGrade = async (publish: boolean) => {
+              if (publish && writingTasks.some(task => !rubricKeys.every(key => scoreIsValid(writingGrading.taskScores[task.id]?.[key])))) {
+                  alert("Nhập đủ bốn tiêu chí cho cả Task 1 và Task 2 trước khi publish.");
+                  return;
+              }
+              const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
+              const nextGrading: WritingGrading = {
+                  ...writingGrading,
+                  status: publish ? "published" : "draft",
+                  finalBand,
+                  updatedAt: getTrueTime(),
+                  ...(publish ? { publishedAt: getTrueTime(), publishedBy: currentUser?.email || "" } : {}),
+              };
+              const nextResult: QuizResult = {
+                  ...reviewQuiz.result,
+                  band: publish && finalBand !== undefined ? finalBand : reviewQuiz.result.band,
+                  writingScores: publish ? Object.fromEntries(writingTasks.map((task, index) => [`task${index + 1}`, taskBand(task.id) ?? ""])) : reviewQuiz.result.writingScores,
+                  writingGrading: nextGrading,
+              };
+              setReviewQuiz(previous => previous ? { ...previous, result: nextResult } : previous);
+              const nextResults = quizResults.some(result => result.id === nextResult.id)
+                  ? quizResults.map(result => result.id === nextResult.id ? nextResult : result)
+                  : [...quizResults, nextResult];
+              setQuizResults(nextResults);
+              const saved = await syncData({ quizResults: nextResults });
+              if (!saved) alert("Bản chấm vẫn còn trên thiết bị này và sẽ tự đồng bộ lại khi có mạng.");
+          };
+          const studentCanSeeGrade = writingGrading.status === "published";
+          return <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+              {globalStyles}
+              <main style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 20px 56px" }}>
+                  <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", paddingBottom: 18, borderBottom: `2px solid ${C.accent}` }}>
+                      <div><div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>Writing review</div><h1 style={{ margin: "5px 0 0", fontFamily: "var(--display)", fontSize: 30 }}>{reviewQuiz.quiz.title}</h1><div style={{ color: C.sub, fontSize: 13, marginTop: 6 }}>{reviewQuiz.result.studentName} · {reviewQuiz.result.date}</div></div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span style={{ padding: "6px 9px", borderRadius: 999, background: writingGrading.status === "published" ? `${C.succ}12` : `${C.warn}12`, color: writingGrading.status === "published" ? C.succ : C.warn, fontSize: 11, fontWeight: 900 }}>{writingGrading.status === "published" ? "Published" : writingGrading.status === "draft" ? "Draft" : "Awaiting grading"}</span><button onClick={() => setReviewQuiz(null)} style={{ background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: "8px 11px", fontWeight: 800 }}><Ico name="arrowLeft" size={14} /> Back</button></div>
+                  </header>
+                  {!isTeacherWritingReview && !studentCanSeeGrade && <section className="card" style={{ marginTop: 20, borderTop: `3px solid ${C.warn}` }}><h2 style={{ margin: 0, fontSize: 19 }}>Bài đã nộp</h2><p style={{ color: C.sub, lineHeight: 1.6, marginBottom: 0 }}>Giáo viên đang chấm cả hai task. Band, bài sửa và nhận xét sẽ chỉ xuất hiện sau khi được publish.</p></section>}
+                  {(isTeacherWritingReview || studentCanSeeGrade) && <section className="card" style={{ marginTop: 20, padding: 18, borderLeft: `4px solid ${C.accent}` }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}><div><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, letterSpacing: .7, textTransform: "uppercase" }}>Final band</div><div style={{ fontFamily: "var(--display)", fontSize: 38, color: C.accent, lineHeight: 1, marginTop: 4 }}>{calculatedFinalBand ?? writingGrading.finalBand ?? "—"}</div></div><div style={{ color: C.sub, fontSize: 12, maxWidth: 430 }}>Task 1 và Task 2 được chấm độc lập; kết quả cuối tính Task 1 một phần, Task 2 hai phần và làm tròn xuống theo nửa band.</div></div></section>}
+                  <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
+                    {writingTasks.map(task => {
+                      const scores = writingGrading.taskScores[task.id] || {};
+                      const labels: Record<keyof WritingCriterionScore, string> = { taskAchievement: task.taskNumber === 1 ? "Task Achievement" : "Task Response", coherence: "Coherence & Cohesion", lexical: "Lexical Resource", grammar: "Grammar Range & Accuracy", overall: "Overall" };
+                      const comments = writingGrading.comments.filter(comment => comment.taskId === task.id);
+                      const original = String(reviewQuiz.result.answers?.[task.id] || "");
+                      return <section key={task.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
+                        <div style={{ padding: "17px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}><div><div style={{ fontSize: 11, color: C.accent, fontWeight: 900, letterSpacing: .8, textTransform: "uppercase" }}>Task {task.taskNumber}</div><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>{task.title}</h2></div><div style={{ color: taskBand(task.id) === undefined ? C.sub : C.succ, fontWeight: 900, fontSize: 15 }}>Band {taskBand(task.id) ?? "—"}</div></div>
+                        <div style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
+                          <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, minHeight: 110, padding: "13px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10 }}>{original || "No response submitted."}</div></div>
+                          {isTeacherWritingReview && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><textarea value={writingGrading.correctedAnswers[task.id] || ""} onChange={event => updateWritingGrading({ correctedAnswers: { ...writingGrading.correctedAnswers, [task.id]: event.target.value } })} placeholder="Write a corrected version or model answer…" rows={9} style={{ resize: "vertical", fontSize: 13, lineHeight: 1.6 }} /></div>}
+                          {!isTeacherWritingReview && studentCanSeeGrade && writingGrading.correctedAnswers[task.id] && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, padding: "13px 14px", background: `${C.succ}08`, border: `1px solid ${C.succ}35`, borderRadius: 10 }}>{writingGrading.correctedAnswers[task.id]}</div></div>}
+                        </div>
+                        {(isTeacherWritingReview || studentCanSeeGrade) && <div style={{ padding: "0 20px 20px" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 9 }}>{rubricKeys.map(criterion => <label key={criterion} style={{ display: "grid", gap: 5, padding: "10px 11px", background: C.bg, borderRadius: 9, border: `1px solid ${C.border}` }}><span style={{ fontSize: 10, color: C.sub, fontWeight: 900, letterSpacing: .45, textTransform: "uppercase" }}>{labels[criterion]}</span>{isTeacherWritingReview ? <input type="number" min="0" max="9" step="0.5" value={scores[criterion] ?? ""} onChange={event => updateTaskScore(task.id, criterion, event.target.value)} aria-label={`${labels[criterion]} score`} style={{ padding: "7px 8px", fontSize: 15, fontWeight: 800 }} /> : <strong style={{ fontSize: 17, color: C.accent }}>{scores[criterion] ?? "—"}</strong>}</label>)}</div>
+                          {(comments.length > 0 || isTeacherWritingReview) && <div style={{ marginTop: 14, borderTop: `1px dashed ${C.border}`, paddingTop: 13 }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, textTransform: "uppercase", letterSpacing: .6, marginBottom: 8 }}>Anchored comments</div>{comments.map(comment => <div key={comment.id} style={{ padding: "9px 10px", background: C.bg, borderLeft: `3px solid ${C.accent}`, marginBottom: 7, fontSize: 13 }}><strong>{comment.anchorQuote || "General feedback"}</strong><div style={{ marginTop: 3, color: C.sub, whiteSpace: "pre-wrap" }}>{comment.comment}</div></div>)}{isTeacherWritingReview && <div style={{ display: "grid", gridTemplateColumns: writingReviewWide ? "minmax(150px, .75fr) minmax(0, 1.6fr) auto" : "1fr", gap: 7, marginTop: 8 }}><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: event.target.value, comment: writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : "" })} placeholder="Quote anchor (optional)" style={{ padding: "8px 9px", fontSize: 12 }} /><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : "", comment: event.target.value })} placeholder="Actionable comment" style={{ padding: "8px 9px", fontSize: 12 }} /><button onClick={() => { const comment = writingCommentDraft.taskId === task.id ? writingCommentDraft.comment.trim() : ""; if (!comment) return; updateWritingGrading({ comments: [...writingGrading.comments, { id: `writing_comment_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, taskId: task.id, anchorQuote: writingCommentDraft.anchorQuote.trim(), comment, createdAt: getTrueTime() }] }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: "8px 10px", fontWeight: 800 }}><Ico name="plus" size={13} /> Add</button></div>}</div>}
+                        </div>}
+                      </section>;
+                    })}
+                  </div>
+                  {isTeacherWritingReview && <footer style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20, flexWrap: "wrap" }}><button onClick={() => void saveWritingGrade(false)} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, padding: "10px 13px", fontWeight: 800 }}><Ico name="save" size={14} /> Save draft</button><button onClick={() => void saveWritingGrade(true)} disabled={calculatedFinalBand === undefined} style={{ background: C.accent, color: "#fff", padding: "10px 14px", fontWeight: 800, opacity: calculatedFinalBand === undefined ? .55 : 1 }}><Ico name="check" size={14} /> Publish to student</button></footer>}
+              </main>
+          </div>;
+      }
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;

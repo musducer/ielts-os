@@ -1,6 +1,7 @@
       if (activeExam) {
           const isIntegrated = activeExam.type === "Integrated";
           const isPractice = isPracticeQuiz(activeExam);
+          const isWriting = isWritingQuiz(activeExam);
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
@@ -17,6 +18,9 @@
               if (!Array.isArray(qs) || qs.length === 0) return [];
               const totalQs = qs.length;
               const groups: { title: string, questions: any[], startIndex: number }[] = [];
+              if (isWriting) {
+                  return qs.slice(0, 2).map((question: any, index: number) => ({ title: `Part ${index + 1}`, questions: [question], startIndex: index }));
+              }
               
               // Tự động chia nhóm Sa bàn theo các Section (Passage) do Backend trả về
               if (activeExam?.sections && activeExam.sections.length > 0) {
@@ -782,17 +786,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
+                      .idp-flowchart-wrap { max-width: 940px; margin: 0 auto 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, 0.42fr); gap:18px; align-items:start; }
                       .idp-flowchart-panel { border: 1.5px solid #0969da; border-radius: 8px; padding: 18px 24px; background: var(--ebg); max-width: 680px; margin: 0 auto 18px; }
-                      .idp-flowchart-wrap { max-width: 760px; margin: 0 auto 18px; }
-                      .idp-flowchart-bank { margin: 0 auto 14px; padding: 14px 16px; border: 1px solid var(--eborder); border-radius: 8px; background: var(--epanel); }
+                      .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
+                      .idp-flowchart-bank { margin:0; padding:14px 16px; border:1px solid var(--eborder); border-radius:8px; background:var(--epanel); position:sticky; top:16px; }
                       .idp-flowchart-bank-label { margin-bottom: 9px; color: var(--esub); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-                      .idp-flowchart-bank-items { display: flex; flex-wrap: wrap; gap: 8px; }
-                      .idp-flowchart-bank .idp-wordbank-item { margin: 0; }
+                      .idp-flowchart-bank-items { display:flex; flex-direction:column; gap:8px; }
+                      .idp-flowchart-bank .idp-wordbank-item { width:100%; margin:0; text-align:left; justify-content:flex-start; }
                       .idp-flowchart-node { border: 1px solid #d8dee4; border-radius: 6px; background: rgba(255,255,255,0.65); padding: 10px 12px; line-height: 1.45; font-size: var(--efont); font-weight: 600; color: var(--etext); }
                       .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
                       .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
+                      .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
+                      .writing-pane { min-width:0; height:100%; overflow:auto; box-sizing:border-box; }
+                      .writing-prompt { padding:28px 36px 44px; line-height:1.62; color:var(--etext); }
+                      .writing-prompt img { display:block; max-width:100%; max-height:70vh; object-fit:contain; margin:22px auto 0; }
+                      .writing-editor-pane { padding:24px 30px 54px; display:flex; flex-direction:column; }
+                      .writing-editor { flex:1; min-height:260px; width:100%; resize:none; box-sizing:border-box; padding:18px; border:1px solid #8c959f; border-radius:0; background:var(--einput); color:var(--etext); font:400 var(--efont)/1.62 Arial,sans-serif; outline:none; }
+                      .writing-editor:focus { border-color:#0969da; box-shadow:0 0 0 1px #0969da; }
+                      .writing-editor-meta { display:flex; justify-content:flex-end; align-items:center; gap:18px; min-height:32px; padding-top:8px; color:var(--esub); font-size:12px; }
+                      .writing-save-state { font-weight:700; }
+                      .writing-divider { width:28px; margin:0 -9px; cursor:col-resize; z-index:30; display:flex; align-items:stretch; justify-content:center; flex:none; position:relative; touch-action:none; }
+                      .writing-divider-track { width:10px; background:#ededed; border-left:1px solid #d1d5db; border-right:1px solid #d1d5db; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+                      @media (max-width:820px) { .idp-flowchart-layout { grid-template-columns:1fr; } .idp-flowchart-layout .idp-flowchart-panel { order:1; } .idp-flowchart-layout .idp-flowchart-bank { order:2; position:static; } .idp-flowchart-bank-items { flex-direction:row; flex-wrap:wrap; } .idp-flowchart-bank .idp-wordbank-item { width:auto; } }
+                      @media (max-width:720px) { .writing-workspace { flex-direction:column; overflow:auto; } .writing-pane { width:100% !important; height:auto; overflow:visible; } .writing-prompt { padding:20px; } .writing-editor-pane { padding:16px 20px 28px; min-height:55vh; } .writing-divider { display:none; } }
                       
                       /* ĐàFIX: Ép văn bản câu hỏi thành Inline, Line spacing khít khịt theo yêu cầu */
                       .idp-q-text-inline p, .idp-q-text-inline div { margin: 0; padding: 0; }
@@ -1685,20 +1704,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         const reuseTags = group.questions.length > flowOptions.length;
                         return (
                         <div className="idp-flowchart-wrap">
-                          {isDragFlow && <div className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
-                              <div className="idp-flowchart-bank-label">Answer choices</div>
-                              <div className="idp-flowchart-bank-items">
-                                  {flowOptions.map((option: string, index: number) => {
-                                      const used = !reuseTags && assigned.includes(option);
-                                      return <button type="button" key={`${option}-${index}`} draggable={!used}
-                                          className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
-                                          onClick={() => { if (!used) selectBankAnswer(option); }}
-                                          onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
-                                          <span>{option}</span>
-                                      </button>;
-                                  })}
-                              </div>
-                          </div>}
+                        <div className={isDragFlow ? "idp-flowchart-layout" : ""}>
                         <div className="idp-flowchart-panel">
                           {group.questions.map((q, flowIdx) => {
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
@@ -1747,6 +1753,21 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   </React.Fragment>
                               );
                           })}
+                        </div>
+                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
+                            <div className="idp-flowchart-bank-label">Answer choices</div>
+                            <div className="idp-flowchart-bank-items">
+                                {flowOptions.map((option: string, index: number) => {
+                                    const used = !reuseTags && assigned.includes(option);
+                                    return <button type="button" key={`${option}-${index}`} draggable={!used}
+                                        className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
+                                        onClick={() => { if (!used) selectBankAnswer(option); }}
+                                        onDragStart={(event: any) => { if (!used) beginAnswerDrag(event, option, option); }}>
+                                        <span>{option}</span>
+                                    </button>;
+                                })}
+                            </div>
+                        </aside>}
                         </div>
                         </div>
                         );
