@@ -3566,7 +3566,10 @@ export default function IeltsSupremeOS() {
       const nSecs = (prev.sections && prev.sections.length)
           ? prev.sections.map((sec: any) => ({ ...sec, questions: (sec.questions || []).map(applyToQ) }))
           : prev.sections;
-      return { ...prev, questions: nQ, sections: nSecs };
+      const nWritingTasks = isWritingQuiz(prev) && field === 'text'
+          ? normalizeWritingTasks(prev).map(task => task.id === qId ? { ...task, prompt: cleanHTML } : task)
+          : prev.writingTasks;
+      return { ...prev, questions: nQ, sections: nSecs, ...(nWritingTasks ? { writingTasks: nWritingTasks } : {}) };
   };
   const [selStudent, setSelStudent] = useState("");
   const [selSkills, setSelSkills] = useState<string[]>([]);

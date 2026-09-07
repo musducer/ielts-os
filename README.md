@@ -1,5 +1,9 @@
 # IELTS OS
 
+## Writing test room
+
+Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
+
 ## Public release additions
 
 - Writing is a first-class test type with Task 1/Task 2, attempt autosave, four-criterion grading, corrected versions, anchored comments, draft, and teacher-controlled publish.

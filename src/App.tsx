@@ -3566,7 +3566,10 @@ export default function IeltsSupremeOS() {
       const nSecs = (prev.sections && prev.sections.length)
           ? prev.sections.map((sec: any) => ({ ...sec, questions: (sec.questions || []).map(applyToQ) }))
           : prev.sections;
-      return { ...prev, questions: nQ, sections: nSecs };
+      const nWritingTasks = isWritingQuiz(prev) && field === 'text'
+          ? normalizeWritingTasks(prev).map(task => task.id === qId ? { ...task, prompt: cleanHTML } : task)
+          : prev.writingTasks;
+      return { ...prev, questions: nQ, sections: nSecs, ...(nWritingTasks ? { writingTasks: nWritingTasks } : {}) };
   };
   const [selStudent, setSelStudent] = useState("");
   const [selSkills, setSelSkills] = useState<string[]>([]);
@@ -12208,6 +12211,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
           {/* BANNER SECTION FULL-WIDTH (tràn cả màn hình, không bị splitter ngăn) */}
           {(() => {
+              if (isWriting) {
+                  const task = normalizeWritingTasks(activeExam)[Math.max(0, Math.min(1, currentSectionIndex))];
+                  return (
+                      <div style={{ flex: 'none', margin: '12px 18px', padding: '10px 14px', background: '#f2f2ed', border: '1px solid #d0d0ca', borderRadius: 2, color: '#111' }}>
+                          <div style={{ fontWeight: 800, fontSize: 14 }}>Part {task?.taskNumber || 1}</div>
+                          <div style={{ fontSize: 14, marginTop: 3 }}>{task?.instructions || `You should spend about ${task?.taskNumber === 2 ? 40 : 20} minutes on this task. Write at least ${task?.taskNumber === 2 ? 250 : 150} words.`}</div>
+                      </div>
+                  );
+              }
               const navG = navGroups[currentSectionIndex];
               const qStart = navG ? navG.startIndex + 1 : 1;
               const qEnd = navG ? navG.startIndex + navG.questions.length : qStart;
@@ -12226,7 +12238,43 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               );
           })()}
 
-          <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
+          {isWriting && (() => {
+              const writingTasks = normalizeWritingTasks(activeExam);
+              const partIndex = Math.max(0, Math.min(writingTasks.length - 1, currentSectionIndex));
+              const task = writingTasks[partIndex];
+              if (!task) return null;
+              const question = (activeExam.questions || []).find((item: any) => item.id === task?.id) || writingQuestions({ ...activeExam, writingTasks })[partIndex];
+              const answer = String(examAnswers[task?.id || ""] || "");
+              const switchWritingPart = (nextIndex: number) => {
+                  if (nextIndex === partIndex) return;
+                  void queueWritingDraftSave(activeExam, { ...latestExamState.current.examAnswers, [task.id]: answer }, true);
+                  setCurrentSectionIndex(nextIndex);
+              };
+              return (
+                  <div className="writing-test-workspace" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }}
+                      onMouseMove={(event: any) => { if (isDraggingSplitter) { const ratio = (event.clientX / window.innerWidth) * 100; if (ratio > 28 && ratio < 72) setSplitRatio(ratio); } }}
+                      onMouseUp={() => setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter(false)}>
+                      <div className="writing-test-prompt exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 280, overflowY: 'auto', padding: '30px 18px', boxSizing: 'border-box', lineHeight: 1.55, fontSize: 15, color: '#111', background: '#fff' }}>
+                          <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
+                          {task?.mediaUrl && <img src={task.mediaUrl} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
+                      </div>
+                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 18, margin: '0 -4px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: '#a5a5a5', borderLeft: '1px solid #858585', borderRight: '1px solid #858585', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <div style={{ width: 28, height: 28, background: '#fff', border: '1px solid #8c8c8c', borderRadius: 1, display: 'grid', placeItems: 'center', pointerEvents: 'none', color: '#333', fontSize: 16 }}>↔</div>
+                      </div>
+                      <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
+                          <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
+                          <div style={{ width: '90%', textAlign: 'right', marginTop: 7, fontSize: 14, color: '#111' }}>Words: {countWritingWords(answer)}</div>
+                          <div style={{ position: 'absolute', right: '4%', bottom: 30, display: 'flex', gap: 5 }}>
+                              <button disabled={partIndex === 0} onClick={() => switchWritingPart(0)} aria-label="Previous writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex === 0 ? '#e4e4e4' : '#1d1d26', color: partIndex === 0 ? '#fff' : '#fff', fontSize: 28, cursor: partIndex === 0 ? 'default' : 'pointer' }}>←</button>
+                              <button disabled={partIndex >= writingTasks.length - 1} onClick={() => switchWritingPart(1)} aria-label="Next writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex >= writingTasks.length - 1 ? '#e4e4e4' : '#111', color: '#fff', fontSize: 28, cursor: partIndex >= writingTasks.length - 1 ? 'default' : 'pointer' }}>→</button>
+                          </div>
+                      </div>
+                      {isDraggingSplitter && <div style={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'col-resize', userSelect: 'none' }} onMouseMove={(event: any) => { const ratio = (event.clientX / window.innerWidth) * 100; if (ratio > 28 && ratio < 72) setSplitRatio(ratio); }} onMouseUp={() => setIsDraggingSplitter(false)} />}
+                  </div>
+              );
+          })()}
+
+          {!isWriting && <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
@@ -13040,7 +13088,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               </div>
                           </div>
                       </div>
-                  </div>
+                  </div>}
                  {/* THANH AUDIO (chỉ practice) — nằm ngay TRÊN nav bar: play/pause · thời gian · thanh tua · tốc độ */}
                  {isListening && (activeExam as any).audioMode === 'practice' && ["IDLE", "LOADING", "PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
                      const safeCur = Math.min(audioCur, audioDur || 0);
@@ -13066,7 +13114,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                  {/* FOOTER NAVIGATOR — Bottom_Bar chuẩn IDP */}
                 {renderMeetAudioNotice()}
-                <div className="idp-footer-nav">
+                {isWriting && (() => {
+                    const tasks = normalizeWritingTasks(activeExam);
+                    return <div className="idp-footer-nav" style={{ display: 'flex', background: '#fff', borderTop: '1px solid #d0d0d0', minHeight: 47 }}>
+                        <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, paddingLeft: 18 }}>
+                            {tasks.map((task, index) => {
+                                const answered = String(examAnswers[task.id] || '').trim().length > 0;
+                                const active = currentSectionIndex === index;
+                                return <button key={task.id} onClick={() => { if (index !== currentSectionIndex) void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true); setCurrentSectionIndex(index); }} style={{ minWidth: 102, padding: '0 14px', border: 0, borderTop: active ? '3px solid #111' : '3px solid transparent', background: '#fff', color: active ? '#111' : '#444', fontWeight: active ? 800 : 600, fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                                    {answered && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16803b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
+                                    Part {task.taskNumber}
+                                </button>;
+                            })}
+                        </div>
+                        {!activeExam.realExamContext && <button className="idp-submit-fab" title="Submit Exam" onClick={() => submitExam(false)}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg></button>}
+                    </div>;
+                })()}
+                <div className="idp-footer-nav" style={{ display: isWriting ? 'none' : undefined }}>
                      {/* HÀNG NAVIGATOR: PASSAGE N + ô số (active) / "X of Y" (inactive) */}
                      <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflowX: 'auto', padding: '0 20px', gap: 20, height: '100%' }}>
                          {navGroups.map((grp, gIdx) => {
