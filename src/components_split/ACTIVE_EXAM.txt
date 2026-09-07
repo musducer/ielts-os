@@ -1294,7 +1294,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               if (isWriting) {
                   const task = normalizeWritingTasks(activeExam)[Math.max(0, Math.min(1, currentSectionIndex))];
                   return (
-                      <div style={{ flex: 'none', margin: '12px 18px', padding: '10px 14px', background: '#f2f2ed', border: '1px solid #d0d0ca', borderRadius: 2, color: '#111' }}>
+                      <div className="writing-instructions" style={{ flex: 'none', margin: '12px 18px', padding: '10px 14px', background: '#f2f2ed', border: '1px solid #d0d0ca', borderRadius: 2, color: '#111', textAlign: 'left' }}>
                           <div style={{ fontWeight: 800, fontSize: 14 }}>Part {task?.taskNumber || 1}</div>
                           <div style={{ fontSize: 14, marginTop: 3 }}>{task?.instructions || `You should spend about ${task?.taskNumber === 2 ? 40 : 20} minutes on this task. Write at least ${task?.taskNumber === 2 ? 250 : 150} words.`}</div>
                       </div>
@@ -1338,8 +1338,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
                           {task?.mediaUrl && <img src={task.mediaUrl} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
-                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 18, margin: '0 -4px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: '#a5a5a5', borderLeft: '1px solid #858585', borderRight: '1px solid #858585', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <div style={{ width: 28, height: 28, background: '#fff', border: '1px solid #8c8c8c', borderRadius: 1, display: 'grid', placeItems: 'center', pointerEvents: 'none', color: '#333', fontSize: 16 }}>↔</div>
+                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
+                          <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
                       <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
                           <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
@@ -2197,11 +2197,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {isWriting && (() => {
                     const tasks = normalizeWritingTasks(activeExam);
                     return <div className="idp-footer-nav" style={{ display: 'flex', background: '#fff', borderTop: '1px solid #d0d0d0', minHeight: 47 }}>
-                        <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, paddingLeft: 18 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, padding: '0 20px', gap: 20 }}>
                             {tasks.map((task, index) => {
                                 const answered = String(examAnswers[task.id] || '').trim().length > 0;
                                 const active = currentSectionIndex === index;
-                                return <button key={task.id} onClick={() => { if (index !== currentSectionIndex) void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true); setCurrentSectionIndex(index); }} style={{ minWidth: 102, padding: '0 14px', border: 0, borderTop: active ? '3px solid #111' : '3px solid transparent', background: '#fff', color: active ? '#111' : '#444', fontWeight: active ? 800 : 600, fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                                return <button className={`idp-pnav-label writing-part-label ${active ? 'active' : ''}`} key={task.id} onClick={() => { if (index !== currentSectionIndex) void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true); setCurrentSectionIndex(index); }} style={{ padding: '0 0 0', border: 0, borderRadius: 0, boxShadow: 'none', background: '#fff', color: active ? 'var(--eblue)' : 'var(--etext)', fontWeight: 800, fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                                     {answered && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16803b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
                                     Part {task.taskNumber}
                                 </button>;

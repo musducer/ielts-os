@@ -21,6 +21,7 @@ import type {
   StudentQuestProgress,
   TopicAssignment,
 } from "./quest";
+import WritingFeedback from "./WritingFeedback";
 import {
   DEFAULT_GIFT_CATALOG,
   DEFAULT_REWARD_MECHANISMS,
@@ -1779,7 +1780,7 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
 interface WritingCriterionScore { taskAchievement?: number; coherence?: number; lexical?: number; grammar?: number; overall?: number; }
-interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; }
+interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; startOffset?: number; endOffset?: number; }
 interface WritingGrading { status: "awaiting_grading" | "draft" | "published"; taskScores: Record<string, WritingCriterionScore>; correctedAnswers: Record<string, string>; comments: WritingComment[]; finalBand?: number; updatedAt?: number; publishedAt?: number; publishedBy?: string; }
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; submittedAt?: number; submissionId?: string; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; writingScores?: Record<string, string | number>; writingGrading?: WritingGrading; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
@@ -3449,7 +3450,7 @@ export default function IeltsSupremeOS() {
   const [rewardConfigDirty, setRewardConfigDirty] = useState(false);
   const [giftDraft, setGiftDraft] = useState<Partial<GiftDefinition>>({ kind: "consumable", enabled: true, price: 0, name: "", details: "" });
   const [rewardDraft, setRewardDraft] = useState<Partial<RewardMechanism>>({ event: "", name: "", coins: 0, enabled: true });
-  const [writingCommentDraft, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
+  const [, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
   const consumableGiftCatalog = giftCatalog.filter(item => item.kind === "consumable");
   const permanentGiftCatalog = giftCatalog.filter(item => item.kind === "permanent");
   const configuredRewardCoins = (event: string, fallback = 0) => coinsForRewardEvent(rewardMechanisms, event, fallback);

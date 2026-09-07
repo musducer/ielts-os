@@ -2,6 +2,8 @@
 
 ## Writing test room
 
+Writing instructions, student responses and corrected essays are left aligned. Part navigation and the splitter follow the Reading/Listening test controls. In grading, select text in the original essay and add a comment; highlighted passages and comment links let teachers and students find the relevant text. General feedback is also supported. Feedback remains hidden from students until published.
+
 Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
 
 ## Public release additions

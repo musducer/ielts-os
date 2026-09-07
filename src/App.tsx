@@ -21,6 +21,7 @@ import type {
   StudentQuestProgress,
   TopicAssignment,
 } from "./quest";
+import WritingFeedback from "./WritingFeedback";
 import {
   DEFAULT_GIFT_CATALOG,
   DEFAULT_REWARD_MECHANISMS,
@@ -1779,7 +1780,7 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
 interface WritingCriterionScore { taskAchievement?: number; coherence?: number; lexical?: number; grammar?: number; overall?: number; }
-interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; }
+interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; startOffset?: number; endOffset?: number; }
 interface WritingGrading { status: "awaiting_grading" | "draft" | "published"; taskScores: Record<string, WritingCriterionScore>; correctedAnswers: Record<string, string>; comments: WritingComment[]; finalBand?: number; updatedAt?: number; publishedAt?: number; publishedBy?: string; }
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; submittedAt?: number; submissionId?: string; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; writingScores?: Record<string, string | number>; writingGrading?: WritingGrading; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
@@ -3449,7 +3450,7 @@ export default function IeltsSupremeOS() {
   const [rewardConfigDirty, setRewardConfigDirty] = useState(false);
   const [giftDraft, setGiftDraft] = useState<Partial<GiftDefinition>>({ kind: "consumable", enabled: true, price: 0, name: "", details: "" });
   const [rewardDraft, setRewardDraft] = useState<Partial<RewardMechanism>>({ event: "", name: "", coins: 0, enabled: true });
-  const [writingCommentDraft, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
+  const [, setWritingCommentDraft] = useState({ taskId: "", anchorQuote: "", comment: "" });
   const consumableGiftCatalog = giftCatalog.filter(item => item.kind === "consumable");
   const permanentGiftCatalog = giftCatalog.filter(item => item.kind === "permanent");
   const configuredRewardCoins = (event: string, fallback = 0) => coinsForRewardEvent(rewardMechanisms, event, fallback);
@@ -9342,7 +9343,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (isWritingQuiz(reviewQuiz.quiz)) {
           const writingTasks = normalizeWritingTasks(reviewQuiz.quiz);
           const isTeacherWritingReview = userRole === "TEACHER";
-          const writingReviewWide = window.innerWidth > 900;
+
           const persistedGrading = reviewQuiz.result.writingGrading || {
               status: "awaiting_grading" as const,
               taskScores: {}, correctedAnswers: {}, comments: [],
@@ -9407,8 +9408,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               if (!saved) alert("Bản chấm vẫn còn trên thiết bị này và sẽ tự đồng bộ lại khi có mạng.");
           };
           const studentCanSeeGrade = writingGrading.status === "published";
-          return <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+          return <div className="writing-review" style={{ minHeight: "100vh", background: C.bg, color: C.text, textAlign: "left" }}>
               {globalStyles}
+              <style>{`.writing-review :is(h1,h2,h3,p,label,input,textarea,blockquote) { text-align:left !important; } .writing-review .card { text-align:left; } .writing-review textarea { box-sizing:border-box; width:100%; } .writing-review .writing-response-columns { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } @media(max-width:700px) { .writing-review .writing-response-columns { grid-template-columns:1fr !important; } }`}</style>
               <main style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 20px 56px" }}>
                   <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", paddingBottom: 18, borderBottom: `2px solid ${C.accent}` }}>
                       <div><div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>Writing review</div><h1 style={{ margin: "5px 0 0", fontFamily: "var(--display)", fontSize: 30 }}>{reviewQuiz.quiz.title}</h1><div style={{ color: C.sub, fontSize: 13, marginTop: 6 }}>{reviewQuiz.result.studentName} · {reviewQuiz.result.date}</div></div>
@@ -9424,14 +9426,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const original = String(reviewQuiz.result.answers?.[task.id] || "");
                       return <section key={task.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
                         <div style={{ padding: "17px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}><div><div style={{ fontSize: 11, color: C.accent, fontWeight: 900, letterSpacing: .8, textTransform: "uppercase" }}>Task {task.taskNumber}</div><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>{task.title}</h2></div><div style={{ color: taskBand(task.id) === undefined ? C.sub : C.succ, fontWeight: 900, fontSize: 15 }}>Band {taskBand(task.id) ?? "—"}</div></div>
-                        <div style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
-                          <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, minHeight: 110, padding: "13px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10 }}>{original || "No response submitted."}</div></div>
+                        <div className="writing-response-columns" style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
+                          <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><WritingFeedback key={`${reviewQuiz.result.id}-${task.id}`} text={original} taskId={task.id} editable={isTeacherWritingReview} comments={isTeacherWritingReview || studentCanSeeGrade ? comments : []} onChange={next => updateWritingGrading({ comments: [...writingGrading.comments.filter(item => item.taskId !== task.id), ...next] })} /></div>
                           {isTeacherWritingReview && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><textarea value={writingGrading.correctedAnswers[task.id] || ""} onChange={event => updateWritingGrading({ correctedAnswers: { ...writingGrading.correctedAnswers, [task.id]: event.target.value } })} placeholder="Write a corrected version or model answer…" rows={9} style={{ resize: "vertical", fontSize: 13, lineHeight: 1.6 }} /></div>}
                           {!isTeacherWritingReview && studentCanSeeGrade && writingGrading.correctedAnswers[task.id] && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, padding: "13px 14px", background: `${C.succ}08`, border: `1px solid ${C.succ}35`, borderRadius: 10 }}>{writingGrading.correctedAnswers[task.id]}</div></div>}
                         </div>
                         {(isTeacherWritingReview || studentCanSeeGrade) && <div style={{ padding: "0 20px 20px" }}>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 9 }}>{rubricKeys.map(criterion => <label key={criterion} style={{ display: "grid", gap: 5, padding: "10px 11px", background: C.bg, borderRadius: 9, border: `1px solid ${C.border}` }}><span style={{ fontSize: 10, color: C.sub, fontWeight: 900, letterSpacing: .45, textTransform: "uppercase" }}>{labels[criterion]}</span>{isTeacherWritingReview ? <input type="number" min="0" max="9" step="0.5" value={scores[criterion] ?? ""} onChange={event => updateTaskScore(task.id, criterion, event.target.value)} aria-label={`${labels[criterion]} score`} style={{ padding: "7px 8px", fontSize: 15, fontWeight: 800 }} /> : <strong style={{ fontSize: 17, color: C.accent }}>{scores[criterion] ?? "—"}</strong>}</label>)}</div>
-                          {(comments.length > 0 || isTeacherWritingReview) && <div style={{ marginTop: 14, borderTop: `1px dashed ${C.border}`, paddingTop: 13 }}><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, textTransform: "uppercase", letterSpacing: .6, marginBottom: 8 }}>Anchored comments</div>{comments.map(comment => <div key={comment.id} style={{ padding: "9px 10px", background: C.bg, borderLeft: `3px solid ${C.accent}`, marginBottom: 7, fontSize: 13 }}><strong>{comment.anchorQuote || "General feedback"}</strong><div style={{ marginTop: 3, color: C.sub, whiteSpace: "pre-wrap" }}>{comment.comment}</div></div>)}{isTeacherWritingReview && <div style={{ display: "grid", gridTemplateColumns: writingReviewWide ? "minmax(150px, .75fr) minmax(0, 1.6fr) auto" : "1fr", gap: 7, marginTop: 8 }}><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: event.target.value, comment: writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : "" })} placeholder="Quote anchor (optional)" style={{ padding: "8px 9px", fontSize: 12 }} /><input value={writingCommentDraft.taskId === task.id ? writingCommentDraft.comment : ""} onChange={event => setWritingCommentDraft({ taskId: task.id, anchorQuote: writingCommentDraft.taskId === task.id ? writingCommentDraft.anchorQuote : "", comment: event.target.value })} placeholder="Actionable comment" style={{ padding: "8px 9px", fontSize: 12 }} /><button onClick={() => { const comment = writingCommentDraft.taskId === task.id ? writingCommentDraft.comment.trim() : ""; if (!comment) return; updateWritingGrading({ comments: [...writingGrading.comments, { id: `writing_comment_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, taskId: task.id, anchorQuote: writingCommentDraft.anchorQuote.trim(), comment, createdAt: getTrueTime() }] }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: "8px 10px", fontWeight: 800 }}><Ico name="plus" size={13} /> Add</button></div>}</div>}
+
                         </div>}
                       </section>;
                     })}
@@ -12214,7 +12216,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               if (isWriting) {
                   const task = normalizeWritingTasks(activeExam)[Math.max(0, Math.min(1, currentSectionIndex))];
                   return (
-                      <div style={{ flex: 'none', margin: '12px 18px', padding: '10px 14px', background: '#f2f2ed', border: '1px solid #d0d0ca', borderRadius: 2, color: '#111' }}>
+                      <div className="writing-instructions" style={{ flex: 'none', margin: '12px 18px', padding: '10px 14px', background: '#f2f2ed', border: '1px solid #d0d0ca', borderRadius: 2, color: '#111', textAlign: 'left' }}>
                           <div style={{ fontWeight: 800, fontSize: 14 }}>Part {task?.taskNumber || 1}</div>
                           <div style={{ fontSize: 14, marginTop: 3 }}>{task?.instructions || `You should spend about ${task?.taskNumber === 2 ? 40 : 20} minutes on this task. Write at least ${task?.taskNumber === 2 ? 250 : 150} words.`}</div>
                       </div>
@@ -12258,8 +12260,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
                           {task?.mediaUrl && <img src={task.mediaUrl} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
-                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 18, margin: '0 -4px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: '#a5a5a5', borderLeft: '1px solid #858585', borderRight: '1px solid #858585', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          <div style={{ width: 28, height: 28, background: '#fff', border: '1px solid #8c8c8c', borderRadius: 1, display: 'grid', placeItems: 'center', pointerEvents: 'none', color: '#333', fontSize: 16 }}>↔</div>
+                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
+                          <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
                       <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
                           <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
@@ -13117,11 +13119,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {isWriting && (() => {
                     const tasks = normalizeWritingTasks(activeExam);
                     return <div className="idp-footer-nav" style={{ display: 'flex', background: '#fff', borderTop: '1px solid #d0d0d0', minHeight: 47 }}>
-                        <div style={{ display: 'flex', alignItems: 'stretch', flex: 1, paddingLeft: 18 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flex: 1, padding: '0 20px', gap: 20 }}>
                             {tasks.map((task, index) => {
                                 const answered = String(examAnswers[task.id] || '').trim().length > 0;
                                 const active = currentSectionIndex === index;
-                                return <button key={task.id} onClick={() => { if (index !== currentSectionIndex) void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true); setCurrentSectionIndex(index); }} style={{ minWidth: 102, padding: '0 14px', border: 0, borderTop: active ? '3px solid #111' : '3px solid transparent', background: '#fff', color: active ? '#111' : '#444', fontWeight: active ? 800 : 600, fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                                return <button className={`idp-pnav-label writing-part-label ${active ? 'active' : ''}`} key={task.id} onClick={() => { if (index !== currentSectionIndex) void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true); setCurrentSectionIndex(index); }} style={{ padding: '0 0 0', border: 0, borderRadius: 0, boxShadow: 'none', background: '#fff', color: active ? 'var(--eblue)' : 'var(--etext)', fontWeight: 800, fontSize: 14, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                                     {answered && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16803b" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
                                     Part {task.taskNumber}
                                 </button>;
