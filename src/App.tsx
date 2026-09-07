@@ -1580,7 +1580,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; writingTutorialVideoUrl?: string; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -7979,6 +7979,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const officialInstructionVideoUrl = (skill: string) => {
     if (skill === "Listening") return "/instruction-videos/listening-tutorial-v1.mp4";
     if (skill === "Reading") return "/instruction-videos/reading-tutorial-v1.mp4";
+    if (skill === "Writing") return "/instruction-videos/writing-tutorial-v1.mp4";
     return "";
   };
   const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
@@ -8018,7 +8019,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     const skill = realExamSkillLabel(source);
-    const videoUrl = skill === "Writing" ? String(source?.writingTutorialVideoUrl || "").trim() : officialInstructionVideoUrl(skill);
+    const videoUrl = officialInstructionVideoUrl(skill);
     if (videoUrl && realExamSession?.packageId === pkg.id) {
       setRealExamInstructionGate({
         packageId: pkg.id,
@@ -9410,7 +9411,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const studentCanSeeGrade = writingGrading.status === "published";
           return <div className="writing-review" style={{ minHeight: "100vh", background: C.bg, color: C.text, textAlign: "left" }}>
               {globalStyles}
-              <style>{`.writing-review :is(h1,h2,h3,p,label,input,textarea,blockquote) { text-align:left !important; } .writing-review .card { text-align:left; } .writing-review textarea { box-sizing:border-box; width:100%; } .writing-review .writing-response-columns { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } @media(max-width:700px) { .writing-review .writing-response-columns { grid-template-columns:1fr !important; } }`}</style>
+              <style>{`.writing-review :is(h1,h2,h3,p,label,input,textarea,blockquote) { text-align:left !important; } .writing-review .card { text-align:left; } .writing-review textarea { box-sizing:border-box; width:100%; } .writing-review .writing-task-source, .writing-review .writing-task-prompt { text-align:left; } .writing-review .writing-task-prompt :is(p,div,h1,h2,h3,h4,li) { text-align:left !important; } .writing-review .writing-response-columns { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } @media(max-width:700px) { .writing-review .writing-response-columns { grid-template-columns:1fr !important; } }`}</style>
               <main style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 20px 56px" }}>
                   <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", paddingBottom: 18, borderBottom: `2px solid ${C.accent}` }}>
                       <div><div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>Writing review</div><h1 style={{ margin: "5px 0 0", fontFamily: "var(--display)", fontSize: 30 }}>{reviewQuiz.quiz.title}</h1><div style={{ color: C.sub, fontSize: 13, marginTop: 6 }}>{reviewQuiz.result.studentName} · {reviewQuiz.result.date}</div></div>
@@ -9426,6 +9427,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const original = String(reviewQuiz.result.answers?.[task.id] || "");
                       return <section key={task.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
                         <div style={{ padding: "17px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}><div><div style={{ fontSize: 11, color: C.accent, fontWeight: 900, letterSpacing: .8, textTransform: "uppercase" }}>Task {task.taskNumber}</div><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>{task.title}</h2></div><div style={{ color: taskBand(task.id) === undefined ? C.sub : C.succ, fontWeight: 900, fontSize: 15 }}>Band {taskBand(task.id) ?? "—"}</div></div>
+                        {(task.instructions || task.prompt || task.mediaUrl) && <div className="writing-task-source" style={{ padding: "18px 20px 20px", borderBottom: `1px solid ${C.border}` }}><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 8 }}>Task prompt</div>{task.instructions && <p style={{ margin: "0 0 12px", lineHeight: 1.55 }}>{task.instructions}</p>}{task.prompt && <StaticHtmlBlock className="writing-task-prompt" html={sanitizeRichHtml(task.prompt)} style={{ lineHeight: 1.65 }} />}{task.mediaUrl && <img src={task.mediaUrl} alt={`Writing Task ${task.taskNumber} chart or visual`} loading="lazy" style={{ display: "block", maxWidth: "100%", maxHeight: 460, width: "auto", height: "auto", objectFit: "contain", margin: "18px 0 0", border: `1px solid ${C.border}` }} />}</div>}
                         <div className="writing-response-columns" style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
                           <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><WritingFeedback key={`${reviewQuiz.result.id}-${task.id}`} text={original} taskId={task.id} editable={isTeacherWritingReview} comments={isTeacherWritingReview || studentCanSeeGrade ? comments : []} onChange={next => updateWritingGrading({ comments: [...writingGrading.comments.filter(item => item.taskId !== task.id), ...next] })} /></div>
                           {isTeacherWritingReview && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><textarea value={writingGrading.correctedAnswers[task.id] || ""} onChange={event => updateWritingGrading({ correctedAnswers: { ...writingGrading.correctedAnswers, [task.id]: event.target.value } })} placeholder="Write a corrected version or model answer…" rows={9} style={{ resize: "vertical", fontSize: 13, lineHeight: 1.6 }} /></div>}
@@ -13519,9 +13521,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const completed = new Set(realExamSession.completedQuizIds || []);
     const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
     const nextQuiz = exams.find(quiz => quiz.id === nextQuizId);
-    const nextInstructionVideoUrl = realExamSkillLabel(nextQuiz) === "Writing"
-      ? String(nextQuiz?.writingTutorialVideoUrl || "").trim()
-      : officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
+    const nextInstructionVideoUrl = officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
     const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
     const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
       ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
@@ -15903,7 +15903,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     return { ...previous, type: "Writing", writingTasks, questions: writingQuestions({ ...previous, type: "Writing", writingTasks }) };
                                 });
                                 return <div className="eb-writing-editor" style={{ display: 'grid', gap: 26 }}>
-                                    <label style={{ display: 'grid', gap: 6, padding: '14px 15px', border: `1px solid ${EB.line}`, borderRadius: 8, background: EB.wash }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>WRITING TUTORIAL VIDEO URL (OPTIONAL)</span><input type="url" value={editingQuiz.writingTutorialVideoUrl || ''} onChange={event => setEditingQuiz((previous: any) => previous ? { ...previous, writingTutorialVideoUrl: event.target.value } : previous)} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /><span style={{ fontSize: 11, color: EB.sub }}>Used as the separate instruction hook for this Writing test in a real-exam package.</span></label>
                                     {tasks.map((task: WritingTaskDefinition) => <section key={task.id} style={{ borderTop: `1px solid ${EB.line}`, paddingTop: 22 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
                                             <div><div style={ebEyebrow}>Part {task.taskNumber}</div><h3 style={{ margin: '5px 0 0', fontSize: 20, color: EB.ink }}>{task.title}</h3></div>

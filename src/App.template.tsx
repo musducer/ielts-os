@@ -1580,7 +1580,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; writingTutorialVideoUrl?: string; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -7979,6 +7979,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const officialInstructionVideoUrl = (skill: string) => {
     if (skill === "Listening") return "/instruction-videos/listening-tutorial-v1.mp4";
     if (skill === "Reading") return "/instruction-videos/reading-tutorial-v1.mp4";
+    if (skill === "Writing") return "/instruction-videos/writing-tutorial-v1.mp4";
     return "";
   };
   const launchRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
@@ -8018,7 +8019,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const startRealExamPackageQuiz = (pkg: RealExamPackage, quizId: string) => {
     const source = quizzesRef.current.find(quiz => quiz.id === quizId);
     const skill = realExamSkillLabel(source);
-    const videoUrl = skill === "Writing" ? String(source?.writingTutorialVideoUrl || "").trim() : officialInstructionVideoUrl(skill);
+    const videoUrl = officialInstructionVideoUrl(skill);
     if (videoUrl && realExamSession?.packageId === pkg.id) {
       setRealExamInstructionGate({
         packageId: pkg.id,
@@ -9352,9 +9353,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const completed = new Set(realExamSession.completedQuizIds || []);
     const nextQuizId = pkg?.quizIds?.find(id => !completed.has(id));
     const nextQuiz = exams.find(quiz => quiz.id === nextQuizId);
-    const nextInstructionVideoUrl = realExamSkillLabel(nextQuiz) === "Writing"
-      ? String(nextQuiz?.writingTutorialVideoUrl || "").trim()
-      : officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
+    const nextInstructionVideoUrl = officialInstructionVideoUrl(realExamSkillLabel(nextQuiz));
     const doneCount = (pkg?.quizIds || []).filter(id => completed.has(id)).length;
     const formatRealExamTiming = (minutes: number) => minutes >= 60 && minutes % 60 === 0
       ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`

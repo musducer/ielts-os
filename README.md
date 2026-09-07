@@ -2,7 +2,7 @@
 
 ## Writing test room
 
-Writing instructions, student responses and corrected essays are left aligned. Part navigation and the splitter follow the Reading/Listening test controls. In grading, select text in the original essay and add a comment; highlighted passages and comment links let teachers and students find the relevant text. General feedback is also supported. Feedback remains hidden from students until published.
+Writing instructions, student responses and corrected essays are left aligned. Part navigation and the splitter follow the Reading/Listening test controls. Review and grading show each task's instruction, prompt and chart/visual before the response. In grading, select text in the original essay and add a comment; highlighted passages and comment links let teachers and students find the relevant text. General feedback is also supported. Feedback remains hidden from students until published.
 
 Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
 
@@ -57,7 +57,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Gói thi LR hoặc LRW, làm bài đúng thứ tự do giáo viên cấu hình.
 - Passcode, đối tượng học sinh, lịch mở/đóng, số lần làm và trạng thái hoàn thành.
 - Test taker ID, pre-test checks, màn tổng hợp và bottom bar riêng có nhận diện IELTS OS tinh gọn ở góc trái, nhất quán cả khi vào luồng làm bài.
-- Video hướng dẫn Listening/Reading bắt buộc xem hết trước khi xác nhận vào bài.
+- Video hướng dẫn Listening/Reading/Writing bắt buộc xem hết trước khi xác nhận vào bài. Writing dùng bản 60 giây được quản lý tập trung, không cấu hình link riêng trong từng đề.
 - Video được phục vụ từ static CDN của chính bản deploy, cache dài hạn và preload video của bài kế tiếp ngay tại màn tổng hợp.
 - Yêu cầu trở lại fullscreen trước khi tiếp tục nếu thí sinh thoát toàn màn hình.
 
