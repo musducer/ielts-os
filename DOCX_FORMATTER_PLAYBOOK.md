@@ -1,17 +1,18 @@
 # IELTS OS: DOCX Formatter Playbook
 
-## Batch DOCX import into a Quest
+## Batch DOCX import
 
 Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up to 20 DOCX files.
 
 - Each file is validated using the same ZIP limits and parsed using the normal `parse_docx_to_quiz` contract.
-- The result is ordered exactly as submitted and reports success/error for every file. A failure never creates a partial Quest.
-- Teachers may remove or reorder rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
+- The result is ordered exactly as submitted and reports success/error for every file.
+- Quest import never creates a partial Quest. The normal Exam Builder may add its ready files after the teacher explicitly confirms that valid subset.
+- Teachers may remove or reorder Quest rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
 - Every DOCX remains independently valid under this playbook. Do not split one passage, answer bank, or question group across files.
 
-**Changelog:** 2026-09-07 — Added validated, ordered multi-DOCX Quest import through `/api/upload_docx_batch` (maximum 20 files).
+**Changelog:** 2026-09-08 — Added Writing DOCX grammar and question-less Writing validation. `/api/upload_docx_batch` accepts mixed Reading, Listening, and Writing files (maximum 20).
 
-**Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
+**Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, Writing, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
 **Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-31 by the commit that updates this changelog.
 
@@ -34,6 +35,7 @@ Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up 
 9. Preserve original question numbering and source order.
 10. Put teacher explanations in [EXPLANATION] lines only. Never mix them into answer-key paragraphs.
 11. Parse the final DOCX locally before upload. Compare extracted types, numbers, options, answers, explanations, evidence quotes, and timestamps against the source test.
+12. Writing uses its dedicated two-task grammar below. Do not put `[PASSAGE]`, `[QUESTIONS]`, generic blocks, or answer keys in a Writing DOCX.
 
 ---
 
@@ -59,7 +61,7 @@ Listening adds a public audio URL:
 Rules:
 
 - [TIME] is parsed as an integer after stripping non-digits.
-- Use Reading, Listening, or Integrated for [TYPE].
+- Use Reading, Listening, Writing, or Integrated for [TYPE].
 - The [AUDIO] paragraph must contain a URL only.
 
 Use one [PASSAGE] and one [QUESTIONS] for each Reading passage or Listening part:
@@ -75,6 +77,43 @@ Passage/transcript content...
 ~~~
 
 A later [PASSAGE] closes the previous section and starts the next one. Omitting [QUESTIONS] leaves the parser with no question block.
+
+### Writing: exactly two task blocks
+
+Writing has no generic questions. It must declare both Task 1 and Task 2, each with a non-empty prompt. The parser returns `writingTasks`; its `questions` array is intentionally empty and must not be used as a Writing validity check.
+
+~~~text
+[TITLE] Academic Writing Practice Test 1
+[TIME] 60
+[TYPE] Writing
+
+[WRITING_TASK 1]
+[TASK_TITLE] Academic Writing Task 1
+[INSTRUCTIONS] You should spend about 20 minutes on this task. Write at least 150 words.
+[MINUTES] 20
+[MIN_WORDS] 150
+[PROMPT]
+The chart below shows the number of trips made by children in one country in 1990 and 2010.
+Summarise the information by selecting and reporting the main features, and make comparisons where relevant.
+[MEDIA] https://cdn.example.com/charts/children-trips.png
+
+[WRITING_TASK 2]
+[TASK_TITLE] Academic Writing Task 2
+[INSTRUCTIONS] You should spend about 40 minutes on this task. Write at least 250 words.
+[MINUTES] 40
+[MIN_WORDS] 250
+[PROMPT]
+Some people believe public transport should receive more government funding. Discuss both views and give your own opinion.
+~~~
+
+Rules:
+
+- `[WRITING_TASK 1]` and `[WRITING_TASK 2]` must each appear once, in that source order; both task prompts are required.
+- `[TASK_TITLE]`, `[INSTRUCTIONS]`, `[MINUTES]`, and `[MIN_WORDS]` are optional. Their defaults are Task 1: 20 minutes / 150 words, Task 2: 40 minutes / 250 words.
+- `[PROMPT]` begins rich prompt content. Ordinary paragraphs and tables after it are preserved until the next Writing control tag or task header.
+- `[MEDIA]` is optional and is for a single chart/visual URL. It must contain one publicly reachable `https://` URL on the same paragraph. The app displays it beneath that task prompt.
+- Embedded DOCX images, text in images, headers, footers, shapes, and text boxes are not extracted. Upload the chart somewhere publicly reachable, then use its HTTPS URL in `[MEDIA]`.
+- Do not use `[AUDIO]`, `[PASSAGE]`, `[QUESTIONS]`, `[BLANK]`, or starred answer keys in a Writing DOCX.
 
 ### Preserved Word formatting
 
@@ -560,9 +599,10 @@ Critical rules:
 ### Content checklist
 
 - [ ] [TITLE], [TIME], and [TYPE] present.
-- [ ] Every part has [PASSAGE] then [QUESTIONS].
-- [ ] Every source question appears once, in original order.
-- [ ] Every question has an answer key.
+- [ ] Reading, Listening, and Integrated: every part has [PASSAGE] then [QUESTIONS].
+- [ ] Reading, Listening, and Integrated: every source question appears once, in original order and has an answer key.
+- [ ] Writing: exactly one [WRITING_TASK 1] and one [WRITING_TASK 2], each with non-empty [PROMPT] content.
+- [ ] Writing: every optional chart/visual is a single public HTTPS URL in [MEDIA], not an embedded DOCX image.
 - [ ] Multiple selection has one starred line per correct option.
 - [ ] Option banks are complete and in original order.
 - [ ] Matching grid has correct [LEFT_TITLE]/[RIGHT_TITLE] when the source table/legend has headings.
@@ -586,6 +626,8 @@ from docx import Document
 from index import parse_docx_to_quiz
 
 quiz = parse_docx_to_quiz(Document(r'C:\path\to\formatted.docx'))
+for task in quiz.get('writingTasks', []):
+    print('Writing task', task['taskNumber'], task['minimumWords'], task['recommendedMinutes'], task.get('mediaUrl'), task['prompt'])
 for q in quiz['questions']:
     manual = q.get('manualExplanation') or {}
     print(q['passageIndex'], q['type'], q.get('subType'), q['text'], '=>', q['correctAnswer'], manual.get('parsedQuotes'), manual.get('parsedTimestamps'))
@@ -595,6 +637,7 @@ for q in quiz['questions']:
 Verify manually:
 
 - section count and question count;
+- Writing: both task prompts, minutes, minimum words, and optional media URL; Writing correctly has no generic questions;
 - each emitted type/subtype;
 - option order;
 - all answer values;
@@ -630,6 +673,7 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-09-08**: Added `[TYPE] Writing` parsing through two required `[WRITING_TASK n]` prompt blocks, optional HTTPS `[MEDIA]`, and question-less Writing validation for single and batch import.
 - **2026-08-31**: Updated matching-grid contract: optional [LEFT_TITLE]/[RIGHT_TITLE], feature legends under the radio grid, letter-only info grids without legends, heading-text answer keys for Matching Headings, and optional IMAGE_MAX_WIDTH for diagram display sizing.
 - **2026-08-30**: Added optional [EXPLANATION] grammar for teacher review explanations, parsed quoted evidence, and Listening timestamps.
 - **2026-08-30**: Added backend supplement DOCX import for replacing passages/sections and explanation-only files; ordinary [MATCHING] now stores clean option text, with Matching Headings retaining Roman compatibility for legacy files.

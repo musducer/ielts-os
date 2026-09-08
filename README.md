@@ -11,7 +11,7 @@ Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one t
 - Writing is a first-class test type with Task 1/Task 2, attempt autosave, four-criterion grading, corrected versions, anchored comments, draft, and teacher-controlled publish.
 - The student test room separates Listening, Reading, and Writing lists. Vocabulary Notebook can export to XLSX; scheduled lessons can contain lesson content and safe external material links.
 - Teachers configure a shared consumable/permanent gift catalog and reward mechanisms. New ledger operations capture a gift/price snapshot so history remains meaningful after a catalog edit.
-- Quest import accepts up to 20 DOCX files, reports validation per file, permits reordering, and creates the quiz chain only after confirmation.
+- Batch DOCX import accepts up to 20 Reading, Listening, Writing, or Integrated files. Exam Builder reviews every file and adds only the teacher-confirmed valid subset in one catalog write; Quest keeps its ordered-chain confirmation flow.
 
 ### Retention cron
 
@@ -48,7 +48,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Các dạng câu hỏi: Choice, Multiple Choice, Blank, Short Answer, Matching, Matching Headings, Drag and Drop, Map Drag và Diagram Label.
 - Matching một hoặc hai cột, option bank co theo nội dung, slot cố định và kéo thả không làm đổi cỡ chữ; card kéo và drag preview được canh cùng độ dày với slot; đáp án Matching Features được chuẩn hóa whitespace/ký tự vô hình khi lưu, chấm và xuất Excel; title và option dùng chung highlight/note persistence.
 - Diagram hỗ trợ ảnh nền, box, overlay và text box.
-- Listening strict mode tự bảo vệ luồng audio, tiếp tục phát sau gián đoạn tạm thời và không cho tua trái phép.
+- Listening strict mode tự bảo vệ luồng audio, tiếp tục phát sau gián đoạn tạm thời và không cho tua trái phép. Khi màn hình hướng dẫn của bài Listening đang mở, app chỉ prewarm một Range 256 KB của đúng audio hiện tại; không autoplay, không khởi động timer và tự bỏ qua Data Saver/2G.
 - Kiểm soát fullscreen, focus, vi phạm rời màn hình và trạng thái nộp bài.
 - Giao diện responsive cho desktop và thiết bị di động.
 
@@ -65,7 +65,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 
 - Tạo, sửa, preview, nhân bản, bật/tắt và phân phối đề.
 - Cấu hình thời gian, số lần làm, lịch thi, passcode, học sinh mục tiêu, audio, passage, transcript, hình ảnh và đáp án.
-- Import đề Reading/Listening/Integrated từ DOCX bằng parser FastAPI.
+- Import đề Reading/Listening/Writing/Integrated từ DOCX bằng parser FastAPI; nút DOCX của Exam Builder nhận tối đa 20 file, hiển thị review từng file và chỉ lưu các file hợp lệ sau nút xác nhận.
 - Import bổ sung passage hoặc explanations vào đề có sẵn.
 - Manual explanation hỗ trợ evidence quote và timestamp Listening để review đúng đoạn audio.
 - Quy chuẩn DOCX đầy đủ nằm trong [DOCX_FORMATTER_PLAYBOOK.md](DOCX_FORMATTER_PLAYBOOK.md).
@@ -114,9 +114,9 @@ AI providers
 ### Luồng DOCX
 
 1. Giáo viên chuẩn hóa DOCX theo playbook.
-2. Frontend gửi file tới `/api/upload_docx` hoặc `/api/upload_docx_supplement`.
+2. Frontend gửi một file tới `/api/upload_docx`, batch tối đa 20 file tới `/api/upload_docx_batch`, hoặc file vá tới `/api/upload_docx_supplement`.
 3. FastAPI kiểm tra ZIP/DOCX, đọc paragraph và table, nhận parser tags và dựng cấu trúc đề.
-4. Exam Builder nhận dữ liệu đã parse để kiểm tra, chỉnh sửa và lưu vào Firestore.
+4. Exam Builder nhận dữ liệu đã parse để kiểm tra. Batch chỉ ghi một lần vào Firestore sau xác nhận rõ ràng; file lỗi không chặn các file hợp lệ.
 5. Bộ test parser xác nhận explanations, matching answers, timestamps và vocabulary classification.
 
 ## Cấu trúc nguồn

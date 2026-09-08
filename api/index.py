@@ -122,6 +122,17 @@ def _attempt_is_expired(result: Dict[str, Any], now_epoch: int) -> bool:
     return bool(submitted_at and now_epoch - submitted_at >= retention_ms)
 
 VALID_BLOCK_TYPES = ["BLANK", "CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP", "DRAG", "SHORT_ANSWER", "MAP_DRAG", "FLOW_DRAG", "DIAGRAM_LABEL"]
+WRITING_TASK_HEADER_RE = re.compile(r"^\s*\[(?:WRITING[\s_-]*TASK|TASK)[\s_-]*([12])\]\s*$", re.IGNORECASE)
+WRITING_TASK_FIELD_RE = re.compile(
+    r"^\s*\[(TASK_TITLE|INSTRUCTIONS|TASK_INSTRUCTIONS|MIN_WORDS|MINIMUM_WORDS|MINUTES|RECOMMENDED_MINUTES|MEDIA|MEDIA_URL)\]\s*(.*)$",
+    re.IGNORECASE,
+)
+WRITING_PROMPT_RE = re.compile(r"^\s*\[PROMPT\]\s*(.*)$", re.IGNORECASE)
+
+
+class DocxImportValidationError(ValueError):
+    """A teacher-facing DOCX grammar error that can safely be returned by import routes."""
+
 
 def clean_option_answer_text(value: Any) -> str:
     text = html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
@@ -963,7 +974,189 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         )
         target_questions.append(question)
 
+
+def _is_writing_quiz_type(value: Any) -> bool:
+    return "writ" in str(value or "").strip().lower()
+
+
+def _document_declares_writing(doc) -> bool:
+    for element in doc.element.body:
+        if not element.tag.endswith("p"):
+            continue
+        text = Paragraph(element, doc).text.strip()
+        if "[TYPE]" not in text.upper():
+            continue
+        parsed_type = re.sub(r"\[TYPE\]", "", text, flags=re.IGNORECASE).strip()
+        if _is_writing_quiz_type(parsed_type):
+            return True
+    return False
+
+
+def _writing_prompt_has_content(value: Any) -> bool:
+    plain = html.unescape(re.sub(r"<[^>]+>", " ", str(value or ""))).replace("\xa0", " ")
+    return bool(re.sub(r"\s+", " ", plain).strip())
+
+
+def _writing_task_defaults(task_number: int) -> Dict[str, Any]:
+    if task_number == 1:
+        return {
+            "id": "writing_task_1",
+            "taskNumber": 1,
+            "title": "Writing Task 1",
+            "instructions": "You should spend about 20 minutes on this task. Write at least 150 words.",
+            "prompt": "",
+            "minimumWords": 150,
+            "recommendedMinutes": 20,
+            "order": 1,
+        }
+    return {
+        "id": "writing_task_2",
+        "taskNumber": 2,
+        "title": "Writing Task 2",
+        "instructions": "You should spend about 40 minutes on this task. Write at least 250 words.",
+        "prompt": "",
+        "minimumWords": 250,
+        "recommendedMinutes": 40,
+        "order": 2,
+    }
+
+
+def parse_writing_docx_to_quiz(doc):
+    """Parse the dedicated two-task Writing grammar without manufacturing MCQ questions."""
+    title, time_limit = "Untitled Writing Test", 60
+    tasks: Dict[int, Dict[str, Any]] = {}
+    current_task: Optional[Dict[str, Any]] = None
+    in_prompt = False
+
+    def require_task(tag: str) -> Dict[str, Any]:
+        if current_task is None:
+            raise DocxImportValidationError(f"Writing DOCX: [{tag}] must appear after [WRITING_TASK 1] or [WRITING_TASK 2].")
+        return current_task
+
+    def add_prompt_html(value: str):
+        task = require_task("PROMPT")
+        if value:
+            task["prompt"] += f"<p>{html.escape(value)}</p>"
+
+    for element in doc.element.body:
+        if element.tag.endswith("p"):
+            paragraph = Paragraph(element, doc)
+            text = paragraph.text.strip()
+            if not text:
+                continue
+
+            title_match = re.match(r"^\s*\[TITLE\]\s*(.*)$", text, re.IGNORECASE)
+            if title_match:
+                title = title_match.group(1).strip() or title
+                continue
+            time_match = re.match(r"^\s*\[TIME\]\s*(.*)$", text, re.IGNORECASE)
+            if time_match:
+                digits = re.sub(r"\D", "", time_match.group(1))
+                if digits:
+                    time_limit = int(digits)
+                continue
+            if re.match(r"^\s*\[TYPE\]\s*.*$", text, re.IGNORECASE):
+                continue
+
+            task_header = WRITING_TASK_HEADER_RE.match(text)
+            if task_header:
+                task_number = int(task_header.group(1))
+                if task_number in tasks:
+                    raise DocxImportValidationError(f"Writing DOCX: [WRITING_TASK {task_number}] appears more than once.")
+                if task_number == 2 and 1 not in tasks:
+                    raise DocxImportValidationError("Writing DOCX: [WRITING_TASK 1] must appear before [WRITING_TASK 2].")
+                current_task = _writing_task_defaults(task_number)
+                tasks[task_number] = current_task
+                in_prompt = False
+                continue
+
+            prompt_match = WRITING_PROMPT_RE.match(text)
+            if prompt_match:
+                require_task("PROMPT")
+                in_prompt = True
+                add_prompt_html(prompt_match.group(1).strip())
+                continue
+
+            field_match = WRITING_TASK_FIELD_RE.match(text)
+            if field_match:
+                field, raw_value = field_match.groups()
+                task = require_task(field.upper())
+                value = raw_value.strip()
+                in_prompt = False
+                field = field.upper()
+                if field == "TASK_TITLE":
+                    task["title"] = value or task["title"]
+                elif field in {"INSTRUCTIONS", "TASK_INSTRUCTIONS"}:
+                    task["instructions"] = value or task["instructions"]
+                elif field in {"MIN_WORDS", "MINIMUM_WORDS", "MINUTES", "RECOMMENDED_MINUTES"}:
+                    digits = re.sub(r"\D", "", value)
+                    if not digits or int(digits) < 1:
+                        raise DocxImportValidationError(f"Writing DOCX: [{field}] needs a positive whole number.")
+                    if field in {"MIN_WORDS", "MINIMUM_WORDS"}:
+                        task["minimumWords"] = int(digits)
+                    else:
+                        task["recommendedMinutes"] = int(digits)
+                else:
+                    parsed_url = urllib.parse.urlparse(value)
+                    if not value or parsed_url.scheme != "https" or not parsed_url.netloc:
+                        raise DocxImportValidationError("Writing DOCX: [MEDIA] must contain one public HTTPS URL.")
+                    task["mediaUrl"] = value
+                continue
+
+            if in_prompt:
+                current_task["prompt"] += paragraph_to_html(paragraph)
+
+        elif element.tag.endswith("tbl") and in_prompt and current_task is not None:
+            current_task["prompt"] += table_to_html(Table(element, doc))
+
+    writing_tasks = [tasks[number] for number in sorted(tasks)]
+    return {
+        "id": f"quiz_{int(time.time() * 1000)}",
+        "title": title,
+        "type": "Writing",
+        "audioUrl": "",
+        "timeLimit": time_limit,
+        "passage": "",
+        "sections": [],
+        "questions": [],
+        "writingTasks": writing_tasks,
+        "active": False,
+        "maxAttempts": 1,
+        "audience": "ALL",
+        "targetStudentIds": [],
+        "folder": "Root",
+        "isSEBRequired": False,
+        "passcode": "",
+        "scheduledStart": "",
+        "scheduledEnd": ""
+    }
+
+
+def docx_quiz_validation_error(quiz: Dict[str, Any]) -> Optional[str]:
+    """Return an import-safe validation message, or None when this parser result is usable."""
+    if _is_writing_quiz_type(quiz.get("type")):
+        raw_tasks = quiz.get("writingTasks") if isinstance(quiz.get("writingTasks"), list) else []
+        tasks_by_number = {
+            int(task.get("taskNumber")): task
+            for task in raw_tasks
+            if isinstance(task, dict) and str(task.get("taskNumber", "")).isdigit()
+        }
+        missing = [str(number) for number in (1, 2) if number not in tasks_by_number]
+        if missing:
+            return "Writing DOCX phải có cả [WRITING_TASK 1] và [WRITING_TASK 2]."
+        empty_prompts = [str(number) for number in (1, 2) if not _writing_prompt_has_content(tasks_by_number[number].get("prompt"))]
+        if empty_prompts:
+            return f"Writing DOCX: Task {', '.join(empty_prompts)} thiếu nội dung sau [PROMPT]."
+        return None
+    if not quiz.get("questions"):
+        return "Lỗi: Không trích xuất được câu hỏi nào. Hãy chắc chắn bạn đã gắn đủ thẻ [PASSAGE] và [QUESTIONS]."
+    return None
+
+
 def parse_docx_to_quiz(doc):
+    if _document_declares_writing(doc):
+        return parse_writing_docx_to_quiz(doc)
+
     title, time_limit, quiz_type, audio_url = "Untitled Mock Test", 60, "Reading", ""
     sections = []
     passage_level_explanations: Dict[str, Dict[str, Any]] = {}
@@ -1109,11 +1302,14 @@ async def upload_docx(
     try:
         doc = await read_validated_docx_upload(file)
         quiz = parse_docx_to_quiz(doc)
-        if not quiz.get("questions") or len(quiz["questions"]) == 0:
-            return {"success": False, "error": "Lỗi: Không trích xuất được câu hỏi nào. Hãy chắc chắn bạn đã gắn đủ thẻ [PASSAGE] và [QUESTIONS]."}
+        validation_error = docx_quiz_validation_error(quiz)
+        if validation_error:
+            return {"success": False, "error": validation_error}
         return {"success": True, "quiz": quiz}
     except HTTPException:
         raise
+    except DocxImportValidationError as exc:
+        return {"success": False, "error": str(exc)}
     except Exception as e:
         print(f"DOCX parse failed: {e}")
         traceback.print_exc()
@@ -1143,11 +1339,14 @@ async def upload_docx_batch(
         try:
             document = await read_validated_docx_upload(file)
             quiz = parse_docx_to_quiz(document)
-            if not quiz.get("questions"):
-                raise ValueError("Không trích xuất được câu hỏi nào. Kiểm tra thẻ [PASSAGE] và [QUESTIONS].")
+            validation_error = docx_quiz_validation_error(quiz)
+            if validation_error:
+                raise DocxImportValidationError(validation_error)
             results.append({"index": index, "filename": filename, "success": True, "quiz": quiz})
         except HTTPException as exc:
             results.append({"index": index, "filename": filename, "success": False, "error": str(exc.detail)})
+        except DocxImportValidationError as exc:
+            results.append({"index": index, "filename": filename, "success": False, "error": str(exc)})
         except Exception as exc:
             print(f"DOCX batch parse failed for {filename}: {exc}")
             traceback.print_exc()

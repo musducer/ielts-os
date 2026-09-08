@@ -159,7 +159,7 @@
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                           <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '9px 16px', borderRadius: EB.radiusSm, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}` }}>
                             <Ico name="download" size={14} /> {t('eb_upload_docx')}
-                            {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" onChange={handleFileUpload as any} style={{ display: 'none' }} />}
+                            {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" multiple onChange={handleFileUpload as any} style={{ display: 'none' }} />}
                           </label>
                           <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '9px 20px', fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
                         </div>
@@ -1181,6 +1181,46 @@
                         </div>
 
                         <div style={{flex: 1, overflowY: 'auto', padding: '30px 30px 60px', maxWidth: 1100, width: '100%', margin: '0 auto'}}>
+                            {examDocxBatch.length > 0 && (() => {
+                                const readyCount = examDocxBatch.filter(item => item.status === 'ready' && item.quiz).length;
+                                const errorCount = examDocxBatch.filter(item => item.status === 'error').length;
+                                const retrying = examDocxBatchCommitState === 'error';
+                                return <section aria-label="DOCX batch review" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, marginBottom: 28, overflow: 'hidden'}}>
+                                    <div style={{display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', padding: '18px 20px 16px', flexWrap: 'wrap'}}>
+                                        <div>
+                                            <div style={{...ebEyebrow, marginBottom: 7}}><Ico name="file" size={13} />Batch DOCX</div>
+                                            <div style={{fontFamily: EB.fDisplay, color: EB.ink, fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em'}}>Kiểm tra trước khi thêm vào thư viện</div>
+                                            <p style={{margin: '5px 0 0', color: EB.sub, fontSize: 12.5, lineHeight: 1.55}}>Lưu vào <b style={{color: EB.ink}}>{examDocxBatch[0]?.targetFolder || 'Root'}</b>. File lỗi không chặn các file hợp lệ.</p>
+                                        </div>
+                                        <span style={{fontFamily: EB.fMono, color: EB.sub, fontSize: 12, paddingTop: 4}}>{examDocxBatchBusy ? 'Đang phân tích…' : `${readyCount} sẵn sàng${errorCount ? ` · ${errorCount} cần bỏ` : ''}`}</span>
+                                    </div>
+                                    <div style={{borderTop: `1px solid ${EB.line}`}}>
+                                        {examDocxBatch.map(item => {
+                                            const parsedQuiz = item.quiz;
+                                            const isWriting = isWritingQuiz(parsedQuiz);
+                                            const questionCount = isWriting ? normalizeWritingTasks(parsedQuiz).length : (parsedQuiz?.questions || []).length;
+                                            const unit = isWriting ? 'phần Writing' : 'câu hỏi';
+                                            const color = item.status === 'ready' ? C.succ : item.status === 'error' ? C.err : EB.sub;
+                                            const label = item.status === 'ready' ? 'Sẵn sàng' : item.status === 'error' ? 'Lỗi parse' : 'Đang phân tích';
+                                            return <div key={item.id} style={{display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 14, alignItems: 'center', padding: '13px 20px', borderBottom: `1px solid ${EB.line}`}}>
+                                                <div style={{minWidth: 0}}>
+                                                    <div style={{fontSize: 13.5, fontWeight: 700, color: EB.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.file.name}</div>
+                                                    {item.status === 'ready' && parsedQuiz ? <div style={{marginTop: 3, color: EB.sub, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{parsedQuiz.type} · {parsedQuiz.title || item.file.name.replace(/\.docx$/i, '')} · {questionCount} {unit}</div> : <div style={{marginTop: 3, color: item.status === 'error' ? C.err : EB.sub, fontSize: 12, lineHeight: 1.4}}>{item.error || 'Đang gửi file tới parser…'}</div>}
+                                                </div>
+                                                <span style={{fontSize: 11.5, fontWeight: 800, color, whiteSpace: 'nowrap'}}>{label}</span>
+                                                <button className="ebx-icon" type="button" aria-label={`Bỏ ${item.file.name}`} disabled={examDocxBatchBusy} onClick={() => removeExamDocxBatchItem(item.id)} style={{width: 30, height: 30, border: `1px solid ${EB.line}`, background: 'transparent', color: EB.sub, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}><Ico name="x" size={14} /></button>
+                                            </div>;
+                                        })}
+                                    </div>
+                                    <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', flexWrap: 'wrap', background: retrying ? `${C.warn}0a` : EB.washSoft}}>
+                                        <div style={{fontSize: 12, color: retrying ? C.warn : EB.sub, lineHeight: 1.45}}>{retrying ? 'Đề đã được giữ an toàn trên thiết bị này. Bạn có thể thử đồng bộ lại đúng batch này.' : 'Bấm thêm để lưu toàn bộ file hợp lệ trong một lần; mặc định chúng ở trạng thái nháp.'}</div>
+                                        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+                                            <button className="ebx-soft" type="button" disabled={examDocxBatchBusy} onClick={cancelExamDocxBatch} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '8px 12px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 700, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}>{retrying ? 'Đóng review' : 'Bỏ batch'}</button>
+                                            <button className="ebx-primary" type="button" disabled={examDocxBatchBusy || readyCount === 0} onClick={confirmExamDocxBatch} style={{background: EB.accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 800, cursor: examDocxBatchBusy || readyCount === 0 ? 'wait' : 'pointer', opacity: examDocxBatchBusy || readyCount === 0 ? .6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name={examDocxBatchBusy ? 'refresh' : retrying ? 'refresh' : 'save'} size={13} />{examDocxBatchBusy ? 'Đang xử lý…' : retrying ? `Đồng bộ lại ${readyCount} đề` : `Thêm ${readyCount} đề hợp lệ`}</button>
+                                        </div>
+                                    </div>
+                                </section>;
+                            })()}
                             {/* KHU VỰC THƯ MỤC */}
                             {builderSearch === "" && childFolders.size > 0 && (
                                 <div style={{marginBottom: 40}}>

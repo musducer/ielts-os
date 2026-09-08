@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useMemo } from "react";
-import * as THREE from "three";
+import type * as Three from "three";
 import DOMPurify from "dompurify";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
@@ -1581,6 +1581,7 @@ interface RealExamInstructionGate { packageId: string; quizId: string; skill: "L
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -2515,9 +2516,13 @@ const SevererScene = React.forwardRef<SevererHandle, {}>((_props, ref) => {
     }), []);
 
     React.useEffect(() => {
+        let disposed = false;
+        let cleanup: (() => void) | undefined;
+        void import("three").then((THREE) => {
+        if (disposed) return;
         const mount = mountRef.current; if (!mount) return;
         let W = mount.clientWidth || 360, H = mount.clientHeight || 320;
-        let renderer: THREE.WebGLRenderer;
+        let renderer: Three.WebGLRenderer;
         try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' }); }
         catch { return; }
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -2617,7 +2622,7 @@ const SevererScene = React.forwardRef<SevererHandle, {}>((_props, ref) => {
         }
 
         // ===== SÉT NỨT (lightning arcs) =====
-        const bolts: any[] = []; const _tmpPts: THREE.Vector3[] = [];
+        const bolts: any[] = []; const _tmpPts: Three.Vector3[] = [];
         const makeBolt = (ln: any) => {
             const a = Math.random() * Math.PI * 2, a2 = a + (Math.random() - 0.5) * 1.5;
             const p0 = new THREE.Vector3(Math.cos(a) * 1.3, (Math.random() - 0.5) * 1.2, Math.sin(a) * 1.3);
@@ -2710,13 +2715,15 @@ const SevererScene = React.forwardRef<SevererHandle, {}>((_props, ref) => {
         const onResize = () => { W = mount.clientWidth || W; H = mount.clientHeight || H; renderer.setSize(W, H); camera.aspect = W / H; camera.updateProjectionMatrix(); };
         const ro = new ResizeObserver(onResize); ro.observe(mount);
 
-        return () => {
+        cleanup = () => {
             cancelAnimationFrame(raf); ro.disconnect(); document.removeEventListener('visibilitychange', onVis);
             beams.forEach((b: any) => { scene.remove(b.mesh); b.mesh.geometry.dispose(); b.mesh.material.dispose(); });
             heartTex.dispose();
             scene.traverse((o: any) => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m: any) => m.dispose()); });
             renderer.dispose(); if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
         };
+        }).catch(() => {});
+        return () => { disposed = true; cleanup?.(); };
     }, []);
 
     return <div ref={mountRef} style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none' }} />;
@@ -3481,6 +3488,9 @@ export default function IeltsSupremeOS() {
   const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
   const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
+  const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
+  const [examDocxBatchCommitState, setExamDocxBatchCommitState] = useState<"idle" | "error">("idle");
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
@@ -4351,6 +4361,7 @@ export default function IeltsSupremeOS() {
   const androidAudioCtxRef = useRef<AudioContext | null>(null);
   const audioProgressPaintRef = useRef({ exam: 0, review: 0 });
   const audioReloadAttemptsRef = useRef(0);
+  const audioPrewarmUrlsRef = useRef<Set<string>>(new Set());
   const examTimerRef = useRef<number | null>(null);
   const timeAlertDismissRef = useRef<number | null>(null);
   const timeAlertMilestonesRef = useRef<Set<number>>(new Set());
@@ -5686,6 +5697,94 @@ const applyWorkspaceSnapshot = (snap: any) => {
       externalPauseTimesRef.current = [];
       examAudioRecoveryAttemptsRef.current = 0;
   }, [activeExam?.id, activeExam?.audioUrl, reviewQuiz?.quiz?.id, reviewQuiz?.quiz?.audioUrl]);
+
+  useEffect(() => {
+      // Warm only the first 256 KB while the Listening instruction screen is open.
+      // Native <audio preload="metadata"> remains authoritative for playback, Range,
+      // and the timer; this request never plays, reloads, or changes that element.
+      if (!activeExam?.audioUrl
+          || !isListeningExamAudio()
+          || examAudioShouldPlayRef.current
+          || !["IDLE", "LOADING", "PAUSED"].includes(audioStatus)) return;
+
+      const connection = (navigator as any).connection as { saveData?: boolean; effectiveType?: string } | undefined;
+      const effectiveType = String(connection?.effectiveType || "").toLowerCase();
+      if (connection?.saveData || effectiveType === "slow-2g" || effectiveType === "2g") {
+          recordAudioDiagnostic("prewarm-skipped", audioRef.current, connection?.saveData ? "save-data" : effectiveType);
+          return;
+      }
+
+      let target: URL;
+      try {
+          target = new URL(activeExam.audioUrl, window.location.href);
+      } catch {
+          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "invalid-url");
+          return;
+      }
+      if (target.origin !== window.location.origin) {
+          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "cross-origin");
+          return;
+      }
+
+      const key = target.href;
+      if (audioPrewarmUrlsRef.current.has(key)) return;
+      audioPrewarmUrlsRef.current.add(key);
+
+      const controller = new AbortController();
+      let disposed = false;
+      let timedOut = false;
+      const startedAt = performance.now();
+      const timeout = window.setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+      }, 4500);
+
+      void (async () => {
+          let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+          try {
+              recordAudioDiagnostic("prewarm-start", audioRef.current, "bytes=0-262143");
+              const response = await fetch(key, {
+                  headers: { Range: "bytes=0-262143" },
+                  cache: "no-store",
+                  signal: controller.signal,
+              });
+              if (response.status !== 206 || !response.body) {
+                  await response.body?.cancel();
+                  if (!disposed) recordAudioDiagnostic("prewarm-unexpected-response", audioRef.current, `status=${response.status}`);
+                  return;
+              }
+
+              reader = response.body.getReader();
+              let bytesRead = 0;
+              while (bytesRead < 262144) {
+                  const { done, value } = await reader.read();
+                  if (done || !value) break;
+                  bytesRead += value.byteLength;
+              }
+              await reader.cancel();
+              reader = null;
+              if (!disposed) recordAudioDiagnostic("prewarm-complete", audioRef.current, `${Math.min(bytesRead, 262144)}B/${Math.round(performance.now() - startedAt)}ms`);
+          } catch (error) {
+              if (!disposed) {
+                  const detail = timedOut
+                      ? "timeout"
+                      : error instanceof Error ? error.name : String(error);
+                  recordAudioDiagnostic("prewarm-failed", audioRef.current, detail);
+              }
+          } finally {
+              window.clearTimeout(timeout);
+              if (reader) {
+                  try { await reader.cancel(); } catch { }
+              }
+          }
+      })();
+
+      return () => {
+          disposed = true;
+          window.clearTimeout(timeout);
+          controller.abort();
+      };
+  }, [activeExam?.id, activeExam?.audioUrl, audioStatus]);
 
   useEffect(() => {
       const currentAudio = isListeningReviewAudio() ? reviewQuiz?.quiz : activeExam;
@@ -7565,28 +7664,141 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `KEY_${quiz.title}.txt`; link.click();
   }
 
-  const handleFileUpload = async (e: any) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      alert("Sending file to FastAPI backend for processing...");
-      const response = await fetch(`${getApiBase()}/api/upload_docx`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json();
-      if (data.success && data.quiz) {
-        const newQuiz: Quiz = { ...data.quiz, audience: "ALL", targetStudentIds: [], maxAttempts: 1, isLocked: false, folder: builderFolder }; 
-        await saveQuiz(newQuiz);
-      } else {
-          logErrorToSystem("UPLOAD_DOCX_FAIL", data.error || "Backend unknown error", { fileName: file.name });
-          alert("Backend error: " + (data.error || "Unknown error."));
+  const makeDocxImportId = (prefix: string) => {
+    const uuid = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "";
+    return uuid ? `${prefix}_${uuid}` : `${prefix}_${getTrueTime()}_${Math.random().toString(36).slice(2, 10)}`;
+  };
+
+  const prepareExamDocxBatchQuiz = (item: ExamDocxBatchItem): Quiz => {
+    if (item.catalogQuiz) return item.catalogQuiz;
+    const imported = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(item.quiz || {})));
+    const quizId = makeDocxImportId("docx");
+    const base: any = {
+      ...imported,
+      id: quizId,
+      title: String(imported.title || item.file.name.replace(/\.docx$/i, "")).trim() || "Untitled DOCX exam",
+      active: false,
+      audience: "ALL",
+      targetStudentIds: [],
+      maxAttempts: Math.max(1, Number(imported.maxAttempts) || 1),
+      isLocked: false,
+      folder: item.targetFolder || "Root",
+      updatedAt: getTrueTime(),
+    };
+    if (isWritingQuiz(base)) {
+      const writingTasks = normalizeWritingTasks(base).map((task: WritingTaskDefinition, index: number) => ({
+        ...task,
+        id: `writing_${quizId}_${Number(task.taskNumber) || index + 1}`,
+      }));
+      return normalizeQuizManualExplanations({ ...base, writingTasks, questions: writingQuestions({ ...base, writingTasks }) }) as Quiz;
+    }
+
+    const originalIds = new Map<string, string>();
+    const questions: QuizQuestion[] = [];
+    const rekeyQuestion = (question: any, fallback: string): QuizQuestion => {
+      const originalId = String(question?.id || fallback);
+      const id = originalIds.get(originalId) || `q_${quizId}_${originalIds.size + 1}`;
+      if (!originalIds.has(originalId)) {
+        originalIds.set(originalId, id);
+        questions.push({ ...question, id });
       }
-    } catch (error: any) { 
-        logErrorToSystem("CONNECTION_ERROR", error.message || String(error), { action: "upload_docx" });
-        alert("Connection error to FastAPI backend!"); 
+      return questions.find(candidate => candidate.id === id)!;
+    };
+    (Array.isArray(base.questions) ? base.questions : []).forEach((question: any, index: number) => rekeyQuestion(question, `question_${index + 1}`));
+    const sections = Array.isArray(base.sections)
+      ? base.sections.map((section: any, sectionIndex: number) => ({
+          ...section,
+          questions: (Array.isArray(section.questions) ? section.questions : []).map((question: any, questionIndex: number) => rekeyQuestion(question, `section_${sectionIndex + 1}_${questionIndex + 1}`)),
+        }))
+      : base.sections;
+    return normalizeQuizManualExplanations({ ...base, questions, sections }) as Quiz;
+  };
+
+  const handleFileUpload = async (e: any) => {
+    const files = Array.from(e.target.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
+    e.target.value = "";
+    if (!files.length) return;
+    if (examDocxBatchBusy || examDocxBatch.length) {
+      alert("Hoàn tất hoặc bỏ batch DOCX hiện tại trước khi chọn batch mới.");
+      return;
+    }
+    if (files.length > 20) {
+      alert("Mỗi lần chỉ có thể phân tích tối đa 20 file DOCX.");
+      return;
+    }
+    const targetFolder = builderFolder || "Root";
+    const staged: ExamDocxBatchItem[] = files.map((file, index) => ({
+      id: makeDocxImportId(`docx_row_${index + 1}`),
+      file,
+      targetFolder,
+      status: "parsing",
+    }));
+    setExamDocxBatch(staged);
+    setExamDocxBatchCommitState("idle");
+    setExamDocxBatchBusy(true);
+    try {
+      const formData = new FormData();
+      staged.forEach(item => formData.append("files", item.file));
+      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
+      const data = await readApiJson(response);
+      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
+      const results = Array.isArray(data?.results) ? data.results : [];
+      setExamDocxBatch(staged.map((item, index) => {
+        const result = results.find((entry: any) => Number(entry?.index) === index);
+        return result?.success && result?.quiz
+          ? { ...item, status: "ready", quiz: result.quiz as Quiz }
+          : { ...item, status: "error", error: String(result?.error || "Không thể phân tích file này.") };
+      }));
+    } catch (error: any) {
+      const message = error?.message || "Không thể phân tích batch DOCX.";
+      logErrorToSystem("UPLOAD_DOCX_BATCH_FAIL", message, { files: staged.map(item => item.file.name) });
+      setExamDocxBatch(staged.map(item => ({ ...item, status: "error", error: message })));
+    } finally {
+      setExamDocxBatchBusy(false);
+    }
+  };
+
+  const removeExamDocxBatchItem = (id: string) => {
+    if (examDocxBatchBusy) return;
+    setExamDocxBatch(previous => previous.filter(item => item.id !== id));
+    setExamDocxBatchCommitState("idle");
+  };
+
+  const cancelExamDocxBatch = () => {
+    if (examDocxBatchBusy) return;
+    setExamDocxBatch([]);
+    setExamDocxBatchCommitState("idle");
+  };
+
+  const confirmExamDocxBatch = async () => {
+    if (userRole !== "TEACHER" || examDocxBatchBusy) return;
+    const validItems = examDocxBatch.filter(item => item.status === "ready" && item.quiz);
+    if (!validItems.length) {
+      alert("Batch này chưa có file DOCX hợp lệ để thêm.");
+      return;
+    }
+    const prepared = validItems.map(prepareExamDocxBatchQuiz);
+    const preparedByRow = new Map(validItems.map((item, index) => [item.id, prepared[index]]));
+    const importedIds = new Set(prepared.map(quiz => quiz.id));
+    setExamDocxBatch(previous => previous.map(item => preparedByRow.has(item.id) ? { ...item, catalogQuiz: preparedByRow.get(item.id) } : item));
+    setQuizCatalogState([...prepared, ...quizzesRef.current.filter(quiz => !importedIds.has(quiz.id))]);
+    setExamDocxBatchBusy(true);
+    try {
+      const saved = await syncData({ __quizUpserts: prepared });
+      if (!saved) {
+        setExamDocxBatchCommitState("error");
+        alert("Chưa thể đồng bộ batch lên máy chủ. Các đề vẫn được giữ trên thiết bị này; bạn có thể thử đồng bộ lại.");
+        return;
+      }
+      setExamDocxBatch([]);
+      setExamDocxBatchCommitState("idle");
+    } catch (error: any) {
+      const message = error?.message || "Không thể đồng bộ batch DOCX.";
+      logErrorToSystem("UPLOAD_DOCX_BATCH_SAVE_FAIL", message, { files: validItems.map(item => item.file.name) });
+      setExamDocxBatchCommitState("error");
+      alert(message);
+    } finally {
+      setExamDocxBatchBusy(false);
     }
   };
 
