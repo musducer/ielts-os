@@ -7977,8 +7977,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return String(quiz?.type || "Exam");
   };
   const officialInstructionVideoUrl = (skill: string) => {
-    if (skill === "Listening") return "/instruction-videos/listening-tutorial-v1.mp4";
-    if (skill === "Reading") return "/instruction-videos/reading-tutorial-v1.mp4";
+    if (skill === "Listening") return "/instruction-videos/listening-tutorial-v2.mp4";
+    if (skill === "Reading") return "/instruction-videos/reading-tutorial-v2.mp4";
     if (skill === "Writing") return "/instruction-videos/writing-tutorial-v1.mp4";
     return "";
   };

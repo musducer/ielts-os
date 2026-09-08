@@ -58,7 +58,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Passcode, đối tượng học sinh, lịch mở/đóng, số lần làm và trạng thái hoàn thành.
 - Test taker ID, pre-test checks, màn tổng hợp và bottom bar riêng có nhận diện IELTS OS tinh gọn ở góc trái, nhất quán cả khi vào luồng làm bài.
 - Video hướng dẫn Listening/Reading/Writing bắt buộc xem hết trước khi xác nhận vào bài. Writing dùng bản 60 giây được quản lý tập trung, không cấu hình link riêng trong từng đề.
-- Video được phục vụ từ static CDN của chính bản deploy, cache dài hạn và preload video của bài kế tiếp ngay tại màn tổng hợp.
+- Video được phục vụ từ static CDN của chính bản deploy, cache dài hạn và preload video của bài kế tiếp ngay tại màn tổng hợp. Listening/Reading dùng MP4 H.264 720p/30fps tương thích Chromium để video không treo ở màn hình tải.
 - Yêu cầu trở lại fullscreen trước khi tiếp tục nếu thí sinh thoát toàn màn hình.
 
 ### Exam Builder và DOCX
