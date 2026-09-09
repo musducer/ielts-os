@@ -38,6 +38,15 @@ import {
   writingDraftKey,
   writingQuestions,
 } from "./publicRelease";
+import {
+  getDeliveryMode,
+  getDeliveryPolicy,
+  isQuizPublishable,
+  isReadyForPublish,
+  withDeliveryMode,
+  type DeliveryMode,
+  type StoredExamPolicy,
+} from "./deliveryPolicy";
 import type { GiftDefinition, RewardMechanism, WritingTaskDefinition } from "./publicRelease";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
@@ -1583,8 +1592,9 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
+interface AiGenerationBatchState { batch_id: string; status: string; delivery_mode: DeliveryMode; publication_policy: "draft" | "publish_when_ready"; results: Array<{ original_filename: string; status: string; question_count?: number; solved_count?: number; explanation_count?: number; repair_count?: number; round_trip_state?: string; error?: string; publish_error?: string }>; completedCount?: number; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1772,13 +1782,9 @@ const mergeQuizManualExplanationsFromSupplement = (baseQuiz: any, supplementPayl
   return { quiz: normalizeQuizManualExplanations({ ...normalized, questions, sections }), imported };
 };
 
-const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
-  if (!quiz) return false;
-  if (quiz.practiceMode === true) return true;
-  // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
-  return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
-};
-const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode'> | null | undefined, isPreviewMode = false) =>
+const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode' | 'deliveryMode' | 'examPolicy' | 'maxAttempts' | 'isSEBRequired'> | null | undefined) =>
+  getDeliveryMode(quiz) === 'practice';
+const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode' | 'deliveryMode' | 'examPolicy' | 'maxAttempts' | 'isSEBRequired'> | null | undefined, isPreviewMode = false) =>
   !!quiz?.audioUrl
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
@@ -3495,6 +3501,10 @@ export default function IeltsSupremeOS() {
   const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
   const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
   const [examDocxBatchCommitState, setExamDocxBatchCommitState] = useState<"idle" | "error">("idle");
+  const [aiGenerationDeliveryMode, setAiGenerationDeliveryMode] = useState<DeliveryMode>("exam");
+  const [aiGenerationPublicationPolicy, setAiGenerationPublicationPolicy] = useState<"draft" | "publish_when_ready">("draft");
+  const [aiGenerationBatch, setAiGenerationBatch] = useState<AiGenerationBatchState | null>(null);
+  const [aiGenerationBusy, setAiGenerationBusy] = useState(false);
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
@@ -4441,6 +4451,27 @@ export default function IeltsSupremeOS() {
   const setManagedAudioLoading = () => {
     if (isListeningReviewAudio()) setRvAudioPlaying(false);
     else setAudioStatus("LOADING");
+  };
+  const persistQuizWithRevision = async (quiz: Quiz): Promise<Quiz> => {
+    const target = doc(QUIZZES_COLLECTION_REF, String(quiz.id));
+    const expectedRevision = Math.max(0, Number(quiz.revision) || 0);
+    let persisted: Quiz | null = null;
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(target);
+      const current = snapshot.exists() ? (snapshot.data() || {}) : {};
+      const currentRevision = Math.max(0, Number(current.revision) || 0);
+      if (snapshot.exists() && currentRevision !== expectedRevision) {
+        throw new Error("QUIZ_REVISION_CONFLICT");
+      }
+      persisted = {
+        ...quiz,
+        revision: currentRevision + 1,
+        updatedAt: getTrueTime(),
+      } as Quiz;
+      transaction.set(target, quizForStorage(persisted));
+    });
+    if (!persisted) throw new Error("QUIZ_SAVE_EMPTY");
+    return persisted;
   };
 
   // Updating the complete exam application four times per second makes lower-end
@@ -7722,6 +7753,62 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return normalizeQuizManualExplanations({ ...base, questions, sections }) as Quiz;
   };
 
+  const pollAiGenerationBatch = async (batchId: string) => {
+    if (!currentUser) return;
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Could not refresh the AI batch.'));
+      const batch = payload?.batch as AiGenerationBatchState;
+      if (batch?.batch_id) {
+        setAiGenerationBatch(batch);
+        if (batch.status === 'QUEUED' || batch.status === 'PROCESSING') {
+          window.setTimeout(() => { void pollAiGenerationBatch(batchId); }, 2500);
+        }
+      }
+    } catch (error: any) {
+      setAiGenerationBusy(false);
+      alert(error?.message || 'Could not refresh the AI batch.');
+    }
+  };
+
+  const handleAiRawDocxBatchUpload = async (event: any) => {
+    const files = Array.from(event?.target?.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
+    event.target.value = '';
+    if (!files.length || aiGenerationBusy) return;
+    if (!currentUser || userRole !== 'TEACHER') {
+      alert('Teacher sign-in is required to start an AI batch.');
+      return;
+    }
+    if (files.length > 20) {
+      alert('An AI batch accepts at most 20 DOCX files.');
+      return;
+    }
+    setAiGenerationBusy(true);
+    try {
+      const formData = new FormData();
+      files.forEach(file => formData.append('files', file));
+      formData.append('delivery_mode', aiGenerationDeliveryMode);
+      formData.append('publication_policy', aiGenerationPublicationPolicy);
+      formData.append('idempotency_key', makeDocxImportId('ai_batch'));
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not start the AI DOCX batch.'));
+      setAiGenerationBatch(payload.batch as AiGenerationBatchState);
+      void pollAiGenerationBatch(payload.batch.batch_id);
+    } catch (error: any) {
+      alert(error?.message || 'Could not start the AI DOCX batch.');
+    } finally {
+      setAiGenerationBusy(false);
+    }
+  };
+
   const handleFileUpload = async (e: any) => {
     const files = Array.from(e.target.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
     e.target.value = "";
@@ -7979,22 +8066,27 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       if (targetQuiz) {
           // Branch A: gọi với quiz object trực tiếp (duplicateQuiz, handleFileUpload)
-          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
+          const qz = withDeliveryMode(normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
-          })));
-          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
+          }))), getDeliveryMode(targetQuiz));
+          try {
+          const persisted = await persistQuizWithRevision(qz as Quiz);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
           const updated = [...quizzesRef.current];
-          if (existingIndex !== -1) updated[existingIndex] = qz;
-          else updated.unshift(qz);
+          if (existingIndex !== -1) updated[existingIndex] = persisted;
+          else updated.unshift(persisted);
           setQuizCatalogState(updated);
-          const saved = await syncData({ quizzes: updated });
-          if (!saved) {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
-              return false;
-          }
           alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
           return true;
+          } catch (error: any) {
+          if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+          } else {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+          }
+          return false;
+          }
       } else {
           // Branch B: gọi từ nút "LƯU ĐỀ THI" (không có argument)
           // FIX ROOT CAUSE: Lấy snapshot qua ref thay vì updater lồng nhau.
@@ -8007,27 +8099,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return false;
           }
 
-          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
+          const qz = withDeliveryMode(normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...currentSnapshot,
               id: currentSnapshot.id || getTrueTime().toString()
-          })));
+          }))), getDeliveryMode(currentSnapshot));
 
-          // Ba lệnh độc lập, KHÔNG lồng nhau  React batch an toàn
+          try {
+          const persisted = await persistQuizWithRevision(qz as Quiz);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
+          const updated = [...quizzesRef.current];
+          if (existingIndex !== -1) updated[existingIndex] = persisted;
+          else updated.unshift(persisted);
+          setQuizCatalogState(updated);
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
-
-          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
-          const updated = [...quizzesRef.current];
-          if (existingIndex !== -1) updated[existingIndex] = qz;
-          else updated.unshift(qz);
-          setQuizCatalogState(updated);
-          const saved = await syncData({ quizzes: updated });
-          if (!saved) {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
-              return false;
-          }
           alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
           return true;
+          } catch (error: any) {
+          if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+          } else {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+          }
+          return false;
+          }
       }
   };
   
@@ -8052,6 +8147,117 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
+
+  const persistBulkQuizUpdates = async (updates: Quiz[], action: string) => {
+      if (!updates.length) return;
+      const byId = new Map(updates.map(quiz => [quiz.id, quiz]));
+      setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
+      const saved = await syncData({ __quizUpserts: updates });
+      if (!saved) {
+          alert(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`);
+      }
+  };
+
+  const bulkIdempotencyKey = (action: string, ids: string[]) => {
+      const stableIds = [...ids].map(String).sort().join('_');
+      return `bulk_${action}_${stableIds}_${getTrueTime()}_${Math.random().toString(36).slice(2, 10)}`.slice(0, 150);
+  };
+
+  const tryServerBulkAction = async (path: string, body: Record<string, any>): Promise<any | null> => {
+      if (!currentUser) return null;
+      try {
+          const token = await currentUser.getIdToken();
+          const response = await fetch(`${getApiBase()}${path}`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+          });
+          if (response.status === 404 || response.status === 503) return null;
+          const payload = await readApiJson(response);
+          if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Bulk operation failed.'));
+          const changed = Array.isArray(payload?.results) ? payload.results.filter((item: any) => item?.success && item?.quiz).map((item: any) => item.quiz as Quiz) : [];
+          if (changed.length) {
+              const byId = new Map(changed.map((quiz: Quiz) => [quiz.id, quiz]));
+              setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
+          }
+          return payload;
+      } catch (error: any) {
+          alert(error?.message || 'Could not complete the bulk operation.');
+          return { failed: true };
+      }
+  };
+
+  const handleBulkDeliveryMode = async (mode: DeliveryMode) => {
+      const targets = quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id));
+      if (!targets.length) return;
+      const label = mode === 'practice' ? 'Practice' : 'Exam';
+      const message = mode === 'practice'
+        ? `Convert ${targets.length} assessments to Practice?\n\nThis allows unlimited attempts and disables integrity checks. It does not change questions, answers, or previous results.`
+        : `Convert ${targets.length} assessments to Exam?\n\nThe remembered Exam restrictions will be restored. Content and previous results are unchanged.`;
+      if (!confirm(message)) return;
+      const server = await tryServerBulkAction('/api/exams/bulk/mode', {
+          exam_ids: targets.map(quiz => quiz.id), delivery_mode: mode,
+          idempotency_key: bulkIdempotencyKey(`mode_${mode}`, targets.map(quiz => quiz.id)),
+      });
+      if (server) {
+          setSelectedQuizzes([]);
+          if (!server.failed) alert(`${server.succeeded || 0} converted to ${label}${server.failed ? `; ${server.failed} failed.` : ''}`);
+          return;
+      }
+      const updates = targets.map(quiz => ({ ...withDeliveryMode(quiz, mode), updatedAt: getTrueTime() } as Quiz));
+      await persistBulkQuizUpdates(updates, `Converted to ${label}`);
+      setSelectedQuizzes([]);
+  };
+
+  const handleBulkPublish = async (active: boolean, onlyReady = false) => {
+      const targets = quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id));
+      const candidates = onlyReady ? targets.filter(isReadyForPublish) : targets;
+      if (!candidates.length) {
+          alert(onlyReady ? 'No selected assessments are READY to publish.' : 'No assessments selected.');
+          return;
+      }
+      if (!confirm(`${active ? 'Publish' : 'Unpublish'} ${candidates.length} assessment${candidates.length === 1 ? '' : 's'}?`)) return;
+      const server = await tryServerBulkAction('/api/exams/bulk/publish', {
+          exam_ids: candidates.map(quiz => quiz.id), publish: active,
+          idempotency_key: bulkIdempotencyKey(active ? 'publish' : 'unpublish', candidates.map(quiz => quiz.id)),
+      });
+      if (server) {
+          setSelectedQuizzes([]);
+          if (!server.failed) alert(`${server.succeeded || 0} ${active ? 'published' : 'unpublished'}.`);
+          return;
+      }
+      const updates: Quiz[] = [];
+      const skipped: string[] = [];
+      candidates.forEach(quiz => {
+          const publishability = isQuizPublishable(quiz);
+          if (active && !publishability.ok) {
+              skipped.push(`${quiz.title}: ${publishability.reason || 'not publishable'}`);
+              return;
+          }
+          updates.push({ ...quiz, active, updatedAt: getTrueTime() });
+      });
+      await persistBulkQuizUpdates(updates, active ? 'Publish' : 'Unpublish');
+      setSelectedQuizzes([]);
+      alert(`${updates.length} ${active ? 'published' : 'unpublished'}${skipped.length ? `\n\nSkipped:\n${skipped.join('\n')}` : ''}`);
+  };
+
+  const handlePublishAllReady = async () => {
+      const scope = selectedQuizzes.length
+        ? quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id))
+        : quizzesRef.current.filter(quiz => String(quiz.folder || 'Root') === String(builderFolder || 'Root'));
+      const readyIds = scope.filter(isReadyForPublish).map(quiz => quiz.id);
+      if (!readyIds.length) {
+          alert('No READY assessments found in the current selection or folder.');
+          return;
+      }
+      setSelectedQuizzes(readyIds);
+      const candidates = scope.filter(quiz => readyIds.includes(quiz.id));
+      if (!confirm(`Publish all ${candidates.length} READY assessment${candidates.length === 1 ? '' : 's'}?`)) return;
+      const updates = candidates.map(quiz => ({ ...quiz, active: true, updatedAt: getTrueTime() }));
+      await persistBulkQuizUpdates(updates, 'Publish all ready');
+      setSelectedQuizzes([]);
+      alert(`${updates.length} published.`);
+  };
 
   const realExamSessionKey = (email = currentUser?.email || "") => `ielts_os_real_exam_session_${String(email || "").trim().toLowerCase()}`;
   const makeRealExamId = () => `realpkg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -8378,13 +8584,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
       const isQuestLaunch = Boolean(quiz.questContext);
       const isRealExamLaunch = Boolean(quiz.realExamContext);
+      const deliveryPolicy = getDeliveryPolicy(quiz);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
           if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
           if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
-          if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
+          if (!deliveryPolicy.isPractice && deliveryPolicy.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
               if (!isSEB) {
                   // Hiển thị màn hình hướng dẫn thay vì dùng alert()
@@ -8400,8 +8607,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
           if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
-              if (myHistory.length >= (quiz.maxAttempts || 1)) {
-                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
+              if (!deliveryPolicy.isPractice && myHistory.length >= deliveryPolicy.maxAttempts) {
+                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`);
                   return;
               }
           }

@@ -38,6 +38,15 @@ import {
   writingDraftKey,
   writingQuestions,
 } from "./publicRelease";
+import {
+  getDeliveryMode,
+  getDeliveryPolicy,
+  isQuizPublishable,
+  isReadyForPublish,
+  withDeliveryMode,
+  type DeliveryMode,
+  type StoredExamPolicy,
+} from "./deliveryPolicy";
 import type { GiftDefinition, RewardMechanism, WritingTaskDefinition } from "./publicRelease";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
@@ -1583,8 +1592,9 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
+interface AiGenerationBatchState { batch_id: string; status: string; delivery_mode: DeliveryMode; publication_policy: "draft" | "publish_when_ready"; results: Array<{ original_filename: string; status: string; question_count?: number; solved_count?: number; explanation_count?: number; repair_count?: number; round_trip_state?: string; error?: string; publish_error?: string }>; completedCount?: number; }
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -1772,13 +1782,9 @@ const mergeQuizManualExplanationsFromSupplement = (baseQuiz: any, supplementPayl
   return { quiz: normalizeQuizManualExplanations({ ...normalized, questions, sections }), imported };
 };
 
-const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode'> | null | undefined) => {
-  if (!quiz) return false;
-  if (quiz.practiceMode === true) return true;
-  // Legacy Listening Practice meant replayable audio; it now also opts out of proctoring.
-  return /listen|integrated/i.test(String(quiz.type || '')) && quiz.audioMode === 'practice';
-};
-const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode'> | null | undefined, isPreviewMode = false) =>
+const isPracticeQuiz = (quiz: Pick<Quiz, 'type' | 'audioMode' | 'practiceMode' | 'deliveryMode' | 'examPolicy' | 'maxAttempts' | 'isSEBRequired'> | null | undefined) =>
+  getDeliveryMode(quiz) === 'practice';
+const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'audioMode' | 'practiceMode' | 'deliveryMode' | 'examPolicy' | 'maxAttempts' | 'isSEBRequired'> | null | undefined, isPreviewMode = false) =>
   !!quiz?.audioUrl
   && !isPreviewMode
   && !isPracticeQuiz(quiz)
@@ -3495,6 +3501,10 @@ export default function IeltsSupremeOS() {
   const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
   const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
   const [examDocxBatchCommitState, setExamDocxBatchCommitState] = useState<"idle" | "error">("idle");
+  const [aiGenerationDeliveryMode, setAiGenerationDeliveryMode] = useState<DeliveryMode>("exam");
+  const [aiGenerationPublicationPolicy, setAiGenerationPublicationPolicy] = useState<"draft" | "publish_when_ready">("draft");
+  const [aiGenerationBatch, setAiGenerationBatch] = useState<AiGenerationBatchState | null>(null);
+  const [aiGenerationBusy, setAiGenerationBusy] = useState(false);
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
@@ -4441,6 +4451,27 @@ export default function IeltsSupremeOS() {
   const setManagedAudioLoading = () => {
     if (isListeningReviewAudio()) setRvAudioPlaying(false);
     else setAudioStatus("LOADING");
+  };
+  const persistQuizWithRevision = async (quiz: Quiz): Promise<Quiz> => {
+    const target = doc(QUIZZES_COLLECTION_REF, String(quiz.id));
+    const expectedRevision = Math.max(0, Number(quiz.revision) || 0);
+    let persisted: Quiz | null = null;
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(target);
+      const current = snapshot.exists() ? (snapshot.data() || {}) : {};
+      const currentRevision = Math.max(0, Number(current.revision) || 0);
+      if (snapshot.exists() && currentRevision !== expectedRevision) {
+        throw new Error("QUIZ_REVISION_CONFLICT");
+      }
+      persisted = {
+        ...quiz,
+        revision: currentRevision + 1,
+        updatedAt: getTrueTime(),
+      } as Quiz;
+      transaction.set(target, quizForStorage(persisted));
+    });
+    if (!persisted) throw new Error("QUIZ_SAVE_EMPTY");
+    return persisted;
   };
 
   // Updating the complete exam application four times per second makes lower-end
@@ -7722,6 +7753,62 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return normalizeQuizManualExplanations({ ...base, questions, sections }) as Quiz;
   };
 
+  const pollAiGenerationBatch = async (batchId: string) => {
+    if (!currentUser) return;
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Could not refresh the AI batch.'));
+      const batch = payload?.batch as AiGenerationBatchState;
+      if (batch?.batch_id) {
+        setAiGenerationBatch(batch);
+        if (batch.status === 'QUEUED' || batch.status === 'PROCESSING') {
+          window.setTimeout(() => { void pollAiGenerationBatch(batchId); }, 2500);
+        }
+      }
+    } catch (error: any) {
+      setAiGenerationBusy(false);
+      alert(error?.message || 'Could not refresh the AI batch.');
+    }
+  };
+
+  const handleAiRawDocxBatchUpload = async (event: any) => {
+    const files = Array.from(event?.target?.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
+    event.target.value = '';
+    if (!files.length || aiGenerationBusy) return;
+    if (!currentUser || userRole !== 'TEACHER') {
+      alert('Teacher sign-in is required to start an AI batch.');
+      return;
+    }
+    if (files.length > 20) {
+      alert('An AI batch accepts at most 20 DOCX files.');
+      return;
+    }
+    setAiGenerationBusy(true);
+    try {
+      const formData = new FormData();
+      files.forEach(file => formData.append('files', file));
+      formData.append('delivery_mode', aiGenerationDeliveryMode);
+      formData.append('publication_policy', aiGenerationPublicationPolicy);
+      formData.append('idempotency_key', makeDocxImportId('ai_batch'));
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not start the AI DOCX batch.'));
+      setAiGenerationBatch(payload.batch as AiGenerationBatchState);
+      void pollAiGenerationBatch(payload.batch.batch_id);
+    } catch (error: any) {
+      alert(error?.message || 'Could not start the AI DOCX batch.');
+    } finally {
+      setAiGenerationBusy(false);
+    }
+  };
+
   const handleFileUpload = async (e: any) => {
     const files = Array.from(e.target.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
     e.target.value = "";
@@ -7979,22 +8066,27 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
       if (targetQuiz) {
           // Branch A: gọi với quiz object trực tiếp (duplicateQuiz, handleFileUpload)
-          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
+          const qz = withDeliveryMode(normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
-          })));
-          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
+          }))), getDeliveryMode(targetQuiz));
+          try {
+          const persisted = await persistQuizWithRevision(qz as Quiz);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
           const updated = [...quizzesRef.current];
-          if (existingIndex !== -1) updated[existingIndex] = qz;
-          else updated.unshift(qz);
+          if (existingIndex !== -1) updated[existingIndex] = persisted;
+          else updated.unshift(persisted);
           setQuizCatalogState(updated);
-          const saved = await syncData({ quizzes: updated });
-          if (!saved) {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
-              return false;
-          }
           alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
           return true;
+          } catch (error: any) {
+          if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+          } else {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+          }
+          return false;
+          }
       } else {
           // Branch B: gọi từ nút "LƯU ĐỀ THI" (không có argument)
           // FIX ROOT CAUSE: Lấy snapshot qua ref thay vì updater lồng nhau.
@@ -8007,27 +8099,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return false;
           }
 
-          const qz = normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
+          const qz = withDeliveryMode(normalizeQuizManualExplanations(JSON.parse(JSON.stringify({
               ...currentSnapshot,
               id: currentSnapshot.id || getTrueTime().toString()
-          })));
+          }))), getDeliveryMode(currentSnapshot));
 
-          // Ba lệnh độc lập, KHÔNG lồng nhau  React batch an toàn
+          try {
+          const persisted = await persistQuizWithRevision(qz as Quiz);
+          const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
+          const updated = [...quizzesRef.current];
+          if (existingIndex !== -1) updated[existingIndex] = persisted;
+          else updated.unshift(persisted);
+          setQuizCatalogState(updated);
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
-
-          const existingIndex = quizzesRef.current.findIndex(q => q.id === qz.id);
-          const updated = [...quizzesRef.current];
-          if (existingIndex !== -1) updated[existingIndex] = qz;
-          else updated.unshift(qz);
-          setQuizCatalogState(updated);
-          const saved = await syncData({ quizzes: updated });
-          if (!saved) {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ. Đề đang được giữ an toàn trên thiết bị này và sẽ tự thử lại khi có mạng.`);
-              return false;
-          }
           alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
           return true;
+          } catch (error: any) {
+          if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+          } else {
+              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+          }
+          return false;
+          }
       }
   };
   
@@ -8052,6 +8147,117 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
+
+  const persistBulkQuizUpdates = async (updates: Quiz[], action: string) => {
+      if (!updates.length) return;
+      const byId = new Map(updates.map(quiz => [quiz.id, quiz]));
+      setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
+      const saved = await syncData({ __quizUpserts: updates });
+      if (!saved) {
+          alert(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`);
+      }
+  };
+
+  const bulkIdempotencyKey = (action: string, ids: string[]) => {
+      const stableIds = [...ids].map(String).sort().join('_');
+      return `bulk_${action}_${stableIds}_${getTrueTime()}_${Math.random().toString(36).slice(2, 10)}`.slice(0, 150);
+  };
+
+  const tryServerBulkAction = async (path: string, body: Record<string, any>): Promise<any | null> => {
+      if (!currentUser) return null;
+      try {
+          const token = await currentUser.getIdToken();
+          const response = await fetch(`${getApiBase()}${path}`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+          });
+          if (response.status === 404 || response.status === 503) return null;
+          const payload = await readApiJson(response);
+          if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Bulk operation failed.'));
+          const changed = Array.isArray(payload?.results) ? payload.results.filter((item: any) => item?.success && item?.quiz).map((item: any) => item.quiz as Quiz) : [];
+          if (changed.length) {
+              const byId = new Map(changed.map((quiz: Quiz) => [quiz.id, quiz]));
+              setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
+          }
+          return payload;
+      } catch (error: any) {
+          alert(error?.message || 'Could not complete the bulk operation.');
+          return { failed: true };
+      }
+  };
+
+  const handleBulkDeliveryMode = async (mode: DeliveryMode) => {
+      const targets = quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id));
+      if (!targets.length) return;
+      const label = mode === 'practice' ? 'Practice' : 'Exam';
+      const message = mode === 'practice'
+        ? `Convert ${targets.length} assessments to Practice?\n\nThis allows unlimited attempts and disables integrity checks. It does not change questions, answers, or previous results.`
+        : `Convert ${targets.length} assessments to Exam?\n\nThe remembered Exam restrictions will be restored. Content and previous results are unchanged.`;
+      if (!confirm(message)) return;
+      const server = await tryServerBulkAction('/api/exams/bulk/mode', {
+          exam_ids: targets.map(quiz => quiz.id), delivery_mode: mode,
+          idempotency_key: bulkIdempotencyKey(`mode_${mode}`, targets.map(quiz => quiz.id)),
+      });
+      if (server) {
+          setSelectedQuizzes([]);
+          if (!server.failed) alert(`${server.succeeded || 0} converted to ${label}${server.failed ? `; ${server.failed} failed.` : ''}`);
+          return;
+      }
+      const updates = targets.map(quiz => ({ ...withDeliveryMode(quiz, mode), updatedAt: getTrueTime() } as Quiz));
+      await persistBulkQuizUpdates(updates, `Converted to ${label}`);
+      setSelectedQuizzes([]);
+  };
+
+  const handleBulkPublish = async (active: boolean, onlyReady = false) => {
+      const targets = quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id));
+      const candidates = onlyReady ? targets.filter(isReadyForPublish) : targets;
+      if (!candidates.length) {
+          alert(onlyReady ? 'No selected assessments are READY to publish.' : 'No assessments selected.');
+          return;
+      }
+      if (!confirm(`${active ? 'Publish' : 'Unpublish'} ${candidates.length} assessment${candidates.length === 1 ? '' : 's'}?`)) return;
+      const server = await tryServerBulkAction('/api/exams/bulk/publish', {
+          exam_ids: candidates.map(quiz => quiz.id), publish: active,
+          idempotency_key: bulkIdempotencyKey(active ? 'publish' : 'unpublish', candidates.map(quiz => quiz.id)),
+      });
+      if (server) {
+          setSelectedQuizzes([]);
+          if (!server.failed) alert(`${server.succeeded || 0} ${active ? 'published' : 'unpublished'}.`);
+          return;
+      }
+      const updates: Quiz[] = [];
+      const skipped: string[] = [];
+      candidates.forEach(quiz => {
+          const publishability = isQuizPublishable(quiz);
+          if (active && !publishability.ok) {
+              skipped.push(`${quiz.title}: ${publishability.reason || 'not publishable'}`);
+              return;
+          }
+          updates.push({ ...quiz, active, updatedAt: getTrueTime() });
+      });
+      await persistBulkQuizUpdates(updates, active ? 'Publish' : 'Unpublish');
+      setSelectedQuizzes([]);
+      alert(`${updates.length} ${active ? 'published' : 'unpublished'}${skipped.length ? `\n\nSkipped:\n${skipped.join('\n')}` : ''}`);
+  };
+
+  const handlePublishAllReady = async () => {
+      const scope = selectedQuizzes.length
+        ? quizzesRef.current.filter(quiz => selectedQuizzes.includes(quiz.id))
+        : quizzesRef.current.filter(quiz => String(quiz.folder || 'Root') === String(builderFolder || 'Root'));
+      const readyIds = scope.filter(isReadyForPublish).map(quiz => quiz.id);
+      if (!readyIds.length) {
+          alert('No READY assessments found in the current selection or folder.');
+          return;
+      }
+      setSelectedQuizzes(readyIds);
+      const candidates = scope.filter(quiz => readyIds.includes(quiz.id));
+      if (!confirm(`Publish all ${candidates.length} READY assessment${candidates.length === 1 ? '' : 's'}?`)) return;
+      const updates = candidates.map(quiz => ({ ...quiz, active: true, updatedAt: getTrueTime() }));
+      await persistBulkQuizUpdates(updates, 'Publish all ready');
+      setSelectedQuizzes([]);
+      alert(`${updates.length} published.`);
+  };
 
   const realExamSessionKey = (email = currentUser?.email || "") => `ielts_os_real_exam_session_${String(email || "").trim().toLowerCase()}`;
   const makeRealExamId = () => `realpkg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -8378,13 +8584,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (bannedIps.includes(studentIp) && !isTeacherPreview && !isStudentTestUI) { alert("ACCESS DENIED. Your IP has been banned from taking exams."); return; }
       const isQuestLaunch = Boolean(quiz.questContext);
       const isRealExamLaunch = Boolean(quiz.realExamContext);
+      const deliveryPolicy = getDeliveryPolicy(quiz);
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
           if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
           if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
           
-          if (!isPracticeQuiz(quiz) && quiz.isSEBRequired) {
+          if (!deliveryPolicy.isPractice && deliveryPolicy.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
               if (!isSEB) {
                   // Hiển thị màn hình hướng dẫn thay vì dùng alert()
@@ -8400,8 +8607,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
           if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
-              if (myHistory.length >= (quiz.maxAttempts || 1)) {
-                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${quiz.maxAttempts || 1} lần)`);
+              if (!deliveryPolicy.isPractice && myHistory.length >= deliveryPolicy.maxAttempts) {
+                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`);
                   return;
               }
           }
@@ -15855,7 +16062,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 if (examBuilderSaveState === "saving") return;
                 const currentLatestQuiz: any = editingQuizRef.current;
                 if (!currentLatestQuiz) return;
-                const quizForSave = normalizeQuizManualExplanations(JSON.parse(JSON.stringify(currentLatestQuiz)));
+                const quizForSave = withDeliveryMode(normalizeQuizManualExplanations(JSON.parse(JSON.stringify(currentLatestQuiz))), getDeliveryMode(currentLatestQuiz));
                 if (isWritingQuiz(quizForSave)) {
                     const incomplete = normalizeWritingTasks(quizForSave).find((task: WritingTaskDefinition) => !String(task.prompt || "").replace(/<[^>]+>/g, "").trim());
                     if (incomplete) {
@@ -15863,15 +16070,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         return;
                     }
                 }
-                const idx = quizzesRef.current.findIndex((q: any) => q.id === quizForSave.id);
-                const nx = [...quizzesRef.current];
-                if (idx > -1) nx[idx] = quizForSave;
-                else nx.unshift(quizForSave);
-                setEditingQuiz(quizForSave);
-                setQuizCatalogState(nx);
                 setExamBuilderSaveState("saving");
-                const saved = await syncData({ __quizUpserts: [quizForSave] });
-                setExamBuilderSaveState(saved ? "saved" : "error");
+                let saved = true;
+                try {
+                    const persisted = await persistQuizWithRevision(quizForSave as Quiz);
+                    const idx = quizzesRef.current.findIndex((q: any) => q.id === persisted.id);
+                    const nx = [...quizzesRef.current];
+                    if (idx > -1) nx[idx] = persisted;
+                    else nx.unshift(persisted);
+                    setEditingQuiz(persisted);
+                    setQuizCatalogState(nx);
+                    setExamBuilderSaveState("saved");
+                } catch (error: any) {
+                    saved = true;
+                    setExamBuilderSaveState("error");
+                    alert(String(error?.message || error).includes('QUIZ_REVISION_CONFLICT') ? 'The assessment changed elsewhere. Reload before saving.' : 'Could not save this assessment.');
+                }
                 if (!saved) alert("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.");
             };
 
@@ -15941,6 +16155,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             <Ico name="download" size={14} /> {t('eb_upload_docx')}
                             {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" multiple onChange={handleFileUpload as any} style={{ display: 'none' }} />}
                           </label>
+                          <div style={{display: 'inline-flex', alignItems: 'center', gap: 6, padding: 4, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet}}>
+                            <select aria-label="AI DOCX delivery mode" value={aiGenerationDeliveryMode} onChange={(event: any) => setAiGenerationDeliveryMode(event.target.value)} style={{width: 94, padding: '5px 7px', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, boxShadow: 'none'}}><option value="exam">Exam</option><option value="practice">Practice</option></select>
+                            <select aria-label="AI DOCX publication policy" value={aiGenerationPublicationPolicy} onChange={(event: any) => setAiGenerationPublicationPolicy(event.target.value)} style={{width: 112, padding: '5px 7px', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, boxShadow: 'none'}}><option value="draft">Keep draft</option><option value="publish_when_ready">Publish ready</option></select>
+                            <label className="ebx-primary" style={{background: aiGenerationBusy ? EB.sub : EB.ink, color: '#fff', padding: '6px 10px', borderRadius: EB.radiusSm, cursor: aiGenerationBusy ? 'wait' : 'pointer', fontWeight: 700, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5, opacity: aiGenerationBusy ? .65 : 1}}>
+                              <Ico name="file" size={13} /> {aiGenerationBusy ? 'Starting…' : 'AI raw DOCX'}
+                              {typeof handleAiRawDocxBatchUpload === 'function' && <input type="file" accept=".docx" multiple disabled={aiGenerationBusy} onChange={handleAiRawDocxBatchUpload as any} style={{display: 'none'}} />}
+                            </label>
+                          </div>
                           <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '9px 20px', fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
                         </div>
                     )}
@@ -16839,16 +17061,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="Reading">Reading</option><option value="Listening">Listening</option><option value="Writing">Writing</option><option value="Integrated">Integrated</option>
                                                 </select>
                                             </div>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                                <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>Delivery mode</span>
+                                                {[{k: 'exam' as const, l: 'Exam'}, {k: 'practice' as const, l: 'Practice'}].map(option => {
+                                                    const on = getDeliveryMode(editingQuiz) === option.k;
+                                                    return <button key={option.k} onClick={() => setEditingQuiz((prev: any) => prev ? withDeliveryMode(prev, option.k) : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{option.l}</button>;
+                                                })}
+                                                {getDeliveryMode(editingQuiz) === 'practice' && <span style={{fontSize: 11, color: C.succ, fontWeight: 700}}>Unlimited attempts · integrity checks off</span>}
+                                            </div>
                                             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12}}>
                                                 <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_time_minutes')}</label><input type="number" className="idp-input" value={editingQuiz.timeLimit} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, timeLimit:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
-                                                <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_max_attempts')}</label><input type="number" className="idp-input" value={editingQuiz.maxAttempts || 1} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, maxAttempts:Number(e.target.value)}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
-                                            </div>
-                                            <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
-                                                <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_test_mode')}</span>
-                                                {[{k: false, l: t('eb_mode_strict')}, {k: true, l: t('eb_mode_practice')}].map(o => {
-                                                    const on = isPracticeQuiz(editingQuiz) === o.k;
-                                                    return <button key={String(o.k)} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, practiceMode: o.k, audioMode: !o.k && /listen|integrated/i.test(String(prev.type || '')) ? 'strict' : prev.audioMode, isSEBRequired: o.k ? false : prev.isSEBRequired} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
-                                                })}
+                                                <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_max_attempts')}</label><input type="number" className="idp-input" value={getDeliveryMode(editingQuiz) === 'practice' ? '' : getDeliveryPolicy(editingQuiz).maxAttempts} placeholder={getDeliveryMode(editingQuiz) === 'practice' ? 'Unlimited in Practice' : ''} disabled={getDeliveryMode(editingQuiz) === 'practice'} onChange={(e)=>setEditingQuiz((prev: any)=>prev ? {...prev, maxAttempts: Math.max(1, Number(e.target.value) || 1), examPolicy: {...(prev.examPolicy || {}), maxAttempts: Math.max(1, Number(e.target.value) || 1)}} : prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none', opacity: getDeliveryMode(editingQuiz) === 'practice' ? .65 : 1}}/></div>
                                             </div>
                                             {(editingQuiz.type === "Listening" || editingQuiz.type === "Integrated") && (
                                                 <div>
@@ -16868,7 +17091,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         <span style={{fontSize: 11, fontWeight: 800, color: C.sub}}>{t('eb_audio_mode')}</span>
                                                         {[{k: 'strict', l: t('eb_audio_strict')}, {k: 'practice', l: t('eb_audio_practice')}].map(o => {
                                                             const on = (editingQuiz.audioMode || 'strict') === o.k;
-                                                            return <button key={o.k} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k, practiceMode: o.k === 'practice'} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub}}>{o.l}</button>;
+                                                            return <button key={o.k} disabled={getDeliveryMode(editingQuiz) === 'practice'} onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, audioMode: o.k, examPolicy: {...(prev.examPolicy || {}), audioMode: o.k}} : prev)} style={{fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: EB.radiusSm, cursor: getDeliveryMode(editingQuiz) === 'practice' ? 'not-allowed' : 'pointer', border: `1px solid ${on ? C.accent : EB.line}`, background: on ? C.accent : EB.wash, color: on ? '#fff' : C.sub, opacity: getDeliveryMode(editingQuiz) === 'practice' ? .55 : 1}}>{o.l}</button>;
                                                         })}
                                                     </div>
                                                 </div>
@@ -16883,8 +17106,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_pin')}</label><input className="idp-input" placeholder={t('eb_pin_ph')} value={editingQuiz.passcode || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, passcode:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                             <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_open_at')}</label><input type="datetime-local" className="idp-input" value={editingQuiz.scheduledStart || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, scheduledStart:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
                                             <div><label style={{fontSize: 11, fontWeight: 800, color: C.sub, display: 'block', marginBottom: 6}}>{t('eb_close_at')}</label><input type="datetime-local" className="idp-input" value={editingQuiz.scheduledEnd || ""} onChange={(e)=>setEditingQuiz((prev: any)=>prev?{...prev, scheduledEnd:e.target.value}:prev)} style={{width: '100%', padding: '10px 14px', borderRadius: 10, background: EB.wash, border: `1px solid ${EB.line}`, boxShadow: 'none'}}/></div>
-                                            <label style={{fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: `${C.warn}10`, padding: '12px 15px', borderRadius: 8, color: C.warn, border: `1px solid ${C.warn}40`}}>
-                                                <input type="checkbox" checked={editingQuiz.isSEBRequired || false} onChange={(e) => setEditingQuiz((prev: any) => prev ? {...prev, isSEBRequired: e.target.checked} : prev)} style={{width: 18, height: 18, margin: 0, cursor: 'pointer'}} />
+                                            <label style={{fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8, cursor: getDeliveryMode(editingQuiz) === 'practice' ? 'not-allowed' : 'pointer', background: `${C.warn}10`, padding: '12px 15px', borderRadius: 8, color: C.warn, border: `1px solid ${C.warn}40`, opacity: getDeliveryMode(editingQuiz) === 'practice' ? .55 : 1}}>
+                                                <input type="checkbox" disabled={getDeliveryMode(editingQuiz) === 'practice'} checked={getDeliveryPolicy(editingQuiz).isSEBRequired} onChange={(e) => setEditingQuiz((prev: any) => prev ? {...prev, isSEBRequired: e.target.checked, examPolicy: {...(prev.examPolicy || {}), isSEBRequired: e.target.checked}} : prev)} style={{width: 18, height: 18, margin: 0, cursor: getDeliveryMode(editingQuiz) === 'practice' ? 'not-allowed' : 'pointer'}} />
                                                 {t('eb_require_seb')}
                                             </label>
                                             <div style={{display: 'flex', alignItems: 'center', gap: 10, background: editingQuiz.active ? `${C.succ}12` : EB.wash, padding: '12px 15px', borderRadius: 10, border: `1px solid ${editingQuiz.active ? C.succ : EB.line}`}}>
@@ -16961,6 +17184,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         </div>
 
                         <div style={{flex: 1, overflowY: 'auto', padding: '30px 30px 60px', maxWidth: 1100, width: '100%', margin: '0 auto'}}>
+                            {aiGenerationBatch && <section aria-label="AI raw DOCX batch" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, marginBottom: 28, overflow: 'hidden'}}>
+                                <div style={{padding: '15px 18px', borderBottom: `1px solid ${EB.line}`, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap'}}>
+                                    <div><div style={{...ebEyebrow, marginBottom: 5}}><Ico name="file" size={13} />AI raw DOCX batch</div><div style={{fontSize: 12, color: EB.sub}}>{aiGenerationBatch.delivery_mode === 'practice' ? 'Practice · unlimited attempts · integrity checks off' : 'Exam · remembered restrictions'} · {aiGenerationBatch.publication_policy === 'publish_when_ready' ? 'publish after every gate passes' : 'keep as draft'}</div></div>
+                                    <span style={{fontFamily: EB.fMono, fontSize: 11, color: aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}</span>
+                                </div>
+                                <div style={{padding: '10px 18px', display: 'grid', gap: 7}}>{(aiGenerationBatch.results || []).map((item: any, index: number) => <div key={`${item.original_filename}_${index}`} style={{display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 12, alignItems: 'center', fontSize: 12}}><span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}}>{item.original_filename}</span><span style={{fontFamily: EB.fMono, color: /^(READY_FOR_REVIEW|PUBLISHED|COMPLETE)$/i.test(String(item.status)) ? C.succ : /FAIL|MANUAL/i.test(String(item.status)) ? C.err : EB.sub}}>{item.status}{item.question_count ? ` · ${item.question_count}Q` : ''}{item.error || item.publish_error ? ' · needs review' : ''}</span></div>)}</div>
+                            </section>}
                             {examDocxBatch.length > 0 && (() => {
                                 const readyCount = examDocxBatch.filter(item => item.status === 'ready' && item.quiz).length;
                                 const errorCount = examDocxBatch.filter(item => item.status === 'error').length;
@@ -17044,8 +17274,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             <div>
                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
                                     <div style={ebEyebrow}><Ico name="file" size={13} />{t('eb_quiz_list')} <span style={{fontFamily: EB.fMono}}>({childQuizzes.length})</span></div>
+                                    {childQuizzes.length > 0 && <button className="ebx-soft" onClick={() => setSelectedQuizzes(childQuizzes.map((quiz: any) => quiz.id))} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Select folder</button>}
                                     {selectedQuizzes.length > 0 && (
                                         <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+                                            <button onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('practice')} style={{background: EB.accent, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Practice</button>
+                                            <button onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('exam')} style={{background: EB.ink, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Exam</button>
+                                            <button onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(true)} style={{background: C.succ, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Publish</button>
+                                            <button onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(false)} style={{background: 'transparent', color: C.err, padding: '8px 13px', fontSize: 12, borderRadius: 8, border: `1px solid ${C.err}55`, fontWeight: 800, cursor: 'pointer'}}>Unpublish</button>
+                                            <button onClick={() => typeof handlePublishAllReady === 'function' && handlePublishAllReady()} style={{background: 'transparent', color: EB.accent, padding: '8px 13px', fontSize: 12, borderRadius: 8, border: `1px solid ${EB.accent}55`, fontWeight: 800, cursor: 'pointer'}}>Publish ready</button>
                                             <button onClick={() => {
                                                 const dest = prompt("Nhập đường dẫn thư mục đích (VD: Root/IELTS/Test 1):", "Root");
                                                 if(dest) {
@@ -17057,6 +17293,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: C.succ, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="unlock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_unlock_quiz')}</button>
                                             <button onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: '#111827', color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Real package</button>
                                             <button onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: C.err, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="trash" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_delete')}</button>
+                                            <button onClick={() => setSelectedQuizzes([])} style={{background: 'transparent', color: EB.sub, padding: '8px 12px', fontSize: 12, borderRadius: 8, border: `1px solid ${EB.line}`, fontWeight: 800, cursor: 'pointer'}}>Clear</button>
                                         </div>
                                     )}
                                 </div>
@@ -17076,6 +17313,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 <div>
                                                     <div style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 18, color: EB.ink, marginBottom: 5, letterSpacing: '-0.01em'}}>
                                                         {q.title} {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 14, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={13} color={EB.sub} /></span>}
+                                                        <span style={{marginLeft: 8, display: 'inline-flex', verticalAlign: 'middle', padding: '2px 6px', borderRadius: 999, border: `1px solid ${getDeliveryMode(q) === 'practice' ? C.succ : EB.line}`, color: getDeliveryMode(q) === 'practice' ? C.succ : EB.sub, fontFamily: EB.fMono, fontSize: 10, letterSpacing: '.04em'}}>{getDeliveryMode(q).toUpperCase()}</span>
                                                     </div>
                                                     <div style={{fontSize: 12.5, color: EB.sub, fontWeight: 500}}>
                                                         {q.type} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')} <span style={{opacity:.5}}>·</span> {q.isLocked ? <span style={{textDecoration: 'line-through'}}>{t('eb_st_locked')}</span> : (q.active ? <span style={{color: C.succ, fontWeight: 600}}>{t('eb_st_open')}</span> : t('eb_st_off'))}

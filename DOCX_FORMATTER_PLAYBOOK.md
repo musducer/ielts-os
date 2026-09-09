@@ -673,6 +673,9 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-09-09**: Added the production AI raw-DOCX transformation contract. Source DOCX media is extracted from OOXML, hash-bound to one declared canonical question/writing-task location, re-embedded into the rendered IELTS OS DOCX, and must survive direct `api.index.parse_docx_to_quiz` round-trip verification. The pipeline fails closed for unbound, duplicated, altered, or inaccessible media; it never substitutes a chart or diagram URL.
+- **2026-09-09**: Pipeline output is canonical-first: run-level bold/italic, paragraph alignment, explicit answer/explanation grounding, bounded question repair, deterministic rendering, direct parser verification, and per-file failure isolation. Generated documents are obtained through authenticated job downloads, never by exposing filesystem paths.
+
 - **2026-09-08**: Added `[TYPE] Writing` parsing through two required `[WRITING_TASK n]` prompt blocks, optional HTTPS `[MEDIA]`, and question-less Writing validation for single and batch import.
 - **2026-08-31**: Updated matching-grid contract: optional [LEFT_TITLE]/[RIGHT_TITLE], feature legends under the radio grid, letter-only info grids without legends, heading-text answer keys for Matching Headings, and optional IMAGE_MAX_WIDTH for diagram display sizing.
 - **2026-08-30**: Added optional [EXPLANATION] grammar for teacher review explanations, parsed quoted evidence, and Listening timestamps.

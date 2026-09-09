@@ -210,6 +210,13 @@ Hoặc build production bằng script npm:
 npm run build
 ```
 
+## Delivery modes and raw DOCX batches
+
+- Every assessment has an explicit `deliveryMode`: **Exam** keeps its saved attempt, integrity and Listening replay policy; **Practice** has unlimited attempts and disables those restrictions. Legacy records with no explicit mode remain Exam.
+- The Exam Library supports selected bulk conversion, publish, unpublish and publish-ready actions. Each action is revisioned, audited, idempotent and returns independent results; one failure never rolls back another record.
+- `AI raw DOCX` accepts 1-20 source DOCX files with an Exam/Practice and Draft/Publish-when-ready pre-setting. It uses bounded file/question concurrency and returns independent detection, solve/explanation, validation, repair and parser round-trip state for each source file.
+- Raw batch processing and output download require a Firebase-verified manager in `EXAM_MANAGER_EMAILS` (or explicit `TEACHER_EMAILS` fallback). Configure `EXAM_GENERATION_STATE_DIR` on durable shared storage and `EXAM_GENERATION_MEDIA_BASE_URL` as an HTTPS origin before enabling production batch traffic.
+
 Không dùng `npx tsc --noEmit` đơn lẻ: `tsconfig.json` gốc không chứa source files và có thể báo thành công giả. Luôn dùng `npx tsc -b`.
 
 ## Deploy

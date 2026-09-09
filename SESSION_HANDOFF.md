@@ -1,5 +1,14 @@
 # IELTS OS — Session Handoff (cập nhật 2026-09-07)
 
+## AI raw-DOCX batch and delivery-mode rules — 2026-09-09
+
+- `deliveryMode` is authoritative. Missing/ambiguous legacy data means **Exam**, never Practice. Practice is explicit and materializes unlimited attempts plus disabled integrity/audio restrictions without erasing the remembered Exam policy.
+- Never trust a browser role for bulk conversion, publication, raw-DOCX processing or generated-document download. Firebase Admin verifies the bearer token; `EXAM_MANAGER_EMAILS`/`TEACHER_EMAILS` is the server allow-list.
+- Batch/import state, uploads, generated DOCX and managed media require durable shared storage. Do not deploy `BackgroundTasks` plus an ephemeral Vercel filesystem as the only production worker/state store; use a durable worker/queue and `EXAM_GENERATION_STATE_DIR` first.
+- Every bulk record update increments `revision`, writes bounded audit data, accepts an idempotency key and isolates failure per record. Do not use client-side fan-out writes for mode/publish actions.
+- AI DOCX import is fail-closed: preserve OOXML images through hash-bound extraction/re-embedding, use direct `api.index.parse_docx_to_quiz` for the final round-trip, and never publish when validation, grounding, repair, parser or media verification is incomplete.
+- Generated batch responses must never expose absolute filesystem paths. Serve output only from an authenticated, path-confined download route.
+
 ## Annotation layers and shared answer dragging — 2026-09-09
 
 - `src/annotationLayers.ts` persists semantic annotation wrappers using `data-annotation-id/type/start/end/created` and existing `data-note/data-note-id`. One action shares one ID across its text fragments. Legacy wrappers receive deterministic IDs, preserving existing note IDs. Leaf paint segments are rebuilt from distinct active highlight IDs; never treat stored pink as semantic data. Serialization and sanitized rendering rebuild segments; note mutation must also call `annotationHTML` so obsolete paint disappears. Keep `syncHighlightState` mirroring section/questions intact.
