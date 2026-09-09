@@ -10081,6 +10081,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
+                  .rv-flowchart-review { width:min(100%, 540px); margin:0; }
+                  .rv-flowchart-review .rv-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:6px 8px; color:#111827; font:400 15px/1.48 Arial,sans-serif; text-align:left; }
+                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 3px; padding:1px 7px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
+                  .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
+                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:0; font-size:0; line-height:1; }
+                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
+                  .rv-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
+                  .rv-flowchart-correction { margin:3px 0 4px; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:left; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
                   .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
@@ -10832,17 +10840,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
                                       const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
                                       if (question) selectFlowQuestion(question);
-                                  }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
+                                  }}>
                                       {flowQuestions.map((question: any, index: number) => {
                                           const state = rvCompletionAnswer(question);
                                           const number = rvQuestionNumber(question);
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
                                           const label = state.blank ? 'No answer' : state.given;
-                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
+                                          const slotLabel = state.blank ? number : label;
+                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${rvEscapeHtml(slotLabel)}</button>`);
                                           return <React.Fragment key={question.id}>
-                                              <div className="rv-flowchart-node" style={{border:`1px solid ${state.correct ? C.succ : state.blank ? C.warn : C.err}`, borderRadius:6, background:state.correct ? `${C.succ}0f` : state.blank ? `${C.warn}10` : `${C.err}0d`, padding:'10px 12px', lineHeight:1.45, fontWeight:600}} dangerouslySetInnerHTML={{__html:renderedNode}} />
-                                              {!state.correct && <div style={{textAlign:'center', color:C.succ, fontSize:12, fontWeight:800, margin:'5px 0'}}>Correct answer: {state.expected}</div>}
-                                              {index < flowQuestions.length - 1 && <div style={{width:20, textAlign:'center', fontSize:18, fontWeight:800, lineHeight:1, margin:'5px auto', color:C.text}}>&darr;</div>}
+                                              <div className="rv-flowchart-node" style={{borderColor:state.correct ? C.succ : state.blank ? C.warn : C.err}} dangerouslySetInnerHTML={{__html:renderedNode}} />
+                                              {!state.correct && <div className="rv-flowchart-correction">Correct answer: {state.expected}</div>}
+                                              {index < flowQuestions.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
                                           </React.Fragment>;
                                       })}
                                   </div>
@@ -11922,17 +11931,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { max-width: 940px; margin: 0 auto 18px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) minmax(190px, 0.42fr); gap:18px; align-items:start; }
-                      .idp-flowchart-panel { border: 1.5px solid #0969da; border-radius: 8px; padding: 18px 24px; background: var(--ebg); max-width: 680px; margin: 0 auto 18px; }
+                      .idp-flowchart-wrap { width:min(100%, 740px); margin:0 0 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 540px) max-content; gap:22px; align-items:start; }
+                      .idp-flowchart-panel { width:min(100%, 540px); margin:0; padding:0; background:transparent; border:0; }
                       .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
-                      .idp-flowchart-bank { margin:0; padding:14px 16px; border:1px solid var(--eborder); border-radius:8px; background:var(--epanel); position:sticky; top:16px; }
-                      .idp-flowchart-bank-label { margin-bottom: 9px; color: var(--esub); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-                      .idp-flowchart-bank-items { display:flex; flex-direction:column; gap:8px; }
-                      .idp-flowchart-bank .idp-wordbank-item { width:100%; margin:0; text-align:left; justify-content:flex-start; }
-                      .idp-flowchart-node { border: 1px solid #d8dee4; border-radius: 6px; background: rgba(255,255,255,0.65); padding: 10px 12px; line-height: 1.45; font-size: var(--efont); font-weight: 600; color: var(--etext); }
-                      .idp-flowchart-arrow { width: 20px; text-align: center; font-size: 18px; font-weight: 800; line-height: 1; margin: 5px 0 5px 18px; color: #24292f; }
-                      .idp-flowchart-number { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border: 1px solid #8c959f; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 800; margin-right: 8px; }
+                      .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
+                      .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
+                      .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:26px; box-sizing:border-box; margin:0; padding:4px 8px; text-align:left; justify-content:flex-start; font:700 13px/1.2 Arial,sans-serif; }
+                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:6px 8px; line-height:1.48; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; }
+                      .idp-flowchart-arrow { position:relative; width:100%; height:22px; margin:0; font-size:0; line-height:1; color:transparent; }
+                      .idp-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
+                      .idp-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
+                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
+                      .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; background:#f5f5f5 !important; }
+                      .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
+                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; }
+                      .idp-flowchart-title, .idp-flowchart-title * { text-align:left !important; }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
@@ -11946,7 +11960,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .writing-save-state { font-weight:700; }
                       .writing-divider { width:28px; margin:0 -9px; cursor:col-resize; z-index:30; display:flex; align-items:stretch; justify-content:center; flex:none; position:relative; touch-action:none; }
                       .writing-divider-track { width:10px; background:#ededed; border-left:1px solid #d1d5db; border-right:1px solid #d1d5db; display:flex; align-items:center; justify-content:center; pointer-events:none; }
-                      @media (max-width:820px) { .idp-flowchart-layout { grid-template-columns:1fr; } .idp-flowchart-layout .idp-flowchart-panel { order:1; } .idp-flowchart-layout .idp-flowchart-bank { order:2; position:static; } .idp-flowchart-bank-items { flex-direction:row; flex-wrap:wrap; } .idp-flowchart-bank .idp-wordbank-item { width:auto; } }
+                      @media (max-width:820px) { .idp-flowchart-layout { grid-template-columns:1fr; gap:14px; } .idp-flowchart-layout .idp-flowchart-panel { order:1; } .idp-flowchart-layout .idp-flowchart-bank { order:2; } .idp-flowchart-bank-items { flex-direction:row; flex-wrap:wrap; } .idp-flowchart-bank .idp-wordbank-item { width:fit-content; } }
                       @media (max-width:720px) { .writing-workspace { flex-direction:column; overflow:auto; } .writing-pane { width:100% !important; height:auto; overflow:visible; } .writing-prompt { padding:20px; } .writing-editor-pane { padding:16px 20px 28px; min-height:55vh; } .writing-divider { display:none; } }
                       
                       /* ĐàFIX: Ép văn bản câu hỏi thành Inline, Line spacing khít khịt theo yêu cầu */
@@ -12898,11 +12912,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               return (
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
-                                          <span className="idp-flowchart-number">{qGlobalIdx}</span>
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
                                            {isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
+                                              aria-label={`Question ${qGlobalIdx}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
                                                title={isAnsweredFlow ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
@@ -12926,7 +12940,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
                                               onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
-                                              style={{ textAlign: 'center', minWidth: 140 }}
+                                              style={{ textAlign: 'center', minWidth: 88 }}
                                            />}
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
                                       </div>
@@ -12936,7 +12950,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           })}
                         </div>
                         {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
-                            <div className="idp-flowchart-bank-label">Answer choices</div>
                             <div className="idp-flowchart-bank-items">
                                 {flowOptions.map((option: string, index: number) => {
                                     const used = !reuseTags && assigned.includes(option);
@@ -13181,7 +13194,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           </div>
                           
                           {showContext && !isWordBankDrag && (
-                                      <div className="idp-context-box" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                      <div className={`idp-context-box${isFlowChartGroup ? ' idp-flowchart-title' : ''}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                           <StaticHtmlBlock className="highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} html={safeHtml} />
                                   </div>
                           )}

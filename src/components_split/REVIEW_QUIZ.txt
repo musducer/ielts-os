@@ -527,6 +527,14 @@
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
+                  .rv-flowchart-review { width:min(100%, 540px); margin:0; }
+                  .rv-flowchart-review .rv-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:6px 8px; color:#111827; font:400 15px/1.48 Arial,sans-serif; text-align:left; }
+                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 3px; padding:1px 7px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
+                  .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
+                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:0; font-size:0; line-height:1; }
+                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
+                  .rv-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
+                  .rv-flowchart-correction { margin:3px 0 4px; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:left; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
                   .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
@@ -1278,17 +1286,18 @@
                                       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
                                       const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
                                       if (question) selectFlowQuestion(question);
-                                  }} style={{maxWidth:760, margin:'0 auto', border:`1.5px solid ${C.accent}`, borderRadius:8, padding:'18px 24px', background:C.bg}}>
+                                  }}>
                                       {flowQuestions.map((question: any, index: number) => {
                                           const state = rvCompletionAnswer(question);
                                           const number = rvQuestionNumber(question);
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
                                           const label = state.blank ? 'No answer' : state.given;
-                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${number}. ${rvEscapeHtml(label)}</button>`);
+                                          const slotLabel = state.blank ? number : label;
+                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${rvEscapeHtml(slotLabel)}</button>`);
                                           return <React.Fragment key={question.id}>
-                                              <div className="rv-flowchart-node" style={{border:`1px solid ${state.correct ? C.succ : state.blank ? C.warn : C.err}`, borderRadius:6, background:state.correct ? `${C.succ}0f` : state.blank ? `${C.warn}10` : `${C.err}0d`, padding:'10px 12px', lineHeight:1.45, fontWeight:600}} dangerouslySetInnerHTML={{__html:renderedNode}} />
-                                              {!state.correct && <div style={{textAlign:'center', color:C.succ, fontSize:12, fontWeight:800, margin:'5px 0'}}>Correct answer: {state.expected}</div>}
-                                              {index < flowQuestions.length - 1 && <div style={{width:20, textAlign:'center', fontSize:18, fontWeight:800, lineHeight:1, margin:'5px auto', color:C.text}}>&darr;</div>}
+                                              <div className="rv-flowchart-node" style={{borderColor:state.correct ? C.succ : state.blank ? C.warn : C.err}} dangerouslySetInnerHTML={{__html:renderedNode}} />
+                                              {!state.correct && <div className="rv-flowchart-correction">Correct answer: {state.expected}</div>}
+                                              {index < flowQuestions.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
                                           </React.Fragment>;
                                       })}
                                   </div>
