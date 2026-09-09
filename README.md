@@ -2,7 +2,7 @@
 
 ## Annotation and answer dragging
 
-- Note/Highlight uses custom 64×64 SVG artwork. Each annotation keeps its own ID, type, text offsets, creation time and note content. Two or more highlights paint their intersection pink with black text in all three contrast modes. Single highlights retain the current theme colour; highlights cover note colouring without deleting notes. “Delete newest Highlight” removes only that annotation, revealing any underlying highlight/note.
+- Note/Highlight uses custom 64×64 SVG artwork in a compact IELTS-style context toolbar. Each annotation keeps its own ID, type, text offsets, creation time and note content. Two or more highlights paint their intersection pink with black text in all three contrast modes. Single highlights retain the current theme colour; highlights cover note colouring without deleting notes. “Delete Highlight” removes only the top annotation, revealing any underlying highlight/note.
 - All interactive answer banks share a move cursor, blue hover/target border, isolated drag preview and faded source during dragging. Per the latest requested behaviour, non-reusable options disappear **only after a valid placement**, and return when dragged back to their bank. Cancellation leaves assignments intact. Used answers can move between gaps in their own question group; replacement returns the displaced answer to the bank. Reusable-answer banks remain reusable; Review remains read-only.
 - Sentence-ending slots share a width measured from every option's rendered text (minimum 394px, capped by the content column). Empty and filled slots keep the same width and reserved height; narrow layouts wrap full answers without clipping.
 

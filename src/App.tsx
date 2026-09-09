@@ -3816,7 +3816,7 @@ export default function IeltsSupremeOS() {
       setNoteInputMenu(null);
       setHighlightDeleteMenu({
           x: rect.left + rect.width / 2,
-          y: rect.bottom + 14,
+          y: rect.bottom + 10,
           node: highlightNode,
           container,
       });
@@ -11829,14 +11829,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* ĐàFIX UI CHUẨN: Popup Highlight & Giao diện Tooltip Nhập Ghi Chú */
                       /* POPUP QUÉT CHỮ — sao chép Inspera: 2 nút NGANG [Note | Highlight], icon trên, chữ dưới, vạch chia dọc */
-                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 8px; display: flex; padding: 0; box-shadow: 0 2px 8px #0002; z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 2px solid #737373; overflow: visible; }
-                      .idp-popup-menu::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.05)); }
-                      .idp-popup-btn { background: transparent; border: none; color: #737373; font-size: 16px; font-weight: 400; padding: 14px 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 9px; line-height: 1; }
+                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 5px; display: flex; padding: 0; box-shadow: 0 1px 3px rgba(0,0,0,.16); z-index: 999999; transform: translate(-50%, -100%); margin-top: -6px; border: 1px solid #737373; overflow: visible; }
+                      .idp-popup-menu::after { content: ''; position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%); border-width: 5px 5px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 1px 1px rgba(0,0,0,.08)); }
+                      .idp-popup-btn { background: transparent; border: none; color: #737373; font-size: 11px; font-weight: 400; padding: 6px 10px 5px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; line-height: 1; }
+                      .idp-popup-btn svg { width:21px; height:21px; flex:none; }
                       .idp-popup-btn + .idp-popup-btn { border-left: none; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
-                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:72px; min-height:62px; border:1px solid #b8bec7; border-radius:6px; background:#fff; color:#2f3338; box-shadow:0 6px 14px rgba(0,0,0,.16); display:flex; align-items:center; justify-content:center; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
-                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-6px; left:50%; width:10px; height:10px; background:#fff; border-left:1px solid #b8bec7; border-top:1px solid #b8bec7; transform:translateX(-50%) rotate(45deg); }
-                      .idp-highlight-delete-menu button { position:relative; z-index:1; width:100%; height:100%; border:0; background:transparent; color:inherit; cursor:pointer; font:500 10px/1.04 Arial,sans-serif; display:grid; gap:3px; place-items:center; padding:6px 5px; }
+                      .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:56px; min-height:46px; border:1px solid #858585; border-radius:4px; background:#fff; color:#4f4f4f; box-shadow:0 1px 3px rgba(0,0,0,.16); display:flex; align-items:center; justify-content:center; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-highlight-delete-menu::before { content:''; position:absolute; top:-5px; left:50%; width:8px; height:8px; background:#fff; border-left:1px solid #858585; border-top:1px solid #858585; transform:translateX(-50%) rotate(45deg); }
+                      .idp-highlight-delete-menu button { position:relative; z-index:1; width:100%; height:100%; border:0; background:transparent; color:inherit; cursor:pointer; font:500 9px/1.05 Arial,sans-serif; display:grid; gap:1px; place-items:center; padding:4px 3px; }
+                      .idp-highlight-delete-menu button svg { width:16px; height:16px; }
                       .idp-highlight-delete-menu button:hover { color:#111; }
                       @keyframes idpDeleteRise { from { opacity:0; transform:translate(-50%,10px); } to { opacity:1; transform:translate(-50%,0); } }
                       
@@ -13513,7 +13515,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
                          <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
-                             <span title="Removes only the newest highlight at this position; underlying highlights and notes remain.">Delete newest<br />Highlight</span>
+                             <span>Delete<br />Highlight</span>
                          </button>
                      </div>
                  )}

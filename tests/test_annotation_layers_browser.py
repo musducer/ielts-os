@@ -11,7 +11,7 @@ css = '\n'.join(line.strip() for line in source.splitlines()
                 and '{' in line and '}' in line and ' !important;' in line or '--hlbg:' in line)
 icons = re.findall(r'<svg width="32" height="32" viewBox="0 0 64 64".*?</svg>', source)
 assert len(icons) == 2
-css += '\n' + '\n'.join(line.strip() for line in source.splitlines() if line.strip().startswith('.idp-popup-'))
+css += '\n' + '\n'.join(line.strip() for line in source.splitlines() if line.strip().startswith(('.idp-popup-', '.idp-highlight-delete-menu')))
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
@@ -22,7 +22,7 @@ with sync_playwright() as p:
         window.annotations = await import('/src/annotationLayers.ts');
         document.head.insertAdjacentHTML('beforeend', `<style>${css}</style>`);
         document.body.innerHTML = '<main class="exam-content-block"><div id="fixture" class="highlightable-content"></div></main>';
-        document.body.insertAdjacentHTML('beforeend', `<div class="idp-popup-menu" style="left:200px;top:190px"><button class="idp-popup-btn">${icons[0]}Note</button><button class="idp-popup-btn">${icons[1]}Highlight</button></div>`);
+        document.body.insertAdjacentHTML('beforeend', `<div class="idp-popup-menu" style="left:200px;top:190px"><button class="idp-popup-btn">${icons[0]}Note</button><button class="idp-popup-btn">${icons[1]}Highlight</button></div><div class="idp-highlight-delete-menu" style="left:300px;top:200px"><button><svg viewBox="0 0 24 24"></svg><span>Delete<br>Highlight</span></button></div>`);
         window.reset = () => { document.querySelector('#fixture').innerHTML = '<b>abcdefghij</b>klmnopqrst'; };
         window.add = (start, end, type='HIGHLIGHT') => {
             const root = document.querySelector('#fixture');
@@ -46,6 +46,13 @@ with sync_playwright() as p:
         };
         window.remove = (id) => { const root=document.querySelector('#fixture'); annotations.removeAnnotation(root,[...root.querySelectorAll('[data-annotation-id]')].find(el=>el.dataset.annotationId===id)); };
     }""", {'css': css, 'icons': icons})
+    popup = page.locator('.idp-popup-menu').bounding_box()
+    delete_popup = page.locator('.idp-highlight-delete-menu').bounding_box()
+    assert popup and popup['width'] <= 120 and popup['height'] <= 52
+    assert delete_popup and delete_popup['width'] <= 58 and delete_popup['height'] <= 48
+    assert page.locator('.idp-popup-btn svg').evaluate_all('(els) => els.every(el => getComputedStyle(el).width === "21px" && getComputedStyle(el).height === "21px")')
+    assert page.locator('.idp-highlight-delete-menu').inner_text() == 'Delete\nHighlight'
+    assert 'Newest' not in page.locator('.idp-highlight-delete-menu').inner_text()
     screenshot = str(Path(tempfile.gettempdir()) / 'ielts-annotation-popup.png')
     page.screenshot(path=screenshot)
     print(f'Popup screenshot: {screenshot}', flush=True)

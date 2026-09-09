@@ -3816,7 +3816,7 @@ export default function IeltsSupremeOS() {
       setNoteInputMenu(null);
       setHighlightDeleteMenu({
           x: rect.left + rect.width / 2,
-          y: rect.bottom + 14,
+          y: rect.bottom + 10,
           node: highlightNode,
           container,
       });
