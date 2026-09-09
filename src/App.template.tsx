@@ -1,6 +1,9 @@
 ﻿import React, { useState, useEffect, useRef, useMemo } from "react";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
+import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
+import { startAnswerDrag, endAnswerDrag, validAnswerTarget, answerBankAt, feedbackAnswerDrag, observeSentenceEnding } from './answerDrag';
+import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
@@ -2123,7 +2126,7 @@ interface LiveSession { id: string; studentId: string; studentName: string; quiz
 // UTILS
 // ==========================================
 const safeString = (val: any) => (val !== null && val !== undefined) ? String(val) : "";
-const sanitizeRichHtml = (html: string) => DOMPurify.sanitize(html, {
+const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
         "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "li", "mark", "ol", "p", "pre", "s", "small", "span",
@@ -2134,7 +2137,7 @@ const sanitizeRichHtml = (html: string) => DOMPurify.sanitize(html, {
         "rel", "rowspan", "src", "style", "target", "title", "width"
     ],
     ALLOW_DATA_ATTR: true,
-});
+}));
 // Mã thưởng độc nhất, không thể đoán/photoshop hợp lệ: token ngẫu nhiên mật mã (crypto), bảng chữ không ký tự dễ nhầm (bỏ I,L,O,0,1)
 const genRewardCode = () => {
   const A = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -2231,6 +2234,7 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         while (el.firstChild) parent.insertBefore(el.firstChild, el);
         parent.removeChild(el);
     });
+    renderAnnotationLayers(clone);
     return clone.innerHTML;
 };
 
@@ -3715,6 +3719,10 @@ export default function IeltsSupremeOS() {
   const [showBellModal, setShowBellModal] = useState(false);
   
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
+  useEffect(() => {
+      endAnswerDrag();
+      return endAnswerDrag;
+  }, [activeExam?.id, currentSectionIndex]);
         const [examCurrentQId, setExamCurrentQId] = useState<string>("");
         const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, range: Range, container: HTMLElement} | null>(null);
   const [noteInputMenu, setNoteInputMenu] = useState<{x: number, y: number, range?: Range, container: HTMLElement, existingNode?: HTMLElement, text: string} | null>(null);
@@ -3798,9 +3806,11 @@ export default function IeltsSupremeOS() {
   }, [activeExam?.id]);
 
   const openHighlightDeleteMenu = (event: any, node: HTMLElement) => {
-      const highlightNode = (node.closest?.('.student-highlight') as HTMLElement | null) || node;
-      const container = highlightNode.closest('.highlightable-content') as HTMLElement | null;
+      if (document.querySelector('.idp-temp-selection') || window.getSelection()?.isCollapsed === false) return;
+      const container = node.closest('.highlightable-content') as HTMLElement | null;
       if (!container) return;
+      const highlightNode = topHighlight(node, container);
+      if (!highlightNode) return;
       const rect = highlightNode.getBoundingClientRect();
       setSelectionMenu(null);
       setNoteInputMenu(null);
@@ -3820,9 +3830,7 @@ export default function IeltsSupremeOS() {
       const node = menu.node;
       const parent = node.parentNode;
       if (!parent) { setHighlightDeleteMenu(null); return; }
-      while (node.firstChild) parent.insertBefore(node.firstChild, node);
-      parent.removeChild(node);
-      parent.normalize();
+      removeAnnotation(menu.container, node);
       const field = menu.container.getAttribute('data-field');
       const qId = menu.container.getAttribute('data-qid');
       const optIndex = menu.container.getAttribute('data-optindex');
@@ -3839,6 +3847,9 @@ export default function IeltsSupremeOS() {
   useEffect(() => {
       const handleSafeHighlightRemoval = (e: MouseEvent) => {
           const target = e.target as HTMLElement;
+          // Mouseup creates the annotation selection before the subsequent click.
+          // Do not replace its menu with Delete/Notes when selecting an existing layer.
+          if (document.querySelector('.idp-temp-selection') || window.getSelection()?.isCollapsed === false) return;
 
           // CHẶN MENU CHUỘT PHẢI / LONG PRESS CỦA TRÌNH DUYỆT VÀ HỆ ĐIỀU HÀNH
           if (e.type === 'contextmenu' && target.closest('.exam-content-block')) {
@@ -3846,7 +3857,7 @@ export default function IeltsSupremeOS() {
           }
 
           // Click vào Note: KHÔNG mở hộp thoại tại chỗ nữa (chuẩn Inspera) — mở PANEL Notes bên phải.
-          if (target && target.classList?.contains('student-note-hl')) {
+          if (target?.closest?.('.student-note-hl') && !target?.closest?.('.student-highlight, mark.idp-highlight')) {
               e.preventDefault();
               e.stopPropagation();
               setShowNotesPanel(true);
@@ -3857,7 +3868,7 @@ export default function IeltsSupremeOS() {
           
           const highlightNode = target?.closest?.('.student-highlight, mark.idp-highlight') as HTMLElement | null;
           if (highlightNode) {
-              openHighlightDeleteMenu(e, highlightNode);
+              openHighlightDeleteMenu(e, target);
           }
       };
 
@@ -6985,7 +6996,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       const parent = textNode.parentNode as HTMLElement;
-                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('idp-temp-selection')) {
+                      if (parent && !parent.classList?.contains('idp-temp-selection')) {
                           const span = document.createElement("span");
                           span.className = 'idp-temp-selection';
                           parent.insertBefore(span, textNode);
@@ -7148,9 +7159,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
           const node = noteInputMenu.existingNode;
           const container = noteInputMenu.container;
           if (noteText === undefined || noteText === null) {
-              const parent = node.parentNode;
-              if (parent) { while (node.firstChild) parent.insertBefore(node.firstChild, node); parent.removeChild(node); parent.normalize(); }
-          } else { node.setAttribute('data-note', noteText); }
+              if (container) removeAnnotation(container, node);
+          } else {
+              const id = node.getAttribute('data-note-id');
+              (container ? Array.from(container.querySelectorAll<HTMLElement>('.student-note-hl')) : [node])
+                  .filter(el => el === node || (!!id && el.getAttribute('data-note-id') === id))
+                  .forEach(el => el.setAttribute('data-note', noteText));
+          }
           
           if (container) {
               const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
@@ -7168,14 +7183,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       const temps = container.querySelectorAll('.idp-temp-selection');
       if (temps.length > 0) {
-          const noteId = type === 'NOTE' ? `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : '';
-          temps.forEach(target => {
-              target.className = type === 'HIGHLIGHT' ? "student-highlight" : "student-note-hl";
-              if (type === 'NOTE') {
-                  target.setAttribute('data-note', noteText ?? '');
-                  target.setAttribute('data-note-id', noteId);
-              }
-          });
+          applySelectionAnnotation(container, type, noteText ?? '');
 
           const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
           if (field && activeExam) {
@@ -9200,7 +9208,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         /* CSS CHO CÁC DẠNG BÀI MỚI VÀ NAVIGATOR CHUẨN IDP */
       .idp-dropzone { display: inline-block; min-width: 100px; min-height: 28px; border: 1px dashed #666; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 8px; font-weight: bold; color: #0969da; cursor: pointer; text-align: center; }
       .idp-dropzone.filled { border-style: solid; background: #e6f0ff; }
-      .idp-draggable { display: inline-block; border: 1px solid #333; padding: 6px 12px; margin: 4px; background: #fff; cursor: grab; border-radius: 2px; font-weight: bold; }
+      .idp-draggable { display: inline-block; border: 1px solid #333; padding: 6px 12px; margin: 4px; background: #fff; cursor: default; border-radius: 2px; font-weight: bold; }
       .idp-matching-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
       .idp-matching-table th, .idp-matching-table td { border: 1px solid #ccc; padding: 10px; text-align: center; }
       .idp-matching-table td:first-child { text-align: left; background: #fff; }
@@ -9235,7 +9243,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   // ==========================================
   const _examRenderSafeHTML = (raw: string | undefined): string => {
       if (!raw) return "";
-      return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? raw : formatContent(raw);
+      return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? annotationHTML(raw) : formatContent(raw);
   };
 
   const examGroupedQuestions = useMemo(() => {

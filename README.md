@@ -1,5 +1,11 @@
 # IELTS OS
 
+## Annotation and answer dragging
+
+- Note/Highlight uses custom 64×64 SVG artwork. Each annotation keeps its own ID, type, text offsets, creation time and note content. Two or more highlights paint their intersection pink with black text in all three contrast modes. Single highlights retain the current theme colour; highlights cover note colouring without deleting notes. “Delete newest Highlight” removes only that annotation, revealing any underlying highlight/note.
+- All interactive answer banks share a move cursor, blue hover/target border, isolated drag preview and faded source during dragging. Per the latest requested behaviour, non-reusable options disappear **only after a valid placement**, and return when dragged back to their bank. Cancellation leaves assignments intact. Used answers can move between gaps in their own question group; replacement returns the displaced answer to the bank. Reusable-answer banks remain reusable; Review remains read-only.
+- Sentence-ending slots share a width measured from every option's rendered text (minimum 394px, capped by the content column). Empty and filled slots keep the same width and reserved height; narrow layouts wrap full answers without clipping.
+
 ## Writing test room
 
 Writing instructions, student responses and corrected essays are left aligned. Part navigation and the splitter follow the Reading/Listening test controls. Review and grading show each task's instruction, prompt and chart/visual before the response. In grading, select text in the original essay and add a comment; highlighted passages and comment links let teachers and students find the relevant text. General feedback is also supported. Feedback remains hidden from students until published.

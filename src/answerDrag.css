@@ -1,0 +1,24 @@
+.exam-content-block [draggable="true"] { cursor:move !important; }
+.exam-content-block [draggable="true"]:hover,
+.exam-content-block [draggable="true"]:focus-visible {
+    border-color:#0969da !important; outline:1px solid #0969da; outline-offset:0;
+    box-shadow:none !important; transform:none !important;
+}
+.exam-content-block [data-answer-dragging="true"] { opacity:.35 !important; }
+.exam-content-block [data-answer-drag-over="true"] { border-color:#0969da !important; outline:1px solid #0969da; outline-offset:0; box-shadow:none !important; }
+.exam-content-block .idp-wordbank-item.used,
+.exam-content-block .idp-map-drag-option.is-used,
+.exam-content-block .mh-heading-option.is-used { display:none !important; }
+.exam-content-block .idp-wordbank,
+.exam-content-block .idp-match2-bank,
+.exam-content-block .idp-flowchart-bank,
+.exam-content-block .idp-map-drag-bank,
+.exam-content-block .mh-heading-tray { min-height:32px; }
+.exam-content-block .idp-sentence-ending-row .idp-dropzone {
+    width:var(--sentence-slot-width, 394px); max-width:100%; min-width:0;
+    height:var(--sentence-slot-height, 24px); min-height:var(--sentence-slot-height, 24px);
+    white-space:normal; overflow:visible; overflow-wrap:anywhere;
+    font:400 13px/1.25 Arial,sans-serif;
+}
+.exam-content-block .idp-sentence-ending-row .idp-dropzone:not(.filled) { font-weight:700; }
+.exam-content-block .idp-sentence-ending-row .idp-dropzone.filled { justify-content:flex-start; text-align:left; }

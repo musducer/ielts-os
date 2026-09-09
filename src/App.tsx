@@ -1,6 +1,9 @@
 ﻿import React, { useState, useEffect, useRef, useMemo } from "react";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
+import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
+import { startAnswerDrag, endAnswerDrag, validAnswerTarget, answerBankAt, feedbackAnswerDrag, observeSentenceEnding } from './answerDrag';
+import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
@@ -2123,7 +2126,7 @@ interface LiveSession { id: string; studentId: string; studentName: string; quiz
 // UTILS
 // ==========================================
 const safeString = (val: any) => (val !== null && val !== undefined) ? String(val) : "";
-const sanitizeRichHtml = (html: string) => DOMPurify.sanitize(html, {
+const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
         "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "li", "mark", "ol", "p", "pre", "s", "small", "span",
@@ -2134,7 +2137,7 @@ const sanitizeRichHtml = (html: string) => DOMPurify.sanitize(html, {
         "rel", "rowspan", "src", "style", "target", "title", "width"
     ],
     ALLOW_DATA_ATTR: true,
-});
+}));
 // Mã thưởng độc nhất, không thể đoán/photoshop hợp lệ: token ngẫu nhiên mật mã (crypto), bảng chữ không ký tự dễ nhầm (bỏ I,L,O,0,1)
 const genRewardCode = () => {
   const A = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -2231,6 +2234,7 @@ const serializeHighlightHTML = (container: HTMLElement): string => {
         while (el.firstChild) parent.insertBefore(el.firstChild, el);
         parent.removeChild(el);
     });
+    renderAnnotationLayers(clone);
     return clone.innerHTML;
 };
 
@@ -3715,6 +3719,10 @@ export default function IeltsSupremeOS() {
   const [showBellModal, setShowBellModal] = useState(false);
   
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
+  useEffect(() => {
+      endAnswerDrag();
+      return endAnswerDrag;
+  }, [activeExam?.id, currentSectionIndex]);
         const [examCurrentQId, setExamCurrentQId] = useState<string>("");
         const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number, range: Range, container: HTMLElement} | null>(null);
   const [noteInputMenu, setNoteInputMenu] = useState<{x: number, y: number, range?: Range, container: HTMLElement, existingNode?: HTMLElement, text: string} | null>(null);
@@ -3798,9 +3806,11 @@ export default function IeltsSupremeOS() {
   }, [activeExam?.id]);
 
   const openHighlightDeleteMenu = (event: any, node: HTMLElement) => {
-      const highlightNode = (node.closest?.('.student-highlight') as HTMLElement | null) || node;
-      const container = highlightNode.closest('.highlightable-content') as HTMLElement | null;
+      if (document.querySelector('.idp-temp-selection') || window.getSelection()?.isCollapsed === false) return;
+      const container = node.closest('.highlightable-content') as HTMLElement | null;
       if (!container) return;
+      const highlightNode = topHighlight(node, container);
+      if (!highlightNode) return;
       const rect = highlightNode.getBoundingClientRect();
       setSelectionMenu(null);
       setNoteInputMenu(null);
@@ -3820,9 +3830,7 @@ export default function IeltsSupremeOS() {
       const node = menu.node;
       const parent = node.parentNode;
       if (!parent) { setHighlightDeleteMenu(null); return; }
-      while (node.firstChild) parent.insertBefore(node.firstChild, node);
-      parent.removeChild(node);
-      parent.normalize();
+      removeAnnotation(menu.container, node);
       const field = menu.container.getAttribute('data-field');
       const qId = menu.container.getAttribute('data-qid');
       const optIndex = menu.container.getAttribute('data-optindex');
@@ -3839,6 +3847,9 @@ export default function IeltsSupremeOS() {
   useEffect(() => {
       const handleSafeHighlightRemoval = (e: MouseEvent) => {
           const target = e.target as HTMLElement;
+          // Mouseup creates the annotation selection before the subsequent click.
+          // Do not replace its menu with Delete/Notes when selecting an existing layer.
+          if (document.querySelector('.idp-temp-selection') || window.getSelection()?.isCollapsed === false) return;
 
           // CHẶN MENU CHUỘT PHẢI / LONG PRESS CỦA TRÌNH DUYỆT VÀ HỆ ĐIỀU HÀNH
           if (e.type === 'contextmenu' && target.closest('.exam-content-block')) {
@@ -3846,7 +3857,7 @@ export default function IeltsSupremeOS() {
           }
 
           // Click vào Note: KHÔNG mở hộp thoại tại chỗ nữa (chuẩn Inspera) — mở PANEL Notes bên phải.
-          if (target && target.classList?.contains('student-note-hl')) {
+          if (target?.closest?.('.student-note-hl') && !target?.closest?.('.student-highlight, mark.idp-highlight')) {
               e.preventDefault();
               e.stopPropagation();
               setShowNotesPanel(true);
@@ -3857,7 +3868,7 @@ export default function IeltsSupremeOS() {
           
           const highlightNode = target?.closest?.('.student-highlight, mark.idp-highlight') as HTMLElement | null;
           if (highlightNode) {
-              openHighlightDeleteMenu(e, highlightNode);
+              openHighlightDeleteMenu(e, target);
           }
       };
 
@@ -6985,7 +6996,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
                       }
 
                       const parent = textNode.parentNode as HTMLElement;
-                      if (parent && !parent.classList?.contains('student-highlight') && !parent.classList?.contains('idp-temp-selection')) {
+                      if (parent && !parent.classList?.contains('idp-temp-selection')) {
                           const span = document.createElement("span");
                           span.className = 'idp-temp-selection';
                           parent.insertBefore(span, textNode);
@@ -7148,9 +7159,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
           const node = noteInputMenu.existingNode;
           const container = noteInputMenu.container;
           if (noteText === undefined || noteText === null) {
-              const parent = node.parentNode;
-              if (parent) { while (node.firstChild) parent.insertBefore(node.firstChild, node); parent.removeChild(node); parent.normalize(); }
-          } else { node.setAttribute('data-note', noteText); }
+              if (container) removeAnnotation(container, node);
+          } else {
+              const id = node.getAttribute('data-note-id');
+              (container ? Array.from(container.querySelectorAll<HTMLElement>('.student-note-hl')) : [node])
+                  .filter(el => el === node || (!!id && el.getAttribute('data-note-id') === id))
+                  .forEach(el => el.setAttribute('data-note', noteText));
+          }
           
           if (container) {
               const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
@@ -7168,14 +7183,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
       const temps = container.querySelectorAll('.idp-temp-selection');
       if (temps.length > 0) {
-          const noteId = type === 'NOTE' ? `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : '';
-          temps.forEach(target => {
-              target.className = type === 'HIGHLIGHT' ? "student-highlight" : "student-note-hl";
-              if (type === 'NOTE') {
-                  target.setAttribute('data-note', noteText ?? '');
-                  target.setAttribute('data-note-id', noteId);
-              }
-          });
+          applySelectionAnnotation(container, type, noteText ?? '');
 
           const field = container.getAttribute('data-field'); const qId = container.getAttribute('data-qid'); const optIndex = container.getAttribute('data-optindex');
           if (field && activeExam) {
@@ -9200,7 +9208,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         /* CSS CHO CÁC DẠNG BÀI MỚI VÀ NAVIGATOR CHUẨN IDP */
       .idp-dropzone { display: inline-block; min-width: 100px; min-height: 28px; border: 1px dashed #666; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 8px; font-weight: bold; color: #0969da; cursor: pointer; text-align: center; }
       .idp-dropzone.filled { border-style: solid; background: #e6f0ff; }
-      .idp-draggable { display: inline-block; border: 1px solid #333; padding: 6px 12px; margin: 4px; background: #fff; cursor: grab; border-radius: 2px; font-weight: bold; }
+      .idp-draggable { display: inline-block; border: 1px solid #333; padding: 6px 12px; margin: 4px; background: #fff; cursor: default; border-radius: 2px; font-weight: bold; }
       .idp-matching-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
       .idp-matching-table th, .idp-matching-table td { border: 1px solid #ccc; padding: 10px; text-align: center; }
       .idp-matching-table td:first-child { text-align: left; background: #fff; }
@@ -9235,7 +9243,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   // ==========================================
   const _examRenderSafeHTML = (raw: string | undefined): string => {
       if (!raw) return "";
-      return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? raw : formatContent(raw);
+      return (raw.includes('student-highlight') || raw.includes('student-note-hl')) ? annotationHTML(raw) : formatContent(raw);
   };
 
   const examGroupedQuestions = useMemo(() => {
@@ -11259,12 +11267,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Chrome's default drag snapshot can capture fixed UI layered over the
           // source element. Always provide a small, isolated drag preview instead.
           const setCleanDragImage = (event: any, label: string) => {
-              const ghost = document.createElement('div');
-              ghost.textContent = String(label || '').replace(/\s+/g, ' ').trim();
-              ghost.style.cssText = 'position:fixed;left:-10000px;top:-10000px;box-sizing:border-box;max-width:360px;min-height:26px;padding:3px 8px;background:#fff;border:1px solid #0969da;border-radius:2px;color:#111827;font:700 13px/1.25 Arial,sans-serif;pointer-events:none;';
-              document.body.appendChild(ghost);
-              event.dataTransfer.setDragImage(ghost, 16, 16);
-              window.setTimeout(() => ghost.remove(), 0);
+              startAnswerDrag(event, String(label || ''));
           };
 
           const beginAnswerDrag = (event: any, value: string, label: string, sourceQid = "") => {
@@ -11291,9 +11294,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
           const commitDraggedAnswer = (qId: string | undefined, value: string | undefined, autoAdvance = false, sourceQid = "") => {
               const answer = String(value || selectedDragAnswer || "");
-              if (!qId || !answer) return;
+              if (!qId || !answer || !validAnswerTarget(qId)) return;
               handleAnswerChange(qId, answer, "DRAG_DROP");
               if (sourceQid && sourceQid !== qId) handleAnswerChange(sourceQid, "", "DRAG_DROP");
+              endAnswerDrag();
               setSelectedDragAnswer("");
               dragSourceQuestionRef.current = "";
               if (autoAdvance) {
@@ -11361,7 +11365,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           };
 
           const placeHeading = (qId: string | undefined, payload: { id: string; text: string; sourceQid: string }) => {
-              if (!qId || !payload?.id) return;
+              if (!qId || !payload?.id || !validAnswerTarget(qId)) return;
               const heading = normalizeHeadingPayload(payload.id, payload.text, payload.sourceQid);
               handleAnswerChange(qId, heading.text || heading.id, "DRAG_DROP_HEADING");
               setHeadingLabelByQuestion((previous) => ({
@@ -11376,6 +11380,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       return next;
                   });
               }
+              endAnswerDrag();
               setSelectedHeadingDrag(null);
           };
 
@@ -11684,10 +11689,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
           return (
               <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
+                   onDragOverCapture={feedbackAnswerDrag}
+                   onDragEndCapture={() => { endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null); }}
+                   onDropCapture={(event: any) => {
+                       if (!feedbackAnswerDrag(event)) return;
+                       if (!answerBankAt(event.target as HTMLElement)) return;
+                       event.preventDefault(); event.stopPropagation();
+                       if (event.dataTransfer?.getData('application/x-ielts-heading-id')) {
+                           const heading = readDroppedHeading(event);
+                           if (heading.sourceQid) clearHeading(heading.sourceQid);
+                       } else {
+                           const sourceQid = readDraggedSource(event);
+                           if (sourceQid) handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                       }
+                       endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null);
+                   }}
                    onContextMenu={(e: any) => {
                        if (isPractice) return;
                        if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
-                           openHighlightDeleteMenu(e, (e.target as HTMLElement).closest('.student-highlight') as HTMLElement);
+                           openHighlightDeleteMenu(e, e.target as HTMLElement);
                        } else {
                            e.preventDefault(); 
                        }
@@ -11809,10 +11829,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* ĐàFIX UI CHUẨN: Popup Highlight & Giao diện Tooltip Nhập Ghi Chú */
                       /* POPUP QUÉT CHỮ — sao chép Inspera: 2 nút NGANG [Note | Highlight], icon trên, chữ dưới, vạch chia dọc */
-                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 10px; display: flex; flex-direction: row; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,0.22); z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 1px solid #d8dce1; overflow: hidden; animation: idpPopupRise .18s cubic-bezier(.2,.82,.2,1) both; }
+                      .idp-popup-menu { position: absolute; background: #fff; border-radius: 8px; display: flex; padding: 0; box-shadow: 0 2px 8px #0002; z-index: 999999; transform: translate(-50%, -100%); margin-top: -10px; border: 2px solid #737373; overflow: visible; }
                       .idp-popup-menu::after { content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); border-width: 8px 8px 0; border-style: solid; border-color: #fff transparent transparent transparent; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.05)); }
-                      .idp-popup-btn { background: transparent; border: none; color: #3b4149; font-size: 12px; font-weight: 500; padding: 7px 16px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1; }
-                      .idp-popup-btn + .idp-popup-btn { border-left: 1px solid #e2e5e9; }
+                      .idp-popup-btn { background: transparent; border: none; color: #737373; font-size: 16px; font-weight: 400; padding: 14px 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 9px; line-height: 1; }
+                      .idp-popup-btn + .idp-popup-btn { border-left: none; }
                       .idp-popup-btn:hover { background: #f4f5f7; }
                       .idp-highlight-delete-menu { position:absolute; z-index:999999; transform:translate(-50%,0); width:72px; min-height:62px; border:1px solid #b8bec7; border-radius:6px; background:#fff; color:#2f3338; box-shadow:0 6px 14px rgba(0,0,0,.16); display:flex; align-items:center; justify-content:center; animation:idpDeleteRise .16s cubic-bezier(.2,.82,.2,1) both; }
                       .idp-highlight-delete-menu::before { content:''; position:absolute; top:-6px; left:50%; width:10px; height:10px; background:#fff; border-left:1px solid #b8bec7; border-top:1px solid #b8bec7; transform:translateX(-50%) rotate(45deg); }
@@ -11867,7 +11887,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .exam-content-block .highlightable-content .student-highlight, .exam-content-block .highlightable-content .student-highlight *, .exam-content-block .idp-q-text-inline .student-highlight, .exam-content-block .idp-q-text-inline .student-highlight * { background-color: var(--hlbg) !important; color: var(--hlfg) !important; cursor: pointer; }
                       .exam-content-block .highlightable-content .student-note-hl, .exam-content-block .highlightable-content .student-note-hl *, .exam-content-block .idp-q-text-inline .student-note-hl, .exam-content-block .idp-q-text-inline .student-note-hl * { background-color: var(--notebg) !important; color: var(--notefg) !important; cursor: pointer; }
-                      .exam-content-block .highlightable-content .student-note-hl .student-highlight, .exam-content-block .highlightable-content .student-note-hl .student-highlight *, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight, .exam-content-block .idp-q-text-inline .student-note-hl .student-highlight * { background-color: #ff66dd !important; color: #000 !important; cursor: pointer; }
                       .exam-content-block .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection,
                       .exam-content-block .highlightable-content .idp-temp-selection * { background-color: #b3d4fc !important; color: #000 !important; }
@@ -12087,7 +12106,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-map-drag-slot-number { color:#334155; font-weight:800; white-space:nowrap; }
                       .idp-map-drag-bank { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--eborder); background:var(--ecard); padding:13px; }
                       .idp-map-drag-bank-title { margin:0 0 10px; color:var(--esub); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
-                      .idp-map-drag-option { width:100%; box-sizing:border-box; display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:9px 10px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#172033; font:600 13px/1.35 Arial,sans-serif; text-align:left; cursor:grab; user-select:none; transition:transform .15s,box-shadow .15s,border-color .15s,opacity .15s; }
+                      .idp-map-drag-option { width:100%; box-sizing:border-box; display:flex; align-items:center; gap:8px; margin:0 0 8px; padding:9px 10px; border:1px solid #94a3b8; border-radius:4px; background:#fff; color:#172033; font:600 13px/1.35 Arial,sans-serif; text-align:left; cursor:move; user-select:none; transition:transform .15s,box-shadow .15s,border-color .15s,opacity .15s; }
                       .idp-map-drag-option:hover, .idp-map-drag-option.is-selected { border-color:#0969da; box-shadow:0 3px 10px rgba(9,105,218,.15); transform:translateY(-1px); }
                       .idp-map-drag-option.is-used { opacity:.4; cursor:default; box-shadow:none; transform:none; }
                       .idp-map-drag-option-key { width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #0969da; color:#0969da; font-size:11px; font-weight:800; flex:0 0 auto; }
@@ -12121,9 +12140,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-dragdrop-flowchart { flex: 1; min-width: 0; }
                       .idp-dragdrop-pool { flex: 0 0 180px; display:flex; flex-direction:column; align-items:flex-start; background: #f4f5f7; border: 1px solid #d1d5db; border-radius: 4px; padding: 12px; }
                       .idp-dragdrop-pool-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #57606a; margin-bottom: 10px; }
-                      .idp-draggable { display: inline-block; width: fit-content; max-width: 100%; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor: grab; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
+                      .idp-draggable { display: inline-block; width: fit-content; max-width: 100%; border: 1px solid #333; padding: 7px 12px; margin-bottom: 7px; background: #fff; cursor:move; border-radius: 3px; font-weight: 700; font-size: 13px; transition: box-shadow 0.1s, opacity 0.15s; user-select: none; }
                       .idp-draggable:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
-                      .idp-draggable:active { cursor: grabbing; opacity: 0.7; }
+                      .idp-draggable:active { cursor:move; opacity: 0.7; }
                       .idp-dropzone { display: inline-block; min-width: 110px; min-height: 28px; border: 2px dashed #888; background: #fafafa; vertical-align: middle; margin: 0 4px; padding: 2px 10px; font-weight: 700; color: #0969da; cursor: pointer; text-align: center; border-radius: 3px; transition: border-color 0.15s, background 0.15s; }
                       .idp-dropzone.filled { border-style: solid; border-color: #0969da; background: #e6f0ff; color: #0550ae; }
                       .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f6ff; }
@@ -12131,9 +12150,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       /* WORD-BANK kéo-thả (summary completion từ box, chuẩn IELTS Mate) */
                       .idp-wordbank { display: flex; flex-wrap: wrap; align-items:center; gap: 7px 8px; padding: 0; background: transparent; border: 0; border-radius: 0; margin: 16px 0 0; }
-                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 4px 9px; background: var(--ecard); border: 1px solid #8a8f98; border-radius: 2px; cursor: grab; font-size: 13px; font-weight: 700; line-height:1.25; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
+                      .idp-wordbank-item { display: inline-flex; align-items: center; gap: 8px; padding: 4px 9px; background: var(--ecard); border: 1px solid #8a8f98; border-radius: 2px; cursor:move; font-size: 13px; font-weight: 700; line-height:1.25; color: var(--etext); user-select: none; transition: box-shadow .1s, opacity .15s; }
                       .idp-wordbank-item:hover { box-shadow: 0 1px 5px rgba(0,0,0,0.12); }
-                      .idp-wordbank-item:active { cursor: grabbing; }
+                      .idp-wordbank-item:active { cursor:move; }
                       .idp-wordbank-item.used { opacity: 0.35; cursor: default; pointer-events: none; }
                       .idp-wb-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border: 1px solid var(--eblue); border-radius: 4px; color: var(--eblue); font-size: 12px; font-weight: 800; flex-shrink: 0; }
                       /* Listening COLUMN_DRAG: IELTS two-column match, not a summary word bank. */
@@ -12146,10 +12165,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-tag { display: inline-flex; width: fit-content; max-width: 100%; align-items: center; gap: 8px; text-align: left; }
                       .idp-match2-key { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 800; line-height: 1; }
                       .idp-match2-name { text-align: left; }
-                      .idp-match2-tag { box-sizing:border-box; min-height:28px; border: 1px solid var(--eborder); border-radius: 4px; padding: 0 12px; background: var(--einput); color: var(--etext); cursor: grab; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
+                      .idp-match2-tag { box-sizing:border-box; min-height:28px; border: 1px solid var(--eborder); border-radius: 4px; padding: 0 12px; background: var(--einput); color: var(--etext); cursor:move; font-size: 13px; line-height: 1.25; user-select: none; transition: border-color .12s, box-shadow .12s; }
                       .idp-match2-tag > span { min-width:0; overflow-wrap:break-word; }
                       .idp-match2-tag:hover { border-color: var(--eblue); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
-                      .idp-match2-tag:active { cursor: grabbing; opacity: .7; }
+                      .idp-match2-tag:active { cursor:move; opacity: .7; }
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
@@ -12168,7 +12187,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .mh-heading-title { width:fit-content; margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
                       .mh-heading-tray { align-items:flex-start; width:fit-content; max-width:100%; }
                       .mh-heading-tray > div { display:flex; flex-direction:column; align-items:flex-start; width:fit-content; max-width:100%; }
-                      .mh-heading-option { box-sizing:border-box; display:inline-flex; align-items:center; width:max-content; max-width:100%; min-height:25px; height:25px; padding:0 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:grab; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
+                      .mh-heading-option { box-sizing:border-box; display:inline-flex; align-items:center; width:max-content; max-width:100%; min-height:25px; height:25px; padding:0 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:move; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; white-space:nowrap; }
@@ -12693,7 +12712,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDragStart={(e: any) => { if (dragSourceQuestionRef.current || e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDragStart={(e: any) => { if (e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
                        onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
                        onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(String(zone.textContent || '').trim()); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                        onDoubleClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; const qId = zone?.dataset.qid; if (qId) { handleAnswerChange(qId, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); } }}>
@@ -13048,10 +13067,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const renderSentenceEndingDrag = () => {
                        const usedValues = group.questions.map((question: any) => resolveMatchingAnswerText({ ...question, options: dragOptions }, examAnswers[question.id])).filter(Boolean);
                        const bankWords = dragOptions.filter((option: string) => !usedValues.some((value: string) => normalizeComparableAnswer(value) === normalizeComparableAnswer(option)));
-                       const longestEnding = dragOptions.reduce((longest: number, option: string) => Math.max(longest, String(option).replace(/<[^>]+>/g, '').trim().length), 0);
-                       const sentenceZoneW = Math.max(300, Math.min(460, Math.round(longestEnding * 7.2) + 34));
                        return (
-                           <div className="idp-sentence-ending">
+                           <div className="idp-sentence-ending" ref={node => node ? observeSentenceEnding(node, dragOptions) : undefined}>
                                <div className="idp-sentence-ending-list">
                                    {group.questions.map((q: any) => {
                                        const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
@@ -13064,7 +13081,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                    className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                    data-qid={q.id}
                                                    draggable={!!val}
-                                                   style={{width: sentenceZoneW, maxWidth: '100%'}}
                                                    onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
                                                    onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
                                                    onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
@@ -13120,6 +13136,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                        const height = Math.max(4, Math.min(18, Number(slot.height || 7)));
                                        return (
                                            <div key={question.id} id={`question-${question.id}`} className={`idp-map-drag-slot ${answer ? 'is-filled' : ''} ${selectedDragAnswer ? 'is-target' : ''}`}
+                                               data-qid={question.id}
                                                style={{left:`${slot.x}%`, top:`${slot.y}%`, width:`${width}%`, height:`${height}%`}}
                                                draggable={!!answer}
                                                onDragStart={(event: any) => { if (answer) beginAnswerDrag(event, answer, answer, question.id); }}
@@ -13195,7 +13212,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    };
 
                    return (
-                      <div key={group.questions[0].id} style={{marginBottom: 'var(--q-gap)'}}>
+                      <div key={group.questions[0].id} data-dnd-question-ids={group.questions.map((q: any) => q.id).join('|')} style={{marginBottom: 'var(--q-gap)'}}>
                           <div className="question-rubric">
                               {/* Title + Instruction PHẢI là StaticHtmlBlock (memo) — render dangerouslySetInnerHTML thô sẽ bị React
                                   ghi đè ngay khi popup Note/Highlight mở (re-render) -> vùng quét tạm biến mất, không highlight được. */}
@@ -13481,12 +13498,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      <div className="idp-popup-menu" style={{ left: selectionMenu!.x, top: selectionMenu!.y }}>
                          <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('NOTE'); }}>
                              {/* Icon Inspera 16x16: quote kép đặc “ */}
-                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M3.2 3.5h3.6v3.9H4.9c0 1.35.65 2.15 2 2.6l-.65 2.5C3.9 11.9 3.2 10.2 3.2 7.9V3.5zm6 0h3.6v3.9h-1.9c0 1.35.65 2.15 2 2.6l-.65 2.5c-2.35-.6-3.05-2.3-3.05-4.6V3.5z"/></svg>
+                             <svg width="32" height="32" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><path d="M6 2h50a4 4 0 0 1 4 4v53L46 50H6a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Z"/><path fill="#fff" d="M28 13c-8 1-12 7-12 15 0 5 2 8 6 8s6-3 6-6-2-5-5-5h-2c0-4 3-7 7-8Zm18 0c-8 1-12 7-12 15 0 5 2 8 6 8s6-3 6-6-2-5-5-5h-2c0-4 3-7 7-8Z"/></svg>
                              Note
                          </button>
                          <button className="idp-popup-btn" onMouseDown={(e) => { e.preventDefault(); applyCustomAction('HIGHLIGHT'); }} onTouchStart={(e) => { e.preventDefault(); applyCustomAction('HIGHLIGHT'); }}>
                              {/* Icon Inspera 16x16: con trỏ chữ I + vệt highlight dưới chân */}
-                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fillRule="evenodd" d="M6.9 1.5c.9 0 1.3.3 1.6.7.3-.4.7-.7 1.6-.7v1.2c-.7 0-1 .35-1 1v5.6c0 .65.3 1 1 1v1.2c-.9 0-1.3-.3-1.6-.7-.3.4-.7.7-1.6.7v-1.2c.7 0 1-.35 1-1V3.7c0-.65-.3-1-1-1V1.5z"/><rect x="3" y="13" width="10" height="2.2" rx="0.4"/></svg>
+                             <svg width="32" height="32" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><path d="M45 2h7q3 0 3 3v31q0 3-2 3v5l-4 5q-2 1-3-1l-2-4v-5q-2 0-2-3V5q0-3 3-3Z"/><rect x="7" y="55" width="48" height="5" rx="2"/></svg>
                              Highlight
                          </button>
                      </div>
@@ -13496,7 +13513,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      <div className="idp-highlight-delete-menu" style={{ left: highlightDeleteMenu.x, top: highlightDeleteMenu.y }}>
                          <button type="button" onMouseDown={(e) => { e.preventDefault(); deleteSelectedHighlight(); }} onTouchStart={(e) => { e.preventDefault(); deleteSelectedHighlight(); }}>
                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6.5 6l1 15h9l1-15"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
-                             <span>Delete<br />Highlight</span>
+                             <span title="Removes only the newest highlight at this position; underlying highlights and notes remain.">Delete newest<br />Highlight</span>
                          </button>
                      </div>
                  )}
@@ -13509,7 +13526,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                      const notes: NoteRef[] = [];
                      const scanHtml = (html: string, base: { secIdx: number; qid: string | null; field: string; optIndex: number | null; keyBase: string }) => {
                          if (!html || html.indexOf('student-note-hl') === -1) return;
-                         _tmp.innerHTML = html;
+                         _tmp.innerHTML = annotationHTML(html);
                          Array.from(_tmp.querySelectorAll('.student-note-hl')).forEach((sp, occ) => {
                              const noteId = sp.getAttribute('data-note-id');
                              const snippet = (sp.textContent || '').trim();
@@ -13611,7 +13628,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              : (diagramField ? (diagramField[2] === undefined ? diagramBoxText : (diagramBoxText.split(/(\[\d+\])/g)[Number(diagramField[2])] || ''))
                              : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || '')));
                          if (!src) return;
-                         _tmp.innerHTML = src;
+                         _tmp.innerHTML = annotationHTML(src);
                          const spans = n.noteId
                              ? Array.from(_tmp.querySelectorAll('.student-note-hl')).filter(sp => sp.getAttribute('data-note-id') === n.noteId) as HTMLElement[]
                              : [_tmp.querySelectorAll('.student-note-hl')[n.occ] as HTMLElement | undefined].filter(Boolean) as HTMLElement[];
@@ -13624,7 +13641,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              } else sp.setAttribute('data-note', newNote);
                          });
                          parents.forEach(p => (p as any).normalize?.());
-                         const clean = _tmp.innerHTML;
+                         const clean = annotationHTML(_tmp.innerHTML);
                          if (n.field === 'passage') {
                              setActiveExam(prev => {
                                  if (!prev) return prev;
