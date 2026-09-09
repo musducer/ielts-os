@@ -11261,7 +11261,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const setCleanDragImage = (event: any, label: string) => {
               const ghost = document.createElement('div');
               ghost.textContent = String(label || '').replace(/\s+/g, ' ').trim();
-              ghost.style.cssText = 'position:fixed;left:-10000px;top:-10000px;box-sizing:border-box;max-width:360px;min-height:28px;padding:3px 12px;background:#fff;border:1px solid #9ca3af;border-radius:4px;color:#111827;font:600 13px/1.25 Arial,sans-serif;box-shadow:0 3px 12px rgba(0,0,0,.16);pointer-events:none;';
+              ghost.style.cssText = 'position:fixed;left:-10000px;top:-10000px;box-sizing:border-box;max-width:360px;min-height:26px;padding:3px 8px;background:#fff;border:1px solid #0969da;border-radius:2px;color:#111827;font:700 13px/1.25 Arial,sans-serif;pointer-events:none;';
               document.body.appendChild(ghost);
               event.dataTransfer.setDragImage(ghost, 16, 16);
               window.setTimeout(() => ghost.remove(), 0);
@@ -11931,17 +11931,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { width:min(100%, 740px); margin:0 0 18px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 540px) max-content; gap:22px; align-items:start; }
-                      .idp-flowchart-panel { width:min(100%, 540px); margin:0; padding:0; background:transparent; border:0; }
+                      .idp-flowchart-wrap { width:min(100%, 610px); margin:0 0 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 420px) max-content; gap:18px; align-items:start; }
+                      .idp-flowchart-panel { width:min(100%, 420px); margin:0; padding:0; background:transparent; border:0; }
                       .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
                       .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
                       .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
                       .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:26px; box-sizing:border-box; margin:0; padding:4px 8px; text-align:left; justify-content:flex-start; font:700 13px/1.2 Arial,sans-serif; }
-                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:6px 8px; line-height:1.48; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; }
-                      .idp-flowchart-arrow { position:relative; width:100%; height:22px; margin:0; font-size:0; line-height:1; color:transparent; }
-                      .idp-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
-                      .idp-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
+                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:5px 7px; line-height:1.42; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; }
+                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:left !important; }
+                      .idp-flowchart-arrow { width:100%; height:22px; margin:0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
                       .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
                       .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; background:#f5f5f5 !important; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
@@ -12156,14 +12155,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
                       .idp-match2-items .idp-dropzone { width: 100%; height: 28px; min-height: 28px; max-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
-                      .idp-sentence-ending { max-width: 780px; }
-                      .idp-sentence-ending-list { display:grid; gap:11px; margin-bottom:18px; }
-                      .idp-sentence-ending-row { display:block; font-size:var(--efont); line-height:1.45; color:var(--etext); }
-                      .idp-sentence-ending-row .idp-dropzone { display:block; margin:4px 0 0; min-height:24px; border:1.5px dashed #0a66c2; background:transparent; border-radius:2px; color:var(--etext); font-weight:800; }
+                      .idp-sentence-ending { max-width:780px; text-align:left; }
+                      .idp-sentence-ending-list { display:grid; gap:12px; margin-bottom:14px; }
+                      .idp-sentence-ending-row { display:block; font-size:var(--efont); line-height:1.42; color:var(--etext); text-align:left; }
+                      .idp-sentence-ending-row > .highlightable-content, .idp-sentence-ending-row > .highlightable-content * { text-align:left !important; }
+                      .idp-sentence-ending-row .idp-dropzone { display:flex; align-items:center; justify-content:center; box-sizing:border-box; height:24px; min-height:24px; margin:3px 0 0; padding:2px 8px; border:1px dashed #0a66c2; background:#fff; border-radius:2px; color:var(--etext); font-weight:800; cursor:move; overflow:hidden; white-space:nowrap; text-overflow:clip; }
                       .idp-sentence-ending-row .idp-dropzone.filled { border-style:solid; background:rgba(9,105,218,.06); color:#0550ae; }
-                      .idp-sentence-ending-bank { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
-                      .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:var(--ecard); color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:grab; user-select:none; }
-                      .idp-sentence-ending-option.selected { outline:2px solid #0969da; outline-offset:1px; background:#e6f0ff; }
+                      .idp-sentence-ending-row .idp-dropzone:not(.filled):hover { border-color:#0969da; background:#f4f9ff; }
+                      .idp-sentence-ending-bank { display:flex; flex-direction:column; align-items:flex-start; gap:5px; min-height:24px; }
+                      .idp-sentence-ending-option { display:inline-flex; width:max-content; max-width:100%; padding:3px 8px; border:1px solid #8a8f98; border-radius:2px; background:#fff; color:var(--etext); font:700 13px/1.25 Arial,sans-serif; cursor:move; user-select:none; }
+                      .idp-sentence-ending-option:hover, .idp-sentence-ending-option.selected { border-color:#0969da; outline:1px solid #0969da; outline-offset:0; background:#fff; }
                       .mh-heading-title { width:fit-content; margin:0 0 10px; color:var(--etext); font-size:14px; font-weight:700; letter-spacing:0; text-transform:none; }
                       .mh-heading-tray { align-items:flex-start; width:fit-content; max-width:100%; }
                       .mh-heading-tray > div { display:flex; flex-direction:column; align-items:flex-start; width:fit-content; max-width:100%; }
@@ -12903,20 +12904,26 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <div className="idp-flowchart-panel">
                           {group.questions.map((q, flowIdx) => {
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
-                               const rawText = q.text || "";
-                               const flowMarker = rawText.match(/\[\d+\]/);
+                              // DOCX paragraphs arrive wrapped in block tags. A flow node is one
+                              // inline sentence, so unwrap paragraph containers before splitting
+                              // the original marker into text + gap + text.
+                              const flowHtml = String(q.text || "").replace(/<\/?(?:div|p)\b[^>]*>/gi, "").replace(/&nbsp;/gi, " ");
+                              const flowMarker = flowHtml.match(/\[(\d+)\]/);
+                              const rawText = flowHtml;
                               const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…|…/);
-                              const beforeText = blankMatch && blankMatch.index !== undefined ? rawText.slice(0, blankMatch.index) : rawText;
-                              const afterText = blankMatch && blankMatch.index !== undefined ? rawText.slice(blankMatch.index + blankMatch[0].length) : "";
+                              const hasFlowGap = Boolean(blankMatch);
+                              const flowNumber = flowMarker?.[1] || String(qGlobalIdx);
+                              const beforeText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml;
+                              const afterText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "";
                               const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
                               return (
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
-                                           {isDragFlow ? <span
+                                           {hasFlowGap && (isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
-                                              aria-label={`Question ${qGlobalIdx}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
+                                              aria-label={`Question ${flowNumber}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
                                                title={isAnsweredFlow ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
@@ -12924,7 +12931,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
                                                onClick={(event: any) => { event.stopPropagation(); if (isAnsweredFlow) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(String(examAnswers[q.id])); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                                                onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
-                                           >{isAnsweredFlow ? String(examAnswers[q.id]) : qGlobalIdx}</span> : <input
+                                           >{isAnsweredFlow ? String(examAnswers[q.id]) : flowNumber}</span> : <input
                                               type="text"
                                               className={`idp-inline-input inline-blank-input ${isAnsweredFlow ? 'filled' : ''}`}
                                               data-answer-input="true"
@@ -12935,13 +12942,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               inputMode="text"
                                               aria-autocomplete="none"
                                               {...({ writingsuggestions: "false" } as any)}
-                                              placeholder={qGlobalIdx.toString()}
+                                              placeholder={flowNumber}
                                               defaultValue={(examAnswers[q.id] as string) || ""}
                                               onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
                                               onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
                                               style={{ textAlign: 'center', minWidth: 88 }}
-                                           />}
+                                           />)}
                                            <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
                                       </div>
                                       {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
@@ -13041,6 +13048,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const renderSentenceEndingDrag = () => {
                        const usedValues = group.questions.map((question: any) => resolveMatchingAnswerText({ ...question, options: dragOptions }, examAnswers[question.id])).filter(Boolean);
                        const bankWords = dragOptions.filter((option: string) => !usedValues.some((value: string) => normalizeComparableAnswer(value) === normalizeComparableAnswer(option)));
+                       const longestEnding = dragOptions.reduce((longest: number, option: string) => Math.max(longest, String(option).replace(/<[^>]+>/g, '').trim().length), 0);
+                       const sentenceZoneW = Math.max(300, Math.min(460, Math.round(longestEnding * 7.2) + 34));
                        return (
                            <div className="idp-sentence-ending">
                                <div className="idp-sentence-ending-list">
@@ -13055,7 +13064,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                    className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                    data-qid={q.id}
                                                    draggable={!!val}
-                                                   style={{minWidth: groupZoneW}}
+                                                   style={{width: sentenceZoneW, maxWidth: '100%'}}
                                                    onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
                                                    onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
                                                    onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
@@ -13066,7 +13075,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                        );
                                    })}
                                </div>
-                               <div className="idp-sentence-ending-bank">
+                               <div className="idp-sentence-ending-bank"
+                                   onDragOver={(event:any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                                   onDrop={(event:any) => { event.preventDefault(); const sourceQid = readDraggedSource(event); if (sourceQid) { handleAnswerChange(sourceQid, '', 'DRAG_DROP'); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); } }}>
                                    {bankWords.map((opt: string, idx: number) => (
                                        <div key={`${opt}-${idx}`} className={`idp-sentence-ending-option ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
                                            onClick={() => selectBankAnswer(String(opt))}

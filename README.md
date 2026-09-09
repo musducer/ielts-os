@@ -9,7 +9,7 @@ Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one t
 ## Public release additions
 
 - Writing is a first-class test type with Task 1/Task 2, attempt autosave, four-criterion grading, corrected versions, anchored comments, draft, and teacher-controlled publish.
-- Flow-chart completion uses compact, left-aligned step boxes, CSS connector arrows, and inline answer gaps. Drag options sit alongside the chart without a surrounding card; Preview, Test Room, and Review share the presentation.
+- Flow-chart completion unwraps DOCX paragraph containers before splitting the original marker into inline text/gap/text segments, so slots stay at their authored position. Compact left-aligned step boxes and embedded SVG connector arrows are shared by Preview, Test Room, and Review. Matching Sentence Ending uses left-aligned prompts, fixed-width row gaps, move-style drag labels, and restores an answer to its bank when it is returned from a gap.
 - The student test room separates Listening, Reading, and Writing lists. Vocabulary Notebook can export to XLSX; scheduled lessons can contain lesson content and safe external material links.
 - Teachers configure a shared consumable/permanent gift catalog and reward mechanisms. New ledger operations capture a gift/price snapshot so history remains meaningful after a catalog edit.
 - Batch DOCX import accepts up to 20 Reading, Listening, Writing, or Integrated files. Exam Builder reviews every file and adds only the teacher-confirmed valid subset in one catalog write; Quest keeps its ordered-chain confirmation flow.
