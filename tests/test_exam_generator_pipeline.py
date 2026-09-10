@@ -154,6 +154,31 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
         self.assertEqual(result.round_trip_state, "PASS")
         self.assertEqual(provider.generate_calls, 2)
 
+    def test_terminal_malformed_json_keeps_private_response_diagnostic(self):
+        class AlwaysMalformedProvider(TextProvider):
+            def __init__(self):
+                self.generate_calls = 0
+
+            def complete(self, **kwargs):
+                if kwargs.get("phase") == "generate":
+                    self.generate_calls += 1
+                    return '{"title":'
+                raise AssertionError(kwargs.get("phase"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            provider = AlwaysMalformedProvider()
+            pipeline = ExamGenerationPipeline(provider, PipelineConfig(
+                state_dir=Path(directory), max_repairs=0, question_workers=0,
+                provider_attempts=2, provider_timeout_seconds=60,
+            ))
+            result = pipeline.generate("A short reading source.", {"exam_type": "Reading"})
+
+        self.assertEqual(provider.generate_calls, 2)
+        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.round_trip_state, "NOT_RUN")
+        self.assertEqual(result.provider_response_debug, '{"title":')
+        self.assertFalse(result.output_path)
+
     def test_pipeline_does_not_retry_strict_canonical_schema_failure(self):
         class InvalidSchemaProvider(TextProvider):
             def __init__(self):

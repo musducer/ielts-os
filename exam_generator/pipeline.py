@@ -70,6 +70,7 @@ class PipelineResult:
     publication_policy: str = "draft"
     published: bool = False
     publish_error: str = ""
+    provider_response_debug: str = field(default="", repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -467,10 +468,12 @@ class ExamGenerationPipeline:
                 cached = None
 
         current: Optional[CanonicalExam] = None
+        provider_response_debug = ""
         issues: List[ValidationIssue] = []
         try:
             current = self._generate(source_prompt, requirements)
         except (ProviderError, CanonicalSchemaError) as exc:
+            provider_response_debug = str(getattr(exc, "raw_response", ""))[:60_000]
             failure_text = str(exc).casefold()
             issue_code = "GENERATION_TIMEOUT" if ("timeout" in failure_text or "timed out" in failure_text) else "GENERATION"
             issues = [ValidationIssue("FAIL", issue_code, str(exc))]
@@ -496,6 +499,7 @@ class ExamGenerationPipeline:
                 media_count=media_count,
                 media_round_trip_state="NOT_RUN",
                 progress={"stage": "FAILED", "reason": issue_code if issues else "GENERATION"},
+                provider_response_debug=provider_response_debug,
                 **self._exam_counts(None),
                 **result_metadata,
             )

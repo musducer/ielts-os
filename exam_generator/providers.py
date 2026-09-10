@@ -13,7 +13,11 @@ from typing import Any, Dict, Optional
 
 
 class ProviderError(RuntimeError):
-    pass
+    """Provider failure with an optional private model-response diagnostic."""
+
+    def __init__(self, message: str, raw_response: str = ""):
+        super().__init__(message)
+        self.raw_response = str(raw_response or "")
 
 
 def extract_json(text: str) -> Dict[str, Any]:
@@ -24,16 +28,16 @@ def extract_json(text: str) -> Dict[str, Any]:
             candidate = candidate.rstrip()[:-3].rstrip()
     try:
         result = json.loads(candidate)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as initial_error:
         start, end = candidate.find("{"), candidate.rfind("}")
         if start < 0 or end <= start:
-            raise ProviderError("The model did not return a JSON object.")
+            raise ProviderError("The model did not return a JSON object.", raw_response=candidate) from initial_error
         try:
             result = json.loads(candidate[start : end + 1])
         except json.JSONDecodeError as exc:
-            raise ProviderError("The model returned malformed JSON.") from exc
+            raise ProviderError("The model returned malformed JSON.", raw_response=candidate) from exc
     if not isinstance(result, dict):
-        raise ProviderError("The model JSON response must be an object.")
+        raise ProviderError("The model JSON response must be an object.", raw_response=candidate)
     return result
 
 
@@ -103,6 +107,8 @@ class ResilientProvider(TextProvider):
             self._failures += 1
             if self._failures >= self.policy.circuit_failures:
                 self._open_until = time.monotonic() + self.policy.circuit_cooldown_seconds
+        if isinstance(last_error, ProviderError):
+            raise last_error
         raise ProviderError(str(last_error or "Provider request failed."))
 
     def complete(self, **kwargs: Any) -> str:
