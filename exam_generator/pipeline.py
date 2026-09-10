@@ -23,7 +23,7 @@ from .validation import ValidationIssue, critic_review, deterministic_review, ha
 
 
 PIPELINE_VERSION = "2026-09-09.parser-contract-v1"
-PROMPT_VERSION = "2026-09-09.rich-docx-contract-v1"
+PROMPT_VERSION = "2026-09-10.structure-first-contract-v1"
 
 
 @dataclass
@@ -41,6 +41,7 @@ class PipelineConfig:
     # inside the 300-second Vercel function limit.
     provider_attempts: int = field(default_factory=lambda: max(1, min(2, int(os.environ.get("EXAM_GENERATION_PROVIDER_ATTEMPTS", "2")))))
     provider_timeout_seconds: int = field(default_factory=lambda: max(60, min(100, int(os.environ.get("EXAM_GENERATION_PROVIDER_TIMEOUT", "90")))))
+    structure_max_tokens: int = field(default_factory=lambda: max(3_000, min(16_000, int(os.environ.get("EXAM_GENERATION_STRUCTURE_MAX_TOKENS", "12000")))))
     media_base_url: str = field(default_factory=lambda: os.environ.get("EXAM_GENERATION_MEDIA_BASE_URL", "").strip())
 
 
@@ -97,9 +98,11 @@ QUESTION has question_number, block_type (BLANK, SHORT_ANSWER, CHOICE,
 CHOICE_MULTIPLE, MATCHING, DRAG, DRAG_DROP, MAP_DRAG, FLOW_DRAG, DIAGRAM_LABEL),
 text (RICH_PARAGRAPH), instruction [RICH_PARAGRAPH], context [RICH_PARAGRAPH],
 options [RICH_PARAGRAPH], correct_answers [plain text], group_id, left_title,
-right_title, media_url, slots, flow_lines [RICH_PARAGRAPH], diagram, and explanation.
+right_title, media_url, slots, flow_lines [RICH_PARAGRAPH], and diagram.
+This is the structure-only generation pass: every Reading/Listening question must set
+correct_answers to [] and must omit explanation. A separate bounded Solver pass adds
+source-grounded answers and explanations only after this canonical structure validates.
 Never output IDs: backend code owns all question/option IDs and answer references.
-explanation is required: {"why":"full explanation","evidence":{"quote":"exact unique source quote","locator":"[mm:ss] optional","source":"passage|audio|source"},"paraphrase_mapping":"source wording -> question wording","correct_reason":"why the evidence proves the answer","distractor_reasons":{"visible wrong option":"why wrong"},"student_takeaway":"reusable IELTS strategy"}.
 Questions sharing instructions/options/context must use the same adjacent group_id.
 For Writing return no sections; return exactly writing_tasks 1 and 2 with prompt
 [RICH_PARAGRAPH], title, instructions, minimum_words, recommended_minutes, media_url.
@@ -248,13 +251,17 @@ class ExamGenerationPipeline:
         user = (
             f"<SOURCE_DATA hash={source_hash(source_text)}>\n{source_text}\n</SOURCE_DATA>\n\n"
             f"TEACHER REQUIREMENTS (authoritative):\n{json.dumps(requirements, ensure_ascii=False)}\n\n"
-            "Generate one canonical exam JSON. Preserve source visual formatting in RICH_PARAGRAPH."
+            "Generate one canonical exam JSON containing only the source-faithful exam structure and presentation. "
+            "Preserve every question, option, gap, chart/media binding, rich-text run and alignment in RICH_PARAGRAPH. "
+            "For every generated question, set correct_answers to [] and omit explanation entirely: the isolated "
+            "SOLVER stage supplies answers and grounded explanations after this structural JSON passes schema validation. "
+            "Never omit or paraphrase visible exam content to make the JSON shorter."
         )
         payload = self.provider.complete_json(
             system=GENERATOR_SYSTEM,
             user=user,
             model=self.config.fast_model or self.config.strong_model,
-            max_tokens=12000,
+            max_tokens=self.config.structure_max_tokens,
             json_mode=True,
             temperature=0.0,
             phase="generate",

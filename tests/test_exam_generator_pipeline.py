@@ -9,7 +9,7 @@ from pathlib import Path
 import docx
 
 from exam_generator.docx_renderer import render_docx
-from exam_generator.pipeline import ExamGenerationPipeline, PipelineConfig
+from exam_generator.pipeline import GENERATOR_SYSTEM, ExamGenerationPipeline, PipelineConfig
 from exam_generator.providers import ProviderError, StaticProvider, TextProvider
 from exam_generator.roundtrip import verify_docx_roundtrip
 from exam_generator.schema import CanonicalExam, assign_stable_identifiers, validate_canonical_exam
@@ -181,6 +181,47 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
         self.assertEqual(result.round_trip_state, "NOT_RUN")
         self.assertFalse(result.output_path)
         self.assertEqual(result.issues[0]["code"], "GENERATION")
+
+    def test_structure_generation_defers_answers_to_the_grounded_solver_stage(self):
+        class StructureThenSolverProvider(TextProvider):
+            def __init__(self):
+                self.generate_user = ""
+
+            def complete(self, **kwargs):
+                phase = kwargs.get("phase")
+                if phase == "generate":
+                    self.generate_user = str(kwargs.get("user") or "")
+                    payload = reading_payload()
+                    for question in payload["sections"][0]["questions"]:
+                        question["correct_answers"] = []
+                        question.pop("explanation", None)
+                    return json.dumps(payload)
+                if phase == "question":
+                    question = json.loads(kwargs["user"].split("<QUESTION>", 1)[1].split("</QUESTION>", 1)[0])
+                    source_question = reading_payload()["sections"][0]["questions"][question["question_number"] - 1]
+                    return json.dumps({
+                        "question_number": question["question_number"],
+                        "correct_answers": source_question["correct_answers"],
+                        "explanation": source_question["explanation"],
+                    })
+                if phase == "critic":
+                    return '{"issues": []}'
+                raise AssertionError(phase)
+
+        with tempfile.TemporaryDirectory() as directory:
+            provider = StructureThenSolverProvider()
+            pipeline = ExamGenerationPipeline(provider, PipelineConfig(
+                state_dir=Path(directory), max_repairs=0, question_workers=1,
+                provider_attempts=1, provider_timeout_seconds=60,
+            ))
+            result = pipeline.generate("Italic source lead. Centered bold heading.", {"exam_type": "Reading"})
+
+        self.assertIn("set correct_answers to []", provider.generate_user)
+        self.assertIn("correct_answers to []", GENERATOR_SYSTEM)
+        self.assertIn("must omit explanation", GENERATOR_SYSTEM)
+        self.assertEqual(result.status, "READY_FOR_REVIEW")
+        self.assertEqual(result.solved_count, 2)
+        self.assertEqual(result.explanation_count, 2)
 
     def test_raw_docx_batch_keeps_order_and_uses_bounded_question_workers(self):
         class ConcurrentProvider(TextProvider):

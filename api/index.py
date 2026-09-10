@@ -1801,6 +1801,7 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
             config = PipelineConfig(
                 state_dir=work_path / "state",
                 max_workers=1,
+                question_workers=max(1, min(4, int(os.environ.get("EXAM_GENERATION_QUESTION_WORKERS", "4")))),
                 media_base_url=str(claim.get("media_base_url") or ""),
             )
             pipeline = ExamGenerationPipeline(config=config)
