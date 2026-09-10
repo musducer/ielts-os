@@ -127,6 +127,61 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
         self.assertIn("timed out", result.error.casefold())
         self.assertEqual(result.issues[0]["code"], "GENERATION_TIMEOUT")
 
+    def test_pipeline_retries_malformed_canonical_json_inside_provider_boundary(self):
+        class SequenceProvider(TextProvider):
+            def __init__(self):
+                self.generate_calls = 0
+
+            def complete(self, **kwargs):
+                phase = kwargs.get("phase")
+                if phase == "generate":
+                    self.generate_calls += 1
+                    return '{"title":' if self.generate_calls == 1 else json.dumps(reading_payload())
+                if phase == "critic":
+                    return '{"issues": []}'
+                raise AssertionError(phase)
+
+        with tempfile.TemporaryDirectory() as directory:
+            provider = SequenceProvider()
+            pipeline = ExamGenerationPipeline(provider, PipelineConfig(
+                state_dir=Path(directory), max_repairs=0, question_workers=0,
+                provider_attempts=2, provider_timeout_seconds=60,
+            ))
+            result = pipeline.generate("Italic source lead. Centered bold heading.", {"exam_type": "Reading"})
+
+        self.assertEqual(result.status, "READY_FOR_REVIEW")
+        self.assertEqual(result.validation_state, "PASS")
+        self.assertEqual(result.round_trip_state, "PASS")
+        self.assertEqual(provider.generate_calls, 2)
+
+    def test_pipeline_does_not_retry_strict_canonical_schema_failure(self):
+        class InvalidSchemaProvider(TextProvider):
+            def __init__(self):
+                self.generate_calls = 0
+
+            def complete(self, **kwargs):
+                if kwargs.get("phase") == "generate":
+                    self.generate_calls += 1
+                    payload = reading_payload()
+                    payload["unexpected"] = "must fail closed"
+                    return json.dumps(payload)
+                raise AssertionError(kwargs.get("phase"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            provider = InvalidSchemaProvider()
+            pipeline = ExamGenerationPipeline(provider, PipelineConfig(
+                state_dir=Path(directory), max_repairs=0, question_workers=0,
+                provider_attempts=2, provider_timeout_seconds=60,
+            ))
+            result = pipeline.generate("Italic source lead. Centered bold heading.", {"exam_type": "Reading"})
+
+        self.assertEqual(provider.generate_calls, 1)
+        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.validation_state, "FAIL")
+        self.assertEqual(result.round_trip_state, "NOT_RUN")
+        self.assertFalse(result.output_path)
+        self.assertEqual(result.issues[0]["code"], "GENERATION")
+
     def test_raw_docx_batch_keeps_order_and_uses_bounded_question_workers(self):
         class ConcurrentProvider(TextProvider):
             def __init__(self):

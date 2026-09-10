@@ -74,7 +74,8 @@ class ResilientProvider(TextProvider):
         self._failures = 0
         self._open_until = 0.0
 
-    def complete(self, **kwargs: Any) -> str:
+    def _run_with_retry(self, operation: Any) -> Any:
+        """Run both provider I/O and JSON decoding inside one bounded retry boundary."""
         with self._lock:
             if self._open_until > time.monotonic():
                 raise ProviderError("Provider circuit breaker is open; retry later.")
@@ -82,7 +83,7 @@ class ResilientProvider(TextProvider):
         for attempt in range(self.policy.max_attempts):
             try:
                 executor = ThreadPoolExecutor(max_workers=1)
-                future = executor.submit(self.inner.complete, **kwargs)
+                future = executor.submit(operation)
                 try:
                     result = future.result(timeout=self.policy.timeout_seconds)
                 finally:
@@ -103,6 +104,15 @@ class ResilientProvider(TextProvider):
             if self._failures >= self.policy.circuit_failures:
                 self._open_until = time.monotonic() + self.policy.circuit_cooldown_seconds
         raise ProviderError(str(last_error or "Provider request failed."))
+
+    def complete(self, **kwargs: Any) -> str:
+        return self._run_with_retry(lambda: self.inner.complete(**kwargs))
+
+    def complete_json(self, **kwargs: Any) -> Dict[str, Any]:
+        # Parsing belongs inside the retry envelope. A syntactically incomplete
+        # model response is transient provider output, while canonical schema
+        # validation remains fail-closed in the pipeline after this returns.
+        return self._run_with_retry(lambda: self.inner.complete_json(**kwargs))
 
 
 class ExistingBackendProvider(TextProvider):

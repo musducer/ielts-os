@@ -244,13 +244,13 @@ class ExamGenerationPipeline:
                     })
         return issues
 
-    def _generate(self, source_text: str, requirements: Dict[str, Any]) -> tuple[CanonicalExam, str]:
+    def _generate(self, source_text: str, requirements: Dict[str, Any]) -> CanonicalExam:
         user = (
             f"<SOURCE_DATA hash={source_hash(source_text)}>\n{source_text}\n</SOURCE_DATA>\n\n"
             f"TEACHER REQUIREMENTS (authoritative):\n{json.dumps(requirements, ensure_ascii=False)}\n\n"
             "Generate one canonical exam JSON. Preserve source visual formatting in RICH_PARAGRAPH."
         )
-        raw = self.provider.complete(
+        payload = self.provider.complete_json(
             system=GENERATOR_SYSTEM,
             user=user,
             model=self.config.fast_model or self.config.strong_model,
@@ -259,8 +259,7 @@ class ExamGenerationPipeline:
             temperature=0.0,
             phase="generate",
         )
-        from .providers import extract_json
-        return CanonicalExam.from_dict(extract_json(raw)), raw
+        return CanonicalExam.from_dict(payload)
 
     def _repair_question(self, question: Any, source_prompt: str, issues: List[ValidationIssue]) -> Dict[str, Any]:
         """Repair an answer/explanation patch only; question structure is immutable."""
@@ -461,10 +460,9 @@ class ExamGenerationPipeline:
                 cached = None
 
         current: Optional[CanonicalExam] = None
-        raw_response = ""
         issues: List[ValidationIssue] = []
         try:
-            current, raw_response = self._generate(source_prompt, requirements)
+            current = self._generate(source_prompt, requirements)
         except (ProviderError, CanonicalSchemaError) as exc:
             failure_text = str(exc).casefold()
             issue_code = "GENERATION_TIMEOUT" if ("timeout" in failure_text or "timed out" in failure_text) else "GENERATION"
