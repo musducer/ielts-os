@@ -22,7 +22,7 @@ from .source import detect_skill, load_source_snapshot, validate_raw_docx_file
 from .validation import ValidationIssue, critic_review, deterministic_review, has_blocking_issue
 
 
-PIPELINE_VERSION = "2026-09-09.parser-contract-v1"
+PIPELINE_VERSION = "2026-09-11.schema-shape-v1"
 PROMPT_VERSION = "2026-09-10.structure-first-contract-v1"
 
 

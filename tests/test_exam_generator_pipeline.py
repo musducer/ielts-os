@@ -12,7 +12,7 @@ from exam_generator.docx_renderer import render_docx
 from exam_generator.pipeline import GENERATOR_SYSTEM, ExamGenerationPipeline, PipelineConfig
 from exam_generator.providers import ProviderError, StaticProvider, TextProvider
 from exam_generator.roundtrip import verify_docx_roundtrip
-from exam_generator.schema import CanonicalExam, assign_stable_identifiers, validate_canonical_exam
+from exam_generator.schema import CanonicalExam, CanonicalSchemaError, assign_stable_identifiers, validate_canonical_exam
 from exam_generator.grounding import source_hash
 from exam_generator.media import InternalMediaStore, extract_docx_media, resolve_media_bindings, verify_embedded_media_roundtrip
 
@@ -80,6 +80,23 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
 
             self.assertEqual(result.quiz["questions"][0]["correctAnswer"], 1)
             self.assertEqual(result.quiz["questions"][1]["correctAnswer"], "heading")
+
+    def test_optional_slots_placeholder_does_not_reject_non_map_question(self):
+        payload = reading_payload()
+        payload["sections"][0]["questions"][0]["slots"] = ["not used outside map drag"]
+
+        exam = CanonicalExam.from_dict(payload)
+
+        self.assertEqual(exam.sections[0].questions[0].slots, {})
+
+    def test_map_drag_slots_remain_fail_closed(self):
+        payload = reading_payload()
+        question = payload["sections"][0]["questions"][0]
+        question["block_type"] = "MAP_DRAG"
+        question["slots"] = [{"x": 10, "y": 20}]
+
+        with self.assertRaisesRegex(CanonicalSchemaError, "MAP_DRAG"):
+            CanonicalExam.from_dict(payload)
 
     def test_renderer_preserves_run_styles_and_alignment(self):
         exam = CanonicalExam.from_dict(reading_payload())

@@ -238,10 +238,21 @@ class Question:
         block_type = str(value.get("block_type") or "").upper().strip()
         raw_slots = value.get("slots") or {}
         if not isinstance(raw_slots, dict):
-            raise CanonicalSchemaError("question.slots must be an object.")
+            # Slot coordinates have meaning only for a map label.  Models often
+            # emit an empty/list placeholder for this optional field on an
+            # ordinary question; preserving that placeholder must not reject an
+            # otherwise intact source structure.  MAP_DRAG remains strict: its
+            # coordinates are rendered and therefore cannot be guessed.
+            if block_type == "MAP_DRAG":
+                raise CanonicalSchemaError("question.slots must be an object for MAP_DRAG.")
+            raw_slots = {}
         diagram = value.get("diagram") or {}
         if not isinstance(diagram, dict):
-            raise CanonicalSchemaError("question.diagram must be an object.")
+            # As above, diagram geometry is required only for DIAGRAM_LABEL.
+            # Never discard malformed geometry for a question that needs it.
+            if block_type == "DIAGRAM_LABEL":
+                raise CanonicalSchemaError("question.diagram must be an object for DIAGRAM_LABEL.")
+            diagram = {}
         return cls(
             id=str(value.get("id") or "").strip(),
             question_number=number,
