@@ -7813,6 +7813,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const aiGenerationIsActive = (batch: AiGenerationBatchState | null | undefined) => Boolean(batch && ['STAGING', 'QUEUED', 'PROCESSING', 'RETRYING'].includes(String(batch.status || '').toUpperCase()));
   const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => item.status === 'PROCESSING').length;
+  const aiGenerationQueuedCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'QUEUED').length;
+  const aiGenerationCanRetry = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some((item: any) => {
+    const status = String(item?.status || '').toUpperCase();
+    const codes = Array.isArray(item?.diagnostics) ? item.diagnostics.map((entry: any) => String(entry?.code || '').toUpperCase()) : [];
+    return (status === 'FAILED' || status === 'MANUAL_REVIEW') && codes.some((code: string) => ['GENERATION', 'GENERATION_TIMEOUT', 'PROVIDER_TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(code));
+  });
   const aiGenerationStorageKey = (uid: string) => `ielts-os:ai-generation-batch:${uid}`;
 
   const acceptAiGenerationBatch = (batchId: string, next: AiGenerationBatchState) => {
@@ -7852,7 +7858,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       driver.epoch += 1;
     }
     const snapshot = aiGenerationBatchRef.current;
-    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationProcessingCount(snapshot) >= 2) return;
+    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationQueuedCount(snapshot) < 1 || aiGenerationProcessingCount(snapshot) >= 2) return;
     const epoch = driver.epoch;
     driver.inFlight = true;
     try {
@@ -7889,7 +7895,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (!batch?.batch_id) return;
       if (!acceptAiGenerationBatch(batchId, batch)) return;
       if (aiGenerationIsActive(aiGenerationBatchRef.current)) {
-        void driveAiGenerationBatch(batchId);
+        if (aiGenerationQueuedCount(aiGenerationBatchRef.current) > 0) void driveAiGenerationBatch(batchId);
         scheduleAiGenerationPoll(batchId);
       } else if (aiGenerationPollTimerRef.current !== null) {
         window.clearTimeout(aiGenerationPollTimerRef.current);
@@ -7922,6 +7928,32 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       window.setTimeout(() => URL.revokeObjectURL(href), 1000);
     } catch (error: any) {
       alert(error?.message || 'Could not download the generated DOCX.');
+    }
+  };
+
+  const retryAiGenerationBatch = async () => {
+    const batchId = String(aiGenerationBatchRef.current?.batch_id || '');
+    if (!currentUser || !/^[A-Za-z0-9_-]{12,160}$/.test(batchId) || aiGenerationBusy) return;
+    setAiGenerationBusy(true);
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/retry`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not retry the AI DOCX batch.'));
+      if (!Number(payload?.retried || 0)) throw new Error('Only transient AI provider failures can be retried automatically.');
+      const batch = payload.batch as AiGenerationBatchState;
+      if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+      aiGenerationDriverRef.current = { batchId, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
+      aiGenerationBatchRef.current = batch;
+      setAiGenerationBatch(batch);
+      if (currentUser.uid) window.localStorage.setItem(aiGenerationStorageKey(currentUser.uid), batchId);
+      void pollAiGenerationBatch(batchId);
+    } catch (error: any) {
+      alert(error?.message || 'Could not retry the AI DOCX batch.');
+    } finally {
+      setAiGenerationBusy(false);
     }
   };
 
@@ -17346,7 +17378,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             {aiGenerationBatch && <section aria-label="AI raw DOCX batch" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, marginBottom: 28, overflow: 'hidden'}}>
                                 <div style={{padding: '15px 18px', borderBottom: `1px solid ${EB.line}`, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap'}}>
                                     <div><div style={{...ebEyebrow, marginBottom: 5}}><Ico name="file" size={13} />AI raw DOCX batch</div><div style={{fontSize: 12, color: EB.sub}}>{aiGenerationBatch.delivery_mode === 'practice' ? 'Practice · unlimited attempts · integrity checks off' : 'Exam · remembered restrictions'} · {aiGenerationBatch.publication_policy === 'publish_when_ready' ? 'publish after every gate passes' : 'keep as draft'}</div></div>
-                                    <span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>
+                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}><span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>{aiGenerationCanRetry(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={retryAiGenerationBatch} style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Retry AI</button>}</div>
                                 </div>
                                 <div style={{padding: '10px 18px', display: 'grid', gap: 8}}>{(aiGenerationBatch.results || []).map((item: any, index: number) => {
                                     const progress = item.progress || {};

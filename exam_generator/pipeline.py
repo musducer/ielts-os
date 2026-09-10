@@ -35,8 +35,12 @@ class PipelineConfig:
     max_repairs: int = field(default_factory=lambda: max(0, int(os.environ.get("EXAM_GENERATION_MAX_REPAIRS", "2"))))
     max_workers: int = field(default_factory=lambda: max(1, min(4, int(os.environ.get("EXAM_GENERATION_MAX_WORKERS", "2")))))
     question_workers: int = field(default_factory=lambda: max(0, min(8, int(os.environ.get("EXAM_GENERATION_QUESTION_WORKERS", "4")))))
-    provider_attempts: int = field(default_factory=lambda: max(1, min(4, int(os.environ.get("EXAM_GENERATION_PROVIDER_ATTEMPTS", "3")))))
-    provider_timeout_seconds: int = field(default_factory=lambda: max(5, min(55, int(os.environ.get("EXAM_GENERATION_PROVIDER_TIMEOUT", "45")))))
+    # The backend provider may legitimately take up to 55 seconds for one large
+    # canonical response.  Do not cut it off at 45 seconds before its own
+    # provider fallback can run.  Two bounded attempts still leave ample room
+    # inside the 300-second Vercel function limit.
+    provider_attempts: int = field(default_factory=lambda: max(1, min(2, int(os.environ.get("EXAM_GENERATION_PROVIDER_ATTEMPTS", "2")))))
+    provider_timeout_seconds: int = field(default_factory=lambda: max(60, min(100, int(os.environ.get("EXAM_GENERATION_PROVIDER_TIMEOUT", "90")))))
     media_base_url: str = field(default_factory=lambda: os.environ.get("EXAM_GENERATION_MEDIA_BASE_URL", "").strip())
 
 
@@ -462,7 +466,37 @@ class ExamGenerationPipeline:
         try:
             current, raw_response = self._generate(source_prompt, requirements)
         except (ProviderError, CanonicalSchemaError) as exc:
-            issues = [ValidationIssue("FAIL", "GENERATION", str(exc))]
+            failure_text = str(exc).casefold()
+            issue_code = "GENERATION_TIMEOUT" if ("timeout" in failure_text or "timed out" in failure_text) else "GENERATION"
+            issues = [ValidationIssue("FAIL", issue_code, str(exc))]
+
+        # A provider/schema failure happens before a DOCX exists.  It must never
+        # be reported as a parser-contract failure or sent to manual format
+        # review, because there is no document for a teacher to inspect.
+        if current is None:
+            timed_out = any(issue.code == "GENERATION_TIMEOUT" for issue in issues)
+            result = PipelineResult(
+                job_id=job_id,
+                status="FAILED",
+                issues=_issues_payload(issues),
+                error=(
+                    "The AI provider timed out before generation completed. "
+                    "The raw DOCX is stored safely; retry this file."
+                    if timed_out else
+                    "The AI provider did not produce a valid exam. "
+                    "The raw DOCX is stored safely; retry this file."
+                ),
+                validation_state="FAIL",
+                round_trip_state="NOT_RUN",
+                media_count=media_count,
+                media_round_trip_state="NOT_RUN",
+                progress={"stage": "FAILED", "reason": issue_code if issues else "GENERATION"},
+                **self._exam_counts(None),
+                **result_metadata,
+            )
+            self._transition(job_id, "FAILED", result.to_dict())
+            self._emit_progress(on_progress, {"stage": "FAILED", **self._exam_counts(None)})
+            return result
 
         question_stage_issues: List[ValidationIssue] = []
         repair_count = 0

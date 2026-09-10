@@ -1701,6 +1701,12 @@ def _durable_upload_failure(exc: Exception) -> Tuple[str, str]:
     return "The source file could not be stored durably.", "DURABLE_UPLOAD"
 
 
+def _is_firestore_transaction_contention(exc: Exception) -> bool:
+    """A duplicate browser advance is safe; it must not become a user-visible 503."""
+    detail = str(exc or "").casefold()
+    return "transaction" in detail and ("contention" in detail or "aborted" in detail)
+
+
 def _pipeline_row_patch(result: Any, original_filename: str, *, output_blob: str = "", result_blob: str = "", parser_blob: str = "", issues_blob: str = "") -> Dict[str, Any]:
     payload = result.to_dict()
     return {
@@ -1985,9 +1991,36 @@ async def advance_exam_generation_batch(batch_id: str, request: Request, backgro
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception as exc:
+        if _is_firestore_transaction_contention(exc):
+            current = await asyncio.to_thread(store.load_batch, batch_id)
+            return {"success": True, "claimed": False, "batch": store.public_batch(current or existing), "retry_after_ms": 2500}
         print(f"Could not advance durable raw DOCX batch {batch_id}: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The durable file worker is temporarily unavailable; retrying is safe.") from exc
+
+
+@app.post("/api/exam-generation/batches/{batch_id}/retry")
+async def retry_exam_generation_batch(batch_id: str, request: Request):
+    """Requeue only provider failures; parser/manual-format failures remain fail-closed."""
+    _require_exam_manager(request)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,160}", batch_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+    try:
+        store = _firebase_exam_generation_store()
+        existing = await asyncio.to_thread(store.load_batch, batch_id)
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+        retried = await asyncio.to_thread(store.retry_retriable_files, batch_id)
+        batch = await asyncio.to_thread(store.load_batch, batch_id)
+        return {"success": True, "retried": retried, "batch": store.public_batch(batch or existing)}
+    except HTTPException:
+        raise
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"Could not retry durable raw DOCX batch {batch_id}: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The durable file retry is temporarily unavailable; retrying is safe.") from exc
 
 
 @app.get("/api/exam-generation/batches/{batch_id}")

@@ -11,11 +11,13 @@ import json
 import os
 import re
 import time
+import uuid
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
 
 
-ACTIVE_FILE_STATUSES = {"STAGING", "QUEUED", "PROCESSING"}
+ACTIVE_FILE_STATUSES = {"STAGING", "QUEUED", "PROCESSING", "RETRYING"}
+RETRYABLE_DIAGNOSTIC_CODES = {"GENERATION", "GENERATION_TIMEOUT", "PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE"}
 PRIVATE_ROW_KEYS = {
     "source_blob",
     "output_blob",
@@ -328,6 +330,70 @@ class DurableExamGenerationStore:
             return False
 
         return bool(self._transactional(complete))
+
+    def retry_retriable_files(self, batch_id: str) -> int:
+        """Requeue only transient provider failures; format/manual-review rows stay protected."""
+        now = _now_ms()
+
+        def retry(transaction):
+            ref = self._batch_ref(batch_id)
+            snapshot = ref.get(transaction=transaction)
+            if not snapshot.exists:
+                return 0
+            payload = snapshot.to_dict() or {}
+            rows = [dict(row) for row in payload.get("results") if isinstance(row, dict)]
+            retried = 0
+            for index, row in enumerate(rows):
+                status = str(row.get("status") or "").upper()
+                diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), list) else []
+                codes = {
+                    str(item.get("code") or "").upper()
+                    for item in diagnostics
+                    if isinstance(item, dict)
+                }
+                if status not in {"FAILED", "MANUAL_REVIEW"} or not (codes & RETRYABLE_DIAGNOSTIC_CODES):
+                    continue
+                history = list(row.get("retry_history") or [])[-4:]
+                history.append({
+                    "at": now,
+                    "status": status,
+                    "diagnostics": [dict(item) for item in diagnostics if isinstance(item, dict)],
+                })
+                row.update({
+                    "status": "QUEUED",
+                    "job_id": uuid.uuid4().hex,
+                    "docx_job_id": "",
+                    "question_count": 0,
+                    "solved_count": 0,
+                    "explanation_count": 0,
+                    "validation_state": "PENDING",
+                    "repair_count": 0,
+                    "round_trip_state": "NOT_RUN",
+                    "media_count": 0,
+                    "media_round_trip_state": "NOT_RUN",
+                    "error": "",
+                    "publish_error": "",
+                    "diagnostics": [],
+                    "progress": {"stage": "RETRY_QUEUED", "retryCount": len(history), "updatedAt": now},
+                    "retry_history": history,
+                    "updatedAt": now,
+                })
+                for key in ("output_blob", "parser_blob", "issues_blob", "media_manifest_blob", "result_blob"):
+                    row.pop(key, None)
+                rows[index] = row
+                retried += 1
+            if not retried:
+                return 0
+            batch_status, completed = self._batch_status(rows)
+            transaction.update(ref, {
+                "results": rows,
+                "status": batch_status,
+                "completedCount": completed,
+                "updatedAt": now,
+            })
+            return retried
+
+        return int(self._transactional(retry) or 0)
 
     def put_job(self, job_id: str, payload: Dict[str, Any]) -> None:
         clean = dict(payload)

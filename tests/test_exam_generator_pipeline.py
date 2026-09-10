@@ -10,7 +10,7 @@ import docx
 
 from exam_generator.docx_renderer import render_docx
 from exam_generator.pipeline import ExamGenerationPipeline, PipelineConfig
-from exam_generator.providers import StaticProvider, TextProvider
+from exam_generator.providers import ProviderError, StaticProvider, TextProvider
 from exam_generator.roundtrip import verify_docx_roundtrip
 from exam_generator.schema import CanonicalExam, assign_stable_identifiers, validate_canonical_exam
 from exam_generator.grounding import source_hash
@@ -108,6 +108,24 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
             self.assertEqual(second.status, "READY_FOR_REVIEW")
             self.assertTrue(second.cached)
             self.assertEqual(len(provider.calls), 2)  # generate + critic; cache performs no model calls.
+
+    def test_provider_timeout_is_failed_not_reported_as_parser_contract(self):
+        class TimeoutProvider(TextProvider):
+            def complete(self, **_kwargs):
+                raise ProviderError("Provider request timed out.")
+
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = ExamGenerationPipeline(TimeoutProvider(), PipelineConfig(
+                state_dir=Path(directory), max_repairs=0, question_workers=0,
+                provider_attempts=1, provider_timeout_seconds=60,
+            ))
+            result = pipeline.generate("A short reading source.", {"exam_type": "Reading"})
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.validation_state, "FAIL")
+        self.assertEqual(result.round_trip_state, "NOT_RUN")
+        self.assertIn("timed out", result.error.casefold())
+        self.assertEqual(result.issues[0]["code"], "GENERATION_TIMEOUT")
 
     def test_raw_docx_batch_keeps_order_and_uses_bounded_question_workers(self):
         class ConcurrentProvider(TextProvider):
