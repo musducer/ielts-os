@@ -24,6 +24,7 @@ dist-ssr
 *.sw?
 
 .vercel
+.vercel_python_packages/
 
 # Python/cache
 __pycache__/

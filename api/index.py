@@ -12,6 +12,9 @@ import html
 import zipfile
 import threading
 import json
+import tempfile
+import uuid
+from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -21,15 +24,22 @@ from docx.text.paragraph import Paragraph
 from typing import List, Dict, Any, Optional, Tuple
 
 try:
+    from api.exam_generation_durable import DurableExamGenerationStore
+except ImportError:  # Vercel loads api/index.py with api/ on sys.path.
+    from exam_generation_durable import DurableExamGenerationStore
+
+try:
     import firebase_admin
     from firebase_admin import credentials as firebase_credentials
     from firebase_admin import auth as firebase_auth
     from firebase_admin import firestore as firebase_firestore
+    from firebase_admin import storage as firebase_storage
 except ImportError:  # Local DOCX work must not require production credentials.
     firebase_admin = None
     firebase_credentials = None
     firebase_auth = None
     firebase_firestore = None
+    firebase_storage = None
 
 _DEFAULT_ALLOWED_ORIGINS = (
     "https://ielts-os-sandy.vercel.app,https://ielts-os.vercel.app,"
@@ -45,11 +55,12 @@ MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
 MAX_DOCX_ZIP_MEMBERS = 2500
 MAX_DOCX_BATCH_FILES = 20
-EXAM_GENERATION_STATE_DIR = os.environ.get("EXAM_GENERATION_STATE_DIR", ".exam-generation")
 _AI_KEY_LOCK = threading.Lock()
 _AI_KEY_CURSOR: Dict[str, int] = {}
 _FIREBASE_ADMIN_LOCK = threading.Lock()
+_FIREBASE_ADMIN_APP = None
 _FIREBASE_ADMIN_DB = None
+_FIREBASE_GENERATION_STORE = None
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -78,11 +89,11 @@ async def unexpected_api_error(request: Request, exc: Exception):
 FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "ielts-os.firebasestorage.app")
 
 
-def _firebase_admin_firestore_client():
-    """Return the Admin SDK client only for protected server maintenance jobs."""
-    global _FIREBASE_ADMIN_DB
-    if _FIREBASE_ADMIN_DB is not None:
-        return _FIREBASE_ADMIN_DB
+def _firebase_admin_app():
+    """Initialize Firebase Admin once before verifying tokens or accessing Firestore."""
+    global _FIREBASE_ADMIN_APP
+    if _FIREBASE_ADMIN_APP is not None:
+        return _FIREBASE_ADMIN_APP
     if not firebase_admin or not firebase_credentials or not firebase_firestore:
         raise RuntimeError("firebase-admin is unavailable; install server dependencies first")
 
@@ -95,11 +106,40 @@ def _firebase_admin_firestore_client():
         raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON must contain valid JSON") from exc
 
     with _FIREBASE_ADMIN_LOCK:
+        if _FIREBASE_ADMIN_APP is None:
+            try:
+                _FIREBASE_ADMIN_APP = firebase_admin.get_app()
+            except ValueError:
+                _FIREBASE_ADMIN_APP = firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
+    return _FIREBASE_ADMIN_APP
+
+
+def _firebase_admin_firestore_client():
+    """Return the Admin SDK client only for protected server maintenance jobs."""
+    global _FIREBASE_ADMIN_DB
+    if _FIREBASE_ADMIN_DB is not None:
+        return _FIREBASE_ADMIN_DB
+    firebase_app = _firebase_admin_app()
+    with _FIREBASE_ADMIN_LOCK:
         if _FIREBASE_ADMIN_DB is None:
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
-            _FIREBASE_ADMIN_DB = firebase_firestore.client()
+            _FIREBASE_ADMIN_DB = firebase_firestore.client(firebase_app)
     return _FIREBASE_ADMIN_DB
+
+
+def _firebase_exam_generation_store():
+    """Get the shared Firestore/Storage store required by production raw-DOCX jobs."""
+    global _FIREBASE_GENERATION_STORE
+    if _FIREBASE_GENERATION_STORE is not None:
+        return _FIREBASE_GENERATION_STORE
+    if not firebase_storage:
+        raise RuntimeError("Firebase Storage support is unavailable; install firebase-admin server dependencies.")
+    firebase_app = _firebase_admin_app()
+    database = _firebase_admin_firestore_client()
+    with _FIREBASE_ADMIN_LOCK:
+        if _FIREBASE_GENERATION_STORE is None:
+            bucket = firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET, app=firebase_app)
+            _FIREBASE_GENERATION_STORE = DurableExamGenerationStore(database, bucket, firebase_firestore)
+    return _FIREBASE_GENERATION_STORE
 
 
 def _exam_manager_emails() -> set[str]:
@@ -119,6 +159,10 @@ def _require_exam_manager(request: Request) -> Dict[str, Any]:
     token = str(request.headers.get("Authorization", "")).removeprefix("Bearer ").strip()
     if not token or not firebase_auth:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="A Firebase teacher token is required.")
+    try:
+        _firebase_admin_app()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Firebase Admin authentication is not configured.") from exc
     try:
         claims = firebase_auth.verify_id_token(token, check_revoked=True)
     except Exception as exc:
@@ -203,23 +247,43 @@ def _safe_idempotency_key(value: Any) -> str:
     return value
 
 
+def _run_firestore_transaction(database: Any, callback):
+    """Run a Firestore transaction through the Admin SDK retry wrapper.
+
+    Calling ``DocumentReference.get(transaction=...)`` on an unstarted
+    transaction raises ``Transaction not in progress`` with current Firestore
+    clients. The decorator starts, retries, and commits the transaction.
+    """
+    if not firebase_firestore:
+        raise RuntimeError("Firebase Firestore support is unavailable.")
+    transaction = database.transaction()
+
+    @firebase_firestore.transactional
+    def run(active_transaction):
+        return callback(active_transaction)
+
+    return run(transaction)
+
+
 def _claim_bulk_operation(database, key: str, fingerprint: str, actor: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     operation = database.collection("ielts_workspace").document("trung_linh_data").collection("examBulkOperations").document(key)
-    transaction = database.transaction()
-    existing = operation.get(transaction=transaction)
-    if existing.exists:
-        payload = existing.to_dict() or {}
-        if payload.get("fingerprint") != fingerprint:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used for a different operation.")
-        return payload.get("response") if isinstance(payload.get("response"), dict) else {"status": payload.get("status", "PROCESSING")}
-    transaction.set(operation, {
-        "fingerprint": fingerprint,
-        "status": "PROCESSING",
-        "actor": actor,
-        "createdAt": int(time.time() * 1000),
-    })
-    transaction.commit()
-    return None
+
+    def claim(transaction):
+        existing = operation.get(transaction=transaction)
+        if existing.exists:
+            payload = existing.to_dict() or {}
+            if payload.get("fingerprint") != fingerprint:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used for a different operation.")
+            return payload.get("response") if isinstance(payload.get("response"), dict) else {"status": payload.get("status", "PROCESSING")}
+        transaction.set(operation, {
+            "fingerprint": fingerprint,
+            "status": "PROCESSING",
+            "actor": actor,
+            "createdAt": int(time.time() * 1000),
+        })
+        return None
+
+    return _run_firestore_transaction(database, claim)
 
 
 def _finish_bulk_operation(database, key: str, response: Dict[str, Any]) -> None:
@@ -236,40 +300,46 @@ def _apply_bulk_quiz_action(database, exam_ids: List[Any], actor: Dict[str, Any]
         if not exam_id:
             output.append({"exam_id": exam_id, "success": False, "error": "Invalid assessment ID."})
             continue
-        transaction = database.transaction()
         reference = collection_ref.document(exam_id)
         try:
-            snapshot = reference.get(transaction=transaction)
-            if not snapshot.exists:
+            def apply(transaction):
+                snapshot = reference.get(transaction=transaction)
+                if not snapshot.exists:
+                    return None
+                previous = snapshot.to_dict() or {}
+                next_quiz = dict(previous)
+                if action == "mode":
+                    next_quiz = _with_delivery_mode(previous, delivery_mode)
+                elif action == "publish":
+                    publish_error = _bulk_publishability(previous)
+                    if publish_error:
+                        return {"publish_error": publish_error}
+                    next_quiz["active"] = True
+                elif action == "unpublish":
+                    next_quiz["active"] = False
+                else:
+                    raise ValueError("Unsupported bulk action.")
+                now = int(time.time() * 1000)
+                old_mode = _delivery_mode(previous)
+                revision = int(previous.get("revision") or 0)
+                audit = previous.get("deliveryAudit") if isinstance(previous.get("deliveryAudit"), list) else []
+                next_quiz["revision"] = revision + 1
+                next_quiz["updatedAt"] = now
+                next_quiz["deliveryAudit"] = [*audit[-49:], {
+                    "at": now, "actor": actor.get("email", ""), "action": action,
+                    "oldMode": old_mode, "newMode": _delivery_mode(next_quiz),
+                    "oldPublished": bool(previous.get("active")), "newPublished": bool(next_quiz.get("active")),
+                }]
+                transaction.set(reference, next_quiz)
+                return next_quiz
+
+            next_quiz = _run_firestore_transaction(database, apply)
+            if next_quiz is None:
                 output.append({"exam_id": exam_id, "success": False, "error": "Assessment not found."})
                 continue
-            previous = snapshot.to_dict() or {}
-            next_quiz = dict(previous)
-            if action == "mode":
-                next_quiz = _with_delivery_mode(previous, delivery_mode)
-            elif action == "publish":
-                publish_error = _bulk_publishability(previous)
-                if publish_error:
-                    output.append({"exam_id": exam_id, "success": False, "error": publish_error})
-                    continue
-                next_quiz["active"] = True
-            elif action == "unpublish":
-                next_quiz["active"] = False
-            else:
-                raise ValueError("Unsupported bulk action.")
-            now = int(time.time() * 1000)
-            old_mode = _delivery_mode(previous)
-            revision = int(previous.get("revision") or 0)
-            audit = previous.get("deliveryAudit") if isinstance(previous.get("deliveryAudit"), list) else []
-            next_quiz["revision"] = revision + 1
-            next_quiz["updatedAt"] = now
-            next_quiz["deliveryAudit"] = [*audit[-49:], {
-                "at": now, "actor": actor.get("email", ""), "action": action,
-                "oldMode": old_mode, "newMode": _delivery_mode(next_quiz),
-                "oldPublished": bool(previous.get("active")), "newPublished": bool(next_quiz.get("active")),
-            }]
-            transaction.set(reference, next_quiz)
-            transaction.commit()
+            if isinstance(next_quiz, dict) and next_quiz.get("publish_error"):
+                output.append({"exam_id": exam_id, "success": False, "error": str(next_quiz["publish_error"])})
+                continue
             output.append({"exam_id": exam_id, "success": True, "quiz": next_quiz})
         except Exception as exc:
             output.append({"exam_id": exam_id, "success": False, "error": "Could not update this assessment."})
@@ -1586,95 +1656,222 @@ def _pipeline_quiz_for_catalog(result: Dict[str, Any], delivery_mode: str, publi
     return _with_delivery_mode(quiz, delivery_mode)
 
 
-def _run_exam_generation_batch(batch_id: str, paths: List[str], delivery_mode: str, publication_policy: str, actor: Dict[str, Any]) -> None:
-    """Background worker entry. Each file publishes independently after every gate."""
-    from exam_generator.cache import StateStore
+def _trusted_exam_generation_media_base_url(request: Request) -> str:
+    """Use a configured canonical origin, or the known HTTPS app origin for this request."""
+    configured = os.environ.get("EXAM_GENERATION_MEDIA_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        parsed = urllib.parse.urlparse(configured)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.path not in {"", "/"}:
+            raise ValueError("EXAM_GENERATION_MEDIA_BASE_URL must be an HTTPS origin without a path.")
+        return configured
+    forwarded_scheme = str(request.headers.get("x-forwarded-proto") or request.url.scheme).split(",", 1)[0].strip().lower()
+    forwarded_host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",", 1)[0].strip().lower()
+    candidate = f"{forwarded_scheme}://{forwarded_host}".rstrip("/")
+    if candidate in ALLOWED_ORIGINS and candidate.startswith("https://"):
+        return candidate
+    # Text-only documents remain processable locally. Embedded media will later
+    # fail closed in the pipeline until a trusted HTTPS origin is configured.
+    return ""
+
+
+def _safe_pipeline_message(value: Any, fallback: str) -> str:
+    message = str(value or "").strip() or fallback
+    message = re.sub(r"(?:[A-Za-z]:)?[\\/][^\s;,:]+", "[private path]", message)
+    return message[:700]
+
+
+def _public_pipeline_diagnostics(issues: Any) -> List[Dict[str, Any]]:
+    diagnostics: List[Dict[str, Any]] = []
+    for issue in issues if isinstance(issues, list) else []:
+        if not isinstance(issue, dict):
+            continue
+        item = {key: issue.get(key) for key in ("severity", "code", "question_number") if issue.get(key) is not None}
+        if item:
+            diagnostics.append(item)
+    return diagnostics[:80]
+
+
+def _durable_upload_failure(exc: Exception) -> Tuple[str, str]:
+    """Return a safe, actionable row-level diagnosis without exposing cloud paths."""
+    detail = str(exc).lower()
+    if "specified bucket does not exist" in detail or ("bucket" in detail and "not found" in detail):
+        return "Firebase Storage is not provisioned for the configured bucket.", "STORAGE_BUCKET_NOT_FOUND"
+    if "permission" in detail or "forbidden" in detail or "403" in detail:
+        return "The Firebase service account cannot write to the configured Storage bucket.", "STORAGE_PERMISSION"
+    return "The source file could not be stored durably.", "DURABLE_UPLOAD"
+
+
+def _pipeline_row_patch(result: Any, original_filename: str, *, output_blob: str = "", result_blob: str = "", parser_blob: str = "", issues_blob: str = "") -> Dict[str, Any]:
+    payload = result.to_dict()
+    return {
+        "status": str(payload.get("status") or "FAILED"),
+        "original_filename": original_filename,
+        "job_id": str(payload.get("job_id") or ""),
+        "docx_job_id": str(payload.get("job_id") or "") if output_blob else "",
+        "detected_skill": str(payload.get("detected_skill") or "Unknown"),
+        "question_count": int(payload.get("question_count") or 0),
+        "solved_count": int(payload.get("solved_count") or 0),
+        "explanation_count": int(payload.get("explanation_count") or 0),
+        "validation_state": str(payload.get("validation_state") or "UNKNOWN"),
+        "repair_count": int(payload.get("repair_count") or 0),
+        "round_trip_state": str(payload.get("round_trip_state") or "NOT_RUN"),
+        "media_count": int(payload.get("media_count") or 0),
+        "media_round_trip_state": str(payload.get("media_round_trip_state") or "NOT_RUN"),
+        "progress": dict(payload.get("progress") or {}),
+        "error": _safe_pipeline_message(payload.get("error"), "The file did not complete.") if payload.get("error") else "",
+        "publish_error": _safe_pipeline_message(payload.get("publish_error"), "") if payload.get("publish_error") else "",
+        "diagnostics": _public_pipeline_diagnostics(payload.get("issues")),
+        "output_blob": output_blob,
+        "result_blob": result_blob,
+        "parser_blob": parser_blob,
+        "issues_blob": issues_blob,
+    }
+
+
+def _publish_pipeline_quiz(result: Any, batch_id: str, delivery_mode: str, publication_policy: str, actor_email: str, pipeline: Any) -> None:
+    """Catalog import remains fail-closed and is independent from other files."""
+    payload = result.to_dict()
+    payload["batch_id"] = batch_id
+    database = _firebase_admin_firestore_client()
+    quiz = _pipeline_quiz_for_catalog(payload, delivery_mode, publication_policy, {"email": actor_email})
+    database_quiz = _quiz_collection(database).document(quiz["id"])
+    existing = database_quiz.get()
+    if existing.exists:
+        previous = existing.to_dict() or {}
+        if int(previous.get("revision") or 0) > 1:
+            raise ValueError("Generated assessment was changed after import; refusing to overwrite it.")
+        quiz["revision"] = int(previous.get("revision") or 0) + 1
+    database_quiz.set(quiz)
+    result.delivery_mode = delivery_mode
+    result.publication_policy = publication_policy
+    result.published = publication_policy == "publish_when_ready"
+    if result.published:
+        pipeline._transition(result.job_id, "APPROVED", {"publication": "AUTO_APPROVED", "batch_id": batch_id})
+        pipeline._transition(result.job_id, "PUBLISHED", {"publication": "AUTO_PUBLISHED", "batch_id": batch_id})
+        result.status = "PUBLISHED"
+
+
+def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str, claim: Optional[Dict[str, Any]] = None) -> bool:
+    """Claim and transform one file using /tmp only as disposable worker scratch space."""
     from exam_generator.pipeline import ExamGenerationPipeline, PipelineConfig
 
-    config = PipelineConfig(state_dir=os.environ.get("EXAM_GENERATION_STATE_DIR", EXAM_GENERATION_STATE_DIR))
-    pipeline = ExamGenerationPipeline(config=config)
-    store = StateStore(config.state_dir)
-    record_lock = threading.Lock()
-    record = store.load_batch(batch_id) or {}
-    record["status"] = "PROCESSING"
-    record["startedAt"] = int(time.time() * 1000)
-    store.save_batch(batch_id, record)
+    lease_ms = max(90_000, min(15 * 60_000, int(os.environ.get("EXAM_GENERATION_LEASE_MS", "180000"))))
+    claim = claim or store.claim_next_file(worker_id, wanted_batch_id=batch_id, max_active_workers=2, lease_ms=lease_ms)
+    if not claim:
+        return False
+    row = dict(claim.get("row") or {})
+    row_id = str(claim.get("row_id") or "")
+    original_filename = str(row.get("original_filename") or "document.docx")
+    job_id = str(row.get("job_id") or "")
+    source_blob = str(row.get("source_blob") or "")
+    if not row_id or not job_id or not source_blob:
+        store.complete_file(claim["batch_id"], row_id, worker_id, {
+            "status": "FAILED", "validation_state": "FAIL", "round_trip_state": "NOT_RUN",
+            "error": "The durable source record is incomplete.", "diagnostics": [{"severity": "FAIL", "code": "DURABLE_SOURCE"}],
+            "progress": {"stage": "FAILED"},
+        })
+        return True
 
-    def persist_ready(result):
-        with record_lock:
-            current = store.load_batch(batch_id) or record
-            results = current.get("results") if isinstance(current.get("results"), list) else []
-            row = next((item for item in results if item.get("job_id") == result.job_id or (
-                item.get("storage_filename") == result.original_filename and item.get("status") == "PROCESSING"
-            )), None)
-            if row is None:
-                row = {"original_filename": result.original_filename}
-                results.append(row)
-            payload = result.to_dict()
-            payload.pop("output_path", None)
-            payload["docx_job_id"] = result.job_id if result.output_path else ""
-            payload["original_filename"] = row.get("original_filename", result.original_filename)
-            payload["batch_id"] = batch_id
-            if result.status == "READY_FOR_REVIEW":
-                try:
-                    database = _firebase_admin_firestore_client()
-                    quiz = _pipeline_quiz_for_catalog(payload, delivery_mode, publication_policy, actor)
-                    database_quiz = _quiz_collection(database).document(quiz["id"])
-                    existing = database_quiz.get()
-                    if existing.exists:
-                        previous = existing.to_dict() or {}
-                        if int(previous.get("revision") or 0) > 1:
-                            raise ValueError("Generated assessment was changed after import; refusing to overwrite it.")
-                        quiz["revision"] = int(previous.get("revision") or 0) + 1
-                    database_quiz.set(quiz)
-                    result.delivery_mode = delivery_mode
-                    result.publication_policy = publication_policy
-                    result.published = publication_policy == "publish_when_ready"
-                    if result.published:
-                        pipeline._transition(result.job_id, "APPROVED", {"publication": "AUTO_APPROVED", "batch_id": batch_id})
-                        pipeline._transition(result.job_id, "PUBLISHED", {"publication": "AUTO_PUBLISHED", "batch_id": batch_id})
-                        result.status = "PUBLISHED"
-                    payload = result.to_dict()
-                    payload.pop("output_path", None)
-                    payload["docx_job_id"] = result.job_id if result.output_path else ""
-                    payload["original_filename"] = row.get("original_filename", result.original_filename)
-                    payload["batch_id"] = batch_id
-                except Exception as exc:
-                    result.status = "MANUAL_REVIEW"
-                    result.publish_error = "Catalog import or auto-publish failed; the source result remains unpublished."
-                    payload = result.to_dict()
-                    payload.pop("output_path", None)
-                    payload["docx_job_id"] = result.job_id if result.output_path else ""
-                    payload["original_filename"] = row.get("original_filename", result.original_filename)
-                    payload["batch_id"] = batch_id
-                    try:
-                        pipeline._transition(result.job_id, "MANUAL_REVIEW", {"publish_error": result.publish_error})
-                    except Exception:
-                        pass
-            row.update(payload)
-            current["results"] = results
-            current["completedCount"] = sum(1 for item in results if item.get("status") not in {"QUEUED", "PROCESSING"})
-            current["status"] = "COMPLETE" if current["completedCount"] >= len(paths) else "PROCESSING"
-            current["updatedAt"] = int(time.time() * 1000)
-            store.save_batch(batch_id, current)
+    last_heartbeat = 0.0
+
+    def report(progress: Dict[str, Any]) -> None:
+        nonlocal last_heartbeat
+        now = time.monotonic()
+        completed = int(progress.get("question_completed") or 0)
+        total = int(progress.get("question_total") or 0)
+        stage = str(progress.get("stage") or "PROCESSING")
+        if now - last_heartbeat >= 0.7 or (total and completed >= total) or stage in {"READY_FOR_REVIEW", "MANUAL_REVIEW", "FAILED"}:
+            store.update_progress(claim["batch_id"], row_id, worker_id, progress, lease_ms=lease_ms)
+            last_heartbeat = now
 
     try:
-        pipeline.transform_raw_docx_batch(paths, {
-            "delivery_mode": delivery_mode,
-            "publication_policy": publication_policy,
-            "batch_id": batch_id,
-        }, on_result=persist_ready)
+        report({"stage": "SOURCE_DOWNLOAD"})
+        raw_source = store.download_source(source_blob)
+        safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "-", original_filename.replace("\\", "/").split("/")[-1]).strip("-.") or "source.docx"
+        with tempfile.TemporaryDirectory(prefix="ielts-os-generation-") as work_root:
+            work_path = Path(work_root)
+            source_path = work_path / safe_filename
+            source_path.write_bytes(raw_source)
+            config = PipelineConfig(
+                state_dir=work_path / "state",
+                max_workers=1,
+                media_base_url=str(claim.get("media_base_url") or ""),
+            )
+            pipeline = ExamGenerationPipeline(config=config)
+            result = pipeline.generate(
+                str(source_path),
+                {
+                    "delivery_mode": str(claim.get("delivery_mode") or "exam"),
+                    "publication_policy": str(claim.get("publication_policy") or "draft"),
+                    "batch_id": claim["batch_id"],
+                },
+                job_id=job_id,
+                use_cache=False,
+                on_progress=report,
+            )
+            output_blob = ""
+            if result.output_path:
+                output_path = Path(result.output_path)
+                if output_path.suffix.lower() != ".docx" or not output_path.is_file():
+                    raise ValueError("The pipeline returned an invalid DOCX output.")
+                output_blob = store.upload_output(claim["batch_id"], job_id, f"{job_id}-IELTS-OS.docx", output_path.read_bytes())
+            if result.status == "READY_FOR_REVIEW":
+                try:
+                    report({"stage": "PERSISTING_MEDIA"})
+                    store.persist_media(claim["batch_id"], str(pipeline.store.root / "media"))
+                    report({"stage": "CATALOG_IMPORT"})
+                    _publish_pipeline_quiz(
+                        result,
+                        claim["batch_id"],
+                        str(claim.get("delivery_mode") or "exam"),
+                        str(claim.get("publication_policy") or "draft"),
+                        str(claim.get("actor") or ""),
+                        pipeline,
+                    )
+                except Exception as exc:
+                    result.status = "MANUAL_REVIEW"
+                    result.publish_error = "Catalog import or managed-media publication failed; the generated DOCX remains unpublished."
+                    result.progress = {**dict(result.progress or {}), "stage": "MANUAL_REVIEW"}
+                    result.issues = list(result.issues or []) + [{
+                        "severity": "FAIL", "code": "CATALOG_OR_MEDIA", "message": str(exc),
+                    }]
+            payload = result.to_dict()
+            payload["batch_id"] = claim["batch_id"]
+            payload["source_blob"] = source_blob
+            payload.pop("output_path", None)
+            result_blob = store.upload_json(claim["batch_id"], job_id, "result", payload)
+            parser_blob = store.upload_json(claim["batch_id"], job_id, "parser", result.parser_quiz) if isinstance(result.parser_quiz, dict) else ""
+            issues_blob = store.upload_json(claim["batch_id"], job_id, "issues", {"issues": result.issues})
+            store.put_job(job_id, {
+                "batch_id": claim["batch_id"], "original_filename": original_filename,
+                "status": result.status, "output_blob": output_blob, "result_blob": result_blob,
+                "parser_blob": parser_blob, "issues_blob": issues_blob,
+            })
+            patch = _pipeline_row_patch(
+                result, original_filename, output_blob=output_blob, result_blob=result_blob,
+                parser_blob=parser_blob, issues_blob=issues_blob,
+            )
+            return store.complete_file(claim["batch_id"], row_id, worker_id, patch)
     except Exception as exc:
-        with record_lock:
-            current = store.load_batch(batch_id) or record
-            current.update({"status": "FAILED", "error": "The batch worker stopped unexpectedly.", "updatedAt": int(time.time() * 1000)})
-            store.save_batch(batch_id, current)
+        print(f"Durable AI DOCX worker failed for {original_filename}: {exc}")
+        traceback.print_exc()
+        diagnostic_blob = ""
+        try:
+            diagnostic_blob = store.upload_json(claim["batch_id"], job_id, "worker-failure", {"error": str(exc)})
+            store.put_job(job_id, {"batch_id": claim["batch_id"], "status": "FAILED", "issues_blob": diagnostic_blob})
+        except Exception:
+            pass
+        return store.complete_file(claim["batch_id"], row_id, worker_id, {
+            "status": "FAILED", "validation_state": "FAIL", "round_trip_state": "NOT_RUN",
+            "error": "The isolated file worker stopped before producing a verified document.",
+            "diagnostics": [{"severity": "FAIL", "code": "WORKER_FAILURE"}],
+            "issues_blob": diagnostic_blob, "progress": {"stage": "FAILED"},
+        })
 
 
 @app.post("/api/exam-generation/batches")
 async def create_exam_generation_batch(
     request: Request,
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     delivery_mode: str = Form("exam"),
     publication_policy: str = Form("draft"),
@@ -1688,48 +1885,109 @@ async def create_exam_generation_batch(
     if not files or len(files) > MAX_DOCX_BATCH_FILES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="A batch accepts 1-20 DOCX files.")
     try:
-        from exam_generator.cache import StateStore
-        state = StateStore(EXAM_GENERATION_STATE_DIR)
+        store = _firebase_exam_generation_store()
         batch_id = _safe_idempotency_key(idempotency_key) if idempotency_key else f"batch_{int(time.time() * 1000)}_{os.urandom(6).hex()}"
-        existing = state.load_batch(batch_id)
+        existing = await asyncio.to_thread(store.load_batch, batch_id)
         if existing:
             if existing.get("delivery_mode") != delivery_mode or existing.get("publication_policy") != publication_policy:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used with different batch settings.")
-            return {"success": True, "idempotent_replay": True, "batch": existing}
-        uploads_dir = state.root / "uploads" / batch_id
-        uploads_dir.mkdir(parents=True, exist_ok=False)
-        paths: List[str] = []
-        rows: List[Dict[str, Any]] = []
-        for index, file in enumerate(files):
-            _, raw = await read_validated_docx_upload(file, include_raw=True)
-            original = os.path.basename(str(file.filename or f"document-{index + 1}.docx"))
-            safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", original) or f"document-{index + 1}.docx"
-            target = uploads_dir / f"{index + 1:02d}-{safe_name}"
-            target.write_bytes(raw)
-            paths.append(str(target))
-            rows.append({
-                "index": index,
-                "original_filename": original,
-                "storage_filename": target.name,
-                "status": "PROCESSING",
-            })
+            return {"success": True, "idempotent_replay": True, "batch": store.public_batch(existing)}
+        media_base_url = _trusted_exam_generation_media_base_url(request)
+        now = int(time.time() * 1000)
+        rows = [{
+            "index": index,
+            "row_id": f"row_{index + 1}_{uuid.uuid4().hex[:16]}",
+            "job_id": uuid.uuid4().hex,
+            "original_filename": str(file.filename or f"document-{index + 1}.docx").replace("\\", "/").split("/")[-1],
+            "status": "STAGING",
+            "progress": {"stage": "STAGING", "updatedAt": now},
+            "attempt_count": 0,
+            "updatedAt": now,
+        } for index, file in enumerate(files)]
         batch = {
             "batch_id": batch_id,
             "status": "QUEUED",
             "delivery_mode": delivery_mode,
             "publication_policy": publication_policy,
             "actor": actor.get("email", ""),
-            "createdAt": int(time.time() * 1000),
-            "results": rows,
+            "media_base_url": media_base_url,
+            "createdAt": now,
+            "updatedAt": now,
+            "totalCount": len(rows),
             "completedCount": 0,
+            "results": rows,
         }
-        state.save_batch(batch_id, batch)
-        background_tasks.add_task(_run_exam_generation_batch, batch_id, paths, delivery_mode, publication_policy, actor)
-        return {"success": True, "batch": batch}
+        try:
+            await asyncio.to_thread(store.create_batch, batch)
+        except Exception:
+            existing = await asyncio.to_thread(store.load_batch, batch_id)
+            if not existing:
+                raise
+            if existing.get("delivery_mode") != delivery_mode or existing.get("publication_policy") != publication_policy:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used with different batch settings.")
+            return {"success": True, "idempotent_replay": True, "batch": store.public_batch(existing)}
+        for index, file in enumerate(files):
+            row = rows[index]
+            try:
+                _, raw = await read_validated_docx_upload(file, include_raw=True)
+                source_blob = await asyncio.to_thread(store.upload_source, batch_id, index, row["original_filename"], raw)
+                staged = await asyncio.to_thread(store.stage_file, batch_id, row["row_id"], {
+                    "status": "QUEUED", "source_blob": source_blob, "progress": {"stage": "QUEUED"},
+                })
+                if not staged:
+                    raise RuntimeError("The durable source row could not be activated.")
+            except HTTPException as exc:
+                await asyncio.to_thread(store.stage_file, batch_id, row["row_id"], {
+                    "status": "FAILED", "error": str(exc.detail),
+                    "diagnostics": [{"severity": "FAIL", "code": "SOURCE_VALIDATION"}], "progress": {"stage": "FAILED"},
+                })
+            except Exception as exc:
+                print(f"Durable raw DOCX upload failed for {row['original_filename']}: {exc}")
+                traceback.print_exc()
+                message, code = _durable_upload_failure(exc)
+                await asyncio.to_thread(store.stage_file, batch_id, row["row_id"], {
+                    "status": "FAILED", "error": message,
+                    "diagnostics": [{"severity": "FAIL", "code": code}], "progress": {"stage": "FAILED"},
+                })
+        stored = await asyncio.to_thread(store.load_batch, batch_id)
+        return {"success": True, "batch": store.public_batch(stored or batch)}
     except HTTPException:
         raise
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not create this raw DOCX batch.") from exc
+        print(f"Could not create durable raw DOCX batch: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Durable batch storage is temporarily unavailable. No raw DOCX job was started.") from exc
+
+
+@app.post("/api/exam-generation/batches/{batch_id}/advance")
+async def advance_exam_generation_batch(batch_id: str, request: Request, background_tasks: BackgroundTasks):
+    """Claim one durable file and start a best-effort worker; leases make every retry safe."""
+    _require_exam_manager(request)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,160}", batch_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+    try:
+        store = _firebase_exam_generation_store()
+        existing = await asyncio.to_thread(store.load_batch, batch_id)
+        if not existing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+        worker_id = f"browser_{uuid.uuid4().hex}"
+        lease_ms = max(90_000, min(15 * 60_000, int(os.environ.get("EXAM_GENERATION_LEASE_MS", "180000"))))
+        claim = await asyncio.to_thread(store.claim_next_file, worker_id, wanted_batch_id=batch_id, max_active_workers=2, lease_ms=lease_ms)
+        claimed = bool(claim)
+        if claim:
+            background_tasks.add_task(_run_durable_exam_generation_file, store, batch_id, worker_id, claim)
+        batch = await asyncio.to_thread(store.load_batch, batch_id)
+        return {"success": True, "claimed": claimed, "batch": store.public_batch(batch or existing)}
+    except HTTPException:
+        raise
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"Could not advance durable raw DOCX batch {batch_id}: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The durable file worker is temporarily unavailable; retrying is safe.") from exc
 
 
 @app.get("/api/exam-generation/batches/{batch_id}")
@@ -1737,35 +1995,38 @@ async def get_exam_generation_batch(batch_id: str, request: Request):
     _require_exam_manager(request)
     if not re.fullmatch(r"[A-Za-z0-9_-]{12,160}", batch_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
-    from exam_generator.cache import StateStore
-    batch = StateStore(EXAM_GENERATION_STATE_DIR).load_batch(batch_id)
+    try:
+        store = _firebase_exam_generation_store()
+        batch = await asyncio.to_thread(store.load_batch, batch_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     if not batch:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
-    return {"success": True, "batch": batch}
+    return {"success": True, "batch": store.public_batch(batch)}
 
 
 @app.get("/api/exam-generation/jobs/{job_id}/docx")
 async def download_exam_generation_docx(job_id: str, request: Request):
-    """Authenticated download; never expose server-side output paths in batch state."""
+    """Authenticated Storage download; no server-side output path is ever returned."""
     _require_exam_manager(request)
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found.")
-    from exam_generator.cache import StateStore
-    store = StateStore(EXAM_GENERATION_STATE_DIR)
-    state = store.load_job(job_id) or {}
-    raw_path = state.get("output_path")
-    if not isinstance(raw_path, str):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found.")
     try:
-        output_path = Path(raw_path).resolve()
-        job_root = store.job_path(job_id).resolve()
-        output_path.relative_to(job_root)
-    except (OSError, ValueError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found.")
-    if output_path.suffix.lower() != ".docx" or not output_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found.")
-    filename = f"{job_id}-IELTS-OS.docx"
-    return FileResponse(output_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        store = _firebase_exam_generation_store()
+        state = await asyncio.to_thread(store.load_job, job_id) or {}
+        output_blob = str(state.get("output_blob") or "")
+        if not output_blob:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generated document not found.")
+        raw = await asyncio.to_thread(store.download_blob, output_blob)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Generated document storage is temporarily unavailable.") from exc
+    return StreamingResponse(
+        io.BytesIO(raw),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{job_id}-IELTS-OS.docx"'},
+    )
 
 def _decode_audio_key(audio_key: str):
     raw = audio_key.replace("-", "+").replace("_", "/")
@@ -3743,27 +4004,25 @@ async def ai_transcribe(
 
 @app.get("/api/exam-media/{asset_id}")
 async def hosted_exam_media(asset_id: str):
-    """Serve only content-addressed pipeline media; never expose storage paths."""
+    """Serve immutable content-addressed media from Firebase Storage, never a local path."""
     if not re.fullmatch(r"media_[a-f0-9]{24}", asset_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found.")
     try:
-        from exam_generator.media import InternalMediaStore
-        store = InternalMediaStore(os.path.join(EXAM_GENERATION_STATE_DIR, "media"))
-        asset = store.get(asset_id)
-        if not asset:
+        store = _firebase_exam_generation_store()
+        asset = await asyncio.to_thread(store.load_media, asset_id)
+        blob_name = str((asset or {}).get("blob") or "")
+        mime_type = str((asset or {}).get("mime_type") or "application/octet-stream")
+        if not blob_name:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found.")
-        asset_path = os.path.realpath(asset.storage_path)
-        assets_root = os.path.realpath(str(store.assets_dir))
-        if not asset_path.startswith(assets_root + os.sep) or not os.path.isfile(asset_path):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found.")
-        return FileResponse(asset_path, media_type=asset.mime_type, headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "X-Content-Type-Options": "nosniff",
-        })
+        raw = await asyncio.to_thread(store.download_blob, blob_name)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed media is unavailable.") from exc
+    return StreamingResponse(io.BytesIO(raw), media_type=mime_type, headers={
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+    })
 
 
 @app.post("/api/exams/bulk/mode")
@@ -3823,18 +4082,21 @@ async def cleanup_expired_attempts(request: Request):
         database = _firebase_admin_firestore_client()
         workspace = database.collection("ielts_workspace").document("trung_linh_data")
         now_epoch = int(time.time() * 1000)
-        transaction = database.transaction()
-        snapshot = workspace.get(transaction=transaction)
-        if not snapshot.exists:
-            return {"success": True, "deletedAttempts": 0, "deletedDrafts": 0, "workspace": "missing"}
+        def clean_attempts(transaction):
+            snapshot = workspace.get(transaction=transaction)
+            if not snapshot.exists:
+                return None
+            payload = snapshot.to_dict() or {}
+            results = payload.get("quizResults") if isinstance(payload.get("quizResults"), list) else []
+            retained = [result for result in results if not isinstance(result, dict) or not _attempt_is_expired(result, now_epoch)]
+            deleted_attempts = len(results) - len(retained)
+            if deleted_attempts:
+                transaction.update(workspace, {"quizResults": retained})
+            return deleted_attempts
 
-        payload = snapshot.to_dict() or {}
-        results = payload.get("quizResults") if isinstance(payload.get("quizResults"), list) else []
-        retained = [result for result in results if not isinstance(result, dict) or not _attempt_is_expired(result, now_epoch)]
-        deleted_attempts = len(results) - len(retained)
-        if deleted_attempts:
-            transaction.update(workspace, {"quizResults": retained})
-            transaction.commit()
+        deleted_attempts = _run_firestore_transaction(database, clean_attempts)
+        if deleted_attempts is None:
+            return {"success": True, "deletedAttempts": 0, "deletedDrafts": 0, "workspace": "missing"}
 
         expired_drafts = list(workspace.collection("writingDrafts").where("expiresAt", "<=", now_epoch).stream())
         deleted_drafts = 0

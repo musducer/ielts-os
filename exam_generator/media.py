@@ -146,6 +146,16 @@ class InternalMediaStore:
         path = self.meta_dir / f"{asset_id}.json"
         if not path.exists():
             return None
+        try:
+            asset = MediaAsset(**json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, TypeError, json.JSONDecodeError):
+            return None
+        asset_path = Path(asset.storage_path)
+        try:
+            asset_path.resolve().relative_to(self.assets_dir.resolve())
+        except (OSError, ValueError):
+            return None
+        return asset if asset_path.is_file() else None
 
 
 def managed_media_url(base_url: str, asset_id: str) -> str:
@@ -245,10 +255,6 @@ def verify_embedded_media_roundtrip(rendered_docx: str | Path, media_asset_paths
         )
     if actual != expected:
         raise ValueError("Rendered DOCX media bytes do not exactly match the verified managed asset set.")
-        try:
-            return MediaAsset(**json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, TypeError, json.JSONDecodeError):
-            return None
 
 
 def _crop(element: ET.Element) -> Dict[str, float]:

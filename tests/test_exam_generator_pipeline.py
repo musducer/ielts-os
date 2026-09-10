@@ -175,9 +175,11 @@ class ExamGeneratorPipelineTests(unittest.TestCase):
             source.add_paragraph("[TYPE] Writing")
             source.add_picture(str(image))
             source.save(raw)
-            extraction = extract_docx_media(raw, "raw-source", InternalMediaStore(root / "media"))
+            media_store = InternalMediaStore(root / "media")
+            extraction = extract_docx_media(raw, "raw-source", media_store)
             self.assertEqual(len(extraction.occurrences), 1)
             occurrence = extraction.occurrences[0]
+            self.assertEqual(media_store.get(occurrence.asset_id).asset_id, occurrence.asset_id)
             payload = {
                 "title": "Writing chart with managed media",
                 "exam_type": "Writing",

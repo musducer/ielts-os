@@ -160,6 +160,8 @@ npm install
 python -m pip install fastapi uvicorn python-multipart python-docx
 ```
 
+For local backend development, select the workspace `.venv\\Scripts\\python.exe` interpreter in VS Code, then install the server dependencies with `python -m pip install -r api/requirements.txt`. This includes `firebase-admin`, which is required for Firebase-authenticated manager actions.
+
 Chạy backend ở cổng `8000`:
 
 ```powershell
@@ -182,7 +184,7 @@ Không commit secret vào repo. Cấu hình trên local shell hoặc Vercel Proj
 | --- | --- |
 | `APP_ALLOWED_ORIGINS` | Danh sách origin CORS, phân cách bằng dấu phẩy |
 | `API_DOCS_ENABLED` | Bật `/api/docs` và OpenAPI khi là `1/true/yes` |
-| `FIREBASE_STORAGE_BUCKET` | Bucket dùng để dựng URL media Firebase |
+| `FIREBASE_STORAGE_BUCKET` | Tên bucket Firebase Storage **đã được provision**; bắt buộc cho raw-DOCX artifacts/media |
 | `GROQ_API_KEY`, `GROQ_API_KEY_2...` | Pool key Groq cho chat và Whisper |
 | `CEREBRAS_API_KEY`, `CEREBRAS_API_KEY_2...` | Pool key Cerebras |
 | `GEMINI_API_KEY` hoặc `GOOGLE_API_KEY` | Pool key Gemini |
@@ -214,8 +216,9 @@ npm run build
 
 - Every assessment has an explicit `deliveryMode`: **Exam** keeps its saved attempt, integrity and Listening replay policy; **Practice** has unlimited attempts and disables those restrictions. Legacy records with no explicit mode remain Exam.
 - The Exam Library supports selected bulk conversion, publish, unpublish and publish-ready actions. Each action is revisioned, audited, idempotent and returns independent results; one failure never rolls back another record.
-- `AI raw DOCX` accepts 1-20 source DOCX files with an Exam/Practice and Draft/Publish-when-ready pre-setting. It uses bounded file/question concurrency and returns independent detection, solve/explanation, validation, repair and parser round-trip state for each source file.
-- Raw batch processing and output download require a Firebase-verified manager in `EXAM_MANAGER_EMAILS` (or explicit `TEACHER_EMAILS` fallback). Configure `EXAM_GENERATION_STATE_DIR` on durable shared storage and `EXAM_GENERATION_MEDIA_BASE_URL` as an HTTPS origin before enabling production batch traffic.
+- `AI raw DOCX` accepts 1-20 source DOCX files with an Exam/Practice and Draft/Publish-when-ready pre-setting. It preserves upload order, uses at most two leased file workers plus bounded question workers, and exposes each file's detection, stage, question progress, solve/explanation, validation, repair, parser round-trip and safe diagnostic state. Ready DOCX files can be downloaded from the batch panel.
+- Raw inputs, generated DOCX, parser/validation payloads and media live in Firebase Storage; batch state, ordered rows and leases live in Firestore. A Vercel function uses `/tmp` only as disposable scratch space. Browser retries and duplicate calls are safe because a worker must own a Firestore lease before it processes a file.
+- Raw batch processing and output download require a Firebase-verified manager in `EXAM_MANAGER_EMAILS` (or explicit `TEACHER_EMAILS` fallback). In Vercel, set the variable to the comma-separated Firebase teacher logins (for example, `trung@ielts.os,linh@ielts.os`) before deploying; an empty allow-list deliberately returns HTTP 503. The service account also needs Firestore read/write and Firebase Storage object read/create/update/delete permission. Provision the bucket in Firebase Console before first use, then set its exact name in `FIREBASE_STORAGE_BUCKET`; `STORAGE_BUCKET_NOT_FOUND` means that the bucket is absent or the name is wrong. Set `EXAM_GENERATION_MEDIA_BASE_URL` to the canonical HTTPS site origin when generated charts/images must remain reachable outside the current production origin.
 
 Không dùng `npx tsc --noEmit` đơn lẻ: `tsconfig.json` gốc không chứa source files và có thể báo thành công giả. Luôn dùng `npx tsc -b`.
 
@@ -224,6 +227,7 @@ Không dùng `npx tsc --noEmit` đơn lẻ: `tsconfig.json` gốc không chứa 
 Production deploy trên Vercel. `vercel.json` thực hiện:
 
 - Chạy `api/index.py` dưới dạng Vercel Function.
+- Cho phép `api/index.py` chạy tối đa 300 giây để hoàn thành một file AI đã được lease; state/output vẫn được checkpoint vào Firebase trước khi job được đánh dấu hoàn tất.
 - Rewrite `/api/*` vào backend.
 - Fallback route SPA về `index.html`.
 - Cache immutable một năm cho tutorial videos có tên versioned.

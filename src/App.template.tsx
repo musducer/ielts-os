@@ -257,7 +257,7 @@ const readApiJson = async (response: Response) => {
             : `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).`);
     }
     if (!response.ok) {
-        throw new Error(String(data?.error || `Máy chủ AI báo lỗi (HTTP ${response.status}).`));
+        throw new Error(String(data?.detail || data?.error || `Máy chủ AI báo lỗi (HTTP ${response.status}).`));
     }
     return data;
 };
@@ -1594,7 +1594,35 @@ interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
-interface AiGenerationBatchState { batch_id: string; status: string; delivery_mode: DeliveryMode; publication_policy: "draft" | "publish_when_ready"; results: Array<{ original_filename: string; status: string; question_count?: number; solved_count?: number; explanation_count?: number; repair_count?: number; round_trip_state?: string; error?: string; publish_error?: string }>; completedCount?: number; }
+interface AiGenerationBatchState {
+  batch_id: string;
+  status: string;
+  updatedAt?: number;
+  delivery_mode: DeliveryMode;
+  publication_policy: "draft" | "publish_when_ready";
+  totalCount?: number;
+  completedCount?: number;
+  results: Array<{
+    index?: number;
+    row_id?: string;
+    original_filename: string;
+    status: string;
+    detected_skill?: string;
+    question_count?: number;
+    solved_count?: number;
+    explanation_count?: number;
+    validation_state?: string;
+    repair_count?: number;
+    round_trip_state?: string;
+    media_count?: number;
+    media_round_trip_state?: string;
+    docx_job_id?: string;
+    error?: string;
+    publish_error?: string;
+    diagnostics?: Array<{ severity?: string; code?: string; question_number?: number }>;
+    progress?: { stage?: string; question_total?: number; question_completed?: number; question_failed?: number; question_number?: number; repair_attempt?: number };
+  }>;
+}
 
 const manualTimestampToSeconds = (value: any) => {
   const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
@@ -3505,6 +3533,9 @@ export default function IeltsSupremeOS() {
   const [aiGenerationPublicationPolicy, setAiGenerationPublicationPolicy] = useState<"draft" | "publish_when_ready">("draft");
   const [aiGenerationBatch, setAiGenerationBatch] = useState<AiGenerationBatchState | null>(null);
   const [aiGenerationBusy, setAiGenerationBusy] = useState(false);
+  const aiGenerationBatchRef = useRef<AiGenerationBatchState | null>(null);
+  const aiGenerationDriverRef = useRef({ batchId: "", inFlight: false, stopped: false, epoch: 0 });
+  const aiGenerationPollTimerRef = useRef<number | null>(null);
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
   const [bannedIps, setBannedIps] = useState<string[]>([]);
@@ -3514,6 +3545,33 @@ export default function IeltsSupremeOS() {
   const [verifyCodeInput, setVerifyCodeInput] = useState("");
   const [verifyResult, setVerifyResult] = useState<{ status: "NONE" | "VALID" | "USED" | "FAKE"; entry?: RewardCode } | null>(null);
   const [serverStatus, setServerStatus] = useState<"OK" | "DOWN">("OK");
+
+  useEffect(() => { aiGenerationBatchRef.current = aiGenerationBatch; }, [aiGenerationBatch]);
+  useEffect(() => () => {
+    aiGenerationDriverRef.current.stopped = true;
+    if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+  }, []);
+  useEffect(() => {
+    if (!currentUser?.uid || userRole !== "TEACHER") return;
+    const key = aiGenerationStorageKey(currentUser.uid);
+    const batchId = window.localStorage.getItem(key) || "";
+    if (!/^[A-Za-z0-9_-]{12,160}$/.test(batchId) || aiGenerationBatchRef.current?.batch_id === batchId) return;
+    if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+    aiGenerationDriverRef.current = {
+      batchId,
+      inFlight: false,
+      stopped: false,
+      epoch: aiGenerationDriverRef.current.epoch + 1,
+    };
+    void pollAiGenerationBatch(batchId);
+    return () => {
+      const driver = aiGenerationDriverRef.current;
+      if (driver.batchId !== batchId) return;
+      driver.stopped = true;
+      driver.epoch += 1;
+      if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+    };
+  }, [currentUser?.uid, userRole]);
  
   // BẢN CANONICAL DUY NHẤT (đã hợp nhất 2 bản trùng tên gây mất dấu quét):
   // 1. Có nhánh 'sections' (quét trong BÀI ĐỌC lưu vào sections[idx].passage — trước đây rơi vào hư không).
@@ -7753,6 +7811,71 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return normalizeQuizManualExplanations({ ...base, questions, sections }) as Quiz;
   };
 
+  const aiGenerationIsActive = (batch: AiGenerationBatchState | null | undefined) => Boolean(batch && ['STAGING', 'QUEUED', 'PROCESSING', 'RETRYING'].includes(String(batch.status || '').toUpperCase()));
+  const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => item.status === 'PROCESSING').length;
+  const aiGenerationStorageKey = (uid: string) => `ielts-os:ai-generation-batch:${uid}`;
+
+  const acceptAiGenerationBatch = (batchId: string, next: AiGenerationBatchState) => {
+    const driver = aiGenerationDriverRef.current;
+    const current = aiGenerationBatchRef.current;
+    if (!next?.batch_id || next.batch_id !== batchId || driver.batchId !== batchId || driver.stopped) return false;
+    if (current?.batch_id === batchId && Number(next.updatedAt || 0) < Number(current.updatedAt || 0)) return false;
+    aiGenerationBatchRef.current = next;
+    setAiGenerationBatch(next);
+    if (currentUser?.uid) {
+      const key = aiGenerationStorageKey(currentUser.uid);
+      if (aiGenerationIsActive(next)) window.localStorage.setItem(key, batchId);
+      else window.localStorage.removeItem(key);
+    }
+    return true;
+  };
+
+  const scheduleAiGenerationPoll = (batchId: string, delay = 2500) => {
+    const driver = aiGenerationDriverRef.current;
+    if (driver.batchId !== batchId || driver.stopped) return;
+    if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+    const epoch = driver.epoch;
+    aiGenerationPollTimerRef.current = window.setTimeout(() => {
+      aiGenerationPollTimerRef.current = null;
+      const activeDriver = aiGenerationDriverRef.current;
+      if (activeDriver.batchId === batchId && activeDriver.epoch === epoch && !activeDriver.stopped) void pollAiGenerationBatch(batchId);
+    }, delay);
+  };
+
+  const driveAiGenerationBatch = async (batchId: string) => {
+    if (!currentUser) return;
+    const driver = aiGenerationDriverRef.current;
+    if (driver.batchId !== batchId) {
+      driver.batchId = batchId;
+      driver.inFlight = false;
+      driver.stopped = false;
+      driver.epoch += 1;
+    }
+    const snapshot = aiGenerationBatchRef.current;
+    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationProcessingCount(snapshot) >= 2) return;
+    const epoch = driver.epoch;
+    driver.inFlight = true;
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/advance`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await readApiJson(response);
+      if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Could not advance the AI batch.'));
+      const batch = payload?.batch as AiGenerationBatchState;
+      if (batch?.batch_id) acceptAiGenerationBatch(batchId, batch);
+      if (payload?.claimed && aiGenerationIsActive(aiGenerationBatchRef.current)) scheduleAiGenerationPoll(batchId, 150);
+      else if (aiGenerationIsActive(aiGenerationBatchRef.current)) scheduleAiGenerationPoll(batchId, 2500);
+    } catch (error) {
+      // A persisted lease may outlive a transient response failure; the one poll
+      // scheduler safely re-checks state without creating retry storms.
+      console.warn('AI batch worker retry is safe:', error);
+      if (aiGenerationDriverRef.current.batchId === batchId && aiGenerationDriverRef.current.epoch === epoch && !aiGenerationDriverRef.current.stopped) scheduleAiGenerationPoll(batchId, 4000);
+    } finally {
+      if (aiGenerationDriverRef.current.batchId === batchId && aiGenerationDriverRef.current.epoch === epoch) aiGenerationDriverRef.current.inFlight = false;
+    }
+  };
+
   const pollAiGenerationBatch = async (batchId: string) => {
     if (!currentUser) return;
     try {
@@ -7763,15 +7886,42 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const payload = await readApiJson(response);
       if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Could not refresh the AI batch.'));
       const batch = payload?.batch as AiGenerationBatchState;
-      if (batch?.batch_id) {
-        setAiGenerationBatch(batch);
-        if (batch.status === 'QUEUED' || batch.status === 'PROCESSING') {
-          window.setTimeout(() => { void pollAiGenerationBatch(batchId); }, 2500);
-        }
+      if (!batch?.batch_id) return;
+      if (!acceptAiGenerationBatch(batchId, batch)) return;
+      if (aiGenerationIsActive(aiGenerationBatchRef.current)) {
+        void driveAiGenerationBatch(batchId);
+        scheduleAiGenerationPoll(batchId);
+      } else if (aiGenerationPollTimerRef.current !== null) {
+        window.clearTimeout(aiGenerationPollTimerRef.current);
+        aiGenerationPollTimerRef.current = null;
       }
+    } catch (error) {
+      console.warn('Could not refresh the AI batch:', error);
+      const driver = aiGenerationDriverRef.current;
+      if (driver.batchId === batchId && !driver.stopped) scheduleAiGenerationPoll(batchId, 4000);
+    }
+  };
+
+  const downloadAiGeneratedDocx = async (jobId: string) => {
+    if (!currentUser || !/^[a-f0-9]{32}$/i.test(jobId)) return;
+    try {
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`${getApiBase()}/api/exam-generation/jobs/${encodeURIComponent(jobId)}/docx`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const payload = await readApiJson(response);
+        throw new Error(String(payload?.detail || payload?.error || 'Could not download the generated DOCX.'));
+      }
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = `${jobId}-IELTS-OS.docx`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(href), 1000);
     } catch (error: any) {
-      setAiGenerationBusy(false);
-      alert(error?.message || 'Could not refresh the AI batch.');
+      alert(error?.message || 'Could not download the generated DOCX.');
     }
   };
 
@@ -7800,8 +7950,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       });
       const payload = await readApiJson(response);
       if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not start the AI DOCX batch.'));
-      setAiGenerationBatch(payload.batch as AiGenerationBatchState);
-      void pollAiGenerationBatch(payload.batch.batch_id);
+      const batch = payload.batch as AiGenerationBatchState;
+      if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
+      aiGenerationDriverRef.current = { batchId: batch.batch_id, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
+      aiGenerationBatchRef.current = batch;
+      setAiGenerationBatch(batch);
+      if (currentUser.uid) {
+        const key = aiGenerationStorageKey(currentUser.uid);
+        if (aiGenerationIsActive(batch)) window.localStorage.setItem(key, batch.batch_id);
+        else window.localStorage.removeItem(key);
+      }
+      void pollAiGenerationBatch(batch.batch_id);
     } catch (error: any) {
       alert(error?.message || 'Could not start the AI DOCX batch.');
     } finally {
@@ -8150,7 +8309,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const persistBulkQuizUpdates = async (updates: Quiz[], action: string) => {
       if (!updates.length) return;
-      const byId = new Map(updates.map(quiz => [quiz.id, quiz]));
+      const byId = new Map<string, Quiz>(updates.map(quiz => [quiz.id, quiz]));
       setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
       const saved = await syncData({ __quizUpserts: updates });
       if (!saved) {
@@ -8177,7 +8336,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (!response.ok) throw new Error(String(payload?.detail || payload?.error || 'Bulk operation failed.'));
           const changed = Array.isArray(payload?.results) ? payload.results.filter((item: any) => item?.success && item?.quiz).map((item: any) => item.quiz as Quiz) : [];
           if (changed.length) {
-              const byId = new Map(changed.map((quiz: Quiz) => [quiz.id, quiz]));
+              const byId = new Map<string, Quiz>(changed.map((quiz: Quiz) => [quiz.id, quiz]));
               setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
           }
           return payload;

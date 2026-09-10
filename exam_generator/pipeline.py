@@ -147,6 +147,16 @@ class ExamGenerationPipeline:
         self.store.transition_job(job_id, status, payload)
 
     @staticmethod
+    def _emit_progress(callback: Optional[Callable[[Dict[str, Any]]]], payload: Dict[str, Any]) -> None:
+        """Progress transport is advisory; a heartbeat failure cannot corrupt a job."""
+        if callback is None:
+            return
+        try:
+            callback(dict(payload))
+        except Exception:
+            pass
+
+    @staticmethod
     def _exam_counts(exam: Optional[CanonicalExam]) -> Dict[str, int]:
         questions = [question for section in (exam.sections if exam else []) for question in section.questions]
         return {
@@ -184,11 +194,24 @@ class ExamGenerationPipeline:
             raise CanonicalSchemaError("Question solver did not return explanation.")
         return raw
 
-    def _solve_questions(self, exam: CanonicalExam, source_prompt: str) -> List[ValidationIssue]:
+    def _solve_questions(
+        self,
+        exam: CanonicalExam,
+        source_prompt: str,
+        on_progress: Optional[Callable[[Dict[str, Any]]]],
+    ) -> List[ValidationIssue]:
         if self.config.question_workers < 1 or not exam.sections:
             return []
         targets = [question for section in exam.sections for question in section.questions]
         issues: List[ValidationIssue] = []
+        completed = 0
+        failed = 0
+        self._emit_progress(on_progress, {
+            "stage": "SOLVING",
+            "question_total": len(targets),
+            "question_completed": completed,
+            "question_failed": failed,
+        })
         with ThreadPoolExecutor(max_workers=self.config.question_workers) as executor:
             futures = {
                 executor.submit(self._question_solve, asdict(question), source_prompt): question
@@ -202,9 +225,19 @@ class ExamGenerationPipeline:
                     from .schema import Explanation
                     question.explanation = Explanation.from_dict(solved["explanation"])
                 except Exception as exc:
+                    failed += 1
                     issues.append(ValidationIssue(
                         "FAIL", "QUESTION_SOLVE", str(exc), question.question_number
                     ))
+                finally:
+                    completed += 1
+                    self._emit_progress(on_progress, {
+                        "stage": "SOLVING",
+                        "question_total": len(targets),
+                        "question_completed": completed,
+                        "question_failed": failed,
+                        "question_number": question.question_number,
+                    })
         return issues
 
     def _generate(self, source_text: str, requirements: Dict[str, Any]) -> tuple[CanonicalExam, str]:
@@ -251,7 +284,13 @@ class ExamGenerationPipeline:
             raise CanonicalSchemaError("Targeted repair did not return answer and explanation fields.")
         return raw
 
-    def _repair_questions(self, exam: CanonicalExam, source_prompt: str, issues: List[ValidationIssue]) -> List[ValidationIssue]:
+    def _repair_questions(
+        self,
+        exam: CanonicalExam,
+        source_prompt: str,
+        issues: List[ValidationIssue],
+        on_progress: Optional[Callable[[Dict[str, Any]]]],
+    ) -> List[ValidationIssue]:
         issues_by_number: Dict[int, List[ValidationIssue]] = {}
         for issue in issues:
             if issue.question_number is not None:
@@ -265,6 +304,14 @@ class ExamGenerationPipeline:
         if not targets:
             return [ValidationIssue("FAIL", "REPAIR_SCOPE", "Blocking issues are not safely repairable at question scope.")]
         failures: List[ValidationIssue] = []
+        completed = 0
+        failed = 0
+        self._emit_progress(on_progress, {
+            "stage": "REPAIRING",
+            "question_total": len(targets),
+            "question_completed": completed,
+            "question_failed": failed,
+        })
         workers = max(1, min(self.config.question_workers or 1, len(targets)))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
@@ -279,7 +326,17 @@ class ExamGenerationPipeline:
                     from .schema import Explanation
                     question.explanation = Explanation.from_dict(repaired["explanation"])
                 except Exception as exc:
+                    failed += 1
                     failures.append(ValidationIssue("FAIL", "QUESTION_REPAIR", str(exc), number))
+                finally:
+                    completed += 1
+                    self._emit_progress(on_progress, {
+                        "stage": "REPAIRING",
+                        "question_total": len(targets),
+                        "question_completed": completed,
+                        "question_failed": failed,
+                        "question_number": number,
+                    })
         return failures
 
     def generate(
@@ -288,22 +345,27 @@ class ExamGenerationPipeline:
         requirements: Optional[Dict[str, Any]] = None,
         job_id: Optional[str] = None,
         use_cache: bool = True,
+        on_progress: Optional[Callable[[Dict[str, Any]]]] = None,
     ) -> PipelineResult:
         requirements = requirements or {}
         job_id = job_id or uuid.uuid4().hex
         self._transition(job_id, "QUEUED", {"progress": {"stage": "QUEUED"}})
+        self._emit_progress(on_progress, {"stage": "QUEUED"})
         try:
             snapshot = load_source_snapshot(source)
         except Exception as exc:
             result = PipelineResult(job_id, "FAILED", error=f"Source ingestion failed: {exc}", original_filename=Path(source).name)
             self._transition(job_id, "FAILED", result.to_dict())
+            self._emit_progress(on_progress, {"stage": "FAILED"})
             return result
         source_text = snapshot.visible_text
         detected_skill = detect_skill(source_text)
         result_metadata = {"original_filename": snapshot.filename, "detected_skill": detected_skill}
+        self._emit_progress(on_progress, {"stage": "SOURCE_READY", "detected_skill": detected_skill})
         if not source_text:
             result = PipelineResult(job_id, "FAILED", error="The generation source is empty.", **result_metadata)
             self._transition(job_id, "FAILED", result.to_dict())
+            self._emit_progress(on_progress, {"stage": "FAILED"})
             return result
         if snapshot.unsupported_layouts:
             result = PipelineResult(
@@ -317,11 +379,13 @@ class ExamGenerationPipeline:
                 **result_metadata,
             )
             self._transition(job_id, "MANUAL_REVIEW", result.to_dict())
+            self._emit_progress(on_progress, {"stage": "MANUAL_REVIEW"})
             return result
         media_count = 0
         media_asset_paths: Dict[str, str] = {}
         media_manifest: Dict[str, Any] = {"assets": [], "occurrences": [], "diagnostics": []}
         if Path(source).suffix.lower() == ".docx":
+            self._emit_progress(on_progress, {"stage": "MEDIA_INSPECTION"})
             try:
                 extraction = extract_docx_media(source, snapshot.source_hash, InternalMediaStore(self.store.root / "media"))
                 media_manifest = extraction.to_dict()
@@ -334,6 +398,7 @@ class ExamGenerationPipeline:
                     issues=[ValidationIssue("FAIL", "MEDIA_INSPECTION", str(exc)).to_dict()],
                 )
                 self._transition(job_id, "MANUAL_REVIEW", result.to_dict())
+                self._emit_progress(on_progress, {"stage": "MANUAL_REVIEW"})
                 return result
             if media_manifest["diagnostics"]:
                 result = PipelineResult(
@@ -347,6 +412,7 @@ class ExamGenerationPipeline:
                     progress={"stage": "MEDIA_MANUAL_REVIEW", "media": media_manifest},
                 )
                 self._transition(job_id, "MANUAL_REVIEW", result.to_dict())
+                self._emit_progress(on_progress, {"stage": "MANUAL_REVIEW"})
                 return result
         source_prompt = snapshot.prompt_payload() + "\nMEDIA_MANIFEST=" + json.dumps(media_manifest, ensure_ascii=False)
         source_identity = json.dumps({
@@ -357,6 +423,7 @@ class ExamGenerationPipeline:
         cache_key = self._cache_key(source_identity, requirements)
         immutable_source_hash = source_hash(source_identity)
         self._transition(job_id, "GENERATING", {"cache_key": cache_key, "requirements": requirements, "progress": {"stage": "GENERATING"}})
+        self._emit_progress(on_progress, {"stage": "GENERATING"})
         cached = self.store.cache_get(cache_key) if use_cache else None
         if cached and cached.get("status") == "READY_FOR_REVIEW":
             try:
@@ -369,6 +436,7 @@ class ExamGenerationPipeline:
                     if media_issues:
                         raise CanonicalSchemaError("; ".join(media_issues))
                 self._transition(job_id, "VALIDATING", {"progress": {"stage": "CACHE_VERIFY"}})
+                self._emit_progress(on_progress, {"stage": "CACHE_VERIFY"})
                 output = self.store.job_path(job_id) / f"{_safe_filename(cached_exam.title)}.docx"
                 render_docx(cached_exam, output, media_asset_paths=media_asset_paths)
                 verify_embedded_media_roundtrip(output, media_asset_paths)
@@ -381,6 +449,7 @@ class ExamGenerationPipeline:
                     **self._exam_counts(cached_exam), **result_metadata,
                 )
                 self._transition(job_id, "READY_FOR_REVIEW", result.to_dict())
+                self._emit_progress(on_progress, {"stage": "READY_FOR_REVIEW", **self._exam_counts(cached_exam)})
                 return result
             except (CanonicalSchemaError, DocxRenderError, ParserContractError, ValueError):
                 # A cache entry is only an optimization. Re-run the generator if its
@@ -398,11 +467,12 @@ class ExamGenerationPipeline:
         question_stage_issues: List[ValidationIssue] = []
         repair_count = 0
         self._transition(job_id, "VALIDATING", {"progress": {"stage": "VALIDATING"}})
+        self._emit_progress(on_progress, {"stage": "VALIDATING"})
         for attempt in range(self.config.max_repairs + 1):
             if current is not None:
                 identifier_errors = assign_stable_identifiers(current, immutable_source_hash)
                 if attempt == 0:
-                    question_stage_issues = self._solve_questions(current, source_prompt)
+                    question_stage_issues = self._solve_questions(current, source_prompt, on_progress)
                     identifier_errors.extend(assign_stable_identifiers(current, immutable_source_hash))
                 issues = [ValidationIssue("FAIL", "IDENTIFIERS", error) for error in identifier_errors]
                 issues.extend(question_stage_issues)
@@ -413,9 +483,11 @@ class ExamGenerationPipeline:
                     media_asset_paths, media_issues = resolve_media_bindings(current, extraction, self.config.media_base_url)
                     issues.extend(ValidationIssue("FAIL", "MEDIA_BINDING", issue) for issue in media_issues)
                 if not has_blocking_issue(issues):
+                    self._emit_progress(on_progress, {"stage": "CRITIC_REVIEW", **self._exam_counts(current)})
                     issues.extend(critic_review(self.provider, current, source_text, self.config.critic_model or self.config.strong_model))
             if current is not None and not has_blocking_issue(issues):
                 try:
+                    self._emit_progress(on_progress, {"stage": "RENDERING", **self._exam_counts(current)})
                     output = self.store.job_path(job_id) / f"{_safe_filename(current.title)}.docx"
                     render_docx(current, output, media_asset_paths=media_asset_paths)
                     verify_embedded_media_roundtrip(output, media_asset_paths)
@@ -441,6 +513,7 @@ class ExamGenerationPipeline:
                     cache_payload.pop("output_path", None)
                     self.store.cache_put(cache_key, cache_payload)
                     self._transition(job_id, "READY_FOR_REVIEW", result.to_dict())
+                    self._emit_progress(on_progress, {"stage": "READY_FOR_REVIEW", **self._exam_counts(current)})
                     return result
                 except (DocxRenderError, ParserContractError) as exc:
                     issues.append(ValidationIssue("FAIL", "PARSER_CONTRACT", str(exc)))
@@ -450,9 +523,11 @@ class ExamGenerationPipeline:
                 break
             try:
                 self._transition(job_id, "REPAIRING", {"progress": {"stage": "REPAIRING", "attempt": attempt + 1, "scope": "question"}})
-                question_stage_issues = self._repair_questions(current, source_prompt, issues)
+                self._emit_progress(on_progress, {"stage": "REPAIRING", "repair_attempt": attempt + 1})
+                question_stage_issues = self._repair_questions(current, source_prompt, issues, on_progress)
                 repair_count += 1
                 self._transition(job_id, "VALIDATING", {"progress": {"stage": "VALIDATING", "attempt": attempt + 1}})
+                self._emit_progress(on_progress, {"stage": "VALIDATING", "repair_attempt": attempt + 1})
             except (ProviderError, CanonicalSchemaError) as exc:
                 issues.append(ValidationIssue("FAIL", "REPAIR", str(exc)))
                 break
@@ -471,6 +546,7 @@ class ExamGenerationPipeline:
             **result_metadata,
         )
         self._transition(job_id, "MANUAL_REVIEW", result.to_dict())
+        self._emit_progress(on_progress, {"stage": "MANUAL_REVIEW", **self._exam_counts(current)})
         return result
 
     def generate_batch(self, sources: Iterable[str], requirements: Optional[Dict[str, Any]] = None) -> List[PipelineResult]:

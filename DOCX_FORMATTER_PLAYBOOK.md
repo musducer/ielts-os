@@ -664,6 +664,18 @@ Do not silently change parser behaviour while leaving this handbook stale.
 
 ## 8. AI Provider Key Pool
 
+### Raw-DOCX batch access
+
+- `POST /api/exam-generation/batches`, its batch-status route, and generated-DOCX download route require a Firebase ID token from an email explicitly listed in server-side `EXAM_MANAGER_EMAILS` (or the legacy `TEACHER_EMAILS` fallback).
+- Firebase Admin must initialize from `FIREBASE_SERVICE_ACCOUNT_JSON` before the token is verified. A missing allow-list or Admin configuration is a server configuration failure, not a malformed DOCX.
+- The browser must surface FastAPI's `detail` value for a non-2xx response so a configuration failure is actionable instead of being shown as a generic AI error.
+- `POST /api/exam-generation/batches/{batch_id}/advance` claims exactly one ordered source row under a Firestore lease. The client may request at most two concurrent advances; duplicate/retry requests cannot process a third file or overwrite a live lease.
+- Source DOCX bytes, output DOCX, canonical/parser/issue payloads and extracted media are durable Firebase Storage artifacts. Firestore batch rows contain only ordered summaries, progress, diagnostics and private blob references; never put a full canonical exam or parser payload in the batch document.
+- The configured `FIREBASE_STORAGE_BUCKET` must already exist. A row marked `STORAGE_BUCKET_NOT_FOUND` is intentionally failed before generation; provision the bucket or correct its exact name, then submit a new batch. Never downgrade this to Vercel filesystem storage.
+- A worker may use a temporary local directory only while extracting, rendering and parser-verifying one leased source. It must upload output/media/JSON before setting the row to `READY_FOR_REVIEW`, `PUBLISHED`, `MANUAL_REVIEW`, or `FAILED`. No API response may reveal local paths.
+- Question progress is a heartbeat: `stage`, total/completed/failed questions and repair attempt update the lease while question workers run. A lease expiry means retry/resume, not a completed result.
+- For a raw DOCX containing a chart or image, configure `EXAM_GENERATION_MEDIA_BASE_URL` to the canonical HTTPS IELTS OS origin (or use a trusted configured production origin). If its managed media cannot be stored, bound, embedded and round-tripped exactly, the file remains fail-closed in manual review.
+
 Backend AI routes distribute requests across configured keys and fail over when one provider/key is rate-limited:
 
 - Groq text and Whisper: `GROQ_API_KEY`, `GROQ_API_KEY_2`, etc., or comma-separated `GROQ_API_KEYS`.
@@ -673,6 +685,9 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-09-09**: Documented Firebase Admin initialization and explicit manager allow-list requirements for protected AI raw-DOCX batch routes; configuration failures are surfaced as actionable API details.
+- **2026-09-10**: Raw-DOCX batches use Firestore leases and Firebase Storage artifacts instead of a Vercel filesystem. Each source is processed in ordered, independently resumable rows with two file-worker slots, question-stage heartbeat progress, authenticated DOCX download and durable managed-media delivery.
+- **2026-09-10**: Added an actionable `STORAGE_BUCKET_NOT_FOUND` diagnostic for unprovisioned/misnamed Firebase Storage buckets; invalid durable infrastructure fails one row without masking it as a DOCX parse error.
 - **2026-09-09**: Added the production AI raw-DOCX transformation contract. Source DOCX media is extracted from OOXML, hash-bound to one declared canonical question/writing-task location, re-embedded into the rendered IELTS OS DOCX, and must survive direct `api.index.parse_docx_to_quiz` round-trip verification. The pipeline fails closed for unbound, duplicated, altered, or inaccessible media; it never substitutes a chart or diagram URL.
 - **2026-09-09**: Pipeline output is canonical-first: run-level bold/italic, paragraph alignment, explicit answer/explanation grounding, bounded question repair, deterministic rendering, direct parser verification, and per-file failure isolation. Generated documents are obtained through authenticated job downloads, never by exposing filesystem paths.
 
