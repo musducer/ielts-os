@@ -32,13 +32,62 @@
 }
 
 #root {
+  width: 100%;
   max-width: 100%;
-  margin: 0 auto;
+  margin: 0;
   text-align: left;
+  border: none;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+}
+
+/* Boot & Sync Screen (Manuscript / Editorial Standard) */
+.booting-screen {
+  min-height: 100svh;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  background: #FAF8F5;
+  color: #1A1726;
+  padding: 24px;
+  font-family: var(--sans), system-ui, sans-serif;
+  box-sizing: border-box;
+}
+
+.booting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 320px;
+  width: 100%;
+}
+
+.booting-bar {
+  width: 100%;
+  max-width: 200px;
+  height: 2px;
+  background: rgba(26, 23, 38, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+  margin: 20px 0 14px;
+}
+
+.booting-bar-fill {
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: var(--accent, #5B3DF5);
+  border-radius: 999px;
+  animation: bootSlide 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes bootSlide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(230%); }
 }
 
 body {

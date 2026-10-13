@@ -1,5 +1,11 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-13)
 
+## Boot and Sync Screen Manuscript Standard — 2026-10-13
+
+- Standalone `.booting-screen`, `.booting-card`, `.booting-bar`, `.booting-bar-fill`, and `@keyframes bootSlide` added directly to `src/index.css` so pre-login (`authChecking`) and pre-sync (`!loaded`) screens never render unstyled or pinned to top-left before React memos evaluate.
+- Early returns in `src/App.template.tsx` now use `renderBootScreen('auth' | 'sync')` including `{globalStyles}`, `<BrandLogo size={38} />`, `<BrandWordmark size={20} />`, an editorial `"Academic Workspace"` label, a 2px hairline indeterminate progress bar (`bootSlide`), and localized step typography (`01 / 02 · VERIFYING SESSION` / `02 / 02 · SYNCING WORKSPACE`). Obsolete circular spinners and legacy emojis removed.
+- `#root` normalized in `src/index.css` to `width: 100%; max-width: 100%; margin: 0; text-align: left; border: none; min-height: 100svh; display: flex; flex-direction: column; box-sizing: border-box;`.
+
 ## Teacher Dashboard and Navbar Manuscript standard — 2026-10-13
 
 - `#root` styling in `src/index.css` no longer forces `text-align: center;` or fixed `width: 1126px; border-inline`, preventing global center-alignment bleed into teacher/admin dashboards and exam views.

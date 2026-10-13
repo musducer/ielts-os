@@ -9786,9 +9786,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .timer-num { font-family: var(--mono), 'SFMono-Regular', Consolas, monospace; font-weight: 700; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
           @keyframes pulseFast { 0%, 100% { opacity: 1; color: ${C.err}; } 50% { opacity: 0.7; color: #ff0000; } }
           .pulse-fast { animation: pulseFast 1s infinite; }
-          .booting-screen { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: ${C.bg}; color: ${C.text}; font-family: -apple-system, system-ui; font-size: 14px; letter-spacing: 2px; font-weight: 600; text-transform: uppercase; }
-          .booting-spinner { width: 32px; height: 32px; border: 3px solid rgba(0,0,0,0.1); border-top-color: ${C.text}; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 24px; }
-          @keyframes spin { to { transform: rotate(360deg); } }
+          .booting-screen { min-height: 100svh; width: 100%; display: grid; place-items: center; background: ${C.bg}; color: ${C.text}; font-family: var(--sans), system-ui, sans-serif; padding: 24px; box-sizing: border-box; }
           @keyframes fall { 0% { transform: translateY(-100vh) rotate(0deg); opacity: 1;} 100% { transform: translateY(100vh) rotate(360deg); opacity: 0;} }
           @keyframes confettiFall { 0% { transform: translateY(-10vh) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) rotate(540deg); opacity: 0.9; } }
           @keyframes celebPop { 0% { transform: scale(0.3); opacity: 0; } 45% { transform: scale(1.25); opacity: 1; } 70% { transform: scale(0.95); } 100% { transform: scale(1); opacity: 0; } }
@@ -10004,7 +10002,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   // ==========================================
   // VIEW RENDER
   // ==========================================
-  if (authChecking) return <div className="booting-screen"><div style={{ marginBottom: 24, filter: "drop-shadow(0 10px 24px rgba(109,40,217,0.35))" }}><BrandLogo size={58} /></div><div className="booting-spinner"></div><div style={{animation: 'pulse 2s infinite', fontWeight: 600}}>AUTHENTICATING...</div></div>;
+  const renderBootScreen = (step: 'auth' | 'sync') => (
+    <div className="booting-screen" style={{ background: C.bg, color: C.text }}>
+      {globalStyles}
+      <div className="booting-card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+          <BrandLogo size={38} />
+          <BrandWordmark size={20} color={C.text} />
+        </div>
+        <div style={{ fontFamily: 'var(--heading)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.sub, marginTop: 6 }}>
+          Academic Workspace
+        </div>
+        <div className="booting-bar">
+          <div className="booting-bar-fill" style={{ background: C.accent }} />
+        </div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', color: C.sub }}>
+          {step === 'auth'
+            ? (i18n.language === 'vi' ? '01 / 02 · ĐANG XÁC THỰC PHIÊN' : '01 / 02 · VERIFYING SESSION')
+            : (i18n.language === 'vi' ? '02 / 02 · ĐANG ĐỒNG BỘ DỮ LIỆU' : '02 / 02 · SYNCING WORKSPACE')}
+        </div>
+      </div>
+    </div>
+  );
+
+  if (authChecking) return renderBootScreen('auth');
 
   if (!currentUser) {
     // ==========================================
@@ -10177,7 +10198,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     );
   }
 
-  if (!loaded) return <div className="booting-screen"><div style={{ marginBottom: 24, filter: "drop-shadow(0 10px 24px rgba(109,40,217,0.35))" }}><BrandLogo size={58} /></div><div className="booting-spinner"></div><div style={{animation: 'pulse 2s infinite', fontWeight: 600}}>{t('syncing_cloud')}</div></div>;
+  if (!loaded) return renderBootScreen('sync');
 
   // #7: Lớp phủ hiệu ứng mừng (level-up / band cao) — dùng chung cho mọi màn hình
   const confettiColors = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#0A84FF', '#5856D6', '#FF2D55'];
