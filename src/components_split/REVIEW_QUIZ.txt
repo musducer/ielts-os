@@ -1,106 +1,17 @@
   if (reviewQuiz) {
       if (isWritingQuiz(reviewQuiz.quiz)) {
-          const writingTasks = normalizeWritingTasks(reviewQuiz.quiz);
-          const isTeacherWritingReview = userRole === "TEACHER";
-
-          const persistedGrading = reviewQuiz.result.writingGrading || {
-              status: "awaiting_grading" as const,
-              taskScores: {}, correctedAnswers: {}, comments: [],
-          };
-          const writingGrading: WritingGrading = {
-              ...persistedGrading,
-              status: persistedGrading.status || "awaiting_grading",
-              taskScores: persistedGrading.taskScores || {},
-              correctedAnswers: persistedGrading.correctedAnswers || {},
-              comments: Array.isArray(persistedGrading.comments) ? persistedGrading.comments : [],
-          };
-          const rubricKeys: Array<keyof WritingCriterionScore> = ["taskAchievement", "coherence", "lexical", "grammar"];
-          const scoreIsValid = (value: unknown) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 9;
-          const roundedBand = (value: number) => Math.floor((Math.max(0, value) + 0.0001) * 2) / 2;
-          const taskBand = (taskId: string) => {
-              const scores = writingGrading.taskScores[taskId] || {};
-              const values = rubricKeys.map(key => Number(scores[key]));
-              return values.every(scoreIsValid) ? roundedBand(values.reduce((sum, value) => sum + value, 0) / values.length) : undefined;
-          };
-          const taskBands = writingTasks.map(task => taskBand(task.id));
-          const calculatedFinalBand = taskBands.length === 2 && taskBands.every(scoreIsValid)
-              ? roundedBand((Number(taskBands[0]) + Number(taskBands[1]) * 2) / 3)
-              : undefined;
-          const updateWritingGrading = (patch: Partial<WritingGrading>) => {
-              setReviewQuiz(previous => previous ? {
-                  ...previous,
-                  result: { ...previous.result, writingGrading: { ...writingGrading, ...patch, updatedAt: getTrueTime() } },
-              } : previous);
-          };
-          const updateTaskScore = (taskId: string, criterion: keyof WritingCriterionScore, rawValue: string) => {
-              const value = rawValue === "" ? undefined : Math.max(0, Math.min(9, Number(rawValue)));
-              updateWritingGrading({ taskScores: {
-                  ...writingGrading.taskScores,
-                  [taskId]: { ...(writingGrading.taskScores[taskId] || {}), [criterion]: value },
-              } });
-          };
-          const saveWritingGrade = async (publish: boolean) => {
-              if (publish && writingTasks.some(task => !rubricKeys.every(key => scoreIsValid(writingGrading.taskScores[task.id]?.[key])))) {
-                  alert("Nhập đủ bốn tiêu chí cho cả Task 1 và Task 2 trước khi publish.");
-                  return;
-              }
-              const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
-              const nextGrading: WritingGrading = {
-                  ...writingGrading,
-                  status: publish ? "published" : "draft",
-                  finalBand,
-                  updatedAt: getTrueTime(),
-                  ...(publish ? { publishedAt: getTrueTime(), publishedBy: currentUser?.email || "" } : {}),
-              };
-              const nextResult: QuizResult = {
-                  ...reviewQuiz.result,
-                  band: publish && finalBand !== undefined ? finalBand : reviewQuiz.result.band,
-                  writingScores: publish ? Object.fromEntries(writingTasks.map((task, index) => [`task${index + 1}`, taskBand(task.id) ?? ""])) : reviewQuiz.result.writingScores,
-                  writingGrading: nextGrading,
-              };
-              setReviewQuiz(previous => previous ? { ...previous, result: nextResult } : previous);
-              const nextResults = quizResults.some(result => result.id === nextResult.id)
-                  ? quizResults.map(result => result.id === nextResult.id ? nextResult : result)
-                  : [...quizResults, nextResult];
-              setQuizResults(nextResults);
-              const saved = await syncData({ quizResults: nextResults });
-              if (!saved) alert("Bản chấm vẫn còn trên thiết bị này và sẽ tự đồng bộ lại khi có mạng.");
-          };
-          const studentCanSeeGrade = writingGrading.status === "published";
-          return <div className="writing-review" style={{ minHeight: "100vh", background: C.bg, color: C.text, textAlign: "left" }}>
-              {globalStyles}
-              <style>{`.writing-review :is(h1,h2,h3,p,label,input,textarea,blockquote) { text-align:left !important; } .writing-review .card { text-align:left; } .writing-review textarea { box-sizing:border-box; width:100%; } .writing-review .writing-task-source, .writing-review .writing-task-prompt { text-align:left; } .writing-review .writing-task-prompt :is(p,div,h1,h2,h3,h4,li) { text-align:left !important; } .writing-review .writing-response-columns { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } @media(max-width:700px) { .writing-review .writing-response-columns { grid-template-columns:1fr !important; } }`}</style>
-              <main style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 20px 56px" }}>
-                  <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", paddingBottom: 18, borderBottom: `2px solid ${C.accent}` }}>
-                      <div><div style={{ color: C.accent, fontSize: 11, fontWeight: 900, letterSpacing: 1, textTransform: "uppercase" }}>Writing review</div><h1 style={{ margin: "5px 0 0", fontFamily: "var(--display)", fontSize: 30 }}>{reviewQuiz.quiz.title}</h1><div style={{ color: C.sub, fontSize: 13, marginTop: 6 }}>{reviewQuiz.result.studentName} · {reviewQuiz.result.date}</div></div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span style={{ padding: "6px 9px", borderRadius: 999, background: writingGrading.status === "published" ? `${C.succ}12` : `${C.warn}12`, color: writingGrading.status === "published" ? C.succ : C.warn, fontSize: 11, fontWeight: 900 }}>{writingGrading.status === "published" ? "Published" : writingGrading.status === "draft" ? "Draft" : "Awaiting grading"}</span><button onClick={() => setReviewQuiz(null)} style={{ background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: "8px 11px", fontWeight: 800 }}><Ico name="arrowLeft" size={14} /> Back</button></div>
-                  </header>
-                  {!isTeacherWritingReview && !studentCanSeeGrade && <section className="card" style={{ marginTop: 20, borderTop: `3px solid ${C.warn}` }}><h2 style={{ margin: 0, fontSize: 19 }}>Bài đã nộp</h2><p style={{ color: C.sub, lineHeight: 1.6, marginBottom: 0 }}>Giáo viên đang chấm cả hai task. Band, bài sửa và nhận xét sẽ chỉ xuất hiện sau khi được publish.</p></section>}
-                  {(isTeacherWritingReview || studentCanSeeGrade) && <section className="card" style={{ marginTop: 20, padding: 18, borderLeft: `4px solid ${C.accent}` }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}><div><div style={{ fontSize: 11, color: C.sub, fontWeight: 900, letterSpacing: .7, textTransform: "uppercase" }}>Final band</div><div style={{ fontFamily: "var(--display)", fontSize: 38, color: C.accent, lineHeight: 1, marginTop: 4 }}>{calculatedFinalBand ?? writingGrading.finalBand ?? "—"}</div></div><div style={{ color: C.sub, fontSize: 12, maxWidth: 430 }}>Task 1 và Task 2 được chấm độc lập; kết quả cuối tính Task 1 một phần, Task 2 hai phần và làm tròn xuống theo nửa band.</div></div></section>}
-                  <div style={{ display: "grid", gap: 20, marginTop: 20 }}>
-                    {writingTasks.map(task => {
-                      const scores = writingGrading.taskScores[task.id] || {};
-                      const labels: Record<keyof WritingCriterionScore, string> = { taskAchievement: task.taskNumber === 1 ? "Task Achievement" : "Task Response", coherence: "Coherence & Cohesion", lexical: "Lexical Resource", grammar: "Grammar Range & Accuracy", overall: "Overall" };
-                      const comments = writingGrading.comments.filter(comment => comment.taskId === task.id);
-                      const original = String(reviewQuiz.result.answers?.[task.id] || "");
-                      return <section key={task.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
-                        <div style={{ padding: "17px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}><div><div style={{ fontSize: 11, color: C.accent, fontWeight: 900, letterSpacing: .8, textTransform: "uppercase" }}>Task {task.taskNumber}</div><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>{task.title}</h2></div><div style={{ color: taskBand(task.id) === undefined ? C.sub : C.succ, fontWeight: 900, fontSize: 15 }}>Band {taskBand(task.id) ?? "—"}</div></div>
-                        {(task.instructions || task.prompt || task.mediaUrl) && <div className="writing-task-source" style={{ padding: "18px 20px 20px", borderBottom: `1px solid ${C.border}` }}><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 8 }}>Task prompt</div>{task.instructions && <p style={{ margin: "0 0 12px", lineHeight: 1.55 }}>{task.instructions}</p>}{task.prompt && <StaticHtmlBlock className="writing-task-prompt" html={sanitizeRichHtml(task.prompt)} style={{ lineHeight: 1.65 }} />}{task.mediaUrl && <img src={task.mediaUrl} alt={`Writing Task ${task.taskNumber} chart or visual`} loading="lazy" style={{ display: "block", maxWidth: "100%", maxHeight: 460, width: "auto", height: "auto", objectFit: "contain", margin: "18px 0 0", border: `1px solid ${C.border}` }} />}</div>}
-                        <div className="writing-response-columns" style={{ padding: 20, display: "grid", gridTemplateColumns: isTeacherWritingReview ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 18 }}>
-                          <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Student response · {countWritingWords(original)} words</div><WritingFeedback key={`${reviewQuiz.result.id}-${task.id}`} text={original} taskId={task.id} editable={isTeacherWritingReview} comments={isTeacherWritingReview || studentCanSeeGrade ? comments : []} onChange={next => updateWritingGrading({ comments: [...writingGrading.comments.filter(item => item.taskId !== task.id), ...next] })} /></div>
-                          {isTeacherWritingReview && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><textarea value={writingGrading.correctedAnswers[task.id] || ""} onChange={event => updateWritingGrading({ correctedAnswers: { ...writingGrading.correctedAnswers, [task.id]: event.target.value } })} placeholder="Write a corrected version or model answer…" rows={9} style={{ resize: "vertical", fontSize: 13, lineHeight: 1.6 }} /></div>}
-                          {!isTeacherWritingReview && studentCanSeeGrade && writingGrading.correctedAnswers[task.id] && <div><div style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: "uppercase", letterSpacing: .65, marginBottom: 7 }}>Corrected version</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, padding: "13px 14px", background: `${C.succ}08`, border: `1px solid ${C.succ}35`, borderRadius: 10 }}>{writingGrading.correctedAnswers[task.id]}</div></div>}
-                        </div>
-                        {(isTeacherWritingReview || studentCanSeeGrade) && <div style={{ padding: "0 20px 20px" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 9 }}>{rubricKeys.map(criterion => <label key={criterion} style={{ display: "grid", gap: 5, padding: "10px 11px", background: C.bg, borderRadius: 9, border: `1px solid ${C.border}` }}><span style={{ fontSize: 10, color: C.sub, fontWeight: 900, letterSpacing: .45, textTransform: "uppercase" }}>{labels[criterion]}</span>{isTeacherWritingReview ? <input type="number" min="0" max="9" step="0.5" value={scores[criterion] ?? ""} onChange={event => updateTaskScore(task.id, criterion, event.target.value)} aria-label={`${labels[criterion]} score`} style={{ padding: "7px 8px", fontSize: 15, fontWeight: 800 }} /> : <strong style={{ fontSize: 17, color: C.accent }}>{scores[criterion] ?? "—"}</strong>}</label>)}</div>
-
-                        </div>}
-                      </section>;
-                    })}
-                  </div>
-                  {isTeacherWritingReview && <footer style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20, flexWrap: "wrap" }}><button onClick={() => void saveWritingGrade(false)} style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, padding: "10px 13px", fontWeight: 800 }}><Ico name="save" size={14} /> Save draft</button><button onClick={() => void saveWritingGrade(true)} disabled={calculatedFinalBand === undefined} style={{ background: C.accent, color: "#fff", padding: "10px 14px", fontWeight: 800, opacity: calculatedFinalBand === undefined ? .55 : 1 }}><Ico name="check" size={14} /> Publish to student</button></footer>}
-              </main>
-          </div>;
+          return <WritingFeedback
+              reviewQuiz={reviewQuiz}
+              userRole={userRole}
+              currentUser={currentUser}
+              setReviewQuiz={setReviewQuiz}
+              quizResults={quizResults}
+              setQuizResults={setQuizResults}
+              syncData={syncData}
+              findMe={findMe}
+              saveMyVocabNotebook={saveMyVocabNotebook}
+              globalStyles={globalStyles}
+          />;
       }
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
@@ -661,7 +572,7 @@
                   .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
                   .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
                   .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
-                  .rv-map-review-stage img { display:block; width:100%; height:auto; }
+                  .rv-map-review-stage img { display:block; width:100%; max-width:100%; height:auto; object-fit:contain; }
                   .rv-map-review-slot { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:92px; min-height:44px; padding:5px 8px; border:2px solid; background:#fff; font:700 12px/1.25 Inter,sans-serif; text-align:center; cursor:pointer; transition:box-shadow .15s, transform .15s; }
                   .rv-map-review-slot:hover, .rv-map-review-slot.is-selected { transform:translate(-50%,-50%) scale(1.04); box-shadow:0 0 0 4px rgba(79,70,229,.16); z-index:3; }
                   .rv-map-review-slot-number { position:absolute; top:-17px; left:0; padding:1px 4px; background:#fff; color:#475569; font-size:10px; font-weight:900; }
@@ -760,7 +671,7 @@
                   );
               })()}
               {renderMeetAudioNotice()}
-              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
+              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
                   {!rvActiveIsListening && (() => {
                       const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
                       const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
@@ -797,7 +708,7 @@
                                   })}
                               </div>
                           )}
-                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
+                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
                           {hasSlots ? (() => {
                               const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>|\[HEADING_SLOT\]/gi);
                               return (
@@ -874,10 +785,10 @@
                       );
 
                   })()}
-                  <div onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                  <div className="exam-column-splitter" onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        title="Drag to resize"
-                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'col-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'ew-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
                        <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                            <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
@@ -885,7 +796,7 @@
                        </div>
                   </div>
                   {isDraggingSplitter && (
-                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'col-resize', userSelect: 'none' }}
+                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'ew-resize', userSelect: 'none' }}
                            onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
                            onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
                            onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}

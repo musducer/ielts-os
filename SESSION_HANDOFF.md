@@ -1,5 +1,29 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-13)
 
+## Writing Grading (Teacher) & Writing Review (Student) Manuscript Editorial Desk — 2026-10-13
+
+- **Nâng cấp toàn diện không gian chấm/xem Writing (`WritingFeedback.tsx` & `REVIEW_QUIZ.txt`)**: Thay thế giao diện card xếp chồng máy móc bằng bàn làm việc 2 cột chuẩn Manuscript Editorial Desk (`C.bg`, thẻ trắng viền hairline 1px `C.border`, font Fraunces/Inter/Space Grotesk/Space Mono).
+- **Thanh điều hướng Task & Đề thi linh hoạt**: Hỗ trợ chuyển đổi nhanh Task 1 (tỷ trọng 1/3) và Task 2 (tỷ trọng 2/3), kèm ngăn kéo đề bài & biểu đồ (`Prompt & Visual Drawer`) có thể đóng/mở mượt mà không làm chật màn hình khi đọc bài.
+- **4 Chế độ đọc bài viết học viên**:
+  1. `Annotated Original`: Bản gốc kèm số thứ tự đoạn (`¶1`, `¶2` ở lề trái) và highlight màu theo 4 phân loại chuẩn (`error` đỏ san hô, `awkward` hổ phách, `upgrade` chàm indigo, `praise` xanh lục).
+  2. `Inline Track Changes (Diff)`: Hiển thị gạch ngang đỏ đoạn cũ và chèn trực tiếp đề xuất sửa mới màu xanh nổi bật trong dòng văn bản.
+  3. `Corrected Clean`: Bản sửa hoàn chỉnh toàn bài (hỗ trợ giáo viên soạn thảo/sửa đổi trực tiếp).
+  4. `Band 8+ Model`: Bài mẫu tham khảo Band 8.0+ bám sát đề thi.
+- **Thanh X-Ray Bar 28px & Radar lặp từ (`Repetition Radar`)**:
+  - Đếm số từ trực quan với badge xanh khi đạt chuẩn (`≥150w` Task 1 / `≥250w` Task 2) hoặc badge hổ phách cảnh báo thiếu từ (`Underlength -Nw`).
+  - Thống kê số đoạn (`¶`), số câu và mật độ từ trung bình mỗi câu (`w/s`).
+  - Radar lặp từ: tự động quét và gạch chân chấm các từ vựng nội dung (độ dài >= 5 ký tự) xuất hiện từ 3 lần trở lên kèm badge số lần lặp.
+- **Popover chú thích nổi khi Hover (120ms Hover Bridge)**: Khi rê chuột vào đoạn highlight, popover nổi hiển thị tiêu chí (`TA/TR`, `CC`, `LR`, `GRA`), loại lỗi, đề xuất thay thế (`anchorQuote → replacement`), gợi ý Band 8+ (`highBandRewrite`), giải thích của giáo viên, và nút **`+ Lưu vào Sổ từ vựng`** cho học sinh (đồng bộ trực tiếp vào `vocabNotebook` qua Firestore).
+- **Trình soạn chú thích 2 giai đoạn cho giáo viên (`2-Stage Selection Composer`)**:
+  - Giai đoạn 1 (Floating Pill): Hiện thanh 3 nút thao tác nhanh (`Lỗi sai`, `Chưa tự nhiên`, `Nâng cấp`) ngay phía trên vùng bôi chọn.
+  - Giai đoạn 2 (Composer Popover): Mở trình soạn thảo tinh gọn với chip gắn nhanh thẻ lỗi theo từng tiêu chí, ô nhập thay thế, toggle gợi ý Band 8+, và ô giải thích.
+- **Cột thanh tra biên tập 3 Tab (`Inspector`)**:
+  - Tab 1 `Rubric & Bottlenecks`: Hộp 3 trọng tâm cần cải thiện (Bottlenecks) đặt ở vị trí ưu tiên; dải chấm điểm dải băng trực quan 4 tiêu chí (`4 đến 9`) kèm mô tả chuẩn IELTS Public Band Descriptors.
+  - Tab 2 `Annotations`: Danh sách chú thích dạng sổ cái, lọc theo tiêu chí/loại lỗi, hỗ trợ click/hover để cuộn mượt và nhấp nháy highlight trên bài viết bên trái.
+  - Tab 3 `Corrected & Model Essay`: Quản lý nhận xét chung (`generalFeedback`), bản sửa hoàn chỉnh và bài mẫu.
+- **AI Co-Pilot chấm nháp 1-Click (`/api/ai_feedback`)**: Nâng cấp backend `/api/ai_feedback` trong `api/index.py` hỗ trợ chấm cấu trúc (chuẩn IELTS 9-band, tính band tự động, sinh 3 bottlenecks, 2-3 điểm mạnh, 6-10 chú thích gắn đúng offset vị trí trong bài, bản sửa hoàn chỉnh và bài mẫu Band 8.5).
+- **Xuất Dossier PDF chuẩn học thuật (`Export PDF Dossier`)**: Tạo báo cáo đa mục in ấn chuyên nghiệp (Header IELTS OS, bảng điểm tổng quan, ma trận 4 tiêu chí, kế hoạch hành động, bài viết học sinh với chỉ số chú thích số mũ `[1]`, `[2]`, bảng chi tiết sửa lỗi, bản sửa hoàn chỉnh và bài mẫu).
+
 ## Teacher Students Tab Manuscript Standard & Chart Upgrades — 2026-10-13
 
 - **Hệ thống giao diện học viên chuẩn Manuscript/Editorial**: Thay thế hoàn toàn giao diện dạng thẻ lồng (`.card`), nút bấm màu mè (rainbow buttons) và layout trung tâm bằng thiết kế sổ cái (ledger), bề mặt ấm (`C.card`, viền mỏng 1px hairline, góc bo 12px), và dải nhấn 3px (`borderLeft`).

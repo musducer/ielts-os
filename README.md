@@ -87,7 +87,12 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 ### Review và AI
 
 - Chấm điểm, band score, đáp án, bài làm học sinh và feedback giáo viên.
-- Review theo câu, nghe lại audio và nhảy tới timestamp liên quan.
+- **Bàn làm việc Chấm & Review Writing (Writing Manuscript Editorial Desk)**: Không gian làm việc 2 cột chuẩn biên tập học thuật với điều hướng Task 1 & Task 2, ngăn kéo xem đề/biểu đồ linh hoạt, 4 chế độ đọc (Bản gốc có chú thích, Inline Track Changes Diff, Bản sửa hoàn chỉnh, và Bài mẫu Band 8+).
+- **Hệ thống Chú thích & Tương tác thông minh**: Hover popover card có 120ms bridge hiển thị 4 tiêu chí (TA/TR, CC, LR, GRA), phân loại lỗi (Lỗi sai, Chưa tự nhiên, Nâng cấp Band 7.5-8.5), đề xuất thay thế, gợi ý Band 8+, nút 1-click lưu cụm từ vào Sổ từ vựng (`vocabNotebook`) cho học sinh; trình soạn chú thích 2 giai đoạn (`Selection Pill` & `Composer`) kèm gắn nhanh tag lỗi cho giáo viên.
+- **Thanh X-Ray & Radar lặp từ**: Theo dõi số từ (badge đạt/thiếu từ), số đoạn, số câu, mật độ từ trung bình, và radar tự động phát hiện các từ lặp lại từ 3 lần trở lên.
+- **AI Co-Pilot chấm nháp Writing**: Tích hợp `/api/ai_feedback` sinh bảng điểm 4 tiêu chí chuẩn IELTS 9-band, 3 trọng tâm khắc phục (bottlenecks), các điểm sáng, 6-10 chú thích chuẩn vị trí văn bản, bản sửa sạch và bài mẫu Band 8.5 cho giáo viên kiểm duyệt và áp dụng trong 1 click.
+- **Xuất Dossier PDF chuẩn học thuật**: Xuất file PDF/in ấn chuyên nghiệp gồm bảng điểm, ma trận tiêu chí, kế hoạch hành động, bài viết đánh số chú thích số mũ và bảng đối chiếu chi tiết sửa lỗi.
+- Review theo câu Reading/Listening, nghe lại audio và nhảy tới timestamp liên quan.
 - AI explain, AI feedback, transcription và trích xuất từ vựng.
 - Chuỗi provider AI có xoay key và fallback giữa Groq, Cerebras, Gemini; OpenAI có thể được ưu tiên cho vocabulary khi được cấu hình.
 - Phân loại từ vựng thành single word, phrasal verb, collocation, idiom và fixed expression.

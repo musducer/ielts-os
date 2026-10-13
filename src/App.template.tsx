@@ -1826,8 +1826,36 @@ const shouldDelayListeningExamTimer = (quiz: Pick<Quiz, 'type' | 'audioUrl' | 'a
   && !isPracticeQuiz(quiz)
   && String(quiz.type || "").toLowerCase().includes("listen");
 interface WritingCriterionScore { taskAchievement?: number; coherence?: number; lexical?: number; grammar?: number; overall?: number; }
-interface WritingComment { id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number; startOffset?: number; endOffset?: number; }
-interface WritingGrading { status: "awaiting_grading" | "draft" | "published"; taskScores: Record<string, WritingCriterionScore>; correctedAnswers: Record<string, string>; comments: WritingComment[]; finalBand?: number; updatedAt?: number; publishedAt?: number; publishedBy?: string; }
+interface WritingComment {
+  id: string; taskId: string; anchorQuote?: string; comment: string; createdAt: number;
+  startOffset?: number; endOffset?: number;
+  criterion?: 'TA_TR' | 'CC' | 'LR' | 'GRA';
+  category?: 'error' | 'awkward' | 'upgrade' | 'praise';
+  replacement?: string;
+  highBandRewrite?: string;
+  tags?: string[];
+}
+interface WritingGrading {
+  status: "awaiting_grading" | "draft" | "published";
+  taskScores: Record<string, WritingCriterionScore>;
+  correctedAnswers: Record<string, string>;
+  comments: WritingComment[];
+  finalBand?: number;
+  updatedAt?: number;
+  publishedAt?: number;
+  publishedBy?: string;
+  sampleAnswers?: Record<string, string>;
+  sampleEssay?: string;
+  taskBottlenecks?: Record<string, string[]>;
+  taskStrengths?: Record<string, string[]>;
+  criteriaNotes?: Record<string, Record<string, string>>;
+  generalFeedback?: string;
+  task1Band?: number;
+  task2Band?: number;
+  overallBand?: number;
+  bottlenecks?: string[];
+  strengths?: string[];
+}
 interface QuizResult { id: string; quizId: string; quizTitle: string; studentId: string; studentName: string; date: string; score: number; total: number; band: number | string; cheatCount: number; submittedAt?: number; submissionId?: string; startTime?: string; endTime?: string; durationSeconds?: number; deviceInfo?: string; ipAddress?: string; teacherFeedback?: string; writingScores?: Record<string, string | number>; writingGrading?: WritingGrading; answers: Record<string, any>; scratchpad?: string; flaggedQuestions?: string[]; isRead?: boolean; topicAssignmentId?: string; topicNodeId?: string; questPassed?: boolean; questQuestionIds?: string[]; hiddenFromStudent?: boolean; realExamPackageId?: string; realExamPackageTitle?: string; realExamAttemptId?: string; realExamOrderIndex?: number; testTakerId?: string; }
 interface QuestStatusNotice { kind: "passed" | "failed" | "changed"; score?: number; total?: number; percentage?: number; threshold?: number; rewards?: string[]; pendingSync?: boolean; }
 

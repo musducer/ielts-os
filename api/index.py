@@ -1,4 +1,4 @@
-﻿import re
+import re
 import io
 import os
 import time
@@ -12,8 +12,15 @@ import html
 import zipfile
 import threading
 import json
+import socket
+import hashlib
 import tempfile
 import uuid
+import datetime as datetime_module
+import shutil
+import subprocess
+import http.client
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,16 +58,70 @@ ALLOWED_ORIGINS = tuple(
     if origin.strip()
 )
 ENABLE_API_DOCS = os.environ.get("API_DOCS_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read an optional operational limit without letting a bad env var break boot."""
+    try:
+        value = int(str(os.environ.get(name, default) or default).strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
 MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
 MAX_DOCX_ZIP_MEMBERS = 2500
 MAX_DOCX_BATCH_FILES = 20
+MAX_AUDIO_UPLOAD_BYTES = _bounded_env_int("MAX_AUDIO_UPLOAD_BYTES", 512 * 1024 * 1024, 1, 1024 * 1024 * 1024)
+# Groq's Whisper endpoint rejects a multipart audio body at roughly 25 MiB. Keep
+# a margin for multipart framing and never ask it to accept an edge-sized file.
+MAX_WHISPER_TRANSCRIPTION_BYTES = _bounded_env_int("MAX_WHISPER_TRANSCRIPTION_BYTES", 23 * 1024 * 1024, 1, 24 * 1024 * 1024)
+MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES = max(
+    MAX_WHISPER_TRANSCRIPTION_BYTES,
+    _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES", 384 * 1024 * 1024, 1, MAX_AUDIO_UPLOAD_BYTES),
+)
+# A Vercel Python function is capped at 300 seconds. Five 9-minute chunks with
+# two workers leave time for one Storage read and retries; a 3-hour recording
+# would not. Larger source files must be split explicitly instead of timing out.
+MAX_AUDIO_TRANSCRIPTION_CHUNKS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_CHUNKS", 5, 1, 5)
+WHISPER_CHUNK_SECONDS = _bounded_env_int("WHISPER_CHUNK_SECONDS", 540, 30, 600)
+MAX_AUDIO_TRANSCRIPTION_SECONDS = _bounded_env_int(
+    "MAX_AUDIO_TRANSCRIPTION_SECONDS",
+    45 * 60,
+    60,
+    min(50 * 60, MAX_AUDIO_TRANSCRIPTION_CHUNKS * WHISPER_CHUNK_SECONDS),
+)
+MAX_AUDIO_TRANSCRIPTION_WORKERS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_WORKERS", 2, 1, 2)
+EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS = _bounded_env_int("EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS", 45, 5, 90)
+AUDIO_UPLOAD_TTL_SECONDS = _bounded_env_int("AUDIO_UPLOAD_TTL_SECONDS", 1800, 300, 3600)
+_AUDIO_UPLOAD_CONTENT_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".webm": "audio/webm",
+    ".flac": "audio/flac",
+}
+_AUDIO_CONTENT_TYPE_ALIASES = {
+    "audio/mp3": "audio/mpeg",
+    "audio/x-m4a": "audio/mp4",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/x-aac": "audio/aac",
+    "audio/x-flac": "audio/flac",
+    "video/webm": "audio/webm",
+}
 _AI_KEY_LOCK = threading.Lock()
 _AI_KEY_CURSOR: Dict[str, int] = {}
 _FIREBASE_ADMIN_LOCK = threading.Lock()
 _FIREBASE_ADMIN_APP = None
 _FIREBASE_ADMIN_DB = None
 _FIREBASE_GENERATION_STORE = None
+_AUDIO_CORS_LOCK = threading.Lock()
+_AUDIO_CORS_READY = False
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -544,17 +605,42 @@ def is_option(text: str) -> bool:
             return True
     return False
 
+def _run_managed_media_html(run: Any) -> str:
+    """Render only media carrying renderer-owned, validated public metadata."""
+    from exam_generator.media import decode_media_metadata
+
+    output = []
+    for element in run._r.iter():
+        if not element.tag.endswith("}docPr"):
+            continue
+        metadata = decode_media_metadata(element.get("descr") or "")
+        if not metadata or not metadata.get("url"):
+            continue
+        url = html.escape(metadata["url"], quote=True)
+        asset_id = html.escape(metadata["asset_id"], quote=True)
+        occurrence_id = html.escape(metadata["occurrence_id"], quote=True)
+        association = html.escape(metadata["association"], quote=True)
+        alt_text = html.escape(metadata.get("alt_text") or metadata.get("title") or "Exam visual", quote=True)
+        output.append(
+            f'<img src="{url}" alt="{alt_text}" data-media-asset-id="{asset_id}" '
+            f'data-media-occurrence-id="{occurrence_id}" data-media-association="{association}" />'
+        )
+    return "".join(output)
+
+
 def paragraph_to_html(para: Paragraph) -> str:
-    if not para.text: return ""
     html_parts = []
     for run in para.runs:
         text = html.escape(run.text or "", quote=False)
-        if not text: continue
-        text = text.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;').replace('  ', '&nbsp;&nbsp;').replace('\n', '<br/>')
-        if run.bold: text = f"<strong>{text}</strong>"
-        if run.italic: text = f"<em>{text}</em>"
-        if run.underline: text = f"<u>{text}</u>"
-        html_parts.append(text)
+        if text:
+            text = text.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;').replace('  ', '&nbsp;&nbsp;').replace('\n', '<br/>')
+            if run.bold: text = f"<strong>{text}</strong>"
+            if run.italic: text = f"<em>{text}</em>"
+            if run.underline: text = f"<u>{text}</u>"
+            html_parts.append(text)
+        media_html = _run_managed_media_html(run)
+        if media_html:
+            html_parts.append(media_html)
     p_html = "".join(html_parts)
     if not p_html.replace('&nbsp;', '').strip() and '<br/>' not in p_html:
         return ""
@@ -585,18 +671,37 @@ def paragraph_to_html(para: Paragraph) -> str:
 def table_to_html(table: Table) -> str:
     rows = table.rows
     if not rows: return ""
-    n_rows, n_cols = len(rows), len(rows[0].cells)
+    positions = {}
+    for r_idx, row in enumerate(rows):
+        for c_idx, cell in enumerate(row.cells):
+            positions.setdefault(cell._tc, []).append((r_idx, c_idx))
+    seen = set()
     html = '<table style="border-collapse:collapse; margin-bottom:15px; table-layout:auto;"><tbody>'
-    for r_idx in range(n_rows):
+    for r_idx, row in enumerate(rows):
         html += "<tr>"
-        for c_idx in range(n_cols):
-            raw_text = " ".join([p.text.strip() for p in table.cell(r_idx, c_idx).paragraphs if p.text.strip()])
-            cell_text = "".join([f"<div>{paragraph_to_html(p)}</div>" for p in table.cell(r_idx, c_idx).paragraphs if p.text.strip()])
+        for cell in row.cells:
+            if cell._tc in seen:
+                continue
+            seen.add(cell._tc)
+            coords = positions[cell._tc]
+            rowspan = len({r for r, _ in coords})
+            colspan = len({c for _, c in coords})
+            raw_text = " ".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
+            content = []
+            for element in cell._tc:
+                if element.tag.endswith('}p'):
+                    paragraph = Paragraph(element, cell)
+                    paragraph_html = paragraph_to_html(paragraph)
+                    if paragraph_html:
+                        content.append(f'<div>{paragraph_html}</div>')
+                elif element.tag.endswith('}tbl'):
+                    content.append(table_to_html(Table(element, cell)))
+            cell_text = "".join(content)
             is_short = len(raw_text) <= 20
             nowrap = "white-space:nowrap;" if is_short else ""
             is_header = r_idx == 0
-            bg = "background:#f5f5f5; font-weight:bold;" if is_header else ""
-            html += f'<td style="border:1px solid #ccc; padding:6px 10px; {nowrap}{bg} vertical-align:top;">{cell_text}</td>'
+            bg = "background:#f5f5f5;" if is_header else ""
+            html += f'<td rowspan="{rowspan}" colspan="{colspan}" style="border:1px solid #ccc; padding:6px 10px; {nowrap}{bg} vertical-align:top;">{cell_text}</td>'
         html += "</tr>"
     html += "</tbody></table>"
     return html
@@ -1290,6 +1395,10 @@ def parse_writing_docx_to_quiz(doc):
             paragraph = Paragraph(element, doc)
             text = paragraph.text.strip()
             if not text:
+                if in_prompt and current_task is not None:
+                    media_html = paragraph_to_html(paragraph)
+                    if media_html:
+                        current_task["prompt"] += media_html
                 continue
 
             title_match = re.match(r"^\s*\[TITLE\]\s*(.*)$", text, re.IGNORECASE)
@@ -1425,7 +1534,15 @@ def parse_docx_to_quiz(doc):
         if element.tag.endswith('p'):
             para = Paragraph(element, doc)
             text = para.text.strip()
-            if not text: continue
+            if not text:
+                media_html = paragraph_to_html(para)
+                if not media_html:
+                    continue
+                if state == "PASSAGE":
+                    current_passage += f"<div style='margin-bottom:12px;'>{media_html}</div>"
+                elif state == "QUESTIONS" and block_type:
+                    current_block_lines.append(para)
+                continue
             text_upper = text.upper()
             
             if "[TITLE]" in text_upper: title = re.sub(r'\[TITLE\]', '', text, flags=re.IGNORECASE).strip(); continue
@@ -1515,18 +1632,18 @@ def parse_docx_to_quiz(doc):
         "scheduledEnd": ""
     }
 
-async def read_validated_docx_upload(file: UploadFile, include_raw: bool = False):
-    filename = str(file.filename or "").lower()
-    content_type = str(file.content_type or "").lower()
+def _validated_docx_bytes(raw: bytes, filename: str, content_type: str = ""):
+    filename = str(filename or "").lower()
+    content_type = str(content_type or "").lower()
     if not filename.endswith(".docx") or (content_type and content_type not in {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/octet-stream",
     }):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Only .docx files are accepted.")
-
-    raw = await file.read(MAX_DOCX_UPLOAD_BYTES + 1)
     if len(raw) > MAX_DOCX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="DOCX is larger than 20 MB.")
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded DOCX is empty.")
     if not zipfile.is_zipfile(io.BytesIO(raw)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is not a valid DOCX archive.")
 
@@ -1540,7 +1657,12 @@ async def read_validated_docx_upload(file: UploadFile, include_raw: bool = False
         if "[Content_Types].xml" not in archive.namelist() or "word/document.xml" not in archive.namelist():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded archive is not a Word document.")
 
-    document = docx.Document(io.BytesIO(raw))
+    return docx.Document(io.BytesIO(raw))
+
+
+async def read_validated_docx_upload(file: UploadFile, include_raw: bool = False):
+    raw = await file.read(MAX_DOCX_UPLOAD_BYTES + 1)
+    document = _validated_docx_bytes(raw, str(file.filename or ""), str(file.content_type or ""))
     return (document, raw) if include_raw else document
 
 @app.post("/api/upload_docx")
@@ -1681,14 +1803,18 @@ def _safe_pipeline_message(value: Any, fallback: str) -> str:
 
 
 def _public_pipeline_diagnostics(issues: Any) -> List[Dict[str, Any]]:
-    diagnostics: List[Dict[str, Any]] = []
-    for issue in issues if isinstance(issues, list) else []:
-        if not isinstance(issue, dict):
-            continue
-        item = {key: issue.get(key) for key in ("severity", "code", "question_number") if issue.get(key) is not None}
-        if item:
-            diagnostics.append(item)
-    return diagnostics[:80]
+    from api.exam_generation_durable import _public_diagnostics
+    diagnostics = _public_diagnostics(issues)
+    for item in diagnostics:
+        for key in ('message', 'details', 'remaining_reason'):
+            if key in item:
+                item[key] = _safe_pipeline_message(item[key], '')
+    return diagnostics
+
+
+def _public_exam_batch(store: Any, batch: Dict[str, Any]) -> Dict[str, Any]:
+    from exam_generator.pipeline import PIPELINE_VERSION
+    return store.public_batch(batch, current_pipeline_version=PIPELINE_VERSION)
 
 
 def _durable_upload_failure(exc: Exception) -> Tuple[str, str]:
@@ -1699,6 +1825,79 @@ def _durable_upload_failure(exc: Exception) -> Tuple[str, str]:
     if "permission" in detail or "forbidden" in detail or "403" in detail:
         return "The Firebase service account cannot write to the configured Storage bucket.", "STORAGE_PERMISSION"
     return "The source file could not be stored durably.", "DURABLE_UPLOAD"
+
+
+def _trusted_direct_upload_origin(request: Request) -> str:
+    """Return the exact browser origin used to bind a resumable Storage session."""
+    raw_origin = str(request.headers.get("origin") or "").strip().rstrip("/")
+    parsed = urllib.parse.urlparse(raw_origin)
+    if (
+        not raw_origin
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A trusted browser origin is required for direct upload.")
+    localhost = re.fullmatch(r"http://(?:localhost|127\.0\.0\.1)(?::\d+)?", raw_origin) is not None
+    if raw_origin not in ALLOWED_ORIGINS and not localhost:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This browser origin cannot upload raw DOCX files.")
+    return raw_origin
+
+
+def _direct_docx_metadata(value: Any, index: int) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"File {index + 1} metadata is invalid.")
+    raw_name = str(value.get("name") or "").replace("\\", "/").split("/")[-1].strip()
+    if not raw_name or len(raw_name) > 260 or not raw_name.lower().endswith(".docx") or any(ord(char) < 32 for char in raw_name):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"File {index + 1} must have a valid .docx filename.")
+    raw_size = value.get("size")
+    if isinstance(raw_size, bool):
+        raw_size = 0
+    try:
+        size_bytes = int(raw_size)
+    except (TypeError, ValueError):
+        size_bytes = 0
+    if size_bytes <= 0 or size_bytes > MAX_DOCX_UPLOAD_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"{raw_name} must be between 1 byte and 20 MB.")
+    supplied_type = str(value.get("content_type") or "").strip().lower()
+    allowed_types = {
+        "",
+        "application/octet-stream",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    if supplied_type not in allowed_types:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"{raw_name} is not a DOCX upload.")
+    return {
+        "name": raw_name,
+        "size": size_bytes,
+        "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+
+
+def _direct_upload_fingerprint(files: List[Dict[str, Any]], delivery_mode: str, publication_policy: str) -> str:
+    canonical = {
+        "files": files,
+        "delivery_mode": delivery_mode,
+        "publication_policy": publication_policy,
+    }
+    encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _direct_upload_failure(exc: Exception) -> Tuple[str, str]:
+    detail = str(exc or "").casefold()
+    name = exc.__class__.__name__.casefold()
+    if "notfound" in name or "not found" in detail or "404" in detail:
+        return "The browser upload did not reach durable Storage.", "DIRECT_UPLOAD_MISSING"
+    if "size" in detail:
+        return "The stored file size does not match the selected DOCX.", "DIRECT_UPLOAD_SIZE"
+    if "metadata" in detail or "reserved" in detail or "outside" in detail:
+        return "The stored file does not match its reserved upload slot.", "DIRECT_UPLOAD_BINDING"
+    message, code = _durable_upload_failure(exc)
+    return message, "DIRECT_UPLOAD_STORAGE" if code == "DURABLE_UPLOAD" else code
 
 
 def _is_firestore_transaction_contention(exc: Exception) -> bool:
@@ -1715,6 +1914,9 @@ def _pipeline_row_patch(result: Any, original_filename: str, *, output_blob: str
         "job_id": str(payload.get("job_id") or ""),
         "docx_job_id": str(payload.get("job_id") or "") if output_blob else "",
         "detected_skill": str(payload.get("detected_skill") or "Unknown"),
+        "pipeline_version": str(payload.get("pipeline_version") or ""),
+        "source_coverage": dict(payload.get("source_coverage") or {}),
+        "structure_state": str(payload.get("structure_state") or "NOT_RUN"),
         "question_count": int(payload.get("question_count") or 0),
         "solved_count": int(payload.get("solved_count") or 0),
         "explanation_count": int(payload.get("explanation_count") or 0),
@@ -1757,6 +1959,11 @@ def _publish_pipeline_quiz(result: Any, batch_id: str, delivery_mode: str, publi
         result.status = "PUBLISHED"
 
 
+def _durable_lease_heartbeat_interval(lease_ms: int) -> float:
+    """Renew a durable worker lease often enough to survive a blocked provider call."""
+    return max(5.0, min(30.0, max(1.0, float(lease_ms) / 3_000.0)))
+
+
 def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str, claim: Optional[Dict[str, Any]] = None) -> bool:
     """Claim and transform one file using /tmp only as disposable worker scratch space."""
     from exam_generator.pipeline import ExamGenerationPipeline, PipelineConfig
@@ -1779,20 +1986,96 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
         return True
 
     last_heartbeat = 0.0
+    progress_lock = threading.Lock()
+    lease_update_lock = threading.Lock()
+    heartbeat_stop = threading.Event()
+    lease_lost = threading.Event()
+    latest_progress: Dict[str, Any] = {"stage": "PROCESSING"}
+    heartbeat_interval_s = _durable_lease_heartbeat_interval(lease_ms)
+
+    def progress_snapshot() -> Dict[str, Any]:
+        with progress_lock:
+            return dict(latest_progress)
+
+    def renew_lease(progress: Optional[Dict[str, Any]] = None) -> Optional[bool]:
+        """Return True when renewed, False when ownership was lost, None on a transient store error."""
+        if lease_lost.is_set():
+            return False
+        try:
+            with lease_update_lock:
+                if lease_lost.is_set():
+                    return False
+                renewed = bool(store.update_progress(
+                    claim["batch_id"], row_id, worker_id,
+                    dict(progress or progress_snapshot()), lease_ms=lease_ms,
+                ))
+        except Exception:
+            # A brief Firestore outage must not incorrectly mark a healthy worker
+            # stale. A strict renewal is required before any durable side effect.
+            return None
+        if not renewed:
+            lease_lost.set()
+        return renewed
+
+    def ensure_current_lease() -> bool:
+        return renew_lease(progress_snapshot()) is True
+
+    def heartbeat() -> None:
+        while not heartbeat_stop.wait(heartbeat_interval_s):
+            if renew_lease(progress_snapshot()) is False:
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat,
+        name=f"exam-generation-lease-{job_id[:12]}",
+        daemon=True,
+    )
+
+    def stop_heartbeat() -> bool:
+        heartbeat_stop.set()
+        if heartbeat_thread.is_alive() and heartbeat_thread is not threading.current_thread():
+            heartbeat_thread.join(timeout=5.0)
+        return not heartbeat_thread.is_alive()
+
+    def complete_current(patch: Dict[str, Any]) -> bool:
+        # Fence terminal writes behind one final successful renewal, then stop the
+        # concurrent heartbeat so it cannot race the lease-clearing transaction.
+        if not ensure_current_lease() or not stop_heartbeat() or lease_lost.is_set():
+            return False
+        return bool(store.complete_file(claim["batch_id"], row_id, worker_id, patch))
 
     def report(progress: Dict[str, Any]) -> None:
         nonlocal last_heartbeat
+        update = dict(progress or {})
+        with progress_lock:
+            latest_progress.update(update)
+            snapshot = dict(latest_progress)
         now = time.monotonic()
-        completed = int(progress.get("question_completed") or 0)
-        total = int(progress.get("question_total") or 0)
-        stage = str(progress.get("stage") or "PROCESSING")
+        completed = int(update.get("question_completed") or 0)
+        total = int(update.get("question_total") or 0)
+        stage = str(update.get("stage") or "PROCESSING")
         if now - last_heartbeat >= 0.7 or (total and completed >= total) or stage in {"READY_FOR_REVIEW", "MANUAL_REVIEW", "FAILED"}:
-            store.update_progress(claim["batch_id"], row_id, worker_id, progress, lease_ms=lease_ms)
-            last_heartbeat = now
+            if renew_lease(snapshot) is True:
+                last_heartbeat = now
 
+    heartbeat_thread.start()
     try:
         report({"stage": "SOURCE_DOWNLOAD"})
-        raw_source = store.download_source(source_blob)
+        if not ensure_current_lease():
+            return False
+        source_generation = str(row.get("source_generation") or "")
+        raw_source = (
+            store.download_source(source_blob, source_generation)
+            if source_generation
+            else store.download_source(source_blob)
+        )
+        checkpoint = store.load_json(row['checkpoint_blob']) if row.get('checkpoint_blob') else None
+        def persist_checkpoint(payload):
+            if not ensure_current_lease():
+                raise RuntimeError('Worker ownership was lost while checkpointing.')
+            blob = store.upload_json(claim['batch_id'], job_id, 'checkpoint-' + uuid.uuid4().hex, payload)
+            if not store.set_checkpoint(claim['batch_id'], row_id, worker_id, blob):
+                raise RuntimeError('Checkpoint ownership changed; another worker will resume.')
         safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "-", original_filename.replace("\\", "/").split("/")[-1]).strip("-.") or "source.docx"
         with tempfile.TemporaryDirectory(prefix="ielts-os-generation-") as work_root:
             work_path = Path(work_root)
@@ -1801,7 +2084,7 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
             config = PipelineConfig(
                 state_dir=work_path / "state",
                 max_workers=1,
-                question_workers=max(1, min(4, int(os.environ.get("EXAM_GENERATION_QUESTION_WORKERS", "4")))),
+                question_workers=max(1, min(4, int(os.environ.get("EXAM_GENERATION_QUESTION_WORKERS", "2")))),
                 media_base_url=str(claim.get("media_base_url") or ""),
             )
             pipeline = ExamGenerationPipeline(config=config)
@@ -1815,18 +2098,33 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
                 job_id=job_id,
                 use_cache=False,
                 on_progress=report,
+                checkpoint=checkpoint,
+                on_checkpoint=persist_checkpoint,
+                work_budget_seconds=240,
             )
+            if not ensure_current_lease():
+                return False
+            if result.status == 'QUEUED':
+                if not stop_heartbeat():
+                    return False
+                return bool(store.defer_file(claim['batch_id'], row_id, worker_id, result.progress))
             output_blob = ""
             if result.output_path:
                 output_path = Path(result.output_path)
                 if output_path.suffix.lower() != ".docx" or not output_path.is_file():
                     raise ValueError("The pipeline returned an invalid DOCX output.")
                 output_blob = store.upload_output(claim["batch_id"], job_id, f"{job_id}-IELTS-OS.docx", output_path.read_bytes())
+                if not ensure_current_lease():
+                    return False
             if result.status == "READY_FOR_REVIEW":
                 try:
                     report({"stage": "PERSISTING_MEDIA"})
+                    if not ensure_current_lease():
+                        return False
                     store.persist_media(claim["batch_id"], str(pipeline.store.root / "media"))
                     report({"stage": "CATALOG_IMPORT"})
+                    if not ensure_current_lease():
+                        return False
                     _publish_pipeline_quiz(
                         result,
                         claim["batch_id"],
@@ -1846,9 +2144,13 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
             payload["batch_id"] = claim["batch_id"]
             payload["source_blob"] = source_blob
             payload.pop("output_path", None)
+            if not ensure_current_lease():
+                return False
             result_blob = store.upload_json(claim["batch_id"], job_id, "result", payload)
             parser_blob = store.upload_json(claim["batch_id"], job_id, "parser", result.parser_quiz) if isinstance(result.parser_quiz, dict) else ""
             issues_blob = store.upload_json(claim["batch_id"], job_id, "issues", {"issues": result.issues})
+            if not ensure_current_lease():
+                return False
             store.put_job(job_id, {
                 "batch_id": claim["batch_id"], "original_filename": original_filename,
                 "status": result.status, "output_blob": output_blob, "result_blob": result_blob,
@@ -1858,8 +2160,12 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
                 result, original_filename, output_blob=output_blob, result_blob=result_blob,
                 parser_blob=parser_blob, issues_blob=issues_blob,
             )
-            return store.complete_file(claim["batch_id"], row_id, worker_id, patch)
+            return complete_current(patch)
     except Exception as exc:
+        # The old worker must never terminally overwrite a row after its lease was
+        # claimed elsewhere. Let the current/future owner resume it instead.
+        if heartbeat_stop.is_set() or lease_lost.is_set() or not ensure_current_lease():
+            return False
         print(f"Durable AI DOCX worker failed for {original_filename}: {exc}")
         traceback.print_exc()
         diagnostic_blob = ""
@@ -1868,12 +2174,246 @@ def _run_durable_exam_generation_file(store: Any, batch_id: str, worker_id: str,
             store.put_job(job_id, {"batch_id": claim["batch_id"], "status": "FAILED", "issues_blob": diagnostic_blob})
         except Exception:
             pass
-        return store.complete_file(claim["batch_id"], row_id, worker_id, {
+        return complete_current({
             "status": "FAILED", "validation_state": "FAIL", "round_trip_state": "NOT_RUN",
             "error": "The isolated file worker stopped before producing a verified document.",
             "diagnostics": [{"severity": "FAIL", "code": "WORKER_FAILURE"}],
             "issues_blob": diagnostic_blob, "progress": {"stage": "FAILED"},
         })
+    finally:
+        stop_heartbeat()
+
+
+@app.post("/api/exam-generation/batches/direct")
+async def create_direct_exam_generation_batch(request: Request, payload: Dict[str, Any] = Body(...)):
+    """Reserve rows and return origin/size/path-bound Storage upload sessions."""
+    actor = _require_exam_manager(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Direct-upload metadata is required.")
+    delivery_mode = str(payload.get("delivery_mode") or "exam").strip().lower()
+    publication_policy = str(payload.get("publication_policy") or "draft").strip().lower()
+    if delivery_mode not in {"exam", "practice"} or publication_policy not in {"draft", "publish_when_ready"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid delivery mode or publication policy.")
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files or len(raw_files) > MAX_DOCX_BATCH_FILES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="A batch accepts 1-20 DOCX files.")
+    files = [_direct_docx_metadata(value, index) for index, value in enumerate(raw_files)]
+    try:
+        batch_id = _safe_idempotency_key(payload.get("idempotency_key"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    origin = _trusted_direct_upload_origin(request)
+    fingerprint = _direct_upload_fingerprint(files, delivery_mode, publication_policy)
+    try:
+        store = _firebase_exam_generation_store()
+        existing = await asyncio.to_thread(store.load_batch, batch_id)
+    except Exception as exc:
+        print(f"Could not initialize direct raw DOCX upload: {exc}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Durable upload storage is temporarily unavailable.") from exc
+    idempotent_replay = bool(existing)
+    if existing:
+        if (
+            str(existing.get("upload_kind") or "") != "DIRECT"
+            or str(existing.get("upload_fingerprint") or "") != fingerprint
+            or str(existing.get("actor") or "").casefold() != str(actor.get("email") or "").casefold()
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used for a different upload.")
+        batch = existing
+    else:
+        now = int(time.time() * 1000)
+        rows: List[Dict[str, Any]] = []
+        for index, metadata in enumerate(files):
+            row_id = f"row_{index + 1}_{uuid.uuid4().hex[:16]}"
+            source_blob = store.source_blob_name(batch_id, index, row_id, metadata["name"])
+            rows.append({
+                "index": index,
+                "row_id": row_id,
+                "job_id": uuid.uuid4().hex,
+                "original_filename": metadata["name"],
+                "source_blob": source_blob,
+                "source_size": metadata["size"],
+                "source_content_type": metadata["content_type"],
+                "upload_kind": "DIRECT",
+                "status": "STAGING",
+                "progress": {"stage": "DIRECT_UPLOAD", "updatedAt": now},
+                "attempt_count": 0,
+                "updatedAt": now,
+            })
+        batch = {
+            "batch_id": batch_id,
+            "status": "STAGING",
+            "upload_kind": "DIRECT",
+            "upload_fingerprint": fingerprint,
+            "delivery_mode": delivery_mode,
+            "publication_policy": publication_policy,
+            "actor": actor.get("email", ""),
+            "actor_uid": actor.get("uid", ""),
+            "media_base_url": _trusted_exam_generation_media_base_url(request),
+            "createdAt": now,
+            "updatedAt": now,
+            "totalCount": len(rows),
+            "completedCount": 0,
+            "results": rows,
+        }
+        try:
+            await asyncio.to_thread(store.create_batch, batch)
+        except Exception as create_exc:
+            try:
+                existing = await asyncio.to_thread(store.load_batch, batch_id)
+            except Exception as load_exc:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Durable upload storage is temporarily unavailable.") from load_exc
+            if not existing:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The durable upload batch could not be reserved.") from create_exc
+            if (
+                str(existing.get("upload_kind") or "") != "DIRECT"
+                or str(existing.get("upload_fingerprint") or "") != fingerprint
+                or str(existing.get("actor") or "").casefold() != str(actor.get("email") or "").casefold()
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used for a different upload.")
+            batch = existing
+            idempotent_replay = True
+
+    rows = sorted(
+        [dict(row) for row in batch.get("results", []) if isinstance(row, dict)],
+        key=lambda row: int(row.get("index") or 0),
+    )
+    semaphore = asyncio.Semaphore(4)
+
+    async def prepare(row: Dict[str, Any]) -> Dict[str, Any]:
+        descriptor: Dict[str, Any] = {
+            "index": int(row.get("index") or 0),
+            "row_id": str(row.get("row_id") or ""),
+            "state": str(row.get("status") or "").upper(),
+        }
+        if descriptor["state"] != "STAGING":
+            descriptor["state"] = "FINALIZED"
+            return descriptor
+        try:
+            async with semaphore:
+                session = await asyncio.to_thread(store.create_source_upload_session, batch_id, row, origin)
+            descriptor["state"] = str(session.get("state") or "READY")
+            upload_url = str(session.get("upload_url") or "")
+            if upload_url:
+                size_bytes = int(row.get("source_size") or 0)
+                descriptor.update({
+                    "method": "PUT",
+                    "upload_url": upload_url,
+                    "headers": {
+                        "Content-Type": str(row.get("source_content_type") or "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                        "Content-Range": f"bytes 0-{size_bytes - 1}/{size_bytes}",
+                    },
+                })
+        except Exception as exc:
+            message, code = _direct_upload_failure(exc)
+            try:
+                await asyncio.to_thread(store.stage_file, batch_id, descriptor["row_id"], {
+                    "status": "FAILED",
+                    "source_blob": "",
+                    "error": message,
+                    "diagnostics": [{"severity": "FAIL", "code": code, "stage": "DIRECT_UPLOAD"}],
+                    "progress": {"stage": "FAILED"},
+                })
+            except Exception:
+                pass
+            descriptor.update({"state": "FAILED", "error": message})
+        return descriptor
+
+    uploads = await asyncio.gather(*(prepare(row) for row in rows))
+    try:
+        stored = await asyncio.to_thread(store.load_batch, batch_id)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The upload batch was reserved, but its latest status is temporarily unavailable.") from exc
+    response = {
+        "success": True,
+        "idempotent_replay": idempotent_replay,
+        "batch": _public_exam_batch(store, stored or batch),
+        "uploads": uploads,
+    }
+    return JSONResponse(content=response, headers={"Cache-Control": "no-store, private"})
+
+
+@app.post("/api/exam-generation/batches/{batch_id}/finalize-upload")
+async def finalize_direct_exam_generation_batch(batch_id: str, request: Request, payload: Dict[str, Any] = Body(...)):
+    """Validate each uploaded object and atomically make valid rows runnable."""
+    actor = _require_exam_manager(request)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,160}", batch_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+    try:
+        store = _firebase_exam_generation_store()
+        batch = await asyncio.to_thread(store.load_batch, batch_id)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Durable upload storage is temporarily unavailable.") from exc
+    if not batch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+    if str(batch.get("upload_kind") or "") != "DIRECT":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This batch does not use direct upload.")
+    if str(batch.get("actor") or "").casefold() != str(actor.get("email") or "").casefold():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the batch owner can finalize these uploads.")
+    rows = sorted(
+        [dict(row) for row in batch.get("results", []) if isinstance(row, dict)],
+        key=lambda row: int(row.get("index") or 0),
+    )
+    expected_row_ids = [str(row.get("row_id") or "") for row in rows]
+    supplied_row_ids = payload.get("row_ids") if isinstance(payload, dict) else None
+    if not isinstance(supplied_row_ids, list) or [str(value) for value in supplied_row_ids] != expected_row_ids:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Finalize must include every reserved row in its original order.")
+    semaphore = asyncio.Semaphore(4)
+
+    async def finalize(row: Dict[str, Any]) -> Dict[str, Any]:
+        row_id = str(row.get("row_id") or "")
+        index = int(row.get("index") or 0)
+        current_status = str(row.get("status") or "").upper()
+        if current_status != "STAGING":
+            return {"index": index, "row_id": row_id, "state": current_status}
+        try:
+            async with semaphore:
+                raw, generation = await asyncio.to_thread(store.inspect_source_upload, batch_id, row)
+                await asyncio.to_thread(
+                    _validated_docx_bytes,
+                    raw,
+                    str(row.get("original_filename") or "document.docx"),
+                    str(row.get("source_content_type") or ""),
+                )
+            activated = await asyncio.to_thread(store.stage_file, batch_id, row_id, {
+                "status": "QUEUED",
+                "source_generation": generation,
+                "progress": {"stage": "QUEUED"},
+            })
+            if not activated:
+                latest = await asyncio.to_thread(store.load_batch, batch_id) or {}
+                latest_row = next((item for item in latest.get("results", []) if str(item.get("row_id") or "") == row_id), {})
+                state = str(latest_row.get("status") or "").upper()
+                if state == "STAGING":
+                    raise RuntimeError("The verified source row could not be activated.")
+                return {"index": index, "row_id": row_id, "state": state}
+            return {"index": index, "row_id": row_id, "state": "QUEUED"}
+        except HTTPException as exc:
+            message, code = str(exc.detail), "SOURCE_VALIDATION"
+        except Exception as exc:
+            message, code = _direct_upload_failure(exc)
+        try:
+            await asyncio.to_thread(store.stage_file, batch_id, row_id, {
+                "status": "FAILED",
+                "source_blob": "",
+                "error": message,
+                "diagnostics": [{"severity": "FAIL", "code": code, "stage": "DIRECT_UPLOAD_VALIDATION"}],
+                "progress": {"stage": "FAILED"},
+            })
+        except Exception:
+            pass
+        return {"index": index, "row_id": row_id, "state": "FAILED", "error": message}
+
+    finalized = await asyncio.gather(*(finalize(row) for row in rows))
+    try:
+        stored = await asyncio.to_thread(store.load_batch, batch_id)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Upload verification could not persist its latest state; retrying is safe.") from exc
+    if any(str(row.get("status") or "").upper() == "STAGING" for row in (stored or {}).get("results", []) if isinstance(row, dict)):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Upload verification is temporarily incomplete; retrying is safe.")
+    return JSONResponse(
+        content={"success": True, "batch": _public_exam_batch(store, stored or batch), "finalized": finalized},
+        headers={"Cache-Control": "no-store, private"},
+    )
 
 
 @app.post("/api/exam-generation/batches")
@@ -1898,7 +2438,7 @@ async def create_exam_generation_batch(
         if existing:
             if existing.get("delivery_mode") != delivery_mode or existing.get("publication_policy") != publication_policy:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used with different batch settings.")
-            return {"success": True, "idempotent_replay": True, "batch": store.public_batch(existing)}
+            return {"success": True, "idempotent_replay": True, "batch": _public_exam_batch(store, existing)}
         media_base_url = _trusted_exam_generation_media_base_url(request)
         now = int(time.time() * 1000)
         rows = [{
@@ -1932,7 +2472,7 @@ async def create_exam_generation_batch(
                 raise
             if existing.get("delivery_mode") != delivery_mode or existing.get("publication_policy") != publication_policy:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Idempotency key was already used with different batch settings.")
-            return {"success": True, "idempotent_replay": True, "batch": store.public_batch(existing)}
+            return {"success": True, "idempotent_replay": True, "batch": _public_exam_batch(store, existing)}
         for index, file in enumerate(files):
             row = rows[index]
             try:
@@ -1957,7 +2497,7 @@ async def create_exam_generation_batch(
                     "diagnostics": [{"severity": "FAIL", "code": code}], "progress": {"stage": "FAILED"},
                 })
         stored = await asyncio.to_thread(store.load_batch, batch_id)
-        return {"success": True, "batch": store.public_batch(stored or batch)}
+        return {"success": True, "batch": _public_exam_batch(store, stored or batch)}
     except HTTPException:
         raise
     except (RuntimeError, ValueError) as exc:
@@ -1986,7 +2526,7 @@ async def advance_exam_generation_batch(batch_id: str, request: Request, backgro
         if claim:
             background_tasks.add_task(_run_durable_exam_generation_file, store, batch_id, worker_id, claim)
         batch = await asyncio.to_thread(store.load_batch, batch_id)
-        return {"success": True, "claimed": claimed, "batch": store.public_batch(batch or existing)}
+        return {"success": True, "claimed": claimed, "batch": _public_exam_batch(store, batch or existing)}
     except HTTPException:
         raise
     except (RuntimeError, ValueError) as exc:
@@ -1994,7 +2534,7 @@ async def advance_exam_generation_batch(batch_id: str, request: Request, backgro
     except Exception as exc:
         if _is_firestore_transaction_contention(exc):
             current = await asyncio.to_thread(store.load_batch, batch_id)
-            return {"success": True, "claimed": False, "batch": store.public_batch(current or existing), "retry_after_ms": 2500}
+            return {"success": True, "claimed": False, "batch": _public_exam_batch(store, current or existing), "retry_after_ms": 2500}
         print(f"Could not advance durable raw DOCX batch {batch_id}: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The durable file worker is temporarily unavailable; retrying is safe.") from exc
@@ -2013,7 +2553,7 @@ async def retry_exam_generation_batch(batch_id: str, request: Request):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
         retried = await asyncio.to_thread(store.retry_retriable_files, batch_id)
         batch = await asyncio.to_thread(store.load_batch, batch_id)
-        return {"success": True, "retried": retried, "batch": store.public_batch(batch or existing)}
+        return {"success": True, "retried": retried, "batch": _public_exam_batch(store, batch or existing)}
     except HTTPException:
         raise
     except (RuntimeError, ValueError) as exc:
@@ -2036,7 +2576,22 @@ async def get_exam_generation_batch(batch_id: str, request: Request):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     if not batch:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
-    return {"success": True, "batch": store.public_batch(batch)}
+    return {"success": True, "batch": _public_exam_batch(store, batch)}
+
+
+@app.post("/api/exam-generation/batches/{batch_id}/reprocess")
+async def reprocess_exam_generation_batch(batch_id: str, request: Request):
+    actor = _require_exam_manager(request)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,160}", batch_id):
+        raise HTTPException(status_code=404, detail='Batch not found.')
+    from exam_generator.pipeline import PIPELINE_VERSION
+    store = _firebase_exam_generation_store()
+    existing = await asyncio.to_thread(store.load_batch, batch_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail='Batch not found.')
+    count = await asyncio.to_thread(store.reprocess_failed_files, batch_id, PIPELINE_VERSION, actor=str(actor.get('email') or ''))
+    batch = await asyncio.to_thread(store.load_batch, batch_id)
+    return {'success': True, 'reprocessed': count, 'batch': _public_exam_batch(store, batch or existing)}
 
 
 @app.get("/api/exam-generation/jobs/{job_id}/docx")
@@ -2063,13 +2618,312 @@ async def download_exam_generation_docx(job_id: str, request: Request):
     )
 
 def _decode_audio_key(audio_key: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,2048}", str(audio_key or "")):
+        raise ValueError("invalid audio key")
     raw = audio_key.replace("-", "+").replace("_", "/")
     raw += "=" * (-len(raw) % 4)
     decoded = base64.b64decode(raw.encode("ascii"), validate=True).decode("utf-8")
     storage_path, token = decoded.split("|", 1)
-    if not storage_path.startswith("exam-audio/") or not token:
+    # Keep old Firebase-client paths playable while constraining every decoded
+    # segment. New signed uploads use two private path segments; legacy uploads
+    # use one quiz-id segment.
+    if not re.fullmatch(r"exam-audio/(?:[A-Za-z0-9_-]{1,160}/){1,2}[A-Za-z0-9._-]{1,160}", storage_path) or not re.fullmatch(r"[A-Za-z0-9_-]{16,256}", token):
         raise ValueError("invalid audio key")
     return storage_path, token
+
+
+def _encode_audio_key(storage_path: str, token: str) -> str:
+    return base64.urlsafe_b64encode(f"{storage_path}|{token}".encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _audio_uploads_collection(database):
+    return database.collection("ielts_workspace").document("trung_linh_data").collection("audioUploads")
+
+
+def _canonical_audio_content_type(value: Any) -> str:
+    content_type = str(value or "").split(";", 1)[0].strip().lower()
+    return _AUDIO_CONTENT_TYPE_ALIASES.get(content_type, content_type)
+
+
+def _validate_audio_upload_metadata(filename: Any, content_type: Any, size: Any) -> Dict[str, Any]:
+    """Validate the signed-upload contract before a browser can obtain a URL."""
+    raw_name = str(filename or "").strip()
+    if not raw_name or len(raw_name) > 160 or any(char in raw_name for char in ("/", "\\", "\x00")):
+        raise ValueError("fileName must be a simple audio filename")
+    suffix = Path(raw_name).suffix.lower()
+    expected_type = _AUDIO_UPLOAD_CONTENT_TYPES.get(suffix)
+    if not expected_type:
+        raise ValueError("Unsupported audio file type")
+    canonical_type = _canonical_audio_content_type(content_type)
+    if canonical_type != expected_type:
+        raise ValueError("contentType does not match the audio file extension")
+    if isinstance(size, bool):
+        raise ValueError("sizeBytes must be an integer")
+    try:
+        byte_size = int(size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("sizeBytes must be an integer") from exc
+    if byte_size < 1 or byte_size > MAX_AUDIO_UPLOAD_BYTES:
+        raise ValueError(f"Audio must be between 1 byte and {MAX_AUDIO_UPLOAD_BYTES} bytes")
+    # Storage paths and HTTP Content-Disposition use this value; keep it portable.
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", raw_name).strip(".-")
+    if not safe_stem or safe_stem.rsplit(".", 1)[-1].lower() != suffix.removeprefix("."):
+        raise ValueError("fileName is not safe for managed audio storage")
+    return {"filename": safe_stem[:128], "content_type": canonical_type, "size": byte_size}
+
+
+def _audio_upload_cors_origins() -> List[str]:
+    configured = os.environ.get("AUDIO_UPLOAD_CORS_ORIGINS", "")
+    values = [*ALLOWED_ORIGINS, *(item.strip().rstrip("/") for item in configured.split(",") if item.strip())]
+    origins: List[str] = []
+    for origin in values:
+        parsed = urllib.parse.urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path not in {"", "/"}:
+            continue
+        normalized = f"{parsed.scheme}://{parsed.netloc}"
+        if normalized not in origins:
+            origins.append(normalized)
+    return origins
+
+
+def _ensure_audio_upload_cors(bucket) -> None:
+    """Install the narrow CORS rule required by browser-to-GCS signed PUT uploads.
+
+    This runs once per warm process. Failing early is intentional: a signed URL
+    without this bucket rule would look valid but fail as an opaque browser CORS
+    error after a large local upload has already started.
+    """
+    global _AUDIO_CORS_READY
+    if _AUDIO_CORS_READY:
+        return
+    origins = _audio_upload_cors_origins()
+    if not origins:
+        raise RuntimeError("No trusted browser origins are configured for managed audio uploads.")
+    with _AUDIO_CORS_LOCK:
+        if _AUDIO_CORS_READY:
+            return
+        bucket.reload()
+        existing = list(getattr(bucket, "cors", None) or [])
+        # The browser receives only a single-use PUT signature. Playback stays
+        # on our first-party `/api/audio` proxy, so do not broaden bucket CORS
+        # to public GET/POST methods or resumable control headers.
+        needed_methods = {"PUT"}
+        needed_headers = {"content-type"}
+        for rule in existing:
+            rule_origins = set(rule.get("origin") or []) if isinstance(rule, dict) else set()
+            rule_methods = {str(item).upper() for item in (rule.get("method") or [])} if isinstance(rule, dict) else set()
+            rule_headers = {str(item).lower() for item in (rule.get("responseHeader") or [])} if isinstance(rule, dict) else set()
+            if set(origins).issubset(rule_origins) and needed_methods.issubset(rule_methods) and {"content-type"}.issubset(rule_headers):
+                _AUDIO_CORS_READY = True
+                return
+        existing.append({
+            "origin": origins,
+            "method": sorted(needed_methods),
+            "responseHeader": sorted(needed_headers),
+            "maxAgeSeconds": 3600,
+        })
+        bucket.cors = existing
+        bucket.patch()
+        _AUDIO_CORS_READY = True
+
+
+def _firebase_audio_bucket():
+    if not firebase_storage:
+        raise RuntimeError("Firebase Storage support is unavailable; install firebase-admin server dependencies.")
+    firebase_app = _firebase_admin_app()
+    return firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET, app=firebase_app)
+
+
+def _generate_audio_upload_url(blob, content_type: str) -> str:
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=datetime_module.timedelta(seconds=AUDIO_UPLOAD_TTL_SECONDS),
+        method="PUT",
+        content_type=content_type,
+    )
+
+
+def _trusted_audio_origins() -> set[str]:
+    configured = [
+        os.environ.get("AUDIO_PUBLIC_ORIGIN", "").strip(),
+        os.environ.get("API_PUBLIC_ORIGIN", "").strip(),
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+    return set(_audio_upload_cors_origins() + [item.rstrip("/") for item in configured if item])
+
+
+def _managed_audio_source_from_url(audio_url: Any) -> Optional[Dict[str, str]]:
+    """Resolve only a first-party managed proxy URL; this function never fetches it."""
+    raw_url = str(audio_url or "").strip()
+    if not raw_url or len(raw_url) > 4096:
+        return None
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme:
+        origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if parsed.scheme not in {"http", "https"} or origin not in _trusted_audio_origins():
+            return None
+    elif parsed.netloc or not raw_url.startswith("/"):
+        return None
+    match = re.fullmatch(r"/api/audio/([A-Za-z0-9_-]{16,2048})/([^/?#]+)", parsed.path)
+    if not match:
+        return None
+    try:
+        storage_path, token = _decode_audio_key(match.group(1))
+        filename = urllib.parse.unquote(match.group(2))
+        # Validates filename without trusting the URL content type or byte size.
+        if any(char in filename for char in ("/", "\\", "\x00")) or not filename:
+            return None
+    except (UnicodeError, ValueError):
+        return None
+    return {"storage_path": storage_path, "token": token, "filename": filename}
+
+
+def _looks_like_internal_audio_route(audio_url: Any) -> bool:
+    raw_url = str(audio_url or "").strip()
+    if not raw_url or len(raw_url) > 4096:
+        return False
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return False
+    if not parsed.scheme and (parsed.netloc or not raw_url.startswith("/")):
+        return False
+    return re.fullmatch(r"/api/audio/[A-Za-z0-9_-]{1,2048}/[^/?#]+", parsed.path) is not None
+
+
+def _audio_header_looks_valid(header: bytes, filename: str) -> bool:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".wav":
+        return header.startswith(b"RIFF") and header[8:12] == b"WAVE"
+    if suffix in {".ogg", ".oga"}:
+        return header.startswith(b"OggS")
+    if suffix == ".flac":
+        return header.startswith(b"fLaC")
+    if suffix == ".webm":
+        return header.startswith(b"\x1aE\xdf\xa3")
+    if suffix == ".m4a":
+        return len(header) >= 12 and header[4:8] == b"ftyp"
+    if suffix == ".aac":
+        return len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xF6) == 0xF0
+    if suffix == ".mp3":
+        return header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0)
+    return False
+
+
+@app.post("/api/exam-audio/uploads")
+async def create_exam_audio_upload(request: Request, payload: Dict[str, Any] = Body(...)):
+    """Create a bounded, teacher-owned GCS signed PUT ticket for one Listening file."""
+    actor = _require_exam_manager(request)
+    quiz_id = str(payload.get("quizId") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", quiz_id):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="quizId is invalid.")
+    try:
+        metadata = _validate_audio_upload_metadata(payload.get("fileName"), payload.get("contentType"), payload.get("sizeBytes"))
+        database = _firebase_admin_firestore_client()
+        bucket = await asyncio.to_thread(_firebase_audio_bucket)
+        await asyncio.to_thread(_ensure_audio_upload_cors, bucket)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed audio Storage is unavailable or its CORS rule could not be configured.") from exc
+
+    upload_id = "audio_" + uuid.uuid4().hex
+    uid_hash = hashlib.sha256(str(actor.get("uid") or actor.get("email") or "unknown").encode("utf-8")).hexdigest()[:24]
+    storage_path = f"exam-audio/{uid_hash}/{upload_id}/{metadata['filename']}"
+    expires_at = int((time.time() + AUDIO_UPLOAD_TTL_SECONDS) * 1000)
+    ticket = {
+        "status": "PENDING",
+        "ownerUid": str(actor.get("uid") or ""),
+        "ownerEmail": str(actor.get("email") or ""),
+        "quizId": quiz_id,
+        "storagePath": storage_path,
+        "filename": metadata["filename"],
+        "contentType": metadata["content_type"],
+        "sizeBytes": metadata["size"],
+        "createdAt": int(time.time() * 1000),
+        "expiresAt": expires_at,
+    }
+    try:
+        blob = bucket.blob(storage_path)
+        upload_url = await asyncio.to_thread(_generate_audio_upload_url, blob, metadata["content_type"])
+        await asyncio.to_thread(_audio_uploads_collection(database).document(upload_id).set, ticket)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not prepare the managed audio upload. Retry safely.") from exc
+    return {
+        "success": True,
+        "uploadId": upload_id,
+        "uploadUrl": upload_url,
+        "method": "PUT",
+        "requiredHeaders": {"Content-Type": metadata["content_type"]},
+        "expiresAt": expires_at,
+        "maxBytes": MAX_AUDIO_UPLOAD_BYTES,
+    }
+
+
+@app.post("/api/exam-audio/uploads/{upload_id}/complete")
+async def complete_exam_audio_upload(upload_id: str, request: Request, payload: Dict[str, Any] = Body(default={})):
+    """Verify a signed upload and issue the stable first-party audio proxy URL."""
+    del payload  # The completion body is intentionally empty; ticket state is authoritative.
+    actor = _require_exam_manager(request)
+    if not re.fullmatch(r"audio_[a-f0-9]{32}", upload_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio upload was not found.")
+    try:
+        database = _firebase_admin_firestore_client()
+        ticket_ref = _audio_uploads_collection(database).document(upload_id)
+        snapshot = await asyncio.to_thread(ticket_ref.get)
+        ticket = snapshot.to_dict() if snapshot.exists else None
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed audio Storage is temporarily unavailable.") from exc
+    if not isinstance(ticket, dict) or ticket.get("ownerUid") != str(actor.get("uid") or ""):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio upload was not found.")
+    if str(ticket.get("status") or "") == "COMPLETE" and str(ticket.get("audioUrl") or ""):
+        return {"success": True, "audioUrl": ticket["audioUrl"], "sizeBytes": ticket.get("uploadedBytes"), "contentType": ticket.get("contentType")}
+    if int(ticket.get("expiresAt") or 0) < int(time.time() * 1000):
+        await asyncio.to_thread(ticket_ref.set, {"status": "EXPIRED", "expiredAt": int(time.time() * 1000)}, merge=True)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="The audio upload ticket expired. Start the upload again.")
+    if str(ticket.get("status") or "") not in {"PENDING", "FINALIZING"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This audio upload cannot be completed.")
+
+    try:
+        bucket = await asyncio.to_thread(_firebase_audio_bucket)
+        blob = bucket.blob(str(ticket["storagePath"]))
+        await asyncio.to_thread(blob.reload)
+        uploaded_bytes = int(getattr(blob, "size", 0) or 0)
+        verified = _validate_audio_upload_metadata(ticket.get("filename"), getattr(blob, "content_type", None), uploaded_bytes)
+        if uploaded_bytes != int(ticket.get("sizeBytes") or -1):
+            raise ValueError("Uploaded byte count does not match the approved file")
+        header = await asyncio.to_thread(blob.download_as_bytes, start=0, end=255)
+        if not _audio_header_looks_valid(header, verified["filename"]):
+            raise ValueError("Uploaded file is not valid audio data")
+        token = uuid.uuid4().hex
+        next_metadata = dict(getattr(blob, "metadata", None) or {})
+        next_metadata.update({
+            "firebaseStorageDownloadTokens": token,
+            "ieltsOsManagedAudio": "1",
+            "ieltsOsQuizId": str(ticket["quizId"]),
+        })
+        blob.metadata = next_metadata
+        blob.content_type = verified["content_type"]
+        await asyncio.to_thread(blob.patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not verify the uploaded audio. Retry the completion step safely.") from exc
+
+    key = _encode_audio_key(str(ticket["storagePath"]), token)
+    audio_url = f"/api/audio/{key}/{urllib.parse.quote(verified['filename'])}"
+    completed = {
+        "status": "COMPLETE",
+        "audioUrl": audio_url,
+        "uploadedBytes": uploaded_bytes,
+        "contentType": verified["content_type"],
+        "completedAt": int(time.time() * 1000),
+    }
+    try:
+        await asyncio.to_thread(ticket_ref.set, completed, merge=True)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Audio uploaded, but its managed link could not be saved. Retry completion; it is safe.") from exc
+    return {"success": True, "audioUrl": audio_url, "sizeBytes": uploaded_bytes, "contentType": verified["content_type"]}
 
 @app.api_route("/api/audio/{audio_key}/{filename}", methods=["GET", "HEAD"])
 async def hosted_audio(request: Request, audio_key: str, filename: str):
@@ -2125,7 +2979,7 @@ async def hosted_audio(request: Request, audio_key: str, filename: str):
     except Exception:
         return JSONResponse(status_code=400, content={"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."})
 
-def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort):
+def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=55):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
     import json as _json
     import urllib.request as _urlreq
@@ -2140,6 +2994,10 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
     if reasoning_effort and "gpt-oss" in model:
         body["reasoning_effort"] = reasoning_effort
     try:
+        timeout_s = max(0.1, float(timeout_s))
+    except (TypeError, ValueError):
+        timeout_s = 55.0
+    try:
         req = _urlreq.Request(
             base_url.rstrip("/") + "/chat/completions",
             data=_json.dumps(body).encode("utf-8"), method="POST",
@@ -2147,9 +3005,12 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
                      "Accept": "application/json",
                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"},
         )
-        with _urlreq.urlopen(req, timeout=55) as resp:
+        with _urlreq.urlopen(req, timeout=timeout_s) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
-        text = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        choice = (data.get("choices") or [{}])[0]
+        if choice.get("finish_reason") == "length":
+            return "", "PROVIDER_TRUNCATED_OUTPUT"
+        text = ((choice.get("message") or {}).get("content") or "").strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
         return (text, "") if text else ("", f"{model}: rỗng")
     except _urlerr.HTTPError as e:
@@ -2219,7 +3080,7 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
         return "", f"{model} -> {str(e)}"
 
 
-def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode):
+def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=55, image_inputs=None):
     """1 lần gọi Google Gemini (định dạng riêng). Tắt 'thinking' ở 2.5 để output ổn định, đỡ rỗng."""
     import json as _json
     import urllib.request as _urlreq
@@ -2230,19 +3091,33 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
         gen["responseMimeType"] = "application/json"
     if "2.5" in model:
         gen["thinkingConfig"] = {"thinkingBudget": 0}
+    user_parts = [{"text": user_prompt}]
+    for image in (image_inputs or [])[:4]:
+        if not isinstance(image, dict):
+            continue
+        mime_type = str(image.get("mime_type") or "").strip().lower()
+        encoded = str(image.get("data") or "").strip()
+        if mime_type.startswith("image/") and encoded and len(encoded) <= 16_000_000:
+            user_parts.append({"inlineData": {"mimeType": mime_type, "data": encoded}})
     body = {
         "systemInstruction": {"parts": [{"text": sys_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "contents": [{"role": "user", "parts": user_parts}],
         "generationConfig": gen,
     }
     try:
+        timeout_s = max(0.1, float(timeout_s))
+    except (TypeError, ValueError):
+        timeout_s = 55.0
+    try:
         req = _urlreq.Request(url, data=_json.dumps(body).encode("utf-8"), method="POST",
                               headers={"Content-Type": "application/json"})
-        with _urlreq.urlopen(req, timeout=55) as resp:
+        with _urlreq.urlopen(req, timeout=timeout_s) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         cands = data.get("candidates") or []
         text = ""
         if cands:
+            if cands[0].get("finishReason") == "MAX_TOKENS":
+                return "", "PROVIDER_TRUNCATED_OUTPUT"
             parts = ((cands[0].get("content") or {}).get("parts") or [])
             text = "".join(p.get("text", "") for p in parts).strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
@@ -2262,7 +3137,19 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
         return "", f"gemini {model} -> {str(e)}"
 
 
-def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temperature: float = 0.7, json_mode: bool = False, model: str = None, reasoning_effort: str = None):
+def _groq_chat(
+    sys_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.7,
+    json_mode: bool = False,
+    model: str = None,
+    reasoning_effort: str = None,
+    *,
+    deadline_monotonic: float = None,
+    per_request_timeout_s: float = None,
+    image_inputs: Optional[List[Dict[str, str]]] = None,
+):
     """ĐA-PROVIDER tự xoay khi rate-limit: Groq (nhiều key) -> Cerebras -> Gemini.
     Giữ nguyên tên & signature cũ để mọi caller dùng được. Trả (text, error).
     Env: GROQ_API_KEY(S)/GROQ_API_KEY_2..., CEREBRAS_API_KEY(S), GEMINI_API_KEY(S)/GOOGLE_API_KEY(S)."""
@@ -2271,6 +3158,9 @@ def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temper
     groq_keys = _rotated_api_keys("groq_chat", _api_key_pool("GROQ_API_KEY"))
     cerebras_keys = _rotated_api_keys("cerebras_chat", _api_key_pool("CEREBRAS_API_KEY"))
     gemini_keys = _rotated_api_keys("gemini_chat", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    image_inputs = [item for item in (image_inputs or []) if isinstance(item, dict)]
+    if image_inputs and not gemini_keys:
+        return "", "VISION_PROVIDER_UNAVAILABLE"
     if not (groq_keys or cerebras_keys or gemini_keys):
         return "", "Server chưa cấu hình GROQ_API_KEY / CEREBRAS_API_KEY / GEMINI_API_KEY."
 
@@ -2279,44 +3169,94 @@ def _groq_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 2048, temper
     cerebras_models = list(dict.fromkeys([os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]))
     gemini_models = list(dict.fromkeys([os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-2.0-flash"]))
 
+    # Existing routes retain their legacy 55-second, provider-first behavior.
+    # The raw-DOCX adapter is the only caller which provides a deadline; it gets
+    # a bounded per-request window and fair provider-family rotation.
+    try:
+        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 55.0
+    except (TypeError, ValueError):
+        request_timeout = 55.0
+    try:
+        router_deadline = float(deadline_monotonic) if deadline_monotonic is not None else None
+    except (TypeError, ValueError):
+        router_deadline = None
+    if router_deadline is not None and router_deadline != router_deadline:  # NaN is not a usable deadline.
+        router_deadline = None
+
+    def remaining_timeout():
+        if router_deadline is None:
+            return request_timeout
+        remaining = router_deadline - time.monotonic()
+        return min(request_timeout, remaining) if remaining > 0 else 0.0
+
+    from collections import deque
+    families = [
+        {
+            "name": "groq",
+            "queue": deque((key, selected_model) for key in groq_keys for selected_model in groq_models),
+            "base_url": GROQ_BASE,
+        },
+        {
+            "name": "cerebras",
+            "queue": deque((key, selected_model) for key in cerebras_keys for selected_model in cerebras_models),
+            "base_url": CEREBRAS_BASE,
+        },
+        {
+            "name": "gemini",
+            "queue": deque((key, selected_model) for key in gemini_keys for selected_model in gemini_models),
+            "base_url": "",
+        },
+    ]
+    if image_inputs:
+        # Configured Gemini is the only current router family whose selected
+        # models accept inline image data. Sending these calls to text-only
+        # Groq/Cerebras models would waste retries and could silently ignore a chart.
+        families = [family for family in families if family["name"] == "gemini"]
+
+    def run_one(family):
+        timeout_s = remaining_timeout()
+        if timeout_s <= 0:
+            return "", "PROVIDER_TIMEOUT"
+        key, selected_model = family["queue"].popleft()
+        if family["name"] == "gemini":
+            gemini_kwargs = {"timeout_s": timeout_s}
+            if image_inputs:
+                gemini_kwargs["image_inputs"] = image_inputs
+            text, err = _gemini_chat_once(
+                key, selected_model, sys_prompt, user_prompt, max_tokens, temperature, json_mode,
+                **gemini_kwargs,
+            )
+        else:
+            text, err = _oai_chat_once(
+                family["base_url"], key, selected_model, sys_prompt, user_prompt, max_tokens,
+                temperature, json_mode, reasoning_effort, timeout_s=timeout_s,
+            )
+        # A rejected/rate-limited key cannot help with its other models. Keep
+        # ordinary transient failures eligible for its next model as before.
+        if err in {"RATE_LIMIT", "AUTH"}:
+            remaining = [item for item in family["queue"] if item[0] != key]
+            family["queue"].clear()
+            family["queue"].extend(remaining)
+        return text, err
+
     last_err = ""
     any_rate = False
-
-    # 1) GROQ — xoay từng key; mỗi key thử các model. Rate-limit/auth -> sang key kế.
-    for key in groq_keys:
-        for gm in groq_models:
-            text, err = _oai_chat_once(GROQ_BASE, key, gm, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort)
+    fair_rotation = router_deadline is not None
+    while any(family["queue"] for family in families):
+        active_families = families if fair_rotation else [next(family for family in families if family["queue"])]
+        for family in active_families:
+            if not family["queue"]:
+                continue
+            text, err = run_one(family)
             if text:
                 return text, ""
+            if err == "PROVIDER_TIMEOUT":
+                return "", err
             last_err = err
             if err == "RATE_LIMIT":
-                any_rate = True; break          # key này hết hạn mức -> key kế / provider kế
-            if err == "AUTH":
-                break
-
-    # 2) CEREBRAS (free, OpenAI-compatible)
-    for key in cerebras_keys:
-        for cm in cerebras_models:
-            text, err = _oai_chat_once(CEREBRAS_BASE, key, cm, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort)
-            if text:
-                return text, ""
-            last_err = err
-            if err == "RATE_LIMIT":
-                any_rate = True; break
-            if err == "AUTH":
-                break
-
-    # 3) GEMINI (free, hạn mức rộng)
-    for gemini_key in gemini_keys:
-        for gem in gemini_models:
-            text, err = _gemini_chat_once(gemini_key, gem, sys_prompt, user_prompt, max_tokens, temperature, json_mode)
-            if text:
-                return text, ""
-            last_err = err
-            if err == "RATE_LIMIT":
-                any_rate = True; break
-            if err == "AUTH":
-                break
+                any_rate = True
+        # Legacy callers exhaust one provider family before trying the next.
+        # Deadline-aware raw-DOCX calls try at most one candidate per family per round.
 
     if any_rate:
         return "", "RATE_LIMIT"
@@ -2368,8 +3308,177 @@ def _friendly_err(err: str, lang: str) -> str:
 async def ai_feedback(
     payload: Dict[str, Any] = Body(...),
 ):
-    """Sinh nhận xét cho học viên (Groq / Llama). Cần GROQ_API_KEY."""
+    """Sinh nhận xét cho học viên (Groq / Llama). Cần GROQ_API_KEY.
+    Hỗ trợ 2 chế độ:
+    1. Structured Writing Grading (AI Co-pilot cho Writing Task 1 & 2): khi payload có structured=True hoặc (task_number và essay).
+    2. Legacy Reading/Listening/General feedback text cho học sinh.
+    """
+    is_structured = bool(payload.get("structured")) or bool(payload.get("writing")) or ("task_number" in payload and "essay" in payload)
     lang = (payload.get("lang") or "vi").lower()
+
+    if is_structured:
+        task_num = int(payload.get("task_number") or payload.get("taskNumber") or 2)
+        task_title = payload.get("task_title") or payload.get("taskTitle") or f"Task {task_num}"
+        prompt = str(payload.get("prompt") or payload.get("taskPrompt") or "").strip()
+        essay = str(payload.get("essay") or payload.get("studentEssay") or "").strip()
+        media_url = str(payload.get("media_url") or payload.get("mediaUrl") or "").strip()
+
+        if not essay:
+            return {
+                "success": False,
+                "error": "Chưa có bài viết học sinh để chấm." if lang == "vi" else "No student essay provided for grading."
+            }
+
+        task_type_label = "Task 1 (Report/Letter, minimum 150 words)" if task_num == 1 else "Task 2 (Discursive Essay, minimum 250 words)"
+        c1_name = "Task Achievement (TA)" if task_num == 1 else "Task Response (TR)"
+
+        sys_prompt = (
+            "You are an expert official IELTS Writing Examiner and master pedagogical coach.\n"
+            f"Analyze the student's IELTS Writing {task_type_label} against the official 9-band descriptors.\n"
+            "You must return ONLY a single valid JSON object, without any markdown formatting or commentary.\n\n"
+            "JSON SCHEMA REQUIREMENT:\n"
+            "{\n"
+            '  "criteria": {\n'
+            f'    "TA_TR": {{ "band": 6.5, "why_current": "Detailed explanation of strengths and shortcomings under {c1_name}", "limiting_feature": "Key bottleneck preventing the next whole band" }},\n'
+            '    "CC": { "band": 6.0, "why_current": "Detailed assessment of paragraphing, cohesion, linking devices, and progression", "limiting_feature": "Key bottleneck in coherence and cohesion" },\n'
+            '    "LR": { "band": 6.0, "why_current": "Detailed assessment of range, precision, collocations, and lexical errors", "limiting_feature": "Key lexical bottleneck" },\n'
+            '    "GRA": { "band": 6.0, "why_current": "Detailed assessment of sentence structures, grammatical accuracy, and error frequency", "limiting_feature": "Key grammatical bottleneck" }\n'
+            "  },\n"
+            '  "estimated_task_band": 6.0,\n'
+            '  "bottlenecks": [\n'
+            '    "Concise actionable limitation 1 in Vietnamese",\n'
+            '    "Concise actionable limitation 2 in Vietnamese",\n'
+            '    "Concise actionable limitation 3 in Vietnamese"\n'
+            "  ],\n"
+            '  "strengths": [\n'
+            '    "Concrete strength 1 in Vietnamese",\n'
+            '    "Concrete strength 2 in Vietnamese"\n'
+            "  ],\n"
+            '  "annotations": [\n'
+            "    {\n"
+            '      "anchorQuote": "EXACT character-for-character substring from the student essay",\n'
+            '      "criterion": "GRA",\n'
+            '      "category": "error",\n'
+            '      "replacement": "clean minimal correction in English",\n'
+            '      "highBandRewrite": "optional natural Band 8.0+ alternative in English",\n'
+            '      "comment": "Concise rule/explanation in Vietnamese explaining the fix"\n'
+            "    }\n"
+            "  ],\n"
+            '  "corrected_essay": "Full clean, minimally corrected version in English preserving the student voice",\n'
+            '  "sample_essay": "A Band 8.5 model answer in English addressing the exact prompt"\n'
+            "}\n\n"
+            "STRICT RULES:\n"
+            "1. Each 'anchorQuote' in 'annotations' MUST be a VERBATIM, EXACT character-for-character substring present in the student's essay. Never change spelling or punctuation in 'anchorQuote'.\n"
+            "2. 'criterion' MUST be strictly one of: 'TA_TR', 'CC', 'LR', 'GRA'.\n"
+            "3. 'category' MUST be strictly one of: 'error' (objective grammar/lexical/spelling error), 'awkward' (acceptable grammar but non-native/unnatural phrasing), 'upgrade' (correct phrasing that can reach Band 7.5-8.5).\n"
+            "4. Provide 6 to 10 high-value inline annotations targeting the most impactful areas.\n"
+            "5. 'bottlenecks' must contain exactly 3 concise, practical Vietnamese bullet points.\n"
+            "6. 'strengths' must contain 2-3 genuine Vietnamese bullet points.\n"
+            "7. Bands for each criterion must be whole or half numbers between 1.0 and 9.0 (e.g. 5.5, 6.0, 6.5, 7.0).\n"
+            "8. Respond with pure JSON."
+        )
+
+        user_prompt = (
+            f"--- TASK INFORMATION ---\n"
+            f"Task: {task_title} ({task_type_label})\n"
+            f"Prompt: {prompt or '(General IELTS Writing prompt)'}\n"
+            f"{('Media/Visual URL: ' + media_url) if media_url else ''}\n\n"
+            f"--- STUDENT ESSAY ---\n"
+            f"{essay}\n\n"
+            "Evaluate strictly and return JSON."
+        )
+
+        text, err = _groq_chat(sys_prompt, user_prompt, max_tokens=4096, temperature=0.2, json_mode=True)
+        if err:
+            return {"success": False, "error": _friendly_err(err, lang)}
+
+        try:
+            clean_text = text.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            elif clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            data = json.loads(clean_text)
+        except Exception:
+            first_brace = text.find("{")
+            last_brace = text.rfind("}")
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                try:
+                    data = json.loads(text[first_brace:last_brace + 1])
+                except Exception:
+                    return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
+            else:
+                return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
+
+        # Validate & calibrate annotations against essay
+        validated_annotations = []
+        now_ms = int(time.time() * 1000)
+        raw_annotations = data.get("annotations") or []
+        for item in raw_annotations:
+            if not isinstance(item, dict):
+                continue
+            quote = str(item.get("anchorQuote") or "").strip()
+            if not quote:
+                continue
+            idx = essay.find(quote)
+            if idx == -1:
+                lower_essay = essay.lower()
+                lower_quote = quote.lower()
+                idx = lower_essay.find(lower_quote)
+                if idx != -1:
+                    quote = essay[idx:idx + len(quote)]
+            if idx != -1:
+                start_offset = idx
+                end_offset = idx + len(quote)
+                criterion = str(item.get("criterion") or "GRA").upper()
+                if criterion not in ("TA_TR", "CC", "LR", "GRA"):
+                    criterion = "GRA"
+                category = str(item.get("category") or "error").lower()
+                if category not in ("error", "awkward", "upgrade", "praise"):
+                    category = "error"
+                validated_annotations.append({
+                    "id": f"ai_ann_{len(validated_annotations) + 1}_{now_ms}",
+                    "anchorQuote": quote,
+                    "startOffset": start_offset,
+                    "endOffset": end_offset,
+                    "criterion": criterion,
+                    "category": category,
+                    "replacement": str(item.get("replacement") or ""),
+                    "highBandRewrite": str(item.get("highBandRewrite") or ""),
+                    "comment": str(item.get("comment") or ""),
+                    "createdAt": now_ms
+                })
+
+        criteria = data.get("criteria") or {}
+        bands = []
+        for k in ["TA_TR", "CC", "LR", "GRA"]:
+            c_item = criteria.get(k) or {}
+            try:
+                b_val = float(c_item.get("band") or 0)
+                if 0 <= b_val <= 9:
+                    bands.append(b_val)
+            except Exception:
+                pass
+
+        if len(bands) == 4:
+            calc_band = round((sum(bands) / 4.0) * 2) / 2
+        else:
+            calc_band = float(data.get("estimated_task_band") or 6.0)
+
+        return {
+            "success": True,
+            "structured": True,
+            "criteria": criteria,
+            "estimated_task_band": calc_band,
+            "bottlenecks": data.get("bottlenecks") or [],
+            "strengths": data.get("strengths") or [],
+            "annotations": validated_annotations,
+            "corrected_essay": data.get("corrected_essay") or "",
+            "sample_essay": data.get("sample_essay") or ""
+        }
     student = payload.get("studentName", "học viên")
     quiz = payload.get("quizTitle", "bài thi")
     qtype = payload.get("type", "")
@@ -3536,6 +4645,49 @@ def _fmt_ts(sec: float) -> str:
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
 
 
+def _plan_audio_transcription_chunks(duration_seconds: Any, max_chunk_seconds: Any = WHISPER_CHUNK_SECONDS) -> List[Tuple[int, int]]:
+    """Return contiguous source-time windows without hidden overlaps or gaps."""
+    if isinstance(duration_seconds, bool) or isinstance(max_chunk_seconds, bool):
+        raise ValueError("Audio duration and chunk length must be numeric")
+    try:
+        duration = int(float(duration_seconds))
+        chunk_cap = int(float(max_chunk_seconds))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Audio duration and chunk length must be numeric") from exc
+    if duration < 0 or chunk_cap < 1:
+        raise ValueError("Audio duration must be non-negative and chunk length must be positive")
+    return [(start, min(chunk_cap, duration - start)) for start in range(0, duration, chunk_cap)]
+
+
+_MARKED_TRANSCRIPT_RANGE_RE = re.compile(r"\((\d{1,2}(?::\d{2}){1,2})\s*-\s*(\d{1,2}(?::\d{2}){1,2})\)")
+
+
+def _marked_timestamp_seconds(value: str) -> int:
+    units = [int(unit) for unit in value.split(":")]
+    if len(units) == 2:
+        return units[0] * 60 + units[1]
+    if len(units) == 3:
+        return units[0] * 3600 + units[1] * 60 + units[2]
+    raise ValueError("Invalid transcript timestamp")
+
+
+def _shift_marked_transcript(text: str, offset_seconds: Any = 0) -> str:
+    """Offset only real Whisper range markers after deterministic chunking."""
+    if isinstance(offset_seconds, bool):
+        raise ValueError("Transcript offset must be numeric")
+    try:
+        offset = int(float(offset_seconds))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Transcript offset must be numeric") from exc
+    if not offset:
+        return str(text or "")
+
+    def replace(match):
+        return f"({_fmt_ts(_marked_timestamp_seconds(match.group(1)) + offset)} - {_fmt_ts(_marked_timestamp_seconds(match.group(2)) + offset)})"
+
+    return _MARKED_TRANSCRIPT_RANGE_RE.sub(replace, str(text or ""))
+
+
 def _segments_to_marked_transcript(segments, block_sec: float = 5.0) -> str:
     """Ghép segment Whisper (verbose_json) thành transcript CÓ MỐC THỜI GIAN TUYỆT ĐỐI:
     (m:ss - m:ss)\\ntext... — mốc lấy thẳng từ máy, không phải AI đoán."""
@@ -3562,7 +4714,7 @@ def _segments_to_marked_transcript(segments, block_sec: float = 5.0) -> str:
     return "\n\n".join(f"({_fmt_ts(a)} - {_fmt_ts(b)})\n{t}" for a, b, t in blocks)
 
 
-def _groq_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
+def _groq_transcribe_once(api_key: str, raw: bytes, mime: str, model: str, timeout_s: float = 170):
     import json as _json
     import urllib.request as _urlreq
     import urllib.error as _urlerr
@@ -3580,7 +4732,7 @@ def _groq_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
                 "Accept": "application/json",
             },
         )
-        with _urlreq.urlopen(req, timeout=170) as r:
+        with _urlreq.urlopen(req, timeout=max(1, float(timeout_s))) as r:
             raw_resp = r.read().decode("utf-8").strip()
         try:
             parsed = _json.loads(raw_resp)
@@ -3604,7 +4756,7 @@ def _groq_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
         return "", f"Lỗi chép lời Groq: {e}"
 
 
-def _gemini_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
+def _gemini_transcribe_once(api_key: str, raw: bytes, mime: str, model: str, timeout_s: float = 170):
     import json as _json
     import urllib.request as _urlreq
     import urllib.error as _urlerr
@@ -3624,9 +4776,11 @@ def _gemini_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
     try:
         req = _urlreq.Request(url, data=_json.dumps(body).encode("utf-8"), method="POST",
                               headers={"Content-Type": "application/json", "Accept": "application/json"})
-        with _urlreq.urlopen(req, timeout=170) as resp:
+        with _urlreq.urlopen(req, timeout=max(1, float(timeout_s))) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         candidates = data.get("candidates") or []
+        if candidates and str(candidates[0].get("finishReason") or "").upper() in {"MAX_TOKENS", "LENGTH"}:
+            return "", "PROVIDER_TRUNCATED_OUTPUT"
         parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
         text = "".join(part.get("text", "") for part in parts).strip()
         return (text, "") if text else ("", "EMPTY")
@@ -3643,6 +4797,459 @@ def _gemini_transcribe_once(api_key: str, raw: bytes, mime: str, model: str):
         return "", f"Lỗi Gemini {e.code}: {detail}"
     except Exception as e:
         return "", f"Lỗi chép lời Gemini: {e}"
+
+
+def _transcribe_audio_bytes(raw: bytes, mime: str, lang: str, *, timeout_s: float = 170,
+                            max_provider_attempts: Optional[int] = None) -> Tuple[str, str, bool]:
+    """Use bounded provider attempts for one already-validated local audio payload."""
+    groq_keys = _rotated_api_keys("groq_whisper", _api_key_pool("GROQ_API_KEY"))
+    gemini_keys = _rotated_api_keys("gemini_audio", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    if not (groq_keys or gemini_keys):
+        return "", "TRANSCRIPTION_PROVIDER_NOT_CONFIGURED", False
+    if max_provider_attempts is not None:
+        attempts = max(1, int(max_provider_attempts))
+        groq_keys = groq_keys[:attempts]
+        gemini_keys = gemini_keys[:attempts]
+
+    model = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
+    text = ""
+    last_err = ""
+    any_rate = False
+    for key in groq_keys:
+        text, err = _groq_transcribe_once(key, raw, mime, model, timeout_s=timeout_s)
+        if text:
+            return text, "", any_rate
+        last_err = err
+        if err == "RATE_LIMIT":
+            any_rate = True
+
+    # Gemini is an explicit bounded fallback. It can return a plain transcript
+    # (without Whisper ranges), so Groq remains the timestamp source of record.
+    gemini_models = list(dict.fromkeys([
+        os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        "gemini-2.0-flash",
+    ]))
+    for key in gemini_keys:
+        for gem_model in gemini_models:
+            text, err = _gemini_transcribe_once(key, raw, mime, gem_model, timeout_s=timeout_s)
+            if text:
+                return text, "", any_rate
+            last_err = err
+            if err == "RATE_LIMIT":
+                any_rate = True
+                break
+            if err == "AUTH":
+                break
+    return "", last_err or "EMPTY", any_rate
+
+
+def _storage_error_is_not_found(exc: Exception) -> bool:
+    detail = str(exc or "").casefold()
+    name = exc.__class__.__name__.casefold()
+    return "notfound" in name or "not found" in detail or "404" in detail
+
+
+def _load_managed_audio_blob(source: Dict[str, str]) -> Tuple[Any, Dict[str, Any]]:
+    """Re-validate the opaque proxy token against the actual private Storage object."""
+    blob = _firebase_audio_bucket().blob(source["storage_path"])
+    try:
+        blob.reload()
+    except Exception as exc:
+        if _storage_error_is_not_found(exc):
+            raise FileNotFoundError(source["storage_path"]) from exc
+        raise
+    byte_size = int(getattr(blob, "size", 0) or 0)
+    metadata = dict(getattr(blob, "metadata", None) or {})
+    issued_tokens = {item.strip() for item in str(metadata.get("firebaseStorageDownloadTokens") or "").split(",") if item.strip()}
+    if source["token"] not in issued_tokens:
+        raise PermissionError("Managed audio token is no longer valid")
+    verified = _validate_audio_upload_metadata(source["filename"], getattr(blob, "content_type", None), byte_size)
+    return blob, verified
+
+
+def _external_audio_mime(audio_url: str, response_mime: Any) -> str:
+    mime = _canonical_audio_content_type(response_mime)
+    suffix = Path(urllib.parse.urlparse(audio_url).path).suffix.lower()
+    inferred = _AUDIO_UPLOAD_CONTENT_TYPES.get(suffix)
+    if mime in set(_AUDIO_UPLOAD_CONTENT_TYPES.values()):
+        return mime
+    if inferred:
+        return inferred
+    if "octet" in mime or not mime or any(token in mime for token in ("audio", "mpeg", "ogg", "wav", "mp4", "m4a", "webm")):
+        return "audio/mpeg"
+    return ""
+
+
+def _download_external_audio_bytes(audio_url: Any) -> Tuple[bytes, str, str]:
+    raw_url = str(audio_url or "").strip()
+    if not raw_url or len(raw_url) > 4096:
+        return b"", "", "AUDIO_URL_REQUIRED"
+    download_url = _normalize_audio_url(raw_url)
+    parsed = urllib.parse.urlparse(download_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    try:
+        request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            content_length = str(response.headers.get("Content-Length") or "").strip()
+            if content_length.isdigit() and int(content_length) > MAX_WHISPER_TRANSCRIPTION_BYTES:
+                return b"", "", "AUDIO_SOURCE_TOO_LARGE"
+            raw = response.read(MAX_WHISPER_TRANSCRIPTION_BYTES + 1)
+            if len(raw) > MAX_WHISPER_TRANSCRIPTION_BYTES:
+                return b"", "", "AUDIO_SOURCE_TOO_LARGE"
+            mime = _external_audio_mime(download_url, response.headers.get("Content-Type"))
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(exc).casefold():
+            return b"", "", "EXTERNAL_AUDIO_TIMEOUT"
+        return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    except (TimeoutError, socket.timeout):
+        return b"", "", "EXTERNAL_AUDIO_TIMEOUT"
+    except Exception as exc:
+        if "timed out" in str(exc).casefold():
+            return b"", "", "EXTERNAL_AUDIO_TIMEOUT"
+        return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    if not raw:
+        return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    if not mime:
+        return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    return raw, mime, ""
+
+
+def _transcribe_external_audio(audio_url: Any, lang: str) -> Tuple[str, str, bool]:
+    raw, mime, error = _download_external_audio_bytes(audio_url)
+    if error:
+        return "", error, False
+    return _transcribe_audio_bytes(raw, mime, lang)
+
+
+def _find_ffmpeg_binary() -> Optional[str]:
+    configured = os.environ.get("FFMPEG_BINARY", "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    system_binary = shutil.which("ffmpeg")
+    if system_binary:
+        return system_binary
+    try:
+        import imageio_ffmpeg  # Bundled in api/requirements.txt for Vercel's Python runtime.
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        return bundled if bundled and os.path.isfile(bundled) else None
+    except Exception:
+        return None
+
+
+def _find_ffprobe_binary(ffmpeg_binary: str) -> Optional[str]:
+    configured = os.environ.get("FFPROBE_BINARY", "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    sibling = Path(ffmpeg_binary).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if sibling.is_file():
+        return str(sibling)
+    return shutil.which("ffprobe")
+
+
+def _probe_audio_duration_seconds(source_path: str, ffmpeg_binary: str) -> int:
+    ffprobe_binary = _find_ffprobe_binary(ffmpeg_binary)
+    if ffprobe_binary:
+        completed = subprocess.run(
+            [ffprobe_binary, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", source_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        duration_text = str(completed.stdout or "").strip() if completed.returncode == 0 else ""
+    else:
+        # imageio-ffmpeg intentionally bundles only ffmpeg. Its `-i` probe exits
+        # non-zero after printing metadata, so parse just the authoritative
+        # Duration field without treating that exit status as a conversion error.
+        completed = subprocess.run(
+            [ffmpeg_binary, "-hide_banner", "-i", source_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        match = re.search(r"Duration:\s*(\d{2}:\d{2}:\d{2}(?:\.\d+)?)", str(completed.stderr or ""))
+        duration_text = match.group(1) if match else ""
+    try:
+        if ":" in duration_text:
+            hours, minutes, seconds = duration_text.split(":", 2)
+            duration = int(float(hours) * 3600 + float(minutes) * 60 + float(seconds))
+        else:
+            duration = int(float(duration_text))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("AUDIO_DURATION_UNAVAILABLE") from exc
+    if duration < 1:
+        raise RuntimeError("AUDIO_DURATION_UNAVAILABLE")
+    return duration
+
+
+def _transcode_whisper_chunk(ffmpeg_binary: str, source_path: str, start_seconds: int,
+                             duration_seconds: int, destination_path: str) -> bytes:
+    completed = subprocess.run(
+        [
+            ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-ss", str(start_seconds), "-t", str(duration_seconds), "-i", source_path,
+            "-vn", "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
+            "-f", "mp3", "-y", destination_path,
+        ],
+        check=False,
+        capture_output=True,
+        timeout=100,
+    )
+    if completed.returncode != 0 or not os.path.isfile(destination_path):
+        raise RuntimeError("AUDIO_CHUNK_TRANSCODE_FAILED")
+    with open(destination_path, "rb") as handle:
+        raw = handle.read(MAX_WHISPER_TRANSCRIPTION_BYTES + 1)
+    if not raw or len(raw) > MAX_WHISPER_TRANSCRIPTION_BYTES:
+        raise RuntimeError("AUDIO_CHUNK_EXCEEDS_WHISPER_LIMIT")
+    return raw
+
+
+def _gemini_file_api_request(api_key: str, method: str, path: str, body: Optional[bytes] = None,
+                             headers: Optional[Dict[str, str]] = None, timeout_s: float = 90):
+    connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=max(1, float(timeout_s)))
+    request_headers = {"x-goog-api-key": api_key, "Accept": "application/json", **(headers or {})}
+    try:
+        connection.request(method, path, body=body, headers=request_headers)
+        response = connection.getresponse()
+        raw = response.read()
+        return response.status, {str(key).lower(): value for key, value in response.getheaders()}, raw
+    finally:
+        connection.close()
+
+
+def _gemini_file_upload_and_transcribe_once(api_key: str, source_path: str, verified: Dict[str, Any]) -> Tuple[str, str]:
+    """Use Gemini's temporary File API for a verified large Storage object.
+
+    It is intentionally server-to-server, bounded by the source size policy,
+    and deletes the temporary Gemini file in a finally block. This is the
+    production fallback when a serverless image does not bundle FFmpeg.
+    """
+    byte_size = int(verified["size"])
+    mime = str(verified["content_type"])
+    display_name = str(verified["filename"])
+    metadata = json.dumps({"file": {"display_name": display_name}}).encode("utf-8")
+    start_path = "/upload/v1beta/files"
+    try:
+        status_code, headers, raw = _gemini_file_api_request(
+            api_key,
+            "POST",
+            start_path,
+            body=metadata,
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(byte_size),
+                "X-Goog-Upload-Header-Content-Type": mime,
+            },
+            timeout_s=45,
+        )
+        upload_url = headers.get("x-goog-upload-url")
+        if status_code not in {200, 201} or not upload_url:
+            return "", "GEMINI_FILE_UPLOAD_START_FAILED"
+        parsed = urllib.parse.urlparse(upload_url)
+        if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith("googleapis.com"):
+            return "", "GEMINI_FILE_UPLOAD_URL_INVALID"
+
+        target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        connection = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=120)
+        try:
+            connection.putrequest("POST", target)
+            connection.putheader("Content-Length", str(byte_size))
+            connection.putheader("X-Goog-Upload-Offset", "0")
+            connection.putheader("X-Goog-Upload-Command", "upload, finalize")
+            connection.putheader("Content-Type", mime)
+            connection.endheaders()
+            with open(source_path, "rb") as handle:
+                while chunk := handle.read(256 * 1024):
+                    connection.send(chunk)
+            response = connection.getresponse()
+            uploaded_raw = response.read()
+            if response.status not in {200, 201}:
+                return "", "GEMINI_FILE_UPLOAD_FAILED"
+        finally:
+            connection.close()
+        uploaded = json.loads(uploaded_raw.decode("utf-8"))
+        file_record = uploaded.get("file") if isinstance(uploaded, dict) else None
+        file_name = str((file_record or {}).get("name") or "")
+        file_uri = str((file_record or {}).get("uri") or "")
+        if not re.fullmatch(r"files/[a-z0-9-]{1,40}", file_name) or not file_uri:
+            return "", "GEMINI_FILE_UPLOAD_RESPONSE_INVALID"
+        try:
+            # Audio processing can briefly remain PROCESSING after finalization.
+            for _attempt in range(10):
+                state_status, _state_headers, state_raw = _gemini_file_api_request(api_key, "GET", f"/v1beta/{file_name}", timeout_s=25)
+                if state_status != 200:
+                    return "", "GEMINI_FILE_STATE_UNAVAILABLE"
+                state_doc = json.loads(state_raw.decode("utf-8"))
+                state = str((state_doc.get("state") or "")).upper()
+                if state in {"ACTIVE", ""}:
+                    file_uri = str(state_doc.get("uri") or file_uri)
+                    break
+                if state == "FAILED":
+                    return "", "GEMINI_FILE_PROCESSING_FAILED"
+                time.sleep(1)
+            else:
+                return "", "GEMINI_FILE_PROCESSING_TIMEOUT"
+
+            model = os.environ.get("GEMINI_FILE_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            prompt = (
+                "Transcribe this IELTS Listening recording in English. Return only the spoken transcript, "
+                "without headings, commentary, answer keys, or invented timestamps."
+            )
+            request_body = json.dumps({
+                "contents": [{"role": "user", "parts": [
+                    {"text": prompt},
+                    {"file_data": {"mime_type": mime, "file_uri": file_uri}},
+                ]}],
+                "generationConfig": {"maxOutputTokens": 16384, "temperature": 0},
+            }).encode("utf-8")
+            generate_status, _generate_headers, generated_raw = _gemini_file_api_request(
+                api_key,
+                "POST",
+                f"/v1beta/models/{urllib.parse.quote(model, safe='.-_')}:generateContent",
+                body=request_body,
+                headers={"Content-Type": "application/json"},
+                timeout_s=150,
+            )
+            if generate_status != 200:
+                return "", "GEMINI_FILE_TRANSCRIPTION_FAILED"
+            generated = json.loads(generated_raw.decode("utf-8"))
+            candidates = generated.get("candidates") or []
+            if candidates and str(candidates[0].get("finishReason") or "").upper() in {"MAX_TOKENS", "LENGTH"}:
+                return "", "GEMINI_FILE_TRANSCRIPT_TRUNCATED"
+            parts = ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+            transcript = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict)).strip()
+            return (transcript, "") if transcript else ("", "EMPTY")
+        finally:
+            try:
+                _gemini_file_api_request(api_key, "DELETE", f"/v1beta/{file_name}", timeout_s=20)
+            except Exception:
+                pass
+    except (OSError, ValueError, json.JSONDecodeError, http.client.HTTPException, TimeoutError):
+        return "", "GEMINI_FILE_TRANSCRIPTION_FAILED"
+
+
+def _transcribe_large_audio_with_gemini_file(source_path: str, verified: Dict[str, Any]) -> Tuple[str, str, bool]:
+    keys = _rotated_api_keys("gemini_file_audio", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))[:2]
+    if not keys:
+        return "", "AUDIO_CHUNKER_UNAVAILABLE", False
+    last_error = "GEMINI_FILE_TRANSCRIPTION_FAILED"
+    for key in keys:
+        text, error = _gemini_file_upload_and_transcribe_once(key, source_path, verified)
+        if text:
+            return text, "", False
+        last_error = error or last_error
+    return "", last_error, False
+
+
+def _transcribe_managed_audio_chunks(blob, verified: Dict[str, Any], lang: str) -> Tuple[str, str, bool]:
+    """Download only a verified Storage blob, transcode deterministic windows, and join in source order."""
+    source_size = int(verified["size"])
+    if source_size > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
+        return "", "AUDIO_SOURCE_TOO_LARGE", False
+    with tempfile.TemporaryDirectory(prefix="ielts-os-transcribe-") as scratch:
+        source_path = os.path.join(scratch, "source" + Path(verified["filename"]).suffix.lower())
+        try:
+            blob.download_to_filename(source_path, timeout=120)
+        except Exception as exc:
+            if _storage_error_is_not_found(exc):
+                return "", "INTERNAL_AUDIO_NOT_FOUND", False
+            return "", "FIREBASE_AUDIO_DOWNLOAD_FAILED", False
+        if not os.path.isfile(source_path) or os.path.getsize(source_path) != source_size:
+            return "", "AUDIO_SOURCE_DOWNLOAD_INCOMPLETE", False
+        ffmpeg_binary = _find_ffmpeg_binary()
+        if not ffmpeg_binary:
+            return _transcribe_large_audio_with_gemini_file(source_path, verified)
+        try:
+            duration = _probe_audio_duration_seconds(source_path, ffmpeg_binary)
+            if duration > MAX_AUDIO_TRANSCRIPTION_SECONDS:
+                return "", "AUDIO_DURATION_EXCEEDS_LIMIT", False
+            plan = _plan_audio_transcription_chunks(duration, WHISPER_CHUNK_SECONDS)
+            if not plan or len(plan) > MAX_AUDIO_TRANSCRIPTION_CHUNKS:
+                return "", "AUDIO_CHUNK_LIMIT_EXCEEDED", False
+        except subprocess.TimeoutExpired:
+            return _transcribe_large_audio_with_gemini_file(source_path, verified)
+        except RuntimeError as exc:
+            return _transcribe_large_audio_with_gemini_file(source_path, verified)
+
+        def run_chunk(index: int, start: int, length: int):
+            destination = os.path.join(scratch, f"chunk-{index:03d}.mp3")
+            try:
+                raw = _transcode_whisper_chunk(ffmpeg_binary, source_path, start, length, destination)
+                text, err, rate_limited = _transcribe_audio_bytes(
+                    raw,
+                    "audio/mpeg",
+                    lang,
+                    timeout_s=75,
+                    max_provider_attempts=2,
+                )
+                return index, _shift_marked_transcript(text, start) if text else "", err, rate_limited
+            except subprocess.TimeoutExpired:
+                return index, "", "AUDIO_CHUNK_TRANSCODE_TIMEOUT", False
+            except RuntimeError as exc:
+                return index, "", str(exc), False
+            except Exception:
+                return index, "", "AUDIO_CHUNK_WORKER_FAILED", False
+            finally:
+                try:
+                    os.remove(destination)
+                except OSError:
+                    pass
+
+        outcomes: Dict[int, Tuple[str, str, bool]] = {}
+        with ThreadPoolExecutor(max_workers=MAX_AUDIO_TRANSCRIPTION_WORKERS, thread_name_prefix="whisper-chunk") as executor:
+            futures = [executor.submit(run_chunk, index, start, length) for index, (start, length) in enumerate(plan)]
+            for future in as_completed(futures):
+                index, text, err, rate_limited = future.result()
+                outcomes[index] = (text, err, rate_limited)
+        failures = [outcomes[index][1] for index in range(len(plan)) if not outcomes.get(index, ("", "MISSING", False))[0]]
+        if failures:
+            # A temporary local transcoder/provider issue should not discard a
+            # verified large upload merely because this Vercel image lacks one
+            # codec. The File API fallback remains private and bounded.
+            fallback_text, fallback_error, fallback_rate = _transcribe_large_audio_with_gemini_file(source_path, verified)
+            if fallback_text:
+                return fallback_text, "", fallback_rate
+            return "", next((error for error in failures if error), fallback_error or "EMPTY"), any(result[2] for result in outcomes.values())
+        return "\n\n".join(outcomes[index][0].strip() for index in range(len(plan)) if outcomes[index][0].strip()), "", any(result[2] for result in outcomes.values())
+
+
+def _transcribe_managed_audio(source: Dict[str, str], lang: str) -> Tuple[str, str, bool]:
+    blob, verified = _load_managed_audio_blob(source)
+    if int(verified["size"]) <= MAX_WHISPER_TRANSCRIPTION_BYTES:
+        try:
+            raw = blob.download_as_bytes(timeout=75)
+        except Exception as exc:
+            if _storage_error_is_not_found(exc):
+                return "", "INTERNAL_AUDIO_NOT_FOUND", False
+            return "", "FIREBASE_AUDIO_DOWNLOAD_FAILED", False
+        return _transcribe_audio_bytes(raw, verified["content_type"], lang)
+    return _transcribe_managed_audio_chunks(blob, verified, lang)
+
+
+def _transcribe_audio_source(audio_url: Any, lang: str) -> Tuple[str, str, bool]:
+    """Resolve first-party managed audio locally; use HTTP only for genuine external URLs."""
+    source = _managed_audio_source_from_url(audio_url)
+    if source:
+        try:
+            return _transcribe_managed_audio(source, lang)
+        except FileNotFoundError:
+            return "", "INTERNAL_AUDIO_NOT_FOUND", False
+        except PermissionError:
+            return "", "INTERNAL_AUDIO_RESOLVE_FAILED", False
+        except ValueError:
+            return "", "INTERNAL_AUDIO_RESOLVE_FAILED", False
+        except Exception as exc:
+            if _storage_error_is_not_found(exc):
+                return "", "INTERNAL_AUDIO_NOT_FOUND", False
+            return "", "FIREBASE_AUDIO_DOWNLOAD_FAILED", False
+    if _looks_like_internal_audio_route(audio_url):
+        return "", "INTERNAL_AUDIO_RESOLVE_FAILED", False
+    return _transcribe_external_audio(audio_url, lang)
 
 
 _TS_MARKER_RE = re.compile(r"\((\d{1,2}):(\d{2})(?::(\d{2}))?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\)")
@@ -3954,86 +5561,97 @@ def _filter_fake_timestamps(answer: str, context: str, correct: str = "", lang: 
     return answer.rstrip() + ("\n\nListen again: " if lang == "en" else "\n\nNghe lại: ") + anchor
 
 
+def _audio_transcription_error_message(code: str, lang: str) -> str:
+    english = str(lang or "").lower().startswith("en")
+    messages = {
+        "AUDIO_URL_REQUIRED": (
+            "This exam does not have an audio link yet.",
+            "Đề này chưa có link audio.",
+        ),
+        "INTERNAL_AUDIO_NOT_FOUND": (
+            "The uploaded IELTS OS audio file was not found in Storage. Re-upload the audio and retry.",
+            "Không tìm thấy audio IELTS OS đã upload trong Storage. Hãy upload lại audio rồi thử lại.",
+        ),
+        "INTERNAL_AUDIO_RESOLVE_FAILED": (
+            "This IELTS OS audio link is invalid or has expired. Re-upload the audio and retry.",
+            "Link audio IELTS OS không hợp lệ hoặc đã hết hiệu lực. Hãy upload lại audio rồi thử lại.",
+        ),
+        "FIREBASE_AUDIO_DOWNLOAD_FAILED": (
+            "The server could not read this uploaded audio directly from Storage. Retry safely.",
+            "Server chưa đọc được audio đã upload trực tiếp từ Storage. Bạn có thể thử lại an toàn.",
+        ),
+        "EXTERNAL_AUDIO_TIMEOUT": (
+            "The external audio URL took too long to respond. Upload the audio file directly instead.",
+            "Link audio ngoài phản hồi quá lâu. Hãy upload file audio trực tiếp lên web.",
+        ),
+        "EXTERNAL_AUDIO_DOWNLOAD_FAILED": (
+            "The external audio URL could not be downloaded. Check that it is a direct public audio file, or upload the file directly.",
+            "Không tải được link audio ngoài. Hãy kiểm tra đó là file audio công khai trực tiếp, hoặc upload file lên web.",
+        ),
+        "TRANSCRIPTION_PROVIDER_NOT_CONFIGURED": (
+            "The server has no transcription provider configured.",
+            "Server chưa cấu hình nhà cung cấp chép lời.",
+        ),
+        "AUDIO_SOURCE_TOO_LARGE": (
+            f"Audio exceeds the managed transcription limit ({MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES // (1024 * 1024)} MB).",
+            f"Audio vượt giới hạn chép lời an toàn ({MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES // (1024 * 1024)} MB).",
+        ),
+        "AUDIO_DURATION_EXCEEDS_LIMIT": (
+            f"Audio exceeds the managed transcription duration limit ({MAX_AUDIO_TRANSCRIPTION_SECONDS // 60} minutes). Split it into separate Listening parts.",
+            f"Audio vượt giới hạn thời lượng chép lời an toàn ({MAX_AUDIO_TRANSCRIPTION_SECONDS // 60} phút). Hãy tách thành các phần Listening riêng.",
+        ),
+        "AUDIO_CHUNK_LIMIT_EXCEEDED": (
+            "Audio needs too many transcription chunks. Split it into separate Listening parts.",
+            "Audio cần quá nhiều đoạn chép lời. Hãy tách thành các phần Listening riêng.",
+        ),
+        "AUDIO_CHUNKER_UNAVAILABLE": (
+            "Large-file transcription is temporarily unavailable because no server transcription path is configured.",
+            "Chép lời file lớn đang tạm thời chưa khả dụng vì server chưa có đường xử lý phù hợp.",
+        ),
+        "AUDIO_SOURCE_DOWNLOAD_FAILED": (
+            "The managed audio could not be read from Storage. Retry safely.",
+            "Không thể đọc audio đã quản lý từ Storage. Bạn có thể thử lại an toàn.",
+        ),
+        "AUDIO_SOURCE_DOWNLOAD_INCOMPLETE": (
+            "The managed audio download was incomplete. Retry safely.",
+            "Tải audio từ Storage chưa đầy đủ. Bạn có thể thử lại an toàn.",
+        ),
+        "AUDIO_DURATION_UNAVAILABLE": (
+            "The server could not read this audio duration. Re-upload a standard MP3, M4A, WAV, OGG, WebM, AAC, or FLAC file.",
+            "Server không đọc được thời lượng audio. Hãy tải lại MP3, M4A, WAV, OGG, WebM, AAC hoặc FLAC chuẩn.",
+        ),
+        "GEMINI_FILE_TRANSCRIPTION_FAILED": (
+            "The large-file transcription fallback did not complete. Retry safely.",
+            "Đường dự phòng chép lời file lớn chưa hoàn tất. Bạn có thể thử lại an toàn.",
+        ),
+        "GEMINI_FILE_TRANSCRIPT_TRUNCATED": (
+            "The large-file transcript would be incomplete. Split the recording into separate Listening parts and retry.",
+            "Transcript file lớn sẽ bị thiếu. Hãy tách recording thành các phần Listening riêng rồi thử lại.",
+        ),
+        "PROVIDER_TRUNCATED_OUTPUT": (
+            "The transcription provider would return an incomplete transcript. Split the recording and retry.",
+            "Nhà cung cấp chép lời sẽ trả transcript thiếu. Hãy tách recording rồi thử lại.",
+        ),
+        "EMPTY": ("No spoken transcript was returned.", "Không nhận được lời thoại từ audio."),
+    }
+    selected = messages.get(str(code or ""))
+    if selected:
+        return selected[0] if english else selected[1]
+    return "Transcription could not be completed. Retry safely." if english else "Không thể hoàn tất chép lời. Bạn có thể thử lại an toàn."
+
+
 @app.post("/api/ai_transcribe")
-async def ai_transcribe(
-    payload: Dict[str, Any] = Body(...),
-):
-    """Chép lời audio bài Listening bằng Groq Whisper (1 lần, nhanh). Lưu vào đề để dùng lại."""
-    import urllib.request as _urlreq
-    import urllib.error as _urlerr
-
+async def ai_transcribe(request: Request, payload: Dict[str, Any] = Body(...)):
+    """Transcribe uploaded IELTS OS audio directly from Storage, or a small public external URL."""
+    _require_exam_manager(request)
     lang = (payload.get("lang") or "vi").lower()
-    audio_url = (payload.get("audioUrl") or "").strip()
-    if not audio_url:
-        return {"success": False, "error": "Đề này chưa có link audio."}
+    text, last_err, any_rate = await asyncio.to_thread(_transcribe_audio_source, payload.get("audioUrl"), lang)
 
-    groq_keys = _rotated_api_keys("groq_whisper", _api_key_pool("GROQ_API_KEY"))
-    gemini_keys = _rotated_api_keys("gemini_audio", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
-    if not (groq_keys or gemini_keys):
-        return {"success": False, "error": "Server chưa cấu hình GROQ_API_KEY hoặc GEMINI_API_KEY."}
-
-    dl_url = _normalize_audio_url(audio_url)
-    try:
-        req = _urlreq.Request(dl_url, headers={"User-Agent": "Mozilla/5.0"})
-        with _urlreq.urlopen(req, timeout=45) as r:
-            raw = r.read()
-            mime = (r.headers.get("Content-Type") or "audio/mpeg").split(";")[0].strip()
-    except Exception as e:
-        return {"success": False, "error": f"Không tải được audio từ link (đảm bảo link công khai): {e}"}
-
-    if len(raw) > 25 * 1024 * 1024:
-        return {"success": False, "error": f"File audio {len(raw)//(1024*1024)}MB > 25MB (giới hạn Whisper free). Hãy nén bitrate thấp hơn (vd 64kbps mono) hoặc tách section."}
-    if "octet" in mime or not any(k in mime for k in ["audio", "mpeg", "ogg", "wav", "mp4", "m4a", "webm"]):
-        mime = "audio/mpeg"
-
-    model = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
-    # verbose_json -> Whisper trả từng segment kèm start/end TUYỆT ĐỐI theo file audio
-    # -> transcript nhúng mốc (m:ss - m:ss) chính xác máy, hết cảnh AI bịa timestamp.
-    text = ""
-    last_err = ""
-    any_rate = False
-    for key in groq_keys:
-        text, err = _groq_transcribe_once(key, raw, mime, model)
-        if text:
-            break
-        last_err = err
-        if err == "RATE_LIMIT":
-            any_rate = True
-            continue
-        if err == "AUTH":
-            continue
-
-    if not text and gemini_keys:
-        # Gemini fallback keeps class moving if Groq Whisper is exhausted. It may
-        # return plain transcript without machine timestamps, so Groq remains first.
-        gemini_models = list(dict.fromkeys([
-            os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-            "gemini-2.0-flash",
-        ]))
-        for key in gemini_keys:
-            for gem_model in gemini_models:
-                text, err = _gemini_transcribe_once(key, raw, mime, gem_model)
-                if text:
-                    break
-                last_err = err
-                if err == "RATE_LIMIT":
-                    any_rate = True
-                    break
-                if err == "AUTH":
-                    break
-            if text:
-                break
-
-    if not text and any_rate:
-        counts = _provider_counts()
-        detail = f" providers loaded: groq×{counts['groq']}, gemini×{counts['gemini']}"
-        return {"success": False, "error": _friendly_err("RATE_LIMIT", lang) + detail}
-    if not text and last_err:
-        return {"success": False, "error": last_err}
-
-    if not text:
-        return {"success": False, "error": "Không nghe được nội dung (audio rỗng?)."}
-    return {"success": True, "transcript": text}
+    if text:
+        return {"success": True, "transcript": text}
+    if any_rate:
+        return {"success": False, "error": _friendly_err("RATE_LIMIT", lang), "code": "RATE_LIMIT"}
+    return {"success": False, "error": _audio_transcription_error_message(last_err, lang), "code": str(last_err or "EMPTY")}
 
 
 @app.get("/api/exam-media/{asset_id}")
