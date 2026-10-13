@@ -1,4 +1,18 @@
-# IELTS OS — Session Handoff (cập nhật 2026-09-07)
+# IELTS OS — Session Handoff (cập nhật 2026-10-13)
+
+## Teacher Dashboard and Navbar Manuscript standard — 2026-10-13
+
+- `#root` styling in `src/index.css` no longer forces `text-align: center;` or fixed `width: 1126px; border-inline`, preventing global center-alignment bleed into teacher/admin dashboards and exam views.
+- Top navbar `.ios-tabs-container` cleanly hides scrollbars (`scrollbar-width: none`, `::-webkit-scrollbar { display: none }`) and `.tab-btn` is tightened to `padding: 6px 12px; font-size: 13px; border-radius: 8px`, accommodating all 8 teacher tabs on standard laptop viewports.
+- Removed duplicate floating language toggle in the Teacher Portal bottom-left (already provided by `<LanguageToggle role="TEACHER" />` in the top navbar).
+- Restyled bottom-right scroll-to-top button to 38×38 Manuscript card aesthetic.
+- Standardized Teacher Dashboard ledger card and schedule item rows to left-aligned editorial layout with 3px left accent borders (`borderLeft`), `var(--mono)` time badges, safe link pills for HTTP URLs, compact link chips for materials, and standardized action button groups.
+- Flattened the right-hand column calendar and announcement into a seamless unified panel container without card-in-card nesting, replacing raw `<` / `>` text with SVG chevrons and adding a subtle clear button for active announcements.
+
+## Test-room SVG media rendering — 2026-09-16
+
+- `formatContent()` must validate remote image URLs by parsing `new URL(url).pathname`, not by matching the whole URL or using `url.endsWith(...)`. Firebase Storage SVG downloads keep `.svg` in the pathname but add `?alt=media&token=...`; query-blind raster-only regexes make the test room fail to render them.
+- Keep remote SVG rendering on ordinary `<img src={url}>` paths with `max-width:100%`, `height:auto` and `object-fit:contain`. Do not fetch SVG text or inject it into the DOM.
 
 ## AI raw-DOCX batch and delivery-mode rules — 2026-09-09
 
@@ -19,7 +33,11 @@
 - Keep the raw-DOCX first pass structural only (`correct_answers=[]`, no explanations). Answers and grounded explanations belong to the bounded per-question Solver stage; asking the first pass to emit both duplicates work and can truncate a large canonical JSON response before its strict schema gate.
 - The raw durable worker must explicitly clamp `question_workers` to at least one. `PipelineConfig(question_workers=0)` is reserved for fixtures that already contain answers; applying it to structure-only production input creates an unanswerable exam and must fail closed.
 - A terminal malformed canonical JSON failure retains its final raw model response only in the private Storage result payload (`provider_response_debug`) so it can be diagnosed without exposing it in a Firestore row or the browser UI. Keep this debug artifact private and bounded to 60,000 characters.
-- The browser sends `/advance` only when a durable row is `QUEUED`; it polls processing rows without repeatedly claiming them. Cross-tab Firestore contention is normal and must return a fresh batch snapshot, not HTTP 503. `retry_retriable_files` may requeue only `GENERATION*` provider diagnostics and creates a fresh job ID.
+- Raw-DOCX provider routing must receive a monotonic inner deadline below the outer retry watchdog. The generic chat router keeps legacy behavior for ordinary routes; only `ExistingBackendProvider` uses short bounded attempts and family rotation. Never rely on cancelling a Python worker thread to stop an active `urlopen`.
+- The raw-DOCX Solver defaults to two concurrent question workers to avoid free-provider burst limits. Each Solver/repair response must contain a non-empty answer list plus `explanation.why` and an exact `explanation.evidence.quote`; malformed valid JSON is kept only in the private `question_response_debug` artifact, never on a Firestore row or UI.
+- The browser sends `/advance` only when a durable row is `QUEUED`; it polls processing rows without repeatedly claiming them. Cross-tab Firestore contention is normal and must return a fresh batch snapshot, not HTTP 503. Explicit retries may requeue provider, incomplete Solver/repair, and worker failures with a fresh job ID; previous private diagnostic pointers remain in retry history. Parser/quality failures remain protected.
+- Renew active worker leases independently of AI progress callbacks, and fence artifact/catalog/terminal writes behind a successful ownership check. Stop the timer before terminal completion. A blocked AI call must not silently expire a healthy worker's lease.
+- Source/media preflight may transition directly from `QUEUED` to `MANUAL_REVIEW`. Blocking unsupported input must preserve the actual diagnosis, never raise an illegal-transition `WORKER_FAILURE` instead.
 - A Firebase service-account private key was exposed outside the repository. Rotate that key in Google Cloud/Firebase and replace only the encrypted Vercel `FIREBASE_SERVICE_ACCOUNT_JSON`; never commit or paste a replacement into source/chat.
 
 ## Annotation layers and shared answer dragging — 2026-09-09
@@ -145,3 +163,11 @@
 - Hạ tầng, deploy, cache, storage, build hoặc quy chuẩn làm việc mới: cập nhật `SESSION_HANDOFF.md` trong cùng thay đổi.
 - Backend, API, parser hoặc quy trình bóc/tạo DOCX mới: cập nhật `DOCX_FORMATTER_PLAYBOOK.md` trong cùng thay đổi.
 - Các luật trên cũng được ghi trong `AGENTS.md`; không commit hoặc báo hoàn thành khi tài liệu thuộc phạm vi chưa đồng bộ.
+
+## Managed audio upload and transcription — 2026-09-13
+
+- Listening audio must upload browser-to-Storage through `POST /api/exam-audio/uploads` → signed `PUT` → `POST /api/exam-audio/uploads/{uploadId}/complete`. Do not proxy the source file through Vercel: its request body limit makes large audio unreliable. Both ticket endpoints require a Firebase-verified exam manager; the ticket owns one exact object path and expires within 30 minutes.
+- The completion endpoint is the trust boundary: it verifies the signed object's owner ticket, size, canonical MIME, filename and audio header before issuing the stable `/api/audio/...` proxy URL. Server-side transcription must not HTTP-fetch that first-party route. Resolve it with the same audio-key decoder, validate the `exam-audio/` Storage path/token, and download bytes directly with Firebase Admin. Genuine small public external audio URLs may still use the bounded HTTP path, but invalid `/api/audio/...` tokens must fail as internal resolve errors instead of falling through to external fetch.
+- A browser signed `PUT` needs a real bucket CORS rule. The initializer checks/merges only configured trusted origins and fails before upload if it cannot do so. `FIREBASE_SERVICE_ACCOUNT_JSON` therefore needs Storage bucket metadata/CORS update permission as well as object permissions. Add every preview origin deliberately in `AUDIO_UPLOAD_CORS_ORIGINS`; do not open CORS to `*`.
+- Whisper requests remain below 23 MiB. Large managed recordings are transcoded via the bundled `imageio-ffmpeg` binary to ordered 16 kHz mono 32 kbps chunks, then real Whisper timestamps are offset to source time. Keep the production envelope at no more than five 9-minute chunks / 45 minutes / two workers: Vercel allows 300 seconds, so a larger job must fail closed with a split instruction rather than become a worker timeout. The Gemini File API is private, bounded fallback only when the local transcoder cannot run.
+- Service worker and the audio proxy must keep bypassing media and `Range` caching. A managed audio URL is intentionally same-origin and range-preserving for native Listening playback; never replace it with a redirect that loses the `Range` header.

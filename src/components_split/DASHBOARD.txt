@@ -23,13 +23,13 @@
             <div style={{ display: "grid", gap: 24 }}>
 
               {/* SỔ CÁI — Manuscript/Editorial: hairline + thanh accent dọc, serif cho con số chính, mono cho số liệu */}
-              <div className="dRise" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, padding: '14px 26px', borderBottom: `1px solid ${C.border}` }}>
+              <div className="dRise" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, padding: '14px 26px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' }}>
                   <div style={{ fontFamily: 'var(--heading)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.sub }}>{t('net_profit')}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: C.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dDateLine}</div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 1.5fr) repeat(3, minmax(0, 1fr))', alignItems: 'stretch' }}>
-                  <div style={{ minWidth: 0, overflow: 'hidden', padding: '24px 26px 22px', borderLeft: `3px solid ${C.accent}` }}>
+                  <div style={{ minWidth: 0, overflow: 'hidden', padding: '24px 26px 22px', borderLeft: `3px solid ${C.accent}`, textAlign: 'left' }}>
                     <div style={{ fontFamily: 'var(--display)', fontSize: 'clamp(26px, 2.6vw, 44px)', fontWeight: 550, letterSpacing: '-0.02em', lineHeight: 1.05, color: C.text, whiteSpace: 'nowrap' }}>{fmtMoney(stats.net)}</div>
                     <div style={{ display: 'flex', gap: 22, marginTop: 14, flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 12.5, color: C.sub }}>{t('total_revenue')} <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: C.text, marginLeft: 4 }}>{fmtMoney(stats.totalRev)}</span></div>
@@ -41,16 +41,18 @@
                     { lb: t('drive_docs'), vl: String(Array.isArray(sharedLinks) ? sharedLinks.length : 0), sub: null as any, meter: null as any },
                     { lb: t('total_teaching_hours'), vl: `${teachHrs.toFixed(1)}h`, sub: `/ ${hrsTarget}h`, meter: hrsPct },
                   ].map((cell, ci) => (
-                    <div key={ci} className="dLedgerCell" style={{ minWidth: 0, overflow: 'hidden', padding: '24px 20px 22px', borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 12 }}>
+                    <div key={ci} className="dLedgerCell" style={{ minWidth: 0, overflow: 'hidden', padding: '24px 20px 22px', borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', gap: 10, textAlign: 'left' }}>
                       <div style={{ fontFamily: 'var(--heading)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.sub, lineHeight: 1.4 }}>{cell.lb}</div>
                       <div>
                         <div style={{ fontFamily: 'var(--display)', fontSize: 'clamp(22px, 1.8vw, 30px)', fontWeight: 550, color: C.text, lineHeight: 1, whiteSpace: 'nowrap' }}>{cell.vl}{cell.sub && <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: C.sub, marginLeft: 5 }}>{cell.sub}</span>}</div>
-                        {cell.meter !== null && (
-                          <div style={{ marginTop: 10, height: 3, background: C.border, borderRadius: 2, overflow: 'hidden' }}>
+                      </div>
+                      {cell.meter !== null && (
+                        <div style={{ marginTop: 'auto', paddingTop: 6 }}>
+                          <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: 'hidden' }}>
                             <div className="dMeter" style={{ width: `${Math.round(cell.meter * 100)}%`, height: '100%', background: C.accent }} />
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -58,12 +60,22 @@
 
               <div className="dRise" style={{ animationDelay:'0.16s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
                 {/* Header sổ lịch — Manuscript: micro-label + ngày serif + nút thêm phẳng */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: '14px 26px', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: '14px 26px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontFamily: 'var(--heading)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.sub }}>{t('teaching_schedule')}</div>
-                    <div style={{ fontFamily: 'var(--display)', fontSize: 21, fontWeight: 550, color: C.text, marginTop: 2 }}>{viewDate}</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+                      <div style={{ fontFamily: 'var(--display)', fontSize: 21, fontWeight: 550, color: C.text }}>{viewDate}</div>
+                      {(() => {
+                        const vd = new Date(viewDate + 'T00:00:00');
+                        return !isNaN(vd.getTime()) ? (
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: C.sub }}>
+                            {vd.toLocaleDateString(i18n.language === 'vi' ? 'vi-VN' : 'en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
-                  <button onClick={() => setShowSchedForm(!showSchedForm)} style={{ background: showSchedForm ? 'transparent' : C.accent, color: showSchedForm ? C.sub : '#fff', border: showSchedForm ? `1px solid ${C.border}` : '1px solid transparent', padding: "9px 18px", fontSize: 12, fontWeight: 700, borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0, transition: '.15s' }}>
+                  <button onClick={() => setShowSchedForm(!showSchedForm)} style={{ background: showSchedForm ? 'transparent' : C.accent, color: showSchedForm ? C.sub : '#fff', border: showSchedForm ? `1px solid ${C.border}` : '1px solid transparent', padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0, transition: '.15s', cursor: 'pointer' }}>
                     <Ico name={showSchedForm ? "x" : "plus"} size={13} />
                     {showSchedForm ? t('common_cancel') : t('add_schedule')}
                   </button>
@@ -103,56 +115,306 @@
                 <div style={{ padding: '16px 26px 20px' }}>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {schedules.filter(s => s && s.date === viewDate).map(s => (
-                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: "15px", background: C.bg, borderRadius: 10, border: `1px solid ${s.status === 'DONE' ? C.succ : s.status === 'ABSENT' ? C.err : C.border}` }}>
-                      <div>
-                        <div style={{fontWeight:800, fontSize: 14}}>{safeString(s.studentName)} <span style={{background: `${C.accent}20`, color: C.accent, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 8}}>{safeString(s.time)}</span>
-                          {s.status === 'DONE' && <span style={{background: `${C.succ}20`, color: C.succ, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_done')}<Ico name="check" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
-                          {s.status === 'ABSENT' && <span style={{background: `${C.err}20`, color: C.err, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_was_absent')}<Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
+                  {schedules.filter(s => s && s.date === viewDate).map(s => {
+                    const isDone = s.status === 'DONE';
+                    const isAbsent = s.status === 'ABSENT';
+                    const isPending = !s.status || s.status === 'PENDING';
+                    const isHttpLocation = typeof s.location === 'string' && /^https?:\/\//i.test(s.location.trim());
+
+                    return (
+                      <div
+                        key={s.id}
+                        style={{
+                          background: C.card,
+                          border: `1px solid ${C.border}`,
+                          borderLeft: `3px solid ${isDone ? C.succ : isAbsent ? C.err : C.accent}`,
+                          borderRadius: 10,
+                          padding: '14px 18px',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 9,
+                        }}
+                      >
+                        {/* Top row: time badge, student name, status pill, and actions */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '2px 7px', borderRadius: 5, color: C.text }}>
+                              {safeString(s.time) || '--:--'}
+                            </span>
+                            <span style={{ fontSize: 14.5, fontWeight: 700, color: C.text }}>
+                              {safeString(s.studentName)}
+                            </span>
+                            {isDone && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${C.succ}18`, color: C.succ, border: `1px solid ${C.succ}35`, padding: '2px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700 }}>
+                                <Ico name="check" size={12} />
+                                {t('att_done')}
+                              </span>
+                            )}
+                            {isAbsent && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}30`, padding: '2px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700 }}>
+                                <Ico name="x" size={12} />
+                                {t('att_was_absent')}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Action buttons */}
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {isPending ? (
+                              <>
+                                <button
+                                  onClick={() => markAttendance(s, true)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    background: `${C.succ}18`,
+                                    color: C.succ,
+                                    border: `1px solid ${C.succ}40`,
+                                    padding: '5px 10px',
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Ico name="check" size={12} />
+                                  {t('att_present')}
+                                </button>
+                                <button
+                                  onClick={() => markAttendance(s, false)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    background: `${C.err}12`,
+                                    color: C.err,
+                                    border: `1px solid ${C.err}35`,
+                                    padding: '5px 10px',
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Ico name="x" size={12} />
+                                  {t('att_absent')}
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  const nx = schedules.map(x => x.id === s.id ? { ...x, status: 'PENDING' as const } : x);
+                                  setSchedules(nx);
+                                  syncData({ schedules: nx });
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  background: C.bg,
+                                  color: C.sub,
+                                  border: `1px solid ${C.border}`,
+                                  padding: '5px 10px',
+                                  fontSize: 11.5,
+                                  fontWeight: 600,
+                                  borderRadius: 6,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {t('att_reschedule')}
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                background: C.bg,
+                                color: C.text,
+                                border: `1px solid ${C.border}`,
+                                padding: '5px 10px',
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                              }}
+                              title={t('remind_schedule')}
+                            >
+                              <Ico name="bell" size={12} color={C.accent} />
+                              {t('remind_schedule')}
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                const nx = schedules.filter(x => x && x.id !== s.id);
+                                setSchedules(nx);
+                                syncData({ schedules: nx });
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                background: 'transparent',
+                                color: C.err,
+                                border: `1px solid ${C.border}`,
+                                padding: '5px 10px',
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                              }}
+                              title={t('common_delete')}
+                            >
+                              <Ico name="trash" size={13} />
+                              {t('common_delete')}
+                            </button>
+                          </div>
                         </div>
-                        <div style={{fontSize:12, color:C.sub, marginTop: 4}}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
-                        {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
-                        {!!s.materials?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 8 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>{material.label || material.url}</a>)}</div>}
-                      </div>
-                      <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
-                          {(!s.status || s.status === 'PENDING') ? (
+
+                        {/* Metadata line */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.sub, flexWrap: 'wrap' }}>
+                          <span>{safeString(s.teacher)}</span>
+                          {s.duration ? (
                             <>
-                              <button onClick={() => markAttendance(s, true)} style={{ background: C.succ, color: '#fff', fontSize: 12, padding: '4px 8px', fontWeight: 700 }}><Ico name="check" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('att_present')}</button>
-                              <button onClick={() => markAttendance(s, false)} style={{ background: `${C.err}15`, color: C.err, fontSize: 12, padding: '4px 8px' }}><Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('att_absent')}</button>
+                              <span>•</span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>{s.duration}'</span>
                             </>
-                          ) : (
-                              <button onClick={() => { const nx=schedules.map(x => x.id===s.id ? {...x, status: 'PENDING' as const} : x); setSchedules(nx); syncData({schedules:nx}); }} style={{ background: C.bg, color: C.sub, border: `1px solid ${C.border}`, fontSize: 12, padding: '4px 8px' }}>{t('att_reschedule')}</button>
-                          )}
-                          <button onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)} style={{ background: `${C.succ}20`, color: C.succ, fontSize: 12, padding: '4px 8px' }}>{t('remind_schedule')}</button>
-                          <button onClick={()=>{ const nx=schedules.filter(x=>x && x.id!==s.id); setSchedules(nx); syncData({schedules:nx}); }} style={{ color: C.err, background: "none", fontSize: 12 }}>{t('common_delete')}</button>
+                          ) : null}
+                          {s.location ? (
+                            <>
+                              <span>•</span>
+                              {isHttpLocation ? (
+                                <a
+                                  href={s.location.trim()}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    color: C.accent,
+                                    textDecoration: 'none',
+                                    fontWeight: 600,
+                                    background: `${C.accent}10`,
+                                    padding: '2px 8px',
+                                    borderRadius: 4,
+                                    border: `1px solid ${C.accent}25`,
+                                    fontSize: 11.5,
+                                  }}
+                                >
+                                  <Ico name="ext" size={11} />
+                                  <span>{s.location.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] || 'Link'}</span>
+                                </a>
+                              ) : (
+                                <span>{safeString(s.location)}</span>
+                              )}
+                            </>
+                          ) : null}
+                        </div>
+
+                        {/* Lesson content */}
+                        {s.lessonContent && (
+                          <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55, marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}`, whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                            {s.lessonContent}
+                          </div>
+                        )}
+
+                        {/* Materials */}
+                        {!!s.materials?.length && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: s.lessonContent ? 4 : 8, textAlign: 'left' }}>
+                            {s.materials.map(material => (
+                              <a
+                                key={material.id}
+                                href={material.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  fontSize: 11.5,
+                                  color: C.accent,
+                                  fontWeight: 600,
+                                  background: C.bg,
+                                  border: `1px solid ${C.border}`,
+                                  padding: '3px 9px',
+                                  borderRadius: 5,
+                                  textDecoration: 'none',
+                                }}
+                              >
+                                <Ico name="ext" size={11} />
+                                <span>{material.label || material.url}</span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {schedules.filter(s => s && s.date === viewDate).length === 0 && <div style={{textAlign:'center', color:C.sub, padding:30, fontSize: 13}}>{t('no_schedule_day')}</div>}
                 </div>
                 </div>
               </div>
             </div>
 
-            <div className="card dRise" style={{height:'fit-content', animationDelay:'0.12s'}}>
-              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20}}>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px'}}>{"<"}</button>
-                <div style={{fontWeight:900, fontSize:15, textTransform: 'uppercase'}}>{calHeader}</div>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px'}}>{">"}</button>
-              </div>
-              <div className="cal-grid">
-                {["S","M","T","W","T","F","S"].map((d, i) => <div key={i} style={{textAlign:'center', fontSize:10, fontWeight:900, color:C.sub, marginBottom: 8}}>{d}</div>)}
-                {calendarDays.map((d, idx) => d ? (
-                  <div key={idx} onClick={() => setViewDate(d.date)} className={`cal-day ${d.hasSched ? 'has-sched' : ''} ${d.date === viewDate ? 'selected' : ''}`}>{d.day}</div>
-                ) : <div key={`empty-${idx}`} className="cal-day empty" />)}
+            <div className="dRise" style={{ height: 'fit-content', animationDelay: '0.12s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: `1px solid ${C.border}` }}>
+                <button
+                  onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth() - 1))}
+                  style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, cursor: 'pointer', padding: 0 }}
+                  aria-label="Previous month"
+                >
+                  <Ico name="chevLeft" size={15} />
+                </button>
+                <div style={{ fontFamily: 'var(--heading)', fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.text }}>
+                  {calHeader}
+                </div>
+                <button
+                  onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth() + 1))}
+                  style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, cursor: 'pointer', padding: 0 }}
+                  aria-label="Next month"
+                >
+                  <Ico name="chevRight" size={15} />
+                </button>
               </div>
 
-              <div style={{marginTop: 30, padding: 16, background: C.bg, borderRadius: 12, border: `1px solid ${C.border}` }}>
-                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub, display:'flex', alignItems:'center', gap:6, textTransform:'uppercase', letterSpacing:0.5}}><Ico name="pin" size={13} color={C.accent} /> {t('announce_to_students')}</label>
-                  <div style={{display: 'flex', gap: 5, marginTop: 8}}>
-                      <input placeholder={t('announce_ph')} value={announcement} onChange={e => setAnnouncement(e.target.value)} onBlur={() => syncData({announcement})} style={{background: C.card}} />
-                      <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.err, color: '#fff', padding: '0 15px'}} title={t('clear_announce')}>X</button>
-                  </div>
+              <div style={{ padding: '16px 20px 20px' }}>
+                <div className="cal-grid">
+                  {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                    <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 900, color: C.sub, marginBottom: 8, fontFamily: 'var(--heading)' }}>{d}</div>
+                  ))}
+                  {calendarDays.map((d, idx) => d ? (
+                    <div key={idx} onClick={() => setViewDate(d.date)} className={`cal-day ${d.hasSched ? 'has-sched' : ''} ${d.date === viewDate ? 'selected' : ''}`}>{d.day}</div>
+                  ) : <div key={`empty-${idx}`} className="cal-day empty" />)}
+                </div>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: '16px 20px', background: C.bg, textAlign: 'left' }}>
+                <label style={{ fontFamily: 'var(--heading)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.sub, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Ico name="pin" size={12} color={C.accent} /> {t('announce_to_students')}
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    placeholder={t('announce_ph')}
+                    value={announcement}
+                    onChange={e => setAnnouncement(e.target.value)}
+                    onBlur={() => syncData({ announcement })}
+                    style={{ background: C.card, padding: '8px 12px', fontSize: 13, flex: 1, border: `1px solid ${C.border}`, borderRadius: 8 }}
+                  />
+                  {announcement.trim().length > 0 && (
+                    <button
+                      onClick={() => { setAnnouncement(""); syncData({ announcement: "" }); }}
+                      style={{ background: C.card, color: C.sub, border: `1px solid ${C.border}`, padding: '0 10px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                      title={t('clear_announce')}
+                    >
+                      <Ico name="x" size={13} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -265,9 +527,9 @@
 
             <div className="dRise" style={{ animationDelay:'0.18s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '14px 14px' }}>
               <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14}}>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 9}}>{"<"}</button>
-                <div style={{fontWeight:900, fontSize:14, textTransform: 'uppercase'}}>{calHeader}</div>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 9}}>{">"}</button>
+                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 8, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'}} aria-label="Previous month"><Ico name="chevLeft" size={14} /></button>
+                <div style={{fontWeight:700, fontSize:12, textTransform: 'uppercase', fontFamily: 'var(--heading)', letterSpacing: '0.12em', color: C.text}}>{calHeader}</div>
+                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 8, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'}} aria-label="Next month"><Ico name="chevRight" size={14} /></button>
               </div>
               <div className="cal-grid">
                 {["S","M","T","W","T","F","S"].map((d,i) => <div key={i} style={{textAlign:'center', fontSize:10, fontWeight:900, color:C.sub, marginBottom: 6}}>{d}</div>)}
@@ -280,7 +542,9 @@
                   <label style={{fontSize: 10, fontWeight: 800, color: C.sub, display:'flex', alignItems:'center', gap:6, textTransform:'uppercase', letterSpacing:0.5}}><Ico name="pin" size={13} color={C.accent} /> {t('announce_to_students')}</label>
                   <div style={{display: 'flex', gap: 5, marginTop: 8}}>
                       <input placeholder={t('announce_ph')} value={announcement} onChange={e => setAnnouncement(e.target.value)} onBlur={() => syncData({announcement})} style={{background: C.card}} />
-                      <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.err, color: '#fff', padding: '0 15px'}} title={t('clear_announce')}>X</button>
+                      {announcement.trim().length > 0 && (
+                        <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.card, color: C.sub, border: `1px solid ${C.border}`, padding: '0 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}} title={t('clear_announce')}><Ico name="x" size={13} /></button>
+                      )}
                   </div>
               </div>
             </div>

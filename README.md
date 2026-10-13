@@ -12,6 +12,8 @@ Writing instructions, student responses and corrected essays are left aligned. P
 
 Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
 
+Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase Storage SVG links with `?alt=media&token=...` query strings. Remote SVG is rendered through normal `<img>` tags, not injected as inline SVG.
+
 ## Public release additions
 
 - Writing is a first-class test type with Task 1/Task 2, attempt autosave, four-criterion grading, corrected versions, anchored comments, draft, and teacher-controlled publish.
@@ -87,7 +89,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 
 ### Quản lý học tập
 
-- Dashboard giáo viên, classroom, student records, academics, finance, history và drive.
+- Dashboard giáo viên theo chuẩn Manuscript/Editorial (sổ cái doanh thu và giờ dạy tích luỹ căn lề trái với thanh accent dọc, danh sách lịch dạy chuẩn editorial có liên kết tài liệu/phòng học thông minh, lịch tháng và bảng thông báo tích hợp tinh gọn không lồng card). Classroom, student records, academics, finance, history và drive.
 - Topic assignments/quest theo chặng, điều kiện đạt, phần thưởng và tiến độ học sinh.
 - Live Arena và các hoạt động học từ vựng.
 - Vocab notebook có đồng bộ Firestore, backup cục bộ, tombstone khi xóa và cơ chế retry khi mạng lỗi.
@@ -216,10 +218,10 @@ npm run build
 
 - Every assessment has an explicit `deliveryMode`: **Exam** keeps its saved attempt, integrity and Listening replay policy; **Practice** has unlimited attempts and disables those restrictions. Legacy records with no explicit mode remain Exam.
 - The Exam Library supports selected bulk conversion, publish, unpublish and publish-ready actions. Each action is revisioned, audited, idempotent and returns independent results; one failure never rolls back another record.
-- `AI raw DOCX` accepts 1-20 source DOCX files with an Exam/Practice and Draft/Publish-when-ready pre-setting. It preserves upload order, uses at most two leased file workers plus bounded question workers, and exposes each file's detection, stage, question progress, solve/explanation, validation, repair, parser round-trip and safe diagnostic state. Ready DOCX files can be downloaded from the batch panel.
+- `AI raw DOCX` accepts 1-20 source DOCX files with an Exam/Practice and Draft/Publish-when-ready pre-setting. It preserves upload order, uses at most two leased file workers plus two bounded Solver workers by default, and exposes each file's detection, stage, question progress, solve/explanation, validation, repair, parser round-trip and safe diagnostic state. Ready DOCX files can be downloaded from the batch panel.
 - Its first AI pass is deliberately structural: it preserves visible content and rich formatting while deferring answers and evidence-based explanations to bounded per-question Solver workers. This prevents a long full-answer JSON response from being truncated before the canonical schema gate.
 - Raw inputs, generated DOCX, parser/validation payloads and media live in Firebase Storage; batch state, ordered rows and leases live in Firestore. A Vercel function uses `/tmp` only as disposable scratch space. Browser retries and duplicate calls are safe because a worker must own a Firestore lease before it processes a file.
-- A transient AI-provider failure is reported as `FAILED / GENERATION*` with `NOT_RUN` round-trip state, never as a DOCX parser failure. Provider I/O and malformed JSON decoding share the same bounded retry envelope; canonical schema, grounding, media and parser-contract gates remain fail-closed. The batch panel offers `Retry AI` only for those provider failures.
+- A transient AI-provider failure is reported as `FAILED / GENERATION*` with `NOT_RUN` round-trip state, never as a DOCX parser failure. Raw-DOCX routing has its own monotonic deadline and rotates provider families before the outer watchdog expires; provider I/O and malformed JSON decoding share the same bounded retry envelope. Canonical schema, grounding, media and parser-contract gates remain fail-closed. An incomplete Solver/repair answer-evidence contract remains unpublished and can be retried explicitly from the batch panel.
 - The client advances a batch only while it has queued rows and a free worker slot. Cross-tab Firestore claim contention returns the latest durable snapshot rather than a visible server error.
 - Raw batch processing and output download require a Firebase-verified manager in `EXAM_MANAGER_EMAILS` (or explicit `TEACHER_EMAILS` fallback). In Vercel, set the variable to the comma-separated Firebase teacher logins (for example, `trung@ielts.os,linh@ielts.os`) before deploying; an empty allow-list deliberately returns HTTP 503. The service account also needs Firestore read/write and Firebase Storage object read/create/update/delete permission. Provision the bucket in Firebase Console before first use, then set its exact name in `FIREBASE_STORAGE_BUCKET`; `STORAGE_BUCKET_NOT_FOUND` means that the bucket is absent or the name is wrong. Set `EXAM_GENERATION_MEDIA_BASE_URL` to the canonical HTTPS site origin when generated charts/images must remain reachable outside the current production origin.
 
@@ -264,3 +266,10 @@ Ba quy tắc này là điều kiện hoàn thành của mọi thay đổi:
 3. Backend, API, parser hoặc cách bóc/tạo DOCX thay đổi: cập nhật `DOCX_FORMATTER_PLAYBOOK.md`.
 
 Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm trong [SESSION_HANDOFF.md](SESSION_HANDOFF.md). Không bắt đầu sửa code trước khi đọc file đó.
+
+## Managed Listening audio
+
+- Exam Builder uploads Listening audio directly to the project's Storage bucket through a short-lived, teacher-only signed upload ticket. The browser sends the file to Storage itself, shows progress/cancellation, and receives a stable first-party `/api/audio/...` link; it never posts a large audio body through Vercel.
+- Supported managed uploads are MP3, M4A, AAC, WAV, OGG/OGA, WebM and FLAC. The upload default is 512 MiB (`MAX_AUDIO_UPLOAD_BYTES`, capped at 1 GiB); Storage verifies filename, MIME, byte count and a file signature before returning the link.
+- Transcript generation resolves first-party `/api/audio/...` links back to the verified Storage object and downloads bytes directly with Firebase Admin, avoiding a self-HTTP loop through the app audio proxy. Small direct public external audio URLs remain supported through the older HTTP path with explicit timeout/size errors. Managed sources up to 384 MiB by default (`MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES`) that exceed Whisper's 23 MiB request envelope are deterministically converted to 16 kHz mono 32 kbps chunks and retain source-time timestamps when joined. The serverless-safe default is 45 minutes / five chunks; longer recordings are rejected with an explicit split instruction instead of timing out a Vercel function.
+- Set `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_STORAGE_BUCKET`, `EXAM_MANAGER_EMAILS`, and the canonical `APP_ALLOWED_ORIGINS`. The upload initializer installs/validates the narrow Storage CORS rule for trusted origins, so its service account needs Storage bucket metadata/CORS update permission in addition to object permissions. Add preview origins to `AUDIO_UPLOAD_CORS_ORIGINS`; use `AUDIO_PUBLIC_ORIGIN` only when storing absolute managed audio URLs.

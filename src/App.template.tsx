@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
 import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
@@ -7,7 +7,6 @@ import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import {
   deriveQuestProgress,
   emptyQuestProgress,
@@ -66,7 +65,6 @@ try {
   db = initializeFirestore(app, {});
 }
 const auth = getAuth(app);
-const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
@@ -837,9 +835,10 @@ const resources = {
       eb_audio_ph: "Enter the audio file URL...",
       eb_upload_audio: "Upload audio",
       eb_audio_uploading: "Uploading audio...",
+      eb_cancel_audio_upload: "Cancel upload",
       eb_audio_ready: "Hosted on your site",
       eb_audio_upload_failed: "Audio upload failed",
-      eb_audio_hosted_hint: "Upload MP3/M4A/WAV to create a clean site audio link.",
+      eb_audio_hosted_hint: "Upload MP3/M4A/WAV/OGG/FLAC; long audio is transcribed in safe chunks.",
       eb_audio_mode: "AUDIO MODE",
       eb_test_mode: "TEST MODE",
       eb_mode_strict: "Exam (anti-cheat on)",
@@ -1413,9 +1412,10 @@ const resources = {
       eb_audio_ph: "Nhập đường dẫn file âm thanh...",
       eb_upload_audio: "Tải audio lên",
       eb_audio_uploading: "Đang tải audio...",
+      eb_cancel_audio_upload: "Hủy tải lên",
       eb_audio_ready: "Đã lưu trên web của bạn",
       eb_audio_upload_failed: "Tải audio lỗi",
-      eb_audio_hosted_hint: "Tải MP3/M4A/WAV để tạo link audio sạch của web mình.",
+      eb_audio_hosted_hint: "Tải MP3/M4A/WAV/OGG/FLAC; audio dài sẽ được tách đoạn an toàn khi tạo transcript.",
       eb_audio_mode: "CHẾ ĐỘ AUDIO",
       eb_test_mode: "CHẾ ĐỘ LÀM BÀI",
       eb_mode_strict: "Thi thật (bật chống gian lận)",
@@ -1597,11 +1597,13 @@ interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; stat
 interface AiGenerationBatchState {
   batch_id: string;
   status: string;
+  upload_kind?: "DIRECT";
   updatedAt?: number;
   delivery_mode: DeliveryMode;
   publication_policy: "draft" | "publish_when_ready";
   totalCount?: number;
   completedCount?: number;
+  current_pipeline_version?: string;
   results: Array<{
     index?: number;
     row_id?: string;
@@ -1619,8 +1621,14 @@ interface AiGenerationBatchState {
     docx_job_id?: string;
     error?: string;
     publish_error?: string;
-    diagnostics?: Array<{ severity?: string; code?: string; question_number?: number }>;
-    progress?: { stage?: string; question_total?: number; question_completed?: number; question_failed?: number; question_number?: number; repair_attempt?: number };
+    can_retry?: boolean;
+    can_reprocess?: boolean;
+    reclaimable?: boolean;
+    pipeline_version?: string;
+    structure_state?: string;
+    source_coverage?: { state?: string; total?: number; by_state?: Record<string, number>; percentage?: number };
+    diagnostics?: Array<{ severity?: string; code?: string; stage?: string; question_number?: number; block_id?: string; block_ids?: string[]; group_id?: string; scope?: string; occurrence_id?: string; message?: string; details?: string; retryable?: boolean; recovery_attempted?: boolean | string[]; remaining_reason?: string }>;
+    progress?: { stage?: string; scope?: string; group_id?: string; block_id?: string; question_total?: number; question_completed?: number; question_failed?: number; question_number?: number; repair_attempt?: number; retryCount?: number; updatedAt?: number };
   }>;
 }
 
@@ -2160,6 +2168,24 @@ interface LiveSession { id: string; studentId: string; studentName: string; quiz
 // UTILS
 // ==========================================
 const safeString = (val: any) => (val !== null && val !== undefined) ? String(val) : "";
+const supportedImagePathRe = /\.(png|jpe?g|webp|gif|svg)$/i;
+const escapeHtmlAttribute = (value: any) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+const isSupportedRemoteImageUrl = (value: any) => {
+    const url = String(value || "").trim();
+    if (!/^https?:\/\//i.test(url)) return false;
+    try {
+        return supportedImagePathRe.test(new URL(url).pathname);
+    } catch {
+        return false;
+    }
+};
+const renderRemoteImageHtml = (url: string, alt = "Visual Content") => (
+    `<img src="${escapeHtmlAttribute(url)}" style="max-width: 100%; height: auto; object-fit: contain; border-radius: 8px; display: block; margin: 15px 0;" alt="${escapeHtmlAttribute(alt)}" />`
+);
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
@@ -2185,13 +2211,17 @@ const formatContent = (html: string) => {
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
     // BẢN VÁ 1: Thêm (src=["'])? để kiểm tra xem link đã nằm trong thẻ <img> chưa. Nếu có rồi thì BỎ QUA không bọc thêm nữa!
-    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp))(?:<\/p>)?/gi, (_match, p1, p2) => {
+    // Firebase Storage media URLs often end with .svg in the pathname but carry
+    // ?alt=media&token=... query params, so validate the URL pathname rather
+    // than using a raw url.endsWith(...) or a query-blind extension regex.
+    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
         if (p1) return _match; // Đã là hình ảnh, bỏ qua
-        return `<img src="${p2}" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px 0;" alt="Visual Content" />`;
+        if (!isSupportedRemoteImageUrl(p2)) return _match;
+        return renderRemoteImageHtml(p2);
     });
     
     res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        return `<img src="${p1}" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px 0;" alt="Visual Content" />`;
+        return renderRemoteImageHtml(p1);
     });
     
     // ==========================================
@@ -2480,6 +2510,11 @@ const Ico = ({ name, size = 18, color = "currentColor", sw = 2, style }: { name:
         edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></>,
         chevronUp: <><path d="m18 15-6-6-6 6"/></>,
         chevronDown: <><path d="m6 9 6 6 6-6"/></>,
+        chevLeft: <><path d="m15 18-6-6 6-6"/></>,
+        chevRight: <><path d="m9 18 6-6-6-6"/></>,
+        chevronLeft: <><path d="m15 18-6-6 6-6"/></>,
+        chevronRight: <><path d="m9 18 6-6-6-6"/></>,
+        ext: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></>,
         check: <><path d="M20 6 9 17l-5-5"/></>,
         xcircle: <><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></>,
         copy: <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
@@ -3533,8 +3568,10 @@ export default function IeltsSupremeOS() {
   const [aiGenerationPublicationPolicy, setAiGenerationPublicationPolicy] = useState<"draft" | "publish_when_ready">("draft");
   const [aiGenerationBatch, setAiGenerationBatch] = useState<AiGenerationBatchState | null>(null);
   const [aiGenerationBusy, setAiGenerationBusy] = useState(false);
+  const [aiGenerationUploadProgress, setAiGenerationUploadProgress] = useState<Record<string, number>>({});
   const aiGenerationBatchRef = useRef<AiGenerationBatchState | null>(null);
   const aiGenerationDriverRef = useRef({ batchId: "", inFlight: false, stopped: false, epoch: 0 });
+  const aiGenerationFinalizeRef = useRef(false);
   const aiGenerationPollTimerRef = useRef<number | null>(null);
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
@@ -3691,6 +3728,8 @@ export default function IeltsSupremeOS() {
   const [transcribeMsg, setTranscribeMsg] = useState("");
   const [audioUploadProgress, setAudioUploadProgress] = useState<number | null>(null);
   const [audioUploadMsg, setAudioUploadMsg] = useState("");
+  const audioUploadAbortRef = useRef<(() => void) | null>(null);
+  const audioUploadCancelledRef = useRef(false);
   const [vocabView, setVocabView] = useState<"list" | "study" | "game">("study");
   const [vocabFilter, setVocabFilter] = useState<string>("all");
   const [vocabKinds, setVocabKinds] = useState<string[]>(["word", "phrasal_verb", "idiom", "collocation", "grammar"]);
@@ -6683,84 +6722,125 @@ const applyWorkspaceSnapshot = (snap: any) => {
     return `${base}${ext}`;
   };
 
-  const base64UrlEncode = (value: string) =>
-    btoa(unescape(encodeURIComponent(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-
-  const buildHostedAudioUrl = (storagePath: string, token: string, fileName: string) => {
-    const host = getApiBase() || window.location.origin;
-    const key = base64UrlEncode(`${storagePath}|${token}`);
-    return `${host}/api/audio/${key}/${encodeURIComponent(fileName)}`;
-  };
-
   const handleAudioFileUpload = async (file: File) => {
     const quiz = editingQuizRef.current || editingQuiz;
     if (!quiz) return;
-    if (!file.type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|aac)$/i.test(file.name)) {
+    if (!file.type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|oga|aac|webm|flac)$/i.test(file.name)) {
       alert("File này không phải audio hợp lệ.");
       return;
     }
+    audioUploadCancelledRef.current = false;
     setAudioUploadProgress(0);
     setAudioUploadMsg(t("eb_audio_uploading"));
     try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Please sign in again before uploading audio.");
       const safeName = makeAudioSafeName(file.name);
       const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
-      const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
-      const task = uploadBytesResumable(storageRef(storage, path), file, {
-        contentType: file.type || "audio/mpeg",
-        customMetadata: { originalName: file.name, quizId },
+      const apiBase = getApiBase();
+      const token = await user.getIdToken();
+      const initController = new AbortController();
+      audioUploadAbortRef.current = () => {
+        audioUploadCancelledRef.current = true;
+        initController.abort();
+      };
+      const initResponse = await fetch(`${apiBase}/api/exam-audio/uploads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        signal: initController.signal,
+        body: JSON.stringify({
+          quizId,
+          fileName: safeName,
+          contentType: file.type || "audio/mpeg",
+          sizeBytes: file.size,
+        }),
       });
+      const initData = await initResponse.json().catch(() => ({}));
+      if (!initResponse.ok || !initData?.uploadUrl || !initData?.uploadId) {
+        throw new Error(String(initData?.detail || initData?.error || "Could not prepare the audio upload."));
+      }
       await new Promise<void>((resolve, reject) => {
-        let sawBytes = false;
-        const noProgressTimer = window.setTimeout(() => {
-          if (!sawBytes) {
-            task.cancel();
-            reject(new Error("Upload audio bị kẹt ở 0%. Firebase Storage có thể đang bị chặn CORS/permission hoặc chưa bật quyền ghi cho exam-audio/. Hãy dán link audio công khai vào ô Audio Link để dùng tạm."));
+        const xhr = new XMLHttpRequest();
+        xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
+        Object.entries(initData.requiredHeaders || {}).forEach(([name, value]) => {
+          xhr.setRequestHeader(name, String(value));
+        });
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
           }
-        }, 20000);
-        task.on("state_changed",
-          snap => {
-            if (snap.bytesTransferred > 0) {
-              sawBytes = true;
-              window.clearTimeout(noProgressTimer);
-            }
-            setAudioUploadProgress(Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)));
-          },
-          err => {
-            window.clearTimeout(noProgressTimer);
-            reject(err);
-          },
-          () => {
-            window.clearTimeout(noProgressTimer);
-            resolve();
-          }
-        );
+        };
+        audioUploadAbortRef.current = () => {
+          audioUploadCancelledRef.current = true;
+          xhr.abort();
+        };
+        xhr.onerror = () => {
+          audioUploadAbortRef.current = null;
+          reject(new Error("The browser could not reach secure audio storage. Please try again."));
+        };
+        xhr.onabort = () => {
+          audioUploadAbortRef.current = null;
+          reject(new Error("Audio upload was cancelled."));
+        };
+        xhr.onload = () => {
+          audioUploadAbortRef.current = null;
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`));
+        };
+        xhr.send(file);
       });
-      const rawUrl = await getDownloadURL(task.snapshot.ref);
-      const token = new URL(rawUrl).searchParams.get("token") || "";
-      const hostedUrl = buildHostedAudioUrl(path, token, safeName);
+      const completeController = new AbortController();
+      audioUploadAbortRef.current = () => {
+        audioUploadCancelledRef.current = true;
+        completeController.abort();
+      };
+      const completeResponse = await fetch(`${apiBase}/api/exam-audio/uploads/${encodeURIComponent(String(initData.uploadId))}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
+        signal: completeController.signal,
+        body: "{}",
+      });
+      const completeData = await completeResponse.json().catch(() => ({}));
+      if (!completeResponse.ok || !completeData?.audioUrl) {
+        throw new Error(String(completeData?.detail || completeData?.error || "Audio upload finished but could not be finalized."));
+      }
+      const managedPath = String(completeData.audioUrl);
+      const hostedUrl = managedPath.startsWith("/") ? `${apiBase}${managedPath}` : managedPath;
       setEditingQuiz((prev: any) => prev ? { ...prev, audioUrl: hostedUrl } : prev);
       setAudioUploadMsg(t("eb_audio_ready"));
     } catch (e: any) {
+      if (audioUploadCancelledRef.current || e?.name === "AbortError") {
+        setAudioUploadMsg("");
+        return;
+      }
       console.error("Audio upload failed:", e);
       setAudioUploadMsg(t("eb_audio_upload_failed"));
-      alert((e?.message || String(e)) + "\n\nNếu lỗi permission, cần bật Firebase Storage và cho teacher được ghi vào exam-audio/.");
+      alert(e?.message || String(e));
     } finally {
+      audioUploadAbortRef.current = null;
+      audioUploadCancelledRef.current = false;
       setTimeout(() => setAudioUploadProgress(null), 1600);
     }
+  };
+
+  const cancelAudioFileUpload = () => {
+    audioUploadAbortRef.current?.();
   };
 
   const handleTranscribe = async () => {
     const quiz = editingQuiz;
     if (!quiz || transcribeLoading) return;
-    if (!quiz.audioUrl) { alert("Đề này chưa có link audio. Hãy thêm link audio trước khi tạo transcript."); return; }
+    if (!quiz.audioUrl) { alert("Đề này chưa có audio. Hãy dùng nút Upload audio trước khi tạo transcript."); return; }
     if (quiz.transcript && !confirm("Đề đã có transcript. Tạo lại sẽ ghi đè bản cũ. Tiếp tục?")) return;
     const lang = i18n.language === "vi" ? "vi" : "en";
     const API_BASE = getApiBase();
     setTranscribeLoading(true);
     setTranscribeMsg(t('eb_transcribing'));
     try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Please sign in again before creating a transcript.");
       const resp = await fetch(`${API_BASE}/api/ai_transcribe`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
         body: JSON.stringify({ lang, audioUrl: quiz.audioUrl })
       });
       const data = await resp.json();
@@ -7812,13 +7892,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const aiGenerationIsActive = (batch: AiGenerationBatchState | null | undefined) => Boolean(batch && ['STAGING', 'QUEUED', 'PROCESSING', 'RETRYING'].includes(String(batch.status || '').toUpperCase()));
-  const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => item.status === 'PROCESSING').length;
-  const aiGenerationQueuedCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'QUEUED').length;
-  const aiGenerationCanRetry = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some((item: any) => {
-    const status = String(item?.status || '').toUpperCase();
-    const codes = Array.isArray(item?.diagnostics) ? item.diagnostics.map((entry: any) => String(entry?.code || '').toUpperCase()) : [];
-    return (status === 'FAILED' || status === 'MANUAL_REVIEW') && codes.some((code: string) => ['GENERATION', 'GENERATION_TIMEOUT', 'PROVIDER_TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(code));
-  });
+  const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'PROCESSING' && item.reclaimable !== true).length;
+  // Lease expiry is evaluated by the server, never by the browser's clock.
+  const aiGenerationRunnableCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'QUEUED' || item.reclaimable === true).length;
+  const aiGenerationCanRetry = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some(item => item.can_retry === true);
+  const aiGenerationCanReprocess = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some(item => item.can_reprocess === true);
   const aiGenerationStorageKey = (uid: string) => `ielts-os:ai-generation-batch:${uid}`;
 
   const acceptAiGenerationBatch = (batchId: string, next: AiGenerationBatchState) => {
@@ -7830,8 +7908,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     setAiGenerationBatch(next);
     if (currentUser?.uid) {
       const key = aiGenerationStorageKey(currentUser.uid);
-      if (aiGenerationIsActive(next)) window.localStorage.setItem(key, batchId);
-      else window.localStorage.removeItem(key);
+      // Keep the last completed batch reachable after a deployment so old failures
+      // can be explicitly reprocessed without re-uploading their source files.
+      window.localStorage.setItem(key, batchId);
     }
     return true;
   };
@@ -7858,7 +7937,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       driver.epoch += 1;
     }
     const snapshot = aiGenerationBatchRef.current;
-    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationQueuedCount(snapshot) < 1 || aiGenerationProcessingCount(snapshot) >= 2) return;
+    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationRunnableCount(snapshot) < 1 || aiGenerationProcessingCount(snapshot) >= 2) return;
     const epoch = driver.epoch;
     driver.inFlight = true;
     try {
@@ -7882,6 +7961,55 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const finalizeAiDirectBatchUpload = async (batch: AiGenerationBatchState, suppliedToken = "") => {
+    if (!currentUser || batch.upload_kind !== 'DIRECT') return batch;
+    const rowIds = [...(batch.results || [])]
+      .sort((left, right) => Number(left.index || 0) - Number(right.index || 0))
+      .map(item => String(item.row_id || ''));
+    if (!rowIds.length || rowIds.some(rowId => !rowId)) throw new Error('The direct-upload batch has invalid row identifiers.');
+    let lastError: any = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const token = suppliedToken || await currentUser.getIdToken(attempt > 0);
+        const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batch.batch_id)}/finalize-upload`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row_ids: rowIds }),
+        });
+        const payload = await readApiJson(response);
+        if (!response.ok || !payload?.batch?.batch_id) {
+          const error: any = new Error(String(payload?.detail || payload?.error || 'Could not verify the uploaded DOCX files.'));
+          error.status = response.status;
+          throw error;
+        }
+        return payload.batch as AiGenerationBatchState;
+      } catch (error: any) {
+        lastError = error;
+        if ((Number(error?.status) > 0 && Number(error.status) < 500) || attempt >= 2) break;
+        await new Promise(resolve => window.setTimeout(resolve, 600 * (attempt + 1)));
+      }
+    }
+    throw lastError || new Error('Could not verify the uploaded DOCX files.');
+  };
+
+  const resumeAiDirectFinalize = async (batch: AiGenerationBatchState) => {
+    if (!currentUser || batch.upload_kind !== 'DIRECT' || aiGenerationFinalizeRef.current) return;
+    aiGenerationFinalizeRef.current = true;
+    try {
+      const finalized = await finalizeAiDirectBatchUpload(batch);
+      acceptAiGenerationBatch(batch.batch_id, finalized);
+      if (aiGenerationIsActive(finalized)) {
+        if (aiGenerationRunnableCount(finalized) > 0) void driveAiGenerationBatch(batch.batch_id);
+        scheduleAiGenerationPoll(batch.batch_id, 2500);
+      }
+    } catch (error) {
+      console.warn('Could not finalize the recovered direct upload:', error);
+      alert(error instanceof Error ? error.message : 'Could not verify the interrupted DOCX upload.');
+    } finally {
+      aiGenerationFinalizeRef.current = false;
+    }
+  };
+
   const pollAiGenerationBatch = async (batchId: string) => {
     if (!currentUser) return;
     try {
@@ -7894,8 +8022,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const batch = payload?.batch as AiGenerationBatchState;
       if (!batch?.batch_id) return;
       if (!acceptAiGenerationBatch(batchId, batch)) return;
+      if (batch.upload_kind === 'DIRECT' && (batch.results || []).some(item => String(item.status || '').toUpperCase() === 'STAGING')) {
+        // A recovered tab must not mark another tab's in-flight upload missing.
+        // The batch panel exposes an explicit verification action instead.
+        return;
+      }
       if (aiGenerationIsActive(aiGenerationBatchRef.current)) {
-        if (aiGenerationQueuedCount(aiGenerationBatchRef.current) > 0) void driveAiGenerationBatch(batchId);
+        if (aiGenerationRunnableCount(aiGenerationBatchRef.current) > 0) void driveAiGenerationBatch(batchId);
         scheduleAiGenerationPoll(batchId);
       } else if (aiGenerationPollTimerRef.current !== null) {
         window.clearTimeout(aiGenerationPollTimerRef.current);
@@ -7931,18 +8064,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
-  const retryAiGenerationBatch = async () => {
+  const recoverAiGenerationBatch = async (action: 'retry' | 'reprocess') => {
     const batchId = String(aiGenerationBatchRef.current?.batch_id || '');
     if (!currentUser || !/^[A-Za-z0-9_-]{12,160}$/.test(batchId) || aiGenerationBusy) return;
     setAiGenerationBusy(true);
     try {
       const token = await currentUser.getIdToken();
-      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/retry`, {
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/${action}`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       const payload = await readApiJson(response);
-      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not retry the AI DOCX batch.'));
-      if (!Number(payload?.retried || 0)) throw new Error('Only transient AI provider failures can be retried automatically.');
+      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not resume the AI DOCX batch.'));
       const batch = payload.batch as AiGenerationBatchState;
       if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
       aiGenerationDriverRef.current = { batchId, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
@@ -7950,12 +8082,61 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAiGenerationBatch(batch);
       if (currentUser.uid) window.localStorage.setItem(aiGenerationStorageKey(currentUser.uid), batchId);
       void pollAiGenerationBatch(batchId);
+      if (!Number(payload?.[action === 'retry' ? 'retried' : 'reprocessed'] || 0) && !aiGenerationIsActive(batch)) {
+        alert(action === 'retry' ? 'No transient failures are eligible for retry.' : 'No failed files from an older pipeline version need reprocessing.');
+      }
     } catch (error: any) {
-      alert(error?.message || 'Could not retry the AI DOCX batch.');
+      alert(error?.message || 'Could not resume the AI DOCX batch.');
     } finally {
       setAiGenerationBusy(false);
     }
   };
+
+  const retryAiGenerationBatch = () => recoverAiGenerationBatch('retry');
+  const reprocessAiGenerationBatch = () => recoverAiGenerationBatch('reprocess');
+  const verifyPendingAiDirectUpload = async () => {
+    const batch = aiGenerationBatchRef.current;
+    if (!batch || batch.upload_kind !== 'DIRECT' || aiGenerationBusy) return;
+    setAiGenerationBusy(true);
+    try {
+      await resumeAiDirectFinalize(batch);
+    } finally {
+      setAiGenerationBusy(false);
+    }
+  };
+
+  const uploadAiRawDocxDirect = (
+    file: File,
+    upload: { row_id?: string; upload_url?: string; method?: string; headers?: Record<string, string> },
+  ) => new Promise<void>((resolve, reject) => {
+    const rowId = String(upload.row_id || '');
+    const uploadUrl = String(upload.upload_url || '');
+    if (!rowId || !uploadUrl.startsWith('https://')) {
+      reject(new Error('Storage did not provide a valid direct-upload session.'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open(String(upload.method || 'PUT'), uploadUrl, true);
+    xhr.timeout = 10 * 60 * 1000;
+    Object.entries(upload.headers || {}).forEach(([name, value]) => xhr.setRequestHeader(name, String(value)));
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable || !event.total) return;
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      setAiGenerationUploadProgress(previous => ({ ...previous, [rowId]: percent }));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setAiGenerationUploadProgress(previous => ({ ...previous, [rowId]: 100 }));
+        resolve();
+      } else {
+        reject(new Error(`Storage rejected ${file.name} (HTTP ${xhr.status || 0}).`));
+      }
+    };
+    xhr.onerror = () => reject(new Error(`Network upload failed for ${file.name}.`));
+    xhr.ontimeout = () => reject(new Error(`Upload timed out for ${file.name}.`));
+    xhr.onabort = () => reject(new Error(`Upload was cancelled for ${file.name}.`));
+    xhr.send(file);
+  });
 
   const handleAiRawDocxBatchUpload = async (event: any) => {
     const files = Array.from(event?.target?.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
@@ -7969,19 +8150,45 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       alert('An AI batch accepts at most 20 DOCX files.');
       return;
     }
+    const oversized = files.find(file => file.size <= 0 || file.size > 20 * 1024 * 1024);
+    if (oversized) {
+      alert(`${oversized.name} must be between 1 byte and 20 MB.`);
+      return;
+    }
     setAiGenerationBusy(true);
+    setAiGenerationUploadProgress({});
     try {
-      const formData = new FormData();
-      files.forEach(file => formData.append('files', file));
-      formData.append('delivery_mode', aiGenerationDeliveryMode);
-      formData.append('publication_policy', aiGenerationPublicationPolicy);
-      formData.append('idempotency_key', makeDocxImportId('ai_batch'));
+      const idempotencyKey = makeDocxImportId('ai_batch');
       const token = await currentUser.getIdToken();
-      const response = await fetch(`${getApiBase()}/api/exam-generation/batches`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
-      });
-      const payload = await readApiJson(response);
-      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not start the AI DOCX batch.'));
+      let payload: any = null;
+      let startError: any = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(`${getApiBase()}/api/exam-generation/batches/direct`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              files: files.map(file => ({ name: file.name, size: file.size, content_type: file.type || '' })),
+              delivery_mode: aiGenerationDeliveryMode,
+              publication_policy: aiGenerationPublicationPolicy,
+              idempotency_key: idempotencyKey,
+            }),
+          });
+          payload = await readApiJson(response);
+          if (!response.ok || !payload?.batch?.batch_id) {
+            const error: any = new Error(String(payload?.detail || payload?.error || 'Could not reserve the AI DOCX upload.'));
+            error.status = response.status;
+            throw error;
+          }
+          startError = null;
+          break;
+        } catch (error: any) {
+          startError = error;
+          if ((Number(error?.status) > 0 && Number(error.status) < 500) || attempt >= 1) break;
+          await new Promise(resolve => window.setTimeout(resolve, 700));
+        }
+      }
+      if (startError || !payload?.batch?.batch_id) throw startError || new Error('Could not reserve the AI DOCX upload.');
       const batch = payload.batch as AiGenerationBatchState;
       if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
       aiGenerationDriverRef.current = { batchId: batch.batch_id, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
@@ -7989,10 +8196,39 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAiGenerationBatch(batch);
       if (currentUser.uid) {
         const key = aiGenerationStorageKey(currentUser.uid);
-        if (aiGenerationIsActive(batch)) window.localStorage.setItem(key, batch.batch_id);
-        else window.localStorage.removeItem(key);
+        window.localStorage.setItem(key, batch.batch_id);
       }
-      void pollAiGenerationBatch(batch.batch_id);
+      const uploads = Array.isArray(payload.uploads) ? payload.uploads : [];
+      const readyUploads = uploads.filter((upload: any) => String(upload?.state || '').toUpperCase() === 'READY');
+      let cursor = 0;
+      const uploadFailures: Error[] = [];
+      const uploadWorker = async () => {
+        while (cursor < readyUploads.length) {
+          const upload = readyUploads[cursor++];
+          const index = Number(upload?.index);
+          const file = files[index];
+          const batchRow = (batch.results || []).find(item => Number(item.index) === index);
+          if (!file || !batchRow || String(batchRow.row_id || '') !== String(upload?.row_id || '')) {
+            uploadFailures.push(new Error('The upload manifest does not match the selected file order.'));
+            continue;
+          }
+          try {
+            await uploadAiRawDocxDirect(file, upload);
+          } catch (error: any) {
+            uploadFailures.push(error instanceof Error ? error : new Error(String(error || 'Direct upload failed.')));
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, Math.max(1, readyUploads.length)) }, () => uploadWorker()));
+      const finalized = await finalizeAiDirectBatchUpload(batch, token);
+      aiGenerationBatchRef.current = finalized;
+      setAiGenerationBatch(finalized);
+      setAiGenerationUploadProgress({});
+      if (uploadFailures.length) console.warn('Some direct DOCX uploads did not complete:', uploadFailures);
+      if (aiGenerationIsActive(finalized)) {
+        if (aiGenerationRunnableCount(finalized) > 0) void driveAiGenerationBatch(batch.batch_id);
+        scheduleAiGenerationPoll(batch.batch_id, 2500);
+      }
     } catch (error: any) {
       alert(error?.message || 'Could not start the AI DOCX batch.');
     } finally {
@@ -9526,12 +9762,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .card ::-webkit-scrollbar-thumb { border-color: ${C.card}; }
           
           /* SEGMENTED CONTROL (IOS TABS) */
-          .ios-tabs-container { display: inline-flex; background: rgba(118, 118, 128, 0.12); padding: 4px 4px 6px; border-radius: 14px; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.28) transparent; }
-          .ios-tabs-container::-webkit-scrollbar { height: 6px; }
+          .ios-tabs-container { display: inline-flex; background: rgba(118, 118, 128, 0.12); padding: 3px; border-radius: 11px; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+          .ios-tabs-container::-webkit-scrollbar { display: none; }
           .ios-tabs-container::-webkit-scrollbar-track { background: transparent; }
           .ios-tabs-container::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.25); border-radius: 10px; }
           .ios-tabs-container::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.4); }
-          .tab-btn { padding: 8px 16px; background: transparent; color: ${C.text}; font-size: 14px; font-weight: 600; border-radius: 10px; transition: all 0.2s ease; white-space: nowrap; box-shadow: none; opacity: 0.7; }
+          .tab-btn { padding: 6px 12px; background: transparent; color: ${C.text}; font-size: 13px; font-weight: 600; border-radius: 8px; transition: all 0.2s ease; white-space: nowrap; box-shadow: none; opacity: 0.7; }
           .tab-btn:hover { opacity: 1; }
           .tab-btn.active { color: #000; background: #FFF; box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0,0,0,0.04); opacity: 1; }
           
@@ -9541,12 +9777,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           
           /* CÁC THÀNH PHẦN KHÁC */
           .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 10px; }
-          .cal-day { aspect-ratio: 1; display: grid; place-items: center; font-size: 13px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; color: ${C.text}; font-weight: 500; transition: 0.2s; }
+          .cal-day { aspect-ratio: auto; height: 34px; display: grid; place-items: center; font-family: var(--mono); font-size: 12px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; color: ${C.text}; font-weight: 500; transition: 0.2s; }
           .cal-day:hover { background: rgba(0,0,0,0.05); }
           .cal-day.empty { cursor: default; border: none; background: transparent; }
           .cal-day.empty:hover { background: transparent; }
           .cal-day.has-sched { background: ${C.accent}15; color: ${C.accent}; font-weight: 700; border-color: ${C.accent}30; }
-          .cal-day.selected { background: ${C.accent} !important; color: #fff !important; font-weight: 700; box-shadow: 0 4px 10px ${C.accent}4D; }
+          .cal-day.selected { background: ${C.accent} !important; color: #fff !important; font-weight: 700; }
           .timer-num { font-family: var(--mono), 'SFMono-Regular', Consolas, monospace; font-weight: 700; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
           @keyframes pulseFast { 0%, 100% { opacity: 1; color: ${C.err}; } 50% { opacity: 0.7; color: #ff0000; } }
           .pulse-fast { animation: pulseFast 1s infinite; }
@@ -10260,18 +10496,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       </main>
       
       {!activeExam && !isMobile && (
-          <button onClick={scrollToTop} style={{position: 'fixed', bottom: 20, right: 20, background: C.accent, color: '#fff', width: 45, height: 45, borderRadius: '50%', fontSize: 20, boxShadow: '0 4px 10px rgba(0,0,0,0.3)', zIndex: 999, border: 'none', cursor: 'pointer'}}><Ico name="arrowUp" size={20} /></button>
+          <button onClick={scrollToTop} style={{position: 'fixed', bottom: 20, right: 20, width: 38, height: 38, borderRadius: 10, background: C.card, color: C.text, border: '1px solid ' + C.border, boxShadow: '0 4px 12px rgba(26,23,38,0.08)', zIndex: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'}} title="Scroll to top"><Ico name="arrowUp" size={18} /></button>
       )}
 
-      {/* NÚT CHUYỂN ĐỔI NGÔN NGỮ NHANH */}
-      {!activeExam && !isMobile && (
-          <button 
-              onClick={() => i18n.changeLanguage(i18n.language === 'en' ? 'vi' : 'en')} 
-              style={{position: 'fixed', bottom: 20, left: 20, background: C.card, color: C.text, border: `2px solid ${C.border}`, padding: '10px 15px', borderRadius: 30, fontSize: 14, fontWeight: 900, boxShadow: '0 4px 10px rgba(0,0,0,0.1)', zIndex: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8}}
-          >
-              {i18n.language === 'en' ? 'Tiếng Việt' : 'English'}
-          </button>
-      )}
 
       {isMobile && !activeExam && (
         <>

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
 import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
@@ -7,7 +7,6 @@ import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import {
   deriveQuestProgress,
   emptyQuestProgress,
@@ -66,7 +65,6 @@ try {
   db = initializeFirestore(app, {});
 }
 const auth = getAuth(app);
-const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
@@ -837,9 +835,10 @@ const resources = {
       eb_audio_ph: "Enter the audio file URL...",
       eb_upload_audio: "Upload audio",
       eb_audio_uploading: "Uploading audio...",
+      eb_cancel_audio_upload: "Cancel upload",
       eb_audio_ready: "Hosted on your site",
       eb_audio_upload_failed: "Audio upload failed",
-      eb_audio_hosted_hint: "Upload MP3/M4A/WAV to create a clean site audio link.",
+      eb_audio_hosted_hint: "Upload MP3/M4A/WAV/OGG/FLAC; long audio is transcribed in safe chunks.",
       eb_audio_mode: "AUDIO MODE",
       eb_test_mode: "TEST MODE",
       eb_mode_strict: "Exam (anti-cheat on)",
@@ -1413,9 +1412,10 @@ const resources = {
       eb_audio_ph: "Nhập đường dẫn file âm thanh...",
       eb_upload_audio: "Tải audio lên",
       eb_audio_uploading: "Đang tải audio...",
+      eb_cancel_audio_upload: "Hủy tải lên",
       eb_audio_ready: "Đã lưu trên web của bạn",
       eb_audio_upload_failed: "Tải audio lỗi",
-      eb_audio_hosted_hint: "Tải MP3/M4A/WAV để tạo link audio sạch của web mình.",
+      eb_audio_hosted_hint: "Tải MP3/M4A/WAV/OGG/FLAC; audio dài sẽ được tách đoạn an toàn khi tạo transcript.",
       eb_audio_mode: "CHẾ ĐỘ AUDIO",
       eb_test_mode: "CHẾ ĐỘ LÀM BÀI",
       eb_mode_strict: "Thi thật (bật chống gian lận)",
@@ -1597,11 +1597,13 @@ interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; stat
 interface AiGenerationBatchState {
   batch_id: string;
   status: string;
+  upload_kind?: "DIRECT";
   updatedAt?: number;
   delivery_mode: DeliveryMode;
   publication_policy: "draft" | "publish_when_ready";
   totalCount?: number;
   completedCount?: number;
+  current_pipeline_version?: string;
   results: Array<{
     index?: number;
     row_id?: string;
@@ -1619,8 +1621,14 @@ interface AiGenerationBatchState {
     docx_job_id?: string;
     error?: string;
     publish_error?: string;
-    diagnostics?: Array<{ severity?: string; code?: string; question_number?: number }>;
-    progress?: { stage?: string; question_total?: number; question_completed?: number; question_failed?: number; question_number?: number; repair_attempt?: number };
+    can_retry?: boolean;
+    can_reprocess?: boolean;
+    reclaimable?: boolean;
+    pipeline_version?: string;
+    structure_state?: string;
+    source_coverage?: { state?: string; total?: number; by_state?: Record<string, number>; percentage?: number };
+    diagnostics?: Array<{ severity?: string; code?: string; stage?: string; question_number?: number; block_id?: string; block_ids?: string[]; group_id?: string; scope?: string; occurrence_id?: string; message?: string; details?: string; retryable?: boolean; recovery_attempted?: boolean | string[]; remaining_reason?: string }>;
+    progress?: { stage?: string; scope?: string; group_id?: string; block_id?: string; question_total?: number; question_completed?: number; question_failed?: number; question_number?: number; repair_attempt?: number; retryCount?: number; updatedAt?: number };
   }>;
 }
 
@@ -2160,6 +2168,24 @@ interface LiveSession { id: string; studentId: string; studentName: string; quiz
 // UTILS
 // ==========================================
 const safeString = (val: any) => (val !== null && val !== undefined) ? String(val) : "";
+const supportedImagePathRe = /\.(png|jpe?g|webp|gif|svg)$/i;
+const escapeHtmlAttribute = (value: any) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+const isSupportedRemoteImageUrl = (value: any) => {
+    const url = String(value || "").trim();
+    if (!/^https?:\/\//i.test(url)) return false;
+    try {
+        return supportedImagePathRe.test(new URL(url).pathname);
+    } catch {
+        return false;
+    }
+};
+const renderRemoteImageHtml = (url: string, alt = "Visual Content") => (
+    `<img src="${escapeHtmlAttribute(url)}" style="max-width: 100%; height: auto; object-fit: contain; border-radius: 8px; display: block; margin: 15px 0;" alt="${escapeHtmlAttribute(alt)}" />`
+);
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
@@ -2185,13 +2211,17 @@ const formatContent = (html: string) => {
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
     // BẢN VÁ 1: Thêm (src=["'])? để kiểm tra xem link đã nằm trong thẻ <img> chưa. Nếu có rồi thì BỎ QUA không bọc thêm nữa!
-    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp))(?:<\/p>)?/gi, (_match, p1, p2) => {
+    // Firebase Storage media URLs often end with .svg in the pathname but carry
+    // ?alt=media&token=... query params, so validate the URL pathname rather
+    // than using a raw url.endsWith(...) or a query-blind extension regex.
+    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
         if (p1) return _match; // Đã là hình ảnh, bỏ qua
-        return `<img src="${p2}" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px 0;" alt="Visual Content" />`;
+        if (!isSupportedRemoteImageUrl(p2)) return _match;
+        return renderRemoteImageHtml(p2);
     });
     
     res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        return `<img src="${p1}" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px 0;" alt="Visual Content" />`;
+        return renderRemoteImageHtml(p1);
     });
     
     // ==========================================
@@ -2480,6 +2510,11 @@ const Ico = ({ name, size = 18, color = "currentColor", sw = 2, style }: { name:
         edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></>,
         chevronUp: <><path d="m18 15-6-6-6 6"/></>,
         chevronDown: <><path d="m6 9 6 6 6-6"/></>,
+        chevLeft: <><path d="m15 18-6-6 6-6"/></>,
+        chevRight: <><path d="m9 18 6-6-6-6"/></>,
+        chevronLeft: <><path d="m15 18-6-6 6-6"/></>,
+        chevronRight: <><path d="m9 18 6-6-6-6"/></>,
+        ext: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></>,
         check: <><path d="M20 6 9 17l-5-5"/></>,
         xcircle: <><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></>,
         copy: <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
@@ -3533,8 +3568,10 @@ export default function IeltsSupremeOS() {
   const [aiGenerationPublicationPolicy, setAiGenerationPublicationPolicy] = useState<"draft" | "publish_when_ready">("draft");
   const [aiGenerationBatch, setAiGenerationBatch] = useState<AiGenerationBatchState | null>(null);
   const [aiGenerationBusy, setAiGenerationBusy] = useState(false);
+  const [aiGenerationUploadProgress, setAiGenerationUploadProgress] = useState<Record<string, number>>({});
   const aiGenerationBatchRef = useRef<AiGenerationBatchState | null>(null);
   const aiGenerationDriverRef = useRef({ batchId: "", inFlight: false, stopped: false, epoch: 0 });
+  const aiGenerationFinalizeRef = useRef(false);
   const aiGenerationPollTimerRef = useRef<number | null>(null);
   const [questDocxBatch, setQuestDocxBatch] = useState<Array<{ id: string; file: File; status: "pending" | "parsing" | "ready" | "error"; quiz?: Quiz; error?: string }>>([]);
   const [questDocxBatchBusy, setQuestDocxBatchBusy] = useState(false);
@@ -3691,6 +3728,8 @@ export default function IeltsSupremeOS() {
   const [transcribeMsg, setTranscribeMsg] = useState("");
   const [audioUploadProgress, setAudioUploadProgress] = useState<number | null>(null);
   const [audioUploadMsg, setAudioUploadMsg] = useState("");
+  const audioUploadAbortRef = useRef<(() => void) | null>(null);
+  const audioUploadCancelledRef = useRef(false);
   const [vocabView, setVocabView] = useState<"list" | "study" | "game">("study");
   const [vocabFilter, setVocabFilter] = useState<string>("all");
   const [vocabKinds, setVocabKinds] = useState<string[]>(["word", "phrasal_verb", "idiom", "collocation", "grammar"]);
@@ -6683,84 +6722,125 @@ const applyWorkspaceSnapshot = (snap: any) => {
     return `${base}${ext}`;
   };
 
-  const base64UrlEncode = (value: string) =>
-    btoa(unescape(encodeURIComponent(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-
-  const buildHostedAudioUrl = (storagePath: string, token: string, fileName: string) => {
-    const host = getApiBase() || window.location.origin;
-    const key = base64UrlEncode(`${storagePath}|${token}`);
-    return `${host}/api/audio/${key}/${encodeURIComponent(fileName)}`;
-  };
-
   const handleAudioFileUpload = async (file: File) => {
     const quiz = editingQuizRef.current || editingQuiz;
     if (!quiz) return;
-    if (!file.type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|aac)$/i.test(file.name)) {
+    if (!file.type.startsWith("audio/") && !/\.(mp3|m4a|wav|ogg|oga|aac|webm|flac)$/i.test(file.name)) {
       alert("File này không phải audio hợp lệ.");
       return;
     }
+    audioUploadCancelledRef.current = false;
     setAudioUploadProgress(0);
     setAudioUploadMsg(t("eb_audio_uploading"));
     try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Please sign in again before uploading audio.");
       const safeName = makeAudioSafeName(file.name);
       const quizId = String(quiz.id || getTrueTime()).replace(/[^a-zA-Z0-9_-]/g, "");
-      const path = `exam-audio/${quizId}/${Date.now()}_${safeName}`;
-      const task = uploadBytesResumable(storageRef(storage, path), file, {
-        contentType: file.type || "audio/mpeg",
-        customMetadata: { originalName: file.name, quizId },
+      const apiBase = getApiBase();
+      const token = await user.getIdToken();
+      const initController = new AbortController();
+      audioUploadAbortRef.current = () => {
+        audioUploadCancelledRef.current = true;
+        initController.abort();
+      };
+      const initResponse = await fetch(`${apiBase}/api/exam-audio/uploads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        signal: initController.signal,
+        body: JSON.stringify({
+          quizId,
+          fileName: safeName,
+          contentType: file.type || "audio/mpeg",
+          sizeBytes: file.size,
+        }),
       });
+      const initData = await initResponse.json().catch(() => ({}));
+      if (!initResponse.ok || !initData?.uploadUrl || !initData?.uploadId) {
+        throw new Error(String(initData?.detail || initData?.error || "Could not prepare the audio upload."));
+      }
       await new Promise<void>((resolve, reject) => {
-        let sawBytes = false;
-        const noProgressTimer = window.setTimeout(() => {
-          if (!sawBytes) {
-            task.cancel();
-            reject(new Error("Upload audio bị kẹt ở 0%. Firebase Storage có thể đang bị chặn CORS/permission hoặc chưa bật quyền ghi cho exam-audio/. Hãy dán link audio công khai vào ô Audio Link để dùng tạm."));
+        const xhr = new XMLHttpRequest();
+        xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
+        Object.entries(initData.requiredHeaders || {}).forEach(([name, value]) => {
+          xhr.setRequestHeader(name, String(value));
+        });
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
           }
-        }, 20000);
-        task.on("state_changed",
-          snap => {
-            if (snap.bytesTransferred > 0) {
-              sawBytes = true;
-              window.clearTimeout(noProgressTimer);
-            }
-            setAudioUploadProgress(Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)));
-          },
-          err => {
-            window.clearTimeout(noProgressTimer);
-            reject(err);
-          },
-          () => {
-            window.clearTimeout(noProgressTimer);
-            resolve();
-          }
-        );
+        };
+        audioUploadAbortRef.current = () => {
+          audioUploadCancelledRef.current = true;
+          xhr.abort();
+        };
+        xhr.onerror = () => {
+          audioUploadAbortRef.current = null;
+          reject(new Error("The browser could not reach secure audio storage. Please try again."));
+        };
+        xhr.onabort = () => {
+          audioUploadAbortRef.current = null;
+          reject(new Error("Audio upload was cancelled."));
+        };
+        xhr.onload = () => {
+          audioUploadAbortRef.current = null;
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`));
+        };
+        xhr.send(file);
       });
-      const rawUrl = await getDownloadURL(task.snapshot.ref);
-      const token = new URL(rawUrl).searchParams.get("token") || "";
-      const hostedUrl = buildHostedAudioUrl(path, token, safeName);
+      const completeController = new AbortController();
+      audioUploadAbortRef.current = () => {
+        audioUploadCancelledRef.current = true;
+        completeController.abort();
+      };
+      const completeResponse = await fetch(`${apiBase}/api/exam-audio/uploads/${encodeURIComponent(String(initData.uploadId))}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
+        signal: completeController.signal,
+        body: "{}",
+      });
+      const completeData = await completeResponse.json().catch(() => ({}));
+      if (!completeResponse.ok || !completeData?.audioUrl) {
+        throw new Error(String(completeData?.detail || completeData?.error || "Audio upload finished but could not be finalized."));
+      }
+      const managedPath = String(completeData.audioUrl);
+      const hostedUrl = managedPath.startsWith("/") ? `${apiBase}${managedPath}` : managedPath;
       setEditingQuiz((prev: any) => prev ? { ...prev, audioUrl: hostedUrl } : prev);
       setAudioUploadMsg(t("eb_audio_ready"));
     } catch (e: any) {
+      if (audioUploadCancelledRef.current || e?.name === "AbortError") {
+        setAudioUploadMsg("");
+        return;
+      }
       console.error("Audio upload failed:", e);
       setAudioUploadMsg(t("eb_audio_upload_failed"));
-      alert((e?.message || String(e)) + "\n\nNếu lỗi permission, cần bật Firebase Storage và cho teacher được ghi vào exam-audio/.");
+      alert(e?.message || String(e));
     } finally {
+      audioUploadAbortRef.current = null;
+      audioUploadCancelledRef.current = false;
       setTimeout(() => setAudioUploadProgress(null), 1600);
     }
+  };
+
+  const cancelAudioFileUpload = () => {
+    audioUploadAbortRef.current?.();
   };
 
   const handleTranscribe = async () => {
     const quiz = editingQuiz;
     if (!quiz || transcribeLoading) return;
-    if (!quiz.audioUrl) { alert("Đề này chưa có link audio. Hãy thêm link audio trước khi tạo transcript."); return; }
+    if (!quiz.audioUrl) { alert("Đề này chưa có audio. Hãy dùng nút Upload audio trước khi tạo transcript."); return; }
     if (quiz.transcript && !confirm("Đề đã có transcript. Tạo lại sẽ ghi đè bản cũ. Tiếp tục?")) return;
     const lang = i18n.language === "vi" ? "vi" : "en";
     const API_BASE = getApiBase();
     setTranscribeLoading(true);
     setTranscribeMsg(t('eb_transcribing'));
     try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Please sign in again before creating a transcript.");
       const resp = await fetch(`${API_BASE}/api/ai_transcribe`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
         body: JSON.stringify({ lang, audioUrl: quiz.audioUrl })
       });
       const data = await resp.json();
@@ -7812,13 +7892,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const aiGenerationIsActive = (batch: AiGenerationBatchState | null | undefined) => Boolean(batch && ['STAGING', 'QUEUED', 'PROCESSING', 'RETRYING'].includes(String(batch.status || '').toUpperCase()));
-  const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => item.status === 'PROCESSING').length;
-  const aiGenerationQueuedCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'QUEUED').length;
-  const aiGenerationCanRetry = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some((item: any) => {
-    const status = String(item?.status || '').toUpperCase();
-    const codes = Array.isArray(item?.diagnostics) ? item.diagnostics.map((entry: any) => String(entry?.code || '').toUpperCase()) : [];
-    return (status === 'FAILED' || status === 'MANUAL_REVIEW') && codes.some((code: string) => ['GENERATION', 'GENERATION_TIMEOUT', 'PROVIDER_TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(code));
-  });
+  const aiGenerationProcessingCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'PROCESSING' && item.reclaimable !== true).length;
+  // Lease expiry is evaluated by the server, never by the browser's clock.
+  const aiGenerationRunnableCount = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).filter(item => String(item.status || '').toUpperCase() === 'QUEUED' || item.reclaimable === true).length;
+  const aiGenerationCanRetry = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some(item => item.can_retry === true);
+  const aiGenerationCanReprocess = (batch: AiGenerationBatchState | null | undefined) => (batch?.results || []).some(item => item.can_reprocess === true);
   const aiGenerationStorageKey = (uid: string) => `ielts-os:ai-generation-batch:${uid}`;
 
   const acceptAiGenerationBatch = (batchId: string, next: AiGenerationBatchState) => {
@@ -7830,8 +7908,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     setAiGenerationBatch(next);
     if (currentUser?.uid) {
       const key = aiGenerationStorageKey(currentUser.uid);
-      if (aiGenerationIsActive(next)) window.localStorage.setItem(key, batchId);
-      else window.localStorage.removeItem(key);
+      // Keep the last completed batch reachable after a deployment so old failures
+      // can be explicitly reprocessed without re-uploading their source files.
+      window.localStorage.setItem(key, batchId);
     }
     return true;
   };
@@ -7858,7 +7937,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       driver.epoch += 1;
     }
     const snapshot = aiGenerationBatchRef.current;
-    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationQueuedCount(snapshot) < 1 || aiGenerationProcessingCount(snapshot) >= 2) return;
+    if (driver.inFlight || driver.stopped || !aiGenerationIsActive(snapshot) || snapshot?.batch_id !== batchId || aiGenerationRunnableCount(snapshot) < 1 || aiGenerationProcessingCount(snapshot) >= 2) return;
     const epoch = driver.epoch;
     driver.inFlight = true;
     try {
@@ -7882,6 +7961,55 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const finalizeAiDirectBatchUpload = async (batch: AiGenerationBatchState, suppliedToken = "") => {
+    if (!currentUser || batch.upload_kind !== 'DIRECT') return batch;
+    const rowIds = [...(batch.results || [])]
+      .sort((left, right) => Number(left.index || 0) - Number(right.index || 0))
+      .map(item => String(item.row_id || ''));
+    if (!rowIds.length || rowIds.some(rowId => !rowId)) throw new Error('The direct-upload batch has invalid row identifiers.');
+    let lastError: any = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const token = suppliedToken || await currentUser.getIdToken(attempt > 0);
+        const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batch.batch_id)}/finalize-upload`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row_ids: rowIds }),
+        });
+        const payload = await readApiJson(response);
+        if (!response.ok || !payload?.batch?.batch_id) {
+          const error: any = new Error(String(payload?.detail || payload?.error || 'Could not verify the uploaded DOCX files.'));
+          error.status = response.status;
+          throw error;
+        }
+        return payload.batch as AiGenerationBatchState;
+      } catch (error: any) {
+        lastError = error;
+        if ((Number(error?.status) > 0 && Number(error.status) < 500) || attempt >= 2) break;
+        await new Promise(resolve => window.setTimeout(resolve, 600 * (attempt + 1)));
+      }
+    }
+    throw lastError || new Error('Could not verify the uploaded DOCX files.');
+  };
+
+  const resumeAiDirectFinalize = async (batch: AiGenerationBatchState) => {
+    if (!currentUser || batch.upload_kind !== 'DIRECT' || aiGenerationFinalizeRef.current) return;
+    aiGenerationFinalizeRef.current = true;
+    try {
+      const finalized = await finalizeAiDirectBatchUpload(batch);
+      acceptAiGenerationBatch(batch.batch_id, finalized);
+      if (aiGenerationIsActive(finalized)) {
+        if (aiGenerationRunnableCount(finalized) > 0) void driveAiGenerationBatch(batch.batch_id);
+        scheduleAiGenerationPoll(batch.batch_id, 2500);
+      }
+    } catch (error) {
+      console.warn('Could not finalize the recovered direct upload:', error);
+      alert(error instanceof Error ? error.message : 'Could not verify the interrupted DOCX upload.');
+    } finally {
+      aiGenerationFinalizeRef.current = false;
+    }
+  };
+
   const pollAiGenerationBatch = async (batchId: string) => {
     if (!currentUser) return;
     try {
@@ -7894,8 +8022,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const batch = payload?.batch as AiGenerationBatchState;
       if (!batch?.batch_id) return;
       if (!acceptAiGenerationBatch(batchId, batch)) return;
+      if (batch.upload_kind === 'DIRECT' && (batch.results || []).some(item => String(item.status || '').toUpperCase() === 'STAGING')) {
+        // A recovered tab must not mark another tab's in-flight upload missing.
+        // The batch panel exposes an explicit verification action instead.
+        return;
+      }
       if (aiGenerationIsActive(aiGenerationBatchRef.current)) {
-        if (aiGenerationQueuedCount(aiGenerationBatchRef.current) > 0) void driveAiGenerationBatch(batchId);
+        if (aiGenerationRunnableCount(aiGenerationBatchRef.current) > 0) void driveAiGenerationBatch(batchId);
         scheduleAiGenerationPoll(batchId);
       } else if (aiGenerationPollTimerRef.current !== null) {
         window.clearTimeout(aiGenerationPollTimerRef.current);
@@ -7931,18 +8064,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
-  const retryAiGenerationBatch = async () => {
+  const recoverAiGenerationBatch = async (action: 'retry' | 'reprocess') => {
     const batchId = String(aiGenerationBatchRef.current?.batch_id || '');
     if (!currentUser || !/^[A-Za-z0-9_-]{12,160}$/.test(batchId) || aiGenerationBusy) return;
     setAiGenerationBusy(true);
     try {
       const token = await currentUser.getIdToken();
-      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/retry`, {
+      const response = await fetch(`${getApiBase()}/api/exam-generation/batches/${encodeURIComponent(batchId)}/${action}`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       const payload = await readApiJson(response);
-      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not retry the AI DOCX batch.'));
-      if (!Number(payload?.retried || 0)) throw new Error('Only transient AI provider failures can be retried automatically.');
+      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not resume the AI DOCX batch.'));
       const batch = payload.batch as AiGenerationBatchState;
       if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
       aiGenerationDriverRef.current = { batchId, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
@@ -7950,12 +8082,61 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAiGenerationBatch(batch);
       if (currentUser.uid) window.localStorage.setItem(aiGenerationStorageKey(currentUser.uid), batchId);
       void pollAiGenerationBatch(batchId);
+      if (!Number(payload?.[action === 'retry' ? 'retried' : 'reprocessed'] || 0) && !aiGenerationIsActive(batch)) {
+        alert(action === 'retry' ? 'No transient failures are eligible for retry.' : 'No failed files from an older pipeline version need reprocessing.');
+      }
     } catch (error: any) {
-      alert(error?.message || 'Could not retry the AI DOCX batch.');
+      alert(error?.message || 'Could not resume the AI DOCX batch.');
     } finally {
       setAiGenerationBusy(false);
     }
   };
+
+  const retryAiGenerationBatch = () => recoverAiGenerationBatch('retry');
+  const reprocessAiGenerationBatch = () => recoverAiGenerationBatch('reprocess');
+  const verifyPendingAiDirectUpload = async () => {
+    const batch = aiGenerationBatchRef.current;
+    if (!batch || batch.upload_kind !== 'DIRECT' || aiGenerationBusy) return;
+    setAiGenerationBusy(true);
+    try {
+      await resumeAiDirectFinalize(batch);
+    } finally {
+      setAiGenerationBusy(false);
+    }
+  };
+
+  const uploadAiRawDocxDirect = (
+    file: File,
+    upload: { row_id?: string; upload_url?: string; method?: string; headers?: Record<string, string> },
+  ) => new Promise<void>((resolve, reject) => {
+    const rowId = String(upload.row_id || '');
+    const uploadUrl = String(upload.upload_url || '');
+    if (!rowId || !uploadUrl.startsWith('https://')) {
+      reject(new Error('Storage did not provide a valid direct-upload session.'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open(String(upload.method || 'PUT'), uploadUrl, true);
+    xhr.timeout = 10 * 60 * 1000;
+    Object.entries(upload.headers || {}).forEach(([name, value]) => xhr.setRequestHeader(name, String(value)));
+    xhr.upload.onprogress = event => {
+      if (!event.lengthComputable || !event.total) return;
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      setAiGenerationUploadProgress(previous => ({ ...previous, [rowId]: percent }));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setAiGenerationUploadProgress(previous => ({ ...previous, [rowId]: 100 }));
+        resolve();
+      } else {
+        reject(new Error(`Storage rejected ${file.name} (HTTP ${xhr.status || 0}).`));
+      }
+    };
+    xhr.onerror = () => reject(new Error(`Network upload failed for ${file.name}.`));
+    xhr.ontimeout = () => reject(new Error(`Upload timed out for ${file.name}.`));
+    xhr.onabort = () => reject(new Error(`Upload was cancelled for ${file.name}.`));
+    xhr.send(file);
+  });
 
   const handleAiRawDocxBatchUpload = async (event: any) => {
     const files = Array.from(event?.target?.files || []).filter((file: any): file is File => file instanceof File && /\.docx$/i.test(file.name));
@@ -7969,19 +8150,45 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       alert('An AI batch accepts at most 20 DOCX files.');
       return;
     }
+    const oversized = files.find(file => file.size <= 0 || file.size > 20 * 1024 * 1024);
+    if (oversized) {
+      alert(`${oversized.name} must be between 1 byte and 20 MB.`);
+      return;
+    }
     setAiGenerationBusy(true);
+    setAiGenerationUploadProgress({});
     try {
-      const formData = new FormData();
-      files.forEach(file => formData.append('files', file));
-      formData.append('delivery_mode', aiGenerationDeliveryMode);
-      formData.append('publication_policy', aiGenerationPublicationPolicy);
-      formData.append('idempotency_key', makeDocxImportId('ai_batch'));
+      const idempotencyKey = makeDocxImportId('ai_batch');
       const token = await currentUser.getIdToken();
-      const response = await fetch(`${getApiBase()}/api/exam-generation/batches`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData,
-      });
-      const payload = await readApiJson(response);
-      if (!response.ok || !payload?.batch?.batch_id) throw new Error(String(payload?.detail || payload?.error || 'Could not start the AI DOCX batch.'));
+      let payload: any = null;
+      let startError: any = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(`${getApiBase()}/api/exam-generation/batches/direct`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              files: files.map(file => ({ name: file.name, size: file.size, content_type: file.type || '' })),
+              delivery_mode: aiGenerationDeliveryMode,
+              publication_policy: aiGenerationPublicationPolicy,
+              idempotency_key: idempotencyKey,
+            }),
+          });
+          payload = await readApiJson(response);
+          if (!response.ok || !payload?.batch?.batch_id) {
+            const error: any = new Error(String(payload?.detail || payload?.error || 'Could not reserve the AI DOCX upload.'));
+            error.status = response.status;
+            throw error;
+          }
+          startError = null;
+          break;
+        } catch (error: any) {
+          startError = error;
+          if ((Number(error?.status) > 0 && Number(error.status) < 500) || attempt >= 1) break;
+          await new Promise(resolve => window.setTimeout(resolve, 700));
+        }
+      }
+      if (startError || !payload?.batch?.batch_id) throw startError || new Error('Could not reserve the AI DOCX upload.');
       const batch = payload.batch as AiGenerationBatchState;
       if (aiGenerationPollTimerRef.current !== null) window.clearTimeout(aiGenerationPollTimerRef.current);
       aiGenerationDriverRef.current = { batchId: batch.batch_id, inFlight: false, stopped: false, epoch: aiGenerationDriverRef.current.epoch + 1 };
@@ -7989,10 +8196,39 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setAiGenerationBatch(batch);
       if (currentUser.uid) {
         const key = aiGenerationStorageKey(currentUser.uid);
-        if (aiGenerationIsActive(batch)) window.localStorage.setItem(key, batch.batch_id);
-        else window.localStorage.removeItem(key);
+        window.localStorage.setItem(key, batch.batch_id);
       }
-      void pollAiGenerationBatch(batch.batch_id);
+      const uploads = Array.isArray(payload.uploads) ? payload.uploads : [];
+      const readyUploads = uploads.filter((upload: any) => String(upload?.state || '').toUpperCase() === 'READY');
+      let cursor = 0;
+      const uploadFailures: Error[] = [];
+      const uploadWorker = async () => {
+        while (cursor < readyUploads.length) {
+          const upload = readyUploads[cursor++];
+          const index = Number(upload?.index);
+          const file = files[index];
+          const batchRow = (batch.results || []).find(item => Number(item.index) === index);
+          if (!file || !batchRow || String(batchRow.row_id || '') !== String(upload?.row_id || '')) {
+            uploadFailures.push(new Error('The upload manifest does not match the selected file order.'));
+            continue;
+          }
+          try {
+            await uploadAiRawDocxDirect(file, upload);
+          } catch (error: any) {
+            uploadFailures.push(error instanceof Error ? error : new Error(String(error || 'Direct upload failed.')));
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, Math.max(1, readyUploads.length)) }, () => uploadWorker()));
+      const finalized = await finalizeAiDirectBatchUpload(batch, token);
+      aiGenerationBatchRef.current = finalized;
+      setAiGenerationBatch(finalized);
+      setAiGenerationUploadProgress({});
+      if (uploadFailures.length) console.warn('Some direct DOCX uploads did not complete:', uploadFailures);
+      if (aiGenerationIsActive(finalized)) {
+        if (aiGenerationRunnableCount(finalized) > 0) void driveAiGenerationBatch(batch.batch_id);
+        scheduleAiGenerationPoll(batch.batch_id, 2500);
+      }
     } catch (error: any) {
       alert(error?.message || 'Could not start the AI DOCX batch.');
     } finally {
@@ -9526,12 +9762,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .card ::-webkit-scrollbar-thumb { border-color: ${C.card}; }
           
           /* SEGMENTED CONTROL (IOS TABS) */
-          .ios-tabs-container { display: inline-flex; background: rgba(118, 118, 128, 0.12); padding: 4px 4px 6px; border-radius: 14px; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.28) transparent; }
-          .ios-tabs-container::-webkit-scrollbar { height: 6px; }
+          .ios-tabs-container { display: inline-flex; background: rgba(118, 118, 128, 0.12); padding: 3px; border-radius: 11px; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+          .ios-tabs-container::-webkit-scrollbar { display: none; }
           .ios-tabs-container::-webkit-scrollbar-track { background: transparent; }
           .ios-tabs-container::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.25); border-radius: 10px; }
           .ios-tabs-container::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.4); }
-          .tab-btn { padding: 8px 16px; background: transparent; color: ${C.text}; font-size: 14px; font-weight: 600; border-radius: 10px; transition: all 0.2s ease; white-space: nowrap; box-shadow: none; opacity: 0.7; }
+          .tab-btn { padding: 6px 12px; background: transparent; color: ${C.text}; font-size: 13px; font-weight: 600; border-radius: 8px; transition: all 0.2s ease; white-space: nowrap; box-shadow: none; opacity: 0.7; }
           .tab-btn:hover { opacity: 1; }
           .tab-btn.active { color: #000; background: #FFF; box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0,0,0,0.04); opacity: 1; }
           
@@ -9541,12 +9777,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           
           /* CÁC THÀNH PHẦN KHÁC */
           .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 10px; }
-          .cal-day { aspect-ratio: 1; display: grid; place-items: center; font-size: 13px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; color: ${C.text}; font-weight: 500; transition: 0.2s; }
+          .cal-day { aspect-ratio: auto; height: 34px; display: grid; place-items: center; font-family: var(--mono); font-size: 12px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; color: ${C.text}; font-weight: 500; transition: 0.2s; }
           .cal-day:hover { background: rgba(0,0,0,0.05); }
           .cal-day.empty { cursor: default; border: none; background: transparent; }
           .cal-day.empty:hover { background: transparent; }
           .cal-day.has-sched { background: ${C.accent}15; color: ${C.accent}; font-weight: 700; border-color: ${C.accent}30; }
-          .cal-day.selected { background: ${C.accent} !important; color: #fff !important; font-weight: 700; box-shadow: 0 4px 10px ${C.accent}4D; }
+          .cal-day.selected { background: ${C.accent} !important; color: #fff !important; font-weight: 700; }
           .timer-num { font-family: var(--mono), 'SFMono-Regular', Consolas, monospace; font-weight: 700; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
           @keyframes pulseFast { 0%, 100% { opacity: 1; color: ${C.err}; } 50% { opacity: 0.7; color: #ff0000; } }
           .pulse-fast { animation: pulseFast 1s infinite; }
@@ -10621,7 +10857,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
                   .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
                   .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
-                  .rv-map-review-stage img { display:block; width:100%; height:auto; }
+                  .rv-map-review-stage img { display:block; width:100%; max-width:100%; height:auto; object-fit:contain; }
                   .rv-map-review-slot { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:92px; min-height:44px; padding:5px 8px; border:2px solid; background:#fff; font:700 12px/1.25 Inter,sans-serif; text-align:center; cursor:pointer; transition:box-shadow .15s, transform .15s; }
                   .rv-map-review-slot:hover, .rv-map-review-slot.is-selected { transform:translate(-50%,-50%) scale(1.04); box-shadow:0 0 0 4px rgba(79,70,229,.16); z-index:3; }
                   .rv-map-review-slot-number { position:absolute; top:-17px; left:0; padding:1px 4px; background:#fff; color:#475569; font-size:10px; font-weight:900; }
@@ -10720,7 +10956,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   );
               })()}
               {renderMeetAudioNotice()}
-              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
+              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
                   {!rvActiveIsListening && (() => {
                       const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
                       const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
@@ -10757,7 +10993,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   })}
                               </div>
                           )}
-                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
+                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
                           {hasSlots ? (() => {
                               const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>|\[HEADING_SLOT\]/gi);
                               return (
@@ -10834,10 +11070,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       );
 
                   })()}
-                  <div onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                  <div className="exam-column-splitter" onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        title="Drag to resize"
-                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'col-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'ew-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
                        <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                            <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
@@ -10845,7 +11081,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                        </div>
                   </div>
                   {isDraggingSplitter && (
-                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'col-resize', userSelect: 'none' }}
+                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'ew-resize', userSelect: 'none' }}
                            onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
                            onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
                            onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
@@ -11709,6 +11945,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               event?.dataTransfer?.getData("text/plain") ||
               selectedDragAnswer;
 
+          // Summary gaps render a persistent question-number label alongside an
+          // answer.  Never derive a dragged answer from textContent there: it
+          // also contains the visible number.
+          const readRenderedDropzoneAnswer = (zone: HTMLElement) =>
+              String(zone.dataset.answer ?? zone.textContent ?? "").trim();
+
           const readDraggedSource = (event: any) =>
               event?.dataTransfer?.getData("application/x-ielts-source-qid") || dragSourceQuestionRef.current || "";
 
@@ -12376,8 +12618,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .writing-editor:focus { border-color:#0969da; box-shadow:0 0 0 1px #0969da; }
                       .writing-editor-meta { display:flex; justify-content:flex-end; align-items:center; gap:18px; min-height:32px; padding-top:8px; color:var(--esub); font-size:12px; }
                       .writing-save-state { font-weight:700; }
-                      .writing-divider { width:28px; margin:0 -9px; cursor:col-resize; z-index:30; display:flex; align-items:stretch; justify-content:center; flex:none; position:relative; touch-action:none; }
+                      .writing-divider { width:28px; margin:0 -9px; cursor:ew-resize; z-index:30; display:flex; align-items:stretch; justify-content:center; flex:none; position:relative; touch-action:none; }
                       .writing-divider-track { width:10px; background:#ededed; border-left:1px solid #d1d5db; border-right:1px solid #d1d5db; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+                      /* Avoid the browser's table-column cursor: exam panes use the
+                         standard horizontal two-arrow resize cursor instead. */
+                      .exam-column-splitter, .exam-column-splitter * { cursor:ew-resize !important; }
                       @media (max-width:820px) { .idp-flowchart-layout { grid-template-columns:1fr; gap:14px; } .idp-flowchart-layout .idp-flowchart-panel { order:1; } .idp-flowchart-layout .idp-flowchart-bank { order:2; } .idp-flowchart-bank-items { flex-direction:row; flex-wrap:wrap; } .idp-flowchart-bank .idp-wordbank-item { width:fit-content; } }
                       @media (max-width:720px) { .writing-workspace { flex-direction:column; overflow:auto; } .writing-pane { width:100% !important; height:auto; overflow:visible; } .writing-prompt { padding:20px; } .writing-editor-pane { padding:16px 20px 28px; min-height:55vh; } .writing-divider { display:none; } }
                       
@@ -12595,6 +12840,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
                       .exam-content-block .idp-drag-summary.highlightable-content { line-height: 2.4 !important; }
                       .idp-drag-summary .idp-dropzone { min-width: 96px; }
+                      /* The question number is a stable part of each Summary Drag gap.
+                         Keeping it in its own node prevents native drag repaint from
+                         replacing it with an empty text node. */
+                      .idp-drag-summary .idp-summary-dropzone { display:inline-flex; align-items:center; justify-content:center; gap:6px; box-sizing:border-box; vertical-align:middle; }
+                      .idp-drag-summary .idp-summary-gap-number { display:inline-block; flex:0 0 auto; min-width:1.35em; color:inherit; font-variant-numeric:tabular-nums; line-height:1; text-align:center; }
+                      .idp-drag-summary .idp-summary-gap-answer { min-width:0; color:inherit; line-height:1.3; text-align:center; }
+                      .idp-drag-summary .idp-summary-dropzone:not(.filled) .idp-summary-gap-number { width:100%; }
 
                       /* Section header Listening */
                       .idp-section-header { font-size: 12px; font-weight: 700; color: #57606a; text-transform: uppercase; letter-spacing: 0.6px; padding: 0 0 8px 0; margin-bottom: 14px; border-bottom: 2px solid #d1d5db; display: flex; align-items: center; gap: 8px; }
@@ -12901,14 +13153,14 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   setCurrentSectionIndex(nextIndex);
               };
               return (
-                  <div className="writing-test-workspace" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }}
+                  <div className="writing-test-workspace" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }}
                       onMouseMove={(event: any) => { if (isDraggingSplitter) { const ratio = (event.clientX / window.innerWidth) * 100; if (ratio > 28 && ratio < 72) setSplitRatio(ratio); } }}
                       onMouseUp={() => setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter(false)}>
                       <div className="writing-test-prompt exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 280, overflowY: 'auto', padding: '30px 18px', boxSizing: 'border-box', lineHeight: 1.55, fontSize: 15, color: '#111', background: '#fff' }}>
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
                           {task?.mediaUrl && <img src={task.mediaUrl} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
-                      <div onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'col-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
+                      <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'ew-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center', touchAction: 'none' }}>
                           <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
                       <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
@@ -12919,12 +13171,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               <button disabled={partIndex >= writingTasks.length - 1} onClick={() => switchWritingPart(1)} aria-label="Next writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex >= writingTasks.length - 1 ? '#e4e4e4' : '#111', color: '#fff', fontSize: 28, cursor: partIndex >= writingTasks.length - 1 ? 'default' : 'pointer' }}>→</button>
                           </div>
                       </div>
-                      {isDraggingSplitter && <div style={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'col-resize', userSelect: 'none' }} onMouseMove={(event: any) => { const ratio = (event.clientX / window.innerWidth) * 100; if (ratio > 28 && ratio < 72) setSplitRatio(ratio); }} onMouseUp={() => setIsDraggingSplitter(false)} />}
+                      {isDraggingSplitter && <div style={{ position: 'absolute', inset: 0, zIndex: 20, cursor: 'ew-resize', userSelect: 'none' }} onMouseMove={(event: any) => { const ratio = (event.clientX / window.innerWidth) * 100; if (ratio > 28 && ratio < 72) setSplitRatio(ratio); }} onMouseUp={() => setIsDraggingSplitter(false)} />}
                   </div>
               );
           })()}
 
-          {!isWriting && <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'col-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
+          {!isWriting && <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
               {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
@@ -13061,10 +13313,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               )}
               {/* SPLITTER chuẩn Inspera: rãnh xám mảnh + nút vuông ↔ ở giữa. Vùng bắt chuột RỘNG 28px (đè mép 2 cột) — trỏ gần khe là kéo được. */}
               {(!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam.type === "Integrated" && currentSectionIndex === 0)) && (
-                  <div onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
+                  <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
                        title="Drag to resize"
-                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'col-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
+                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'ew-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative', touchAction: 'none' }}>
                        <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
                            <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
@@ -13074,7 +13326,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               )}
               {/* LỚP PHỦ KHI KÉO: nuốt mọi sự kiện của bảng/text bên dưới -> kéo mượt không bị gò bó */}
               {isDraggingSplitter && (
-                  <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'col-resize', userSelect: 'none' }}
+                  <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'ew-resize', userSelect: 'none' }}
                        onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
                        onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
                        onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
@@ -13112,9 +13364,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        onKeyDown={(e: any) => { if (e.key === 'Enter' && e.target && e.target.classList.contains('inline-blank-input')) { const qId = e.target.dataset.qid; if (qId) handleAutoScrollNext((activeExam!.questions || []).findIndex((x:any) => x.id === qId), (activeExam!.questions || []).length); } }}
                        onDragEnter={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
                        onDragOver={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
-                       onDragStart={(e: any) => { if (e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = String(zone.textContent || '').trim(); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
+                       onDragStart={(e: any) => { if (e.dataTransfer?.getData("application/x-ielts-source-qid") || e.dataTransfer?.getData("application/x-ielts-heading-id")) return; const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone || zone.closest('.idp-heading-slot-render') || !zone.classList.contains('filled')) return; const qId = zone.dataset.qid || ''; const answer = readRenderedDropzoneAnswer(zone); if (qId && answer) beginAnswerDrag(e, answer, answer, qId); }}
                        onDrop={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (zone) { e.preventDefault(); commitDraggedAnswer(zone.dataset.qid, readDroppedAnswer(e), true, readDraggedSource(e)); } }}
-                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(String(zone.textContent || '').trim()); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                       onClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; if (!zone) return; const qId = zone.dataset.qid || ''; if (zone.classList.contains('filled')) { dragSourceQuestionRef.current = qId; setSelectedDragAnswer(readRenderedDropzoneAnswer(zone)); } else commitDraggedAnswer(qId, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                        onDoubleClick={(e: any) => { const zone = (e.target as HTMLElement | null)?.closest?.('.idp-dropzone') as HTMLElement | null; const qId = zone?.dataset.qid; if (qId) { handleAnswerChange(qId, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); } }}>
 
                       <div style={{ width: '100%', maxWidth: (!String(activeExam!.type).toLowerCase().includes("listen") && !(activeExam!.type === "Integrated" && currentSectionIndex === 0)) ? '100%' : 1280, margin: '0 auto', padding: "12px 28px 20px", boxSizing: 'border-box' }}>
@@ -13258,6 +13510,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const isWordBankDrag = isDragDropGroup && !isSentenceEndingDrag && dragOptions.length > 0
                       && (explicitDragSubType === "SUMMARY_DRAG" || (!explicitDragSubType && hasSummarySlots));
                   const wordBankSummaryHtml = isWordBankDrag ? (() => {
+                      const escapeHtmlAttribute = (value: string) => value
+                          .replace(/&/g, "&amp;")
+                          .replace(/\"/g, "&quot;")
+                          .replace(/</g, "&lt;")
+                          .replace(/>/g, "&gt;");
                       let html = renderSafeHTML(group.context);
                       html = html.replace(/\[(\d+)\]/g, (m: string, num: string) => {
                           const tIdx = parseInt(num, 10) - 1;
@@ -13265,9 +13522,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           if (!tQ) return m;
                           const val = examAnswers[tQ.id];
                           const filled = val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0);
-                          const disp = filled ? String(val) : num;
+                          const answer = filled ? String(val) : "";
+                          const answerHtml = filled ? sanitizeRichHtml(answer).replace(/<\/?(?:div|p)\b[^>]*>/gi, "") : "";
+                          const answerLabel = answer.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
                           const currentClass = examCurrentQId === tQ.id ? ' idp-current-gap' : '';
-                          return `<span class="idp-dropzone ${filled ? 'filled' : ''}${currentClass}" data-qid="${tQ.id}" data-num="${num}" draggable="${filled ? 'true' : 'false'}" style="min-width:${groupZoneW}px">${disp}</span>`;
+                          return `<span class="idp-dropzone idp-summary-dropzone ${filled ? 'filled' : ''}${currentClass}" data-qid="${escapeHtmlAttribute(tQ.id)}" data-num="${num}" data-answer="${escapeHtmlAttribute(answer)}" draggable="${filled ? 'true' : 'false'}" aria-label="Question ${num}${filled ? `, ${escapeHtmlAttribute(answerLabel)}` : ', empty'}" style="min-width:${groupZoneW}px"><span class="idp-summary-gap-number" aria-hidden="true">${num}</span>${filled ? `<span class="idp-summary-gap-answer" aria-hidden="true">${answerHtml}</span>` : ""}</span>`;
                       });
                       return html;
                   })() : "";
@@ -15844,13 +16103,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <div style={{ display: "grid", gap: 24 }}>
 
               {/* SỔ CÁI — Manuscript/Editorial: hairline + thanh accent dọc, serif cho con số chính, mono cho số liệu */}
-              <div className="dRise" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, padding: '14px 26px', borderBottom: `1px solid ${C.border}` }}>
+              <div className="dRise" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, padding: '14px 26px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' }}>
                   <div style={{ fontFamily: 'var(--heading)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.sub }}>{t('net_profit')}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: C.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dDateLine}</div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 1.5fr) repeat(3, minmax(0, 1fr))', alignItems: 'stretch' }}>
-                  <div style={{ minWidth: 0, overflow: 'hidden', padding: '24px 26px 22px', borderLeft: `3px solid ${C.accent}` }}>
+                  <div style={{ minWidth: 0, overflow: 'hidden', padding: '24px 26px 22px', borderLeft: `3px solid ${C.accent}`, textAlign: 'left' }}>
                     <div style={{ fontFamily: 'var(--display)', fontSize: 'clamp(26px, 2.6vw, 44px)', fontWeight: 550, letterSpacing: '-0.02em', lineHeight: 1.05, color: C.text, whiteSpace: 'nowrap' }}>{fmtMoney(stats.net)}</div>
                     <div style={{ display: 'flex', gap: 22, marginTop: 14, flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 12.5, color: C.sub }}>{t('total_revenue')} <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: C.text, marginLeft: 4 }}>{fmtMoney(stats.totalRev)}</span></div>
@@ -15862,16 +16121,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     { lb: t('drive_docs'), vl: String(Array.isArray(sharedLinks) ? sharedLinks.length : 0), sub: null as any, meter: null as any },
                     { lb: t('total_teaching_hours'), vl: `${teachHrs.toFixed(1)}h`, sub: `/ ${hrsTarget}h`, meter: hrsPct },
                   ].map((cell, ci) => (
-                    <div key={ci} className="dLedgerCell" style={{ minWidth: 0, overflow: 'hidden', padding: '24px 20px 22px', borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 12 }}>
+                    <div key={ci} className="dLedgerCell" style={{ minWidth: 0, overflow: 'hidden', padding: '24px 20px 22px', borderLeft: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', gap: 10, textAlign: 'left' }}>
                       <div style={{ fontFamily: 'var(--heading)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.sub, lineHeight: 1.4 }}>{cell.lb}</div>
                       <div>
                         <div style={{ fontFamily: 'var(--display)', fontSize: 'clamp(22px, 1.8vw, 30px)', fontWeight: 550, color: C.text, lineHeight: 1, whiteSpace: 'nowrap' }}>{cell.vl}{cell.sub && <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: C.sub, marginLeft: 5 }}>{cell.sub}</span>}</div>
-                        {cell.meter !== null && (
-                          <div style={{ marginTop: 10, height: 3, background: C.border, borderRadius: 2, overflow: 'hidden' }}>
+                      </div>
+                      {cell.meter !== null && (
+                        <div style={{ marginTop: 'auto', paddingTop: 6 }}>
+                          <div style={{ height: 3, background: C.border, borderRadius: 2, overflow: 'hidden' }}>
                             <div className="dMeter" style={{ width: `${Math.round(cell.meter * 100)}%`, height: '100%', background: C.accent }} />
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -15879,12 +16140,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
               <div className="dRise" style={{ animationDelay:'0.16s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
                 {/* Header sổ lịch — Manuscript: micro-label + ngày serif + nút thêm phẳng */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: '14px 26px', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: '14px 26px', borderBottom: `1px solid ${C.border}`, textAlign: 'left' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontFamily: 'var(--heading)', fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.sub }}>{t('teaching_schedule')}</div>
-                    <div style={{ fontFamily: 'var(--display)', fontSize: 21, fontWeight: 550, color: C.text, marginTop: 2 }}>{viewDate}</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+                      <div style={{ fontFamily: 'var(--display)', fontSize: 21, fontWeight: 550, color: C.text }}>{viewDate}</div>
+                      {(() => {
+                        const vd = new Date(viewDate + 'T00:00:00');
+                        return !isNaN(vd.getTime()) ? (
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: C.sub }}>
+                            {vd.toLocaleDateString(i18n.language === 'vi' ? 'vi-VN' : 'en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
-                  <button onClick={() => setShowSchedForm(!showSchedForm)} style={{ background: showSchedForm ? 'transparent' : C.accent, color: showSchedForm ? C.sub : '#fff', border: showSchedForm ? `1px solid ${C.border}` : '1px solid transparent', padding: "9px 18px", fontSize: 12, fontWeight: 700, borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0, transition: '.15s' }}>
+                  <button onClick={() => setShowSchedForm(!showSchedForm)} style={{ background: showSchedForm ? 'transparent' : C.accent, color: showSchedForm ? C.sub : '#fff', border: showSchedForm ? `1px solid ${C.border}` : '1px solid transparent', padding: "8px 14px", fontSize: 12, fontWeight: 700, borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0, transition: '.15s', cursor: 'pointer' }}>
                     <Ico name={showSchedForm ? "x" : "plus"} size={13} />
                     {showSchedForm ? t('common_cancel') : t('add_schedule')}
                   </button>
@@ -15924,56 +16195,306 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 <div style={{ padding: '16px 26px 20px' }}>
 
                 <div style={{ display: "grid", gap: 10 }}>
-                  {schedules.filter(s => s && s.date === viewDate).map(s => (
-                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: "15px", background: C.bg, borderRadius: 10, border: `1px solid ${s.status === 'DONE' ? C.succ : s.status === 'ABSENT' ? C.err : C.border}` }}>
-                      <div>
-                        <div style={{fontWeight:800, fontSize: 14}}>{safeString(s.studentName)} <span style={{background: `${C.accent}20`, color: C.accent, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 8}}>{safeString(s.time)}</span>
-                          {s.status === 'DONE' && <span style={{background: `${C.succ}20`, color: C.succ, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_done')}<Ico name="check" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
-                          {s.status === 'ABSENT' && <span style={{background: `${C.err}20`, color: C.err, padding: '2px 6px', borderRadius: 4, fontSize: 11, marginLeft: 6, fontWeight: 800}}>{t('att_was_absent')}<Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 0 0 6px',display:'inline-block'}} /></span>}
+                  {schedules.filter(s => s && s.date === viewDate).map(s => {
+                    const isDone = s.status === 'DONE';
+                    const isAbsent = s.status === 'ABSENT';
+                    const isPending = !s.status || s.status === 'PENDING';
+                    const isHttpLocation = typeof s.location === 'string' && /^https?:\/\//i.test(s.location.trim());
+
+                    return (
+                      <div
+                        key={s.id}
+                        style={{
+                          background: C.card,
+                          border: `1px solid ${C.border}`,
+                          borderLeft: `3px solid ${isDone ? C.succ : isAbsent ? C.err : C.accent}`,
+                          borderRadius: 10,
+                          padding: '14px 18px',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 9,
+                        }}
+                      >
+                        {/* Top row: time badge, student name, status pill, and actions */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '2px 7px', borderRadius: 5, color: C.text }}>
+                              {safeString(s.time) || '--:--'}
+                            </span>
+                            <span style={{ fontSize: 14.5, fontWeight: 700, color: C.text }}>
+                              {safeString(s.studentName)}
+                            </span>
+                            {isDone && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${C.succ}18`, color: C.succ, border: `1px solid ${C.succ}35`, padding: '2px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700 }}>
+                                <Ico name="check" size={12} />
+                                {t('att_done')}
+                              </span>
+                            )}
+                            {isAbsent && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}30`, padding: '2px 8px', borderRadius: 5, fontSize: 11, fontWeight: 700 }}>
+                                <Ico name="x" size={12} />
+                                {t('att_was_absent')}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Action buttons */}
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {isPending ? (
+                              <>
+                                <button
+                                  onClick={() => markAttendance(s, true)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    background: `${C.succ}18`,
+                                    color: C.succ,
+                                    border: `1px solid ${C.succ}40`,
+                                    padding: '5px 10px',
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Ico name="check" size={12} />
+                                  {t('att_present')}
+                                </button>
+                                <button
+                                  onClick={() => markAttendance(s, false)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 5,
+                                    background: `${C.err}12`,
+                                    color: C.err,
+                                    border: `1px solid ${C.err}35`,
+                                    padding: '5px 10px',
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <Ico name="x" size={12} />
+                                  {t('att_absent')}
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  const nx = schedules.map(x => x.id === s.id ? { ...x, status: 'PENDING' as const } : x);
+                                  setSchedules(nx);
+                                  syncData({ schedules: nx });
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  background: C.bg,
+                                  color: C.sub,
+                                  border: `1px solid ${C.border}`,
+                                  padding: '5px 10px',
+                                  fontSize: 11.5,
+                                  fontWeight: 600,
+                                  borderRadius: 6,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {t('att_reschedule')}
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                background: C.bg,
+                                color: C.text,
+                                border: `1px solid ${C.border}`,
+                                padding: '5px 10px',
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                              }}
+                              title={t('remind_schedule')}
+                            >
+                              <Ico name="bell" size={12} color={C.accent} />
+                              {t('remind_schedule')}
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                const nx = schedules.filter(x => x && x.id !== s.id);
+                                setSchedules(nx);
+                                syncData({ schedules: nx });
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                background: 'transparent',
+                                color: C.err,
+                                border: `1px solid ${C.border}`,
+                                padding: '5px 10px',
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                cursor: 'pointer',
+                              }}
+                              title={t('common_delete')}
+                            >
+                              <Ico name="trash" size={13} />
+                              {t('common_delete')}
+                            </button>
+                          </div>
                         </div>
-                        <div style={{fontSize:12, color:C.sub, marginTop: 4}}>{safeString(s.teacher)} • {safeString(s.location)}{s.duration ? ` • ${s.duration}'` : ''}</div>
-                        {s.lessonContent && <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5, marginTop: 7, whiteSpace: 'pre-wrap' }}>{s.lessonContent}</div>}
-                        {!!s.materials?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 8 }}>{s.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>{material.label || material.url}</a>)}</div>}
-                      </div>
-                      <div style={{display: 'flex', gap: 5, flexWrap: 'wrap'}}>
-                          {(!s.status || s.status === 'PENDING') ? (
+
+                        {/* Metadata line */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.sub, flexWrap: 'wrap' }}>
+                          <span>{safeString(s.teacher)}</span>
+                          {s.duration ? (
                             <>
-                              <button onClick={() => markAttendance(s, true)} style={{ background: C.succ, color: '#fff', fontSize: 12, padding: '4px 8px', fontWeight: 700 }}><Ico name="check" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('att_present')}</button>
-                              <button onClick={() => markAttendance(s, false)} style={{ background: `${C.err}15`, color: C.err, fontSize: 12, padding: '4px 8px' }}><Ico name="x" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('att_absent')}</button>
+                              <span>•</span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>{s.duration}'</span>
                             </>
-                          ) : (
-                              <button onClick={() => { const nx=schedules.map(x => x.id===s.id ? {...x, status: 'PENDING' as const} : x); setSchedules(nx); syncData({schedules:nx}); }} style={{ background: C.bg, color: C.sub, border: `1px solid ${C.border}`, fontSize: 12, padding: '4px 8px' }}>{t('att_reschedule')}</button>
-                          )}
-                          <button onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)} style={{ background: `${C.succ}20`, color: C.succ, fontSize: 12, padding: '4px 8px' }}>{t('remind_schedule')}</button>
-                          <button onClick={()=>{ const nx=schedules.filter(x=>x && x.id!==s.id); setSchedules(nx); syncData({schedules:nx}); }} style={{ color: C.err, background: "none", fontSize: 12 }}>{t('common_delete')}</button>
+                          ) : null}
+                          {s.location ? (
+                            <>
+                              <span>•</span>
+                              {isHttpLocation ? (
+                                <a
+                                  href={s.location.trim()}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    color: C.accent,
+                                    textDecoration: 'none',
+                                    fontWeight: 600,
+                                    background: `${C.accent}10`,
+                                    padding: '2px 8px',
+                                    borderRadius: 4,
+                                    border: `1px solid ${C.accent}25`,
+                                    fontSize: 11.5,
+                                  }}
+                                >
+                                  <Ico name="ext" size={11} />
+                                  <span>{s.location.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] || 'Link'}</span>
+                                </a>
+                              ) : (
+                                <span>{safeString(s.location)}</span>
+                              )}
+                            </>
+                          ) : null}
+                        </div>
+
+                        {/* Lesson content */}
+                        {s.lessonContent && (
+                          <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55, marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}`, whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                            {s.lessonContent}
+                          </div>
+                        )}
+
+                        {/* Materials */}
+                        {!!s.materials?.length && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: s.lessonContent ? 4 : 8, textAlign: 'left' }}>
+                            {s.materials.map(material => (
+                              <a
+                                key={material.id}
+                                href={material.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  fontSize: 11.5,
+                                  color: C.accent,
+                                  fontWeight: 600,
+                                  background: C.bg,
+                                  border: `1px solid ${C.border}`,
+                                  padding: '3px 9px',
+                                  borderRadius: 5,
+                                  textDecoration: 'none',
+                                }}
+                              >
+                                <Ico name="ext" size={11} />
+                                <span>{material.label || material.url}</span>
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {schedules.filter(s => s && s.date === viewDate).length === 0 && <div style={{textAlign:'center', color:C.sub, padding:30, fontSize: 13}}>{t('no_schedule_day')}</div>}
                 </div>
                 </div>
               </div>
             </div>
 
-            <div className="card dRise" style={{height:'fit-content', animationDelay:'0.12s'}}>
-              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20}}>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px'}}>{"<"}</button>
-                <div style={{fontWeight:900, fontSize:15, textTransform: 'uppercase'}}>{calHeader}</div>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px'}}>{">"}</button>
-              </div>
-              <div className="cal-grid">
-                {["S","M","T","W","T","F","S"].map((d, i) => <div key={i} style={{textAlign:'center', fontSize:10, fontWeight:900, color:C.sub, marginBottom: 8}}>{d}</div>)}
-                {calendarDays.map((d, idx) => d ? (
-                  <div key={idx} onClick={() => setViewDate(d.date)} className={`cal-day ${d.hasSched ? 'has-sched' : ''} ${d.date === viewDate ? 'selected' : ''}`}>{d.day}</div>
-                ) : <div key={`empty-${idx}`} className="cal-day empty" />)}
+            <div className="dRise" style={{ height: 'fit-content', animationDelay: '0.12s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: `1px solid ${C.border}` }}>
+                <button
+                  onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth() - 1))}
+                  style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, cursor: 'pointer', padding: 0 }}
+                  aria-label="Previous month"
+                >
+                  <Ico name="chevLeft" size={15} />
+                </button>
+                <div style={{ fontFamily: 'var(--heading)', fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.text }}>
+                  {calHeader}
+                </div>
+                <button
+                  onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth() + 1))}
+                  style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, cursor: 'pointer', padding: 0 }}
+                  aria-label="Next month"
+                >
+                  <Ico name="chevRight" size={15} />
+                </button>
               </div>
 
-              <div style={{marginTop: 30, padding: 16, background: C.bg, borderRadius: 12, border: `1px solid ${C.border}` }}>
-                  <label style={{fontSize: 10, fontWeight: 800, color: C.sub, display:'flex', alignItems:'center', gap:6, textTransform:'uppercase', letterSpacing:0.5}}><Ico name="pin" size={13} color={C.accent} /> {t('announce_to_students')}</label>
-                  <div style={{display: 'flex', gap: 5, marginTop: 8}}>
-                      <input placeholder={t('announce_ph')} value={announcement} onChange={e => setAnnouncement(e.target.value)} onBlur={() => syncData({announcement})} style={{background: C.card}} />
-                      <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.err, color: '#fff', padding: '0 15px'}} title={t('clear_announce')}>X</button>
-                  </div>
+              <div style={{ padding: '16px 20px 20px' }}>
+                <div className="cal-grid">
+                  {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+                    <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 900, color: C.sub, marginBottom: 8, fontFamily: 'var(--heading)' }}>{d}</div>
+                  ))}
+                  {calendarDays.map((d, idx) => d ? (
+                    <div key={idx} onClick={() => setViewDate(d.date)} className={`cal-day ${d.hasSched ? 'has-sched' : ''} ${d.date === viewDate ? 'selected' : ''}`}>{d.day}</div>
+                  ) : <div key={`empty-${idx}`} className="cal-day empty" />)}
+                </div>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: '16px 20px', background: C.bg, textAlign: 'left' }}>
+                <label style={{ fontFamily: 'var(--heading)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.sub, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Ico name="pin" size={12} color={C.accent} /> {t('announce_to_students')}
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    placeholder={t('announce_ph')}
+                    value={announcement}
+                    onChange={e => setAnnouncement(e.target.value)}
+                    onBlur={() => syncData({ announcement })}
+                    style={{ background: C.card, padding: '8px 12px', fontSize: 13, flex: 1, border: `1px solid ${C.border}`, borderRadius: 8 }}
+                  />
+                  {announcement.trim().length > 0 && (
+                    <button
+                      onClick={() => { setAnnouncement(""); syncData({ announcement: "" }); }}
+                      style={{ background: C.card, color: C.sub, border: `1px solid ${C.border}`, padding: '0 10px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                      title={t('clear_announce')}
+                    >
+                      <Ico name="x" size={13} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -16086,9 +16607,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
             <div className="dRise" style={{ animationDelay:'0.18s', background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: '14px 14px' }}>
               <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14}}>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 9}}>{"<"}</button>
-                <div style={{fontWeight:900, fontSize:14, textTransform: 'uppercase'}}>{calHeader}</div>
-                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 9}}>{">"}</button>
+                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()-1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 8, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'}} aria-label="Previous month"><Ico name="chevLeft" size={14} /></button>
+                <div style={{fontWeight:700, fontSize:12, textTransform: 'uppercase', fontFamily: 'var(--heading)', letterSpacing: '0.12em', color: C.text}}>{calHeader}</div>
+                <button onClick={() => setCalDate(new Date(calDate.getFullYear(), calDate.getMonth()+1))} style={{background:C.bg, color:C.text, padding: '6px 12px', borderRadius: 8, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'}} aria-label="Next month"><Ico name="chevRight" size={14} /></button>
               </div>
               <div className="cal-grid">
                 {["S","M","T","W","T","F","S"].map((d,i) => <div key={i} style={{textAlign:'center', fontSize:10, fontWeight:900, color:C.sub, marginBottom: 6}}>{d}</div>)}
@@ -16101,7 +16622,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   <label style={{fontSize: 10, fontWeight: 800, color: C.sub, display:'flex', alignItems:'center', gap:6, textTransform:'uppercase', letterSpacing:0.5}}><Ico name="pin" size={13} color={C.accent} /> {t('announce_to_students')}</label>
                   <div style={{display: 'flex', gap: 5, marginTop: 8}}>
                       <input placeholder={t('announce_ph')} value={announcement} onChange={e => setAnnouncement(e.target.value)} onBlur={() => syncData({announcement})} style={{background: C.card}} />
-                      <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.err, color: '#fff', padding: '0 15px'}} title={t('clear_announce')}>X</button>
+                      {announcement.trim().length > 0 && (
+                        <button onClick={() => { setAnnouncement(""); syncData({announcement: ""}); }} style={{background: C.card, color: C.sub, border: `1px solid ${C.border}`, padding: '0 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}} title={t('clear_announce')}><Ico name="x" size={13} /></button>
+                      )}
                   </div>
               </div>
             </div>
@@ -16582,7 +17105,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>TASK INSTRUCTION</span><input value={task.instructions} onChange={event => updateWritingTask(task.id, { instructions: event.target.value })} style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
                                         <div style={{ marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 800, color: EB.sub, marginBottom: 6 }}>PROMPT</div><div style={{ border: `1px solid ${EB.line}`, borderRadius: 8, overflow: 'hidden', background: EB.sheet }}><RichTextEditor value={task.prompt} onChange={(value: string) => updateWritingTask(task.id, { prompt: value })} placeholder={`Enter ${task.title} prompt`} /></div></div>
                                         <label style={{ display: 'grid', gap: 6 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>OPTIONAL MEDIA URL</span><input type="url" value={task.mediaUrl || ''} onChange={event => updateWritingTask(task.id, { mediaUrl: event.target.value })} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
-                                        {!!task.mediaUrl && <img src={task.mediaUrl} alt={`${task.title} prompt`} style={{ display: 'block', maxWidth: '100%', maxHeight: 360, objectFit: 'contain', margin: '16px auto 0', border: `1px solid ${EB.line}` }} />}
+                                        {!!task.mediaUrl && <img src={task.mediaUrl} alt={`${task.title} prompt`} style={{ display: 'block', maxWidth: '100%', maxHeight: 360, width: 'auto', height: 'auto', objectFit: 'contain', margin: '16px auto 0', border: `1px solid ${EB.line}` }} />}
                                     </section>)}
                                 </div>;
                             })()}
@@ -17271,9 +17794,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap'}}>
                                                         <label className="ebx-soft" style={{background: EB.sheet, color: EB.ink, fontSize: 12, fontWeight: 700, padding: '9px 14px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: audioUploadProgress !== null ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: audioUploadProgress !== null ? 0.72 : 1}}>
                                                             <Ico name="cloud" size={14} /> {audioUploadProgress !== null ? `${t('eb_audio_uploading')} ${audioUploadProgress}%` : t('eb_upload_audio')}
-                                                            <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
+                                                            <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.oga,.aac,.webm,.flac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
                                                         </label>
-                                                        {audioUploadProgress !== null && <button className="ebx-soft" onClick={() => { setAudioUploadProgress(null); setAudioUploadMsg(""); }} style={{background: EB.sheet, color: C.sub, fontSize: 12, fontWeight: 700, padding: '9px 12px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer'}}>Reset upload</button>}
+                                                        {audioUploadProgress !== null && <button className="ebx-soft" onClick={cancelAudioFileUpload} style={{background: EB.sheet, color: C.sub, fontSize: 12, fontWeight: 700, padding: '9px 12px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer'}}>{t('eb_cancel_audio_upload')}</button>}
                                                         <button className="ebx-primary" onClick={handleTranscribe} disabled={transcribeLoading || !editingQuiz.audioUrl} style={{background: transcribeLoading ? C.sub : C.accent, color: '#fff', fontSize: 12, fontWeight: 600, padding: '9px 14px', borderRadius: EB.radiusSm, opacity: (transcribeLoading || !editingQuiz.audioUrl) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}>{transcribeLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {transcribeMsg || t('eb_transcribing')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="headphones" size={14} /> {t('eb_transcribe')}</span>}</button>
                                                         {audioUploadMsg ? <span style={{fontSize: 11, fontWeight: 700, color: audioUploadMsg === t('eb_audio_upload_failed') ? C.err : C.succ}}>{audioUploadMsg}</span> : (editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_audio_hosted_hint')}</span>)}
                                                     </div>
@@ -17378,17 +17901,31 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             {aiGenerationBatch && <section aria-label="AI raw DOCX batch" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, marginBottom: 28, overflow: 'hidden'}}>
                                 <div style={{padding: '15px 18px', borderBottom: `1px solid ${EB.line}`, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap'}}>
                                     <div><div style={{...ebEyebrow, marginBottom: 5}}><Ico name="file" size={13} />AI raw DOCX batch</div><div style={{fontSize: 12, color: EB.sub}}>{aiGenerationBatch.delivery_mode === 'practice' ? 'Practice · unlimited attempts · integrity checks off' : 'Exam · remembered restrictions'} · {aiGenerationBatch.publication_policy === 'publish_when_ready' ? 'publish after every gate passes' : 'keep as draft'}</div></div>
-                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}><span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>{aiGenerationCanRetry(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={retryAiGenerationBatch} style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Retry AI</button>}</div>
+                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                        <span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>
+                                        {aiGenerationBatch.upload_kind === 'DIRECT' && (aiGenerationBatch.results || []).some((item: any) => String(item.status || '').toUpperCase() === 'STAGING') && <button type="button" disabled={aiGenerationBusy} onClick={verifyPendingAiDirectUpload} title="Verify files after an interrupted browser upload." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Verify upload</button>}
+                                        {aiGenerationCanRetry(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={retryAiGenerationBatch} title="Retry only temporary provider failures and resume from the last checkpoint." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Retry transient</button>}
+                                        {aiGenerationCanReprocess(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={reprocessAiGenerationBatch} title="Rebuild failed files created by an older pipeline using their stored source DOCX." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.ink, color: '#fff', fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Reprocess latest</button>}
+                                    </div>
                                 </div>
                                 <div style={{padding: '10px 18px', display: 'grid', gap: 8}}>{(aiGenerationBatch.results || []).map((item: any, index: number) => {
                                     const progress = item.progress || {};
-                                    const diagnostic = Array.isArray(item.diagnostics) ? item.diagnostics.map((entry: any) => entry?.code).filter(Boolean).join(', ') : '';
+                                    const diagnostics = Array.isArray(item.diagnostics) ? item.diagnostics : [];
+                                    const diagnostic = diagnostics.find((entry: any) => String(entry?.severity || 'FAIL').toUpperCase() === 'FAIL') || diagnostics[0];
+                                    const diagnosticScope = diagnostic ? [diagnostic.code, diagnostic.stage, diagnostic.scope, diagnostic.question_number ? `Q${diagnostic.question_number}` : '', diagnostic.group_id, diagnostic.block_id || (Array.isArray(diagnostic.block_ids) ? diagnostic.block_ids.slice(0, 2).join('+') : ''), diagnostic.occurrence_id].filter(Boolean).join(' · ') : '';
+                                    const diagnosticMessage = String(diagnostic?.message || diagnostic?.details || diagnostic?.remaining_reason || '');
                                     const success = /^(READY_FOR_REVIEW|PUBLISHED|COMPLETE)$/i.test(String(item.status));
                                     const needsReview = /FAIL|MANUAL/i.test(String(item.status));
                                     const questionProgress = progress.question_total ? `${progress.question_completed || 0}/${progress.question_total} questions` : '';
+                                    const directUploadPercent = aiGenerationUploadProgress[String(item.row_id || '')];
                                     return <div key={`${item.row_id || item.original_filename}_${index}`} style={{display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 12, alignItems: 'center', fontSize: 12, padding: '5px 0'}}>
-                                        <div style={{minWidth: 0}}><div style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}}>{item.original_filename}</div><div style={{fontSize: 10.5, color: EB.sub, marginTop: 2}}>{[item.detected_skill, item.validation_state, item.round_trip_state, diagnostic].filter(Boolean).join(' / ')}</div>{(item.error || item.publish_error) && <div style={{fontSize: 10.5, color: C.err, marginTop: 2, lineHeight: 1.35}}>{item.error || item.publish_error}</div>}</div>
-                                        <div style={{fontFamily: EB.fMono, textAlign: 'right', color: success ? C.succ : needsReview ? C.err : EB.sub, whiteSpace: 'nowrap'}}><div>{item.status}{item.question_count ? ` / ${item.question_count}Q` : ''}</div>{(progress.stage || questionProgress) && <div style={{fontSize: 10, color: EB.sub, marginTop: 2}}>{[progress.stage, questionProgress].filter(Boolean).join(' / ')}</div>}{item.docx_job_id && <button type="button" onClick={() => downloadAiGeneratedDocx(item.docx_job_id)} style={{marginTop: 4, padding: '2px 5px', border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, borderRadius: 2, fontSize: 9, fontFamily: EB.fMono, cursor: 'pointer'}}>DOCX</button>}</div>
+                                        <div style={{minWidth: 0}}>
+                                            <div style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}}>{item.original_filename}</div>
+                                            <div style={{fontSize: 10.5, color: EB.sub, marginTop: 2}}>{[item.detected_skill, item.validation_state, item.structure_state, item.round_trip_state, typeof item.source_coverage?.percentage === 'number' ? `${item.source_coverage.percentage}% source` : ''].filter(Boolean).join(' / ')}</div>
+                                            {diagnosticScope && <div style={{fontFamily: EB.fMono, fontSize: 9.5, color: needsReview ? C.err : EB.sub, marginTop: 3, lineHeight: 1.35}}>{diagnosticScope}</div>}
+                                            {(diagnosticMessage || item.error || item.publish_error) && <div style={{fontSize: 10.5, color: C.err, marginTop: 2, lineHeight: 1.35}}>{diagnosticMessage || item.error || item.publish_error}</div>}
+                                        </div>
+                                        <div style={{fontFamily: EB.fMono, textAlign: 'right', color: success ? C.succ : needsReview ? C.err : EB.sub, whiteSpace: 'nowrap'}}><div>{typeof directUploadPercent === 'number' && directUploadPercent < 100 ? `UPLOADING ${directUploadPercent}%` : item.reclaimable ? 'RESUMABLE' : item.status}{item.question_count ? ` / ${item.question_count}Q` : ''}</div>{(progress.stage || questionProgress) && <div style={{fontSize: 10, color: EB.sub, marginTop: 2}}>{[item.reclaimable ? 'LEASE_EXPIRED' : progress.stage, questionProgress].filter(Boolean).join(' / ')}</div>}{item.can_retry && <div style={{fontSize: 9, color: EB.sub, marginTop: 2}}>TRANSIENT_RETRY_AVAILABLE</div>}{item.can_reprocess && <div style={{fontSize: 9, color: EB.sub, marginTop: 2}}>OLDER_PIPELINE</div>}{item.docx_job_id && <button type="button" onClick={() => downloadAiGeneratedDocx(item.docx_job_id)} style={{marginTop: 4, padding: '2px 5px', border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, borderRadius: 2, fontSize: 9, fontFamily: EB.fMono, cursor: 'pointer'}}>DOCX</button>}</div>
                                     </div>;
                                 })}</div>
                             </section>}
@@ -18642,18 +19179,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       </main>
       
       {!activeExam && !isMobile && (
-          <button onClick={scrollToTop} style={{position: 'fixed', bottom: 20, right: 20, background: C.accent, color: '#fff', width: 45, height: 45, borderRadius: '50%', fontSize: 20, boxShadow: '0 4px 10px rgba(0,0,0,0.3)', zIndex: 999, border: 'none', cursor: 'pointer'}}><Ico name="arrowUp" size={20} /></button>
+          <button onClick={scrollToTop} style={{position: 'fixed', bottom: 20, right: 20, width: 38, height: 38, borderRadius: 10, background: C.card, color: C.text, border: '1px solid ' + C.border, boxShadow: '0 4px 12px rgba(26,23,38,0.08)', zIndex: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'}} title="Scroll to top"><Ico name="arrowUp" size={18} /></button>
       )}
 
-      {/* NÚT CHUYỂN ĐỔI NGÔN NGỮ NHANH */}
-      {!activeExam && !isMobile && (
-          <button 
-              onClick={() => i18n.changeLanguage(i18n.language === 'en' ? 'vi' : 'en')} 
-              style={{position: 'fixed', bottom: 20, left: 20, background: C.card, color: C.text, border: `2px solid ${C.border}`, padding: '10px 15px', borderRadius: 30, fontSize: 14, fontWeight: 900, boxShadow: '0 4px 10px rgba(0,0,0,0.1)', zIndex: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8}}
-          >
-              {i18n.language === 'en' ? 'Tiếng Việt' : 'English'}
-          </button>
-      )}
 
       {isMobile && !activeExam && (
         <>
