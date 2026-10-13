@@ -1,5 +1,19 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-13)
 
+## Teacher Students Tab Manuscript Standard & Chart Upgrades — 2026-10-13
+
+- **Hệ thống giao diện học viên chuẩn Manuscript/Editorial**: Thay thế hoàn toàn giao diện dạng thẻ lồng (`.card`), nút bấm màu mè (rainbow buttons) và layout trung tâm bằng thiết kế sổ cái (ledger), bề mặt ấm (`C.card`, viền mỏng 1px hairline, góc bo 12px), và dải nhấn 3px (`borderLeft`).
+- **Sidebar danh sách học viên tối ưu độ rộng**: Nâng độ rộng cột danh sách bên trái lên `minmax(290px, 320px) minmax(0, 1fr)` với `gap: 24px`. Tách tên học viên sang hàng riêng (Line 1) không bị chèn ép bởi badge học phí, chống tràn/cắt cụt tên dài (VD: "Nguyễn Thị Ngọc Ánh"). Hàng 2 hiển thị Level, Mục tiêu Band và Trạng thái nợ học phí (`Debt: ...`).
+- **Nâng cấp biểu đồ Band Trend (`BandTrendChart`) chống tràn chữ & đè nhãn**:
+  - Tăng khoảng đệm hai biên `padL = 36, padR = 36` và căn lề trục ngày tháng (`textAnchor="start"` cho ngày đầu, `textAnchor="end"` cho ngày cuối), triệt tiêu hoàn toàn lỗi số/ngày tháng bị tràn mép phải (`31/7/2026`).
+  - Lọc bỏ các bài thi điểm 0 hoặc rác (`band < 1.0`).
+  - Cơ chế hiển thị nhãn điểm thông minh chống đè chữ: khi số điểm `<= 12` hiển thị toàn bộ; khi `> 12` chỉ hiển thị điểm đầu, điểm cuối, các đỉnh cực trị (min/max peak) và điểm đang hover.
+  - Tích hợp thanh chuyển đổi phạm vi (`Recent 15` vs `All (N)`) khi học sinh làm trên 15 bài thi.
+  - Bổ sung thanh đọc nhanh điểm số trên đỉnh biểu đồ (Quiz Title · Band · Date) tương tác mượt mà khi hover.
+- **Chuẩn hóa nhãn câu hỏi (`formatQuestionTypeLabel`)**: Chuyển đổi toàn bộ enum kỹ thuật thô (`MAP_DRAG`, `FLOWCHART_DRAG`, `SUMMARY_DRAG`, `COLUMN_DRAG`, `DIAGRAM_LABEL`, `NOTES`, `HEADINGS`, `CHOICE`, v.v.) sang tên hiển thị sư phạm rõ ràng (`Map / Plan Drag-and-Drop`, `Flow-chart Drag-and-Drop`, v.v.).
+- **Bộ lọc kết quả bài thi theo kỹ năng & tìm kiếm**: Bổ sung bộ lọc kỹ năng (`All`, `Listening`, `Reading`, `Writing`) và ô tìm kiếm tên bài thi vào tab kết quả bài làm của từng học sinh.
+- **Dải thao tác học phí & Phần thưởng đồng nhất**: Loại bỏ hoàn toàn các nút gradient/màu sặc sỡ; chuẩn hóa các nút hành động (Nhắc học phí, Thu học phí, Tặng xu, Gacha/Quà tặng) theo nút bấm chuẩn Manuscript viền hairline tinh tế.
+
 ## Exam Builder Library Shell & Desktop-Grade File Manager Manuscript Standard — 2026-10-13
 
 - **Hệ thống thư mục chuẩn file manager bền vững**: Thư mục được lưu trữ độc lập trong danh sách `examFolders` (đồng bộ Firestore qua `serverData.examFolders` và sao lưu `localStorage`), cho phép tạo và duy trì thư mục trống thực thụ mà không cần tạo quiz nháp rác `"Bản nháp (Xóa nếu không dùng)"`.

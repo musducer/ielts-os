@@ -2397,40 +2397,212 @@ const LanguageToggle = ({ role }: { role: "TEACHER" | "STUDENT" | null }) => {
 };
 
 // ==========================================
-// COMPONENT: BIỂU ĐỒ TIẾN BỘ BAND (SVG thuần, không thư viện)
+// Helper: định dạng tên dạng câu hỏi thân thiện (thay thế raw enum như MAP_DRAG)
+const formatQuestionTypeLabel = (rawType: string): string => {
+    if (!rawType) return "General";
+    const cleanKey = String(rawType).trim().toUpperCase();
+    const map: Record<string, string> = {
+        MAP_DRAG: "Map Labelling (Drag)",
+        FLOWCHART_DRAG: "Flow-chart (Drag)",
+        SUMMARY_DRAG: "Summary Completion (Drag)",
+        COLUMN_DRAG: "Matching Features",
+        DIAGRAM_LABEL: "Diagram Labelling",
+        MAP_LABELLING: "Map Labelling",
+        NOTES: "Note Completion",
+        SENTENCE: "Sentence Completion",
+        SUMMARY: "Summary Completion",
+        TABLE: "Table Completion",
+        FLOWCHART: "Flow-chart Completion",
+        HEADINGS: "Matching Headings",
+        FEATURES: "Matching Features",
+        INFORMATION: "Matching Information",
+        CHOICE: "Multiple Choice",
+        MULTIPLE_CHOICE: "Multiple Choice",
+        CHOICE_MULTIPLE: "Multi-select",
+        MATCHING: "Matching",
+        BLANK: "Completion",
+        SHORT_ANSWER: "Short Answer",
+        TRUE_FALSE_NOT_GIVEN: "True/False/Not Given",
+        YES_NO_NOT_GIVEN: "Yes/No/Not Given"
+    };
+    return map[cleanKey] || rawType;
+};
+
 // ==========================================
-const BandTrendChart = ({ data, color = "#4338ca", height = 170 }: { data: { label: string; band: number }[]; color?: string; height?: number }) => {
-    const pts = (data || [])
-        .map(d => ({ label: d.label, band: Math.max(0, Math.min(9, Number(d.band))) }))
-        .filter(d => !isNaN(d.band));
-    if (pts.length === 0) return <div style={{ textAlign: "center", color: "#94a3b8", padding: 24, fontSize: 13 }}>—</div>;
-    const W = 320, H = height, padL = 26, padR = 12, padT = 14, padB = 24;
+// COMPONENT: BIỂU ĐỒ TIẾN BỘ BAND (SVG thuần, chuẩn Manuscript / Editorial)
+// ==========================================
+interface BandPoint {
+    label: string;
+    band: number;
+    title?: string;
+    fullDate?: string;
+}
+
+const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandPoint[]; color?: string; height?: number }) => {
+    const [showAll, setShowAll] = useState(false);
+    const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+    const validPts = useMemo(() => {
+        return (data || [])
+            .map(d => ({
+                label: d.label,
+                band: Math.max(0, Math.min(9, Number(d.band))),
+                title: d.title || "",
+                fullDate: d.fullDate || d.label
+            }))
+            .filter(d => !isNaN(d.band) && d.band >= 1.0);
+    }, [data]);
+
+    if (validPts.length === 0) {
+        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— Chưa có dữ liệu điểm band hợp lệ —</div>;
+    }
+
+    const hasMany = validPts.length > 15;
+    const pts = hasMany && !showAll ? validPts.slice(-15) : validPts;
+
+    const W = 460, H = height, padL = 36, padR = 36, padT = 18, padB = 28;
     const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    const minBand = Math.min(...pts.map(p => p.band));
+    const maxBand = Math.max(...pts.map(p => p.band));
+
     const x = (i: number) => pts.length === 1 ? padL + plotW / 2 : padL + plotW * (i / (pts.length - 1));
-    const y = (b: number) => padT + plotH * (1 - b / 9);
+    const yMin = Math.min(4.0, Math.floor(minBand));
+    const yMax = 9.0;
+    const yRange = yMax - yMin || 5.0;
+    const y = (b: number) => padT + plotH * (1 - (Math.max(yMin, b) - yMin) / yRange);
+
     const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.band).toFixed(1)}`).join(" ");
     const areaPath = `${linePath} L${x(pts.length - 1).toFixed(1)},${(padT + plotH).toFixed(1)} L${x(0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
-    const gridBands = [9, 8, 7, 6, 5, 4];
-    const showLabel = (i: number) => pts.length <= 6 || i === 0 || i === pts.length - 1;
+
+    const gridBands = [9, 8, 7, 6, 5, 4].filter(b => b >= yMin);
+
+    const isPeak = (i: number) => pts[i].band === minBand || pts[i].band === maxBand;
+    const showBandLabel = (i: number) => pts.length <= 12 || i === 0 || i === pts.length - 1 || isPeak(i) || hoveredIdx === i;
+
+    const activePoint = hoveredIdx !== null && pts[hoveredIdx] ? pts[hoveredIdx] : pts[pts.length - 1];
+
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="xMidYMid meet">
-            <defs><linearGradient id="bandgrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.22" /><stop offset="100%" stopColor={color} stopOpacity="0.02" /></linearGradient></defs>
-            {gridBands.map(b => (
-                <g key={b}>
-                    <line x1={padL} y1={y(b)} x2={W - padR} y2={y(b)} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="3 3" />
-                    <text x={padL - 5} y={y(b) + 3} textAnchor="end" fontSize="8" fill="#94a3b8" fontWeight="700">{b}</text>
-                </g>
-            ))}
-            {pts.length > 1 && <path d={areaPath} fill="url(#bandgrad)" />}
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-            {pts.map((p, i) => (
-                <g key={i}>
-                    <circle cx={x(i)} cy={y(p.band)} r="3.5" fill="#fff" stroke={color} strokeWidth="2" />
-                    <text x={x(i)} y={y(p.band) - 7} textAnchor="middle" fontSize="8.5" fontWeight="800" fill={color}>{p.band}</text>
-                    {showLabel(i) && <text x={x(i)} y={H - 7} textAnchor="middle" fontSize="7.5" fill="#94a3b8">{p.label}</text>}
-                </g>
-            ))}
-        </svg>
+        <div style={{ width: "100%" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 20 }}>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: color }}>
+                        Band {activePoint.band.toFixed(1)}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#6B6875", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260 }}>
+                        {activePoint.title ? `${activePoint.title} · ` : ""}{activePoint.fullDate}
+                    </span>
+                </div>
+                {hasMany && (
+                    <div style={{ display: "inline-flex", background: "rgba(26,23,38,0.05)", borderRadius: 6, padding: 2, gap: 2 }}>
+                        <button
+                            type="button"
+                            onClick={() => setShowAll(false)}
+                            style={{
+                                padding: "2px 8px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                fontFamily: "var(--heading)",
+                                borderRadius: 4,
+                                border: "none",
+                                background: !showAll ? "#fff" : "transparent",
+                                color: !showAll ? color : "#6B6875",
+                                boxShadow: !showAll ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                                cursor: "pointer"
+                            }}
+                        >
+                            Recent 15
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowAll(true)}
+                            style={{
+                                padding: "2px 8px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                fontFamily: "var(--heading)",
+                                borderRadius: 4,
+                                border: "none",
+                                background: showAll ? "#fff" : "transparent",
+                                color: showAll ? color : "#6B6875",
+                                boxShadow: showAll ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                                cursor: "pointer"
+                            }}
+                        >
+                            All ({validPts.length})
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="xMidYMid meet">
+                <defs>
+                    <linearGradient id="bandgrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+                        <stop offset="100%" stopColor={color} stopOpacity="0.01" />
+                    </linearGradient>
+                </defs>
+
+                {gridBands.map(b => (
+                    <g key={b}>
+                        <line x1={padL} y1={y(b)} x2={W - padR} y2={y(b)} stroke="rgba(26,23,38,0.08)" strokeWidth="1" strokeDasharray="3 3" />
+                        <text x={padL - 6} y={y(b) + 3} textAnchor="end" fontSize="9" fill="#8E8B99" fontFamily="var(--mono)" fontWeight="600">{b}.0</text>
+                    </g>
+                ))}
+
+                {pts.length > 1 && <path d={areaPath} fill="url(#bandgrad)" />}
+                <path d={linePath} fill="none" stroke={color} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+
+                {pts.map((p, i) => {
+                    const cx = x(i);
+                    const cy = y(p.band);
+                    const isHovered = hoveredIdx === i;
+                    const isFirst = i === 0;
+                    const isLast = i === pts.length - 1;
+                    const showDate = isFirst || isLast || (pts.length <= 8) || (pts.length <= 15 && i === Math.floor(pts.length / 2));
+                    const textAnchor = isFirst ? "start" : isLast ? "end" : "middle";
+
+                    return (
+                        <g key={i} style={{ cursor: "pointer" }} onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)}>
+                            <circle cx={cx} cy={cy} r="14" fill="transparent" />
+                            <circle
+                                cx={cx}
+                                cy={cy}
+                                r={isHovered ? 5 : 3.5}
+                                fill="#fff"
+                                stroke={color}
+                                strokeWidth={isHovered ? 2.5 : 2}
+                            />
+                            {showBandLabel(i) && (
+                                <text
+                                    x={cx}
+                                    y={cy - (isHovered ? 8 : 6)}
+                                    textAnchor="middle"
+                                    fontSize="9.5"
+                                    fontFamily="var(--mono)"
+                                    fontWeight="700"
+                                    fill={isHovered ? color : "#1A1726"}
+                                >
+                                    {p.band.toFixed(1)}
+                                </text>
+                            )}
+                            {showDate && (
+                                <text
+                                    x={isFirst ? padL : isLast ? W - padR : cx}
+                                    y={H - 6}
+                                    textAnchor={textAnchor}
+                                    fontSize="8.5"
+                                    fontFamily="var(--mono)"
+                                    fill="#8E8B99"
+                                >
+                                    {p.label}
+                                </text>
+                            )}
+                        </g>
+                    );
+                })}
+            </svg>
+        </div>
     );
 };
 
@@ -3707,6 +3879,8 @@ export default function IeltsSupremeOS() {
   const [searchSt, setSearchSt] = useState(""); 
   const [filterUnpaid, setFilterUnpaid] = useState(false); 
   const [sortStudentBy, setSortStudentBy] = useState<"NAME"|"EXP"|"DEBT">("NAME");
+  const [stuResSkillFilter, setStuResSkillFilter] = useState<"ALL" | "Listening" | "Reading" | "Writing">("ALL");
+  const [stuResSearch, setStuResSearch] = useState("");
   const [newTrans, setNewTrans] = useState({ title: "", amount: 0 });
   const [calcScore, setCalcScore] = useState<number | "">("");
   
@@ -6423,7 +6597,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   // PHÂN TÍCH LỖI THEO DẠNG CÂU HỎI (toàn trung tâm + theo học viên)
   const errorAnalytics = useMemo(() => {
-    const typeLabel = (q: QuizQuestion) => q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion');
+    const typeLabel = (q: QuizQuestion) => formatQuestionTypeLabel(q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion'));
     const typeStats: Record<string, { correct: number; total: number }> = {};
     const studentStats: Record<string, { name: string; types: Record<string, { correct: number; total: number }> }> = {};
     (quizResults || []).forEach(r => {
@@ -6437,7 +6611,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const label = typeLabel(q);
         if (!typeStats[label]) typeStats[label] = { correct: 0, total: 0 };
         typeStats[label].total += group.total; typeStats[label].correct += group.score;
-        if (!studentStats[r.studentId]) studentStats[r.studentId] = { name: r.studentName, types: {} };
+        if (!studentStats[r.studentId]) {
+          const matched = (students || []).find(s => s && s.id === r.studentId);
+          studentStats[r.studentId] = { name: matched?.name || r.studentName || "Student", types: {} };
+        }
         const stt = studentStats[r.studentId].types;
         if (!stt[label]) stt[label] = { correct: 0, total: 0 };
         stt[label].total += group.total; stt[label].correct += group.score;
@@ -6459,14 +6636,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .sort((a, b) => a.rate - b.rate);
     });
     return { centerTypes, weakStudents, studentTypes };
-  }, [quizResults, quizzes]);
+  }, [quizResults, quizzes, students]);
 
   // Tiện ích cho biểu đồ band: rút gọn ngày + tạo chuỗi điểm theo thời gian (sắp theo id = mốc thời gian)
   const shortDate = (s: string) => { const m = String(s || "").match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/); return m ? m[0] : ""; };
   const bandSeries = (results: QuizResult[]) => [...(results || [])]
     .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
-    .map(r => ({ label: shortDate(r.date), band: Number(r.band) }))
-    .filter(d => !isNaN(d.band));
+    .map(r => ({
+      label: shortDate(r.date),
+      band: Number(r.band),
+      title: r.quizTitle || "Test",
+      fullDate: r.date || ""
+    }))
+    .filter(d => !isNaN(d.band) && d.band >= 1.0);
 
   // NHẬN XÉT BẰNG AI cho 1 kết quả thi
   const handleAiFeedback = async (r: QuizResult) => {

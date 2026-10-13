@@ -94,7 +94,9 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 
 ### Quản lý học tập
 
-- Dashboard giáo viên theo chuẩn Manuscript/Editorial (sổ cái doanh thu và giờ dạy tích luỹ căn lề trái với thanh accent dọc, danh sách lịch dạy chuẩn editorial có liên kết tài liệu/phòng học thông minh, lịch tháng và bảng thông báo tích hợp tinh gọn không lồng card). Classroom, student records, academics, finance, history và drive.
+- Dashboard giáo viên theo chuẩn Manuscript/Editorial (sổ cái doanh thu và giờ dạy tích luỹ căn lề trái với thanh accent dọc, danh sách lịch dạy chuẩn editorial có liên kết tài liệu/phòng học thông minh, lịch tháng và bảng thông báo tích hợp tinh gọn không lồng card).
+- Quản lý học viên (Students) theo chuẩn Manuscript/Editorial: danh sách học viên tối ưu layout chống cắt cụt tên tiếng Việt, dải sổ cái KPI viền hairline 1px, biểu đồ Band Trend thông minh tự động chống đè nhãn và chống tràn lề ngày tháng, bộ lọc kỹ năng cho bài thi đã làm, phân tích dạng câu hỏi yếu chuẩn hóa tên sư phạm, cùng thanh công cụ học phí & quà tặng tinh gọn không nút màu mè.
+- Classroom, academics, finance, history và drive.
 - Topic assignments/quest theo chặng, điều kiện đạt, phần thưởng và tiến độ học sinh.
 - Live Arena và các hoạt động học từ vựng.
 - Vocab notebook có đồng bộ Firestore, backup cục bộ, tombstone khi xóa và cơ chế retry khi mạng lỗi.

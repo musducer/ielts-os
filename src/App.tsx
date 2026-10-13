@@ -2397,40 +2397,212 @@ const LanguageToggle = ({ role }: { role: "TEACHER" | "STUDENT" | null }) => {
 };
 
 // ==========================================
-// COMPONENT: BIỂU ĐỒ TIẾN BỘ BAND (SVG thuần, không thư viện)
+// Helper: định dạng tên dạng câu hỏi thân thiện (thay thế raw enum như MAP_DRAG)
+const formatQuestionTypeLabel = (rawType: string): string => {
+    if (!rawType) return "General";
+    const cleanKey = String(rawType).trim().toUpperCase();
+    const map: Record<string, string> = {
+        MAP_DRAG: "Map Labelling (Drag)",
+        FLOWCHART_DRAG: "Flow-chart (Drag)",
+        SUMMARY_DRAG: "Summary Completion (Drag)",
+        COLUMN_DRAG: "Matching Features",
+        DIAGRAM_LABEL: "Diagram Labelling",
+        MAP_LABELLING: "Map Labelling",
+        NOTES: "Note Completion",
+        SENTENCE: "Sentence Completion",
+        SUMMARY: "Summary Completion",
+        TABLE: "Table Completion",
+        FLOWCHART: "Flow-chart Completion",
+        HEADINGS: "Matching Headings",
+        FEATURES: "Matching Features",
+        INFORMATION: "Matching Information",
+        CHOICE: "Multiple Choice",
+        MULTIPLE_CHOICE: "Multiple Choice",
+        CHOICE_MULTIPLE: "Multi-select",
+        MATCHING: "Matching",
+        BLANK: "Completion",
+        SHORT_ANSWER: "Short Answer",
+        TRUE_FALSE_NOT_GIVEN: "True/False/Not Given",
+        YES_NO_NOT_GIVEN: "Yes/No/Not Given"
+    };
+    return map[cleanKey] || rawType;
+};
+
 // ==========================================
-const BandTrendChart = ({ data, color = "#4338ca", height = 170 }: { data: { label: string; band: number }[]; color?: string; height?: number }) => {
-    const pts = (data || [])
-        .map(d => ({ label: d.label, band: Math.max(0, Math.min(9, Number(d.band))) }))
-        .filter(d => !isNaN(d.band));
-    if (pts.length === 0) return <div style={{ textAlign: "center", color: "#94a3b8", padding: 24, fontSize: 13 }}>—</div>;
-    const W = 320, H = height, padL = 26, padR = 12, padT = 14, padB = 24;
+// COMPONENT: BIỂU ĐỒ TIẾN BỘ BAND (SVG thuần, chuẩn Manuscript / Editorial)
+// ==========================================
+interface BandPoint {
+    label: string;
+    band: number;
+    title?: string;
+    fullDate?: string;
+}
+
+const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandPoint[]; color?: string; height?: number }) => {
+    const [showAll, setShowAll] = useState(false);
+    const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+    const validPts = useMemo(() => {
+        return (data || [])
+            .map(d => ({
+                label: d.label,
+                band: Math.max(0, Math.min(9, Number(d.band))),
+                title: d.title || "",
+                fullDate: d.fullDate || d.label
+            }))
+            .filter(d => !isNaN(d.band) && d.band >= 1.0);
+    }, [data]);
+
+    if (validPts.length === 0) {
+        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— Chưa có dữ liệu điểm band hợp lệ —</div>;
+    }
+
+    const hasMany = validPts.length > 15;
+    const pts = hasMany && !showAll ? validPts.slice(-15) : validPts;
+
+    const W = 460, H = height, padL = 36, padR = 36, padT = 18, padB = 28;
     const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    const minBand = Math.min(...pts.map(p => p.band));
+    const maxBand = Math.max(...pts.map(p => p.band));
+
     const x = (i: number) => pts.length === 1 ? padL + plotW / 2 : padL + plotW * (i / (pts.length - 1));
-    const y = (b: number) => padT + plotH * (1 - b / 9);
+    const yMin = Math.min(4.0, Math.floor(minBand));
+    const yMax = 9.0;
+    const yRange = yMax - yMin || 5.0;
+    const y = (b: number) => padT + plotH * (1 - (Math.max(yMin, b) - yMin) / yRange);
+
     const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.band).toFixed(1)}`).join(" ");
     const areaPath = `${linePath} L${x(pts.length - 1).toFixed(1)},${(padT + plotH).toFixed(1)} L${x(0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
-    const gridBands = [9, 8, 7, 6, 5, 4];
-    const showLabel = (i: number) => pts.length <= 6 || i === 0 || i === pts.length - 1;
+
+    const gridBands = [9, 8, 7, 6, 5, 4].filter(b => b >= yMin);
+
+    const isPeak = (i: number) => pts[i].band === minBand || pts[i].band === maxBand;
+    const showBandLabel = (i: number) => pts.length <= 12 || i === 0 || i === pts.length - 1 || isPeak(i) || hoveredIdx === i;
+
+    const activePoint = hoveredIdx !== null && pts[hoveredIdx] ? pts[hoveredIdx] : pts[pts.length - 1];
+
     return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="xMidYMid meet">
-            <defs><linearGradient id="bandgrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.22" /><stop offset="100%" stopColor={color} stopOpacity="0.02" /></linearGradient></defs>
-            {gridBands.map(b => (
-                <g key={b}>
-                    <line x1={padL} y1={y(b)} x2={W - padR} y2={y(b)} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="3 3" />
-                    <text x={padL - 5} y={y(b) + 3} textAnchor="end" fontSize="8" fill="#94a3b8" fontWeight="700">{b}</text>
-                </g>
-            ))}
-            {pts.length > 1 && <path d={areaPath} fill="url(#bandgrad)" />}
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-            {pts.map((p, i) => (
-                <g key={i}>
-                    <circle cx={x(i)} cy={y(p.band)} r="3.5" fill="#fff" stroke={color} strokeWidth="2" />
-                    <text x={x(i)} y={y(p.band) - 7} textAnchor="middle" fontSize="8.5" fontWeight="800" fill={color}>{p.band}</text>
-                    {showLabel(i) && <text x={x(i)} y={H - 7} textAnchor="middle" fontSize="7.5" fill="#94a3b8">{p.label}</text>}
-                </g>
-            ))}
-        </svg>
+        <div style={{ width: "100%" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, minHeight: 20 }}>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: color }}>
+                        Band {activePoint.band.toFixed(1)}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#6B6875", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 260 }}>
+                        {activePoint.title ? `${activePoint.title} · ` : ""}{activePoint.fullDate}
+                    </span>
+                </div>
+                {hasMany && (
+                    <div style={{ display: "inline-flex", background: "rgba(26,23,38,0.05)", borderRadius: 6, padding: 2, gap: 2 }}>
+                        <button
+                            type="button"
+                            onClick={() => setShowAll(false)}
+                            style={{
+                                padding: "2px 8px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                fontFamily: "var(--heading)",
+                                borderRadius: 4,
+                                border: "none",
+                                background: !showAll ? "#fff" : "transparent",
+                                color: !showAll ? color : "#6B6875",
+                                boxShadow: !showAll ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                                cursor: "pointer"
+                            }}
+                        >
+                            Recent 15
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setShowAll(true)}
+                            style={{
+                                padding: "2px 8px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                fontFamily: "var(--heading)",
+                                borderRadius: 4,
+                                border: "none",
+                                background: showAll ? "#fff" : "transparent",
+                                color: showAll ? color : "#6B6875",
+                                boxShadow: showAll ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                                cursor: "pointer"
+                            }}
+                        >
+                            All ({validPts.length})
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="xMidYMid meet">
+                <defs>
+                    <linearGradient id="bandgrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+                        <stop offset="100%" stopColor={color} stopOpacity="0.01" />
+                    </linearGradient>
+                </defs>
+
+                {gridBands.map(b => (
+                    <g key={b}>
+                        <line x1={padL} y1={y(b)} x2={W - padR} y2={y(b)} stroke="rgba(26,23,38,0.08)" strokeWidth="1" strokeDasharray="3 3" />
+                        <text x={padL - 6} y={y(b) + 3} textAnchor="end" fontSize="9" fill="#8E8B99" fontFamily="var(--mono)" fontWeight="600">{b}.0</text>
+                    </g>
+                ))}
+
+                {pts.length > 1 && <path d={areaPath} fill="url(#bandgrad)" />}
+                <path d={linePath} fill="none" stroke={color} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+
+                {pts.map((p, i) => {
+                    const cx = x(i);
+                    const cy = y(p.band);
+                    const isHovered = hoveredIdx === i;
+                    const isFirst = i === 0;
+                    const isLast = i === pts.length - 1;
+                    const showDate = isFirst || isLast || (pts.length <= 8) || (pts.length <= 15 && i === Math.floor(pts.length / 2));
+                    const textAnchor = isFirst ? "start" : isLast ? "end" : "middle";
+
+                    return (
+                        <g key={i} style={{ cursor: "pointer" }} onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)}>
+                            <circle cx={cx} cy={cy} r="14" fill="transparent" />
+                            <circle
+                                cx={cx}
+                                cy={cy}
+                                r={isHovered ? 5 : 3.5}
+                                fill="#fff"
+                                stroke={color}
+                                strokeWidth={isHovered ? 2.5 : 2}
+                            />
+                            {showBandLabel(i) && (
+                                <text
+                                    x={cx}
+                                    y={cy - (isHovered ? 8 : 6)}
+                                    textAnchor="middle"
+                                    fontSize="9.5"
+                                    fontFamily="var(--mono)"
+                                    fontWeight="700"
+                                    fill={isHovered ? color : "#1A1726"}
+                                >
+                                    {p.band.toFixed(1)}
+                                </text>
+                            )}
+                            {showDate && (
+                                <text
+                                    x={isFirst ? padL : isLast ? W - padR : cx}
+                                    y={H - 6}
+                                    textAnchor={textAnchor}
+                                    fontSize="8.5"
+                                    fontFamily="var(--mono)"
+                                    fill="#8E8B99"
+                                >
+                                    {p.label}
+                                </text>
+                            )}
+                        </g>
+                    );
+                })}
+            </svg>
+        </div>
     );
 };
 
@@ -3707,6 +3879,8 @@ export default function IeltsSupremeOS() {
   const [searchSt, setSearchSt] = useState(""); 
   const [filterUnpaid, setFilterUnpaid] = useState(false); 
   const [sortStudentBy, setSortStudentBy] = useState<"NAME"|"EXP"|"DEBT">("NAME");
+  const [stuResSkillFilter, setStuResSkillFilter] = useState<"ALL" | "Listening" | "Reading" | "Writing">("ALL");
+  const [stuResSearch, setStuResSearch] = useState("");
   const [newTrans, setNewTrans] = useState({ title: "", amount: 0 });
   const [calcScore, setCalcScore] = useState<number | "">("");
   
@@ -6423,7 +6597,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   // PHÂN TÍCH LỖI THEO DẠNG CÂU HỎI (toàn trung tâm + theo học viên)
   const errorAnalytics = useMemo(() => {
-    const typeLabel = (q: QuizQuestion) => q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion');
+    const typeLabel = (q: QuizQuestion) => formatQuestionTypeLabel(q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion'));
     const typeStats: Record<string, { correct: number; total: number }> = {};
     const studentStats: Record<string, { name: string; types: Record<string, { correct: number; total: number }> }> = {};
     (quizResults || []).forEach(r => {
@@ -6437,7 +6611,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const label = typeLabel(q);
         if (!typeStats[label]) typeStats[label] = { correct: 0, total: 0 };
         typeStats[label].total += group.total; typeStats[label].correct += group.score;
-        if (!studentStats[r.studentId]) studentStats[r.studentId] = { name: r.studentName, types: {} };
+        if (!studentStats[r.studentId]) {
+          const matched = (students || []).find(s => s && s.id === r.studentId);
+          studentStats[r.studentId] = { name: matched?.name || r.studentName || "Student", types: {} };
+        }
         const stt = studentStats[r.studentId].types;
         if (!stt[label]) stt[label] = { correct: 0, total: 0 };
         stt[label].total += group.total; stt[label].correct += group.score;
@@ -6459,14 +6636,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .sort((a, b) => a.rate - b.rate);
     });
     return { centerTypes, weakStudents, studentTypes };
-  }, [quizResults, quizzes]);
+  }, [quizResults, quizzes, students]);
 
   // Tiện ích cho biểu đồ band: rút gọn ngày + tạo chuỗi điểm theo thời gian (sắp theo id = mốc thời gian)
   const shortDate = (s: string) => { const m = String(s || "").match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/); return m ? m[0] : ""; };
   const bandSeries = (results: QuizResult[]) => [...(results || [])]
     .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
-    .map(r => ({ label: shortDate(r.date), band: Number(r.band) }))
-    .filter(d => !isNaN(d.band));
+    .map(r => ({
+      label: shortDate(r.date),
+      band: Number(r.band),
+      title: r.quizTitle || "Test",
+      fullDate: r.date || ""
+    }))
+    .filter(d => !isNaN(d.band) && d.band >= 1.0);
 
   // NHẬN XÉT BẰNG AI cho 1 kết quả thi
   const handleAiFeedback = async (r: QuizResult) => {
@@ -19323,7 +19505,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             pUnpaid = unpaidOf(profile.id);
             const valid = pResults.filter(r => !isNaN(Number(r.band)));
             pAvg = valid.length ? (valid.reduce((a, c) => a + Number(c.band), 0) / valid.length).toFixed(1) : "—";
-            pTrend = pResults.length >= 2 ? (Number(pResults[0].band) >= Number(pResults[1].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
+            pTrend = pResults.length >= 2 ? (Number(pResults[0].band) >= Number(pResults[1].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="chevronDown" size={14} color={C.err} />) : null;
             pTypes = errorAnalytics.studentTypes[profile.id] || [];
           }
 
@@ -19331,18 +19513,85 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           const allUnpaidTotal = history.filter(h => h && !h.isPaid).reduce((s, h) => s + (Number(h.earnings) || 0), 0);
           const debtorCount = students.filter(s => s && unpaidOf(s.id) > 0).length;
           const bandDist: Record<string, number> = {};
-          quizResults.forEach(r => { if (r && r.band && r.band !== "N/A") bandDist[r.band] = (bandDist[r.band] || 0) + 1; });
+          quizResults.forEach(r => { if (r && r.band && r.band !== "N/A" && !isNaN(Number(r.band))) bandDist[r.band] = (bandDist[r.band] || 0) + 1; });
 
-          const secHead = (text: string) => <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 10 }}>{text}</div>;
+          const totalBandGrades = Object.values(bandDist).reduce((sum, n) => sum + n, 0);
+          const bandTiers = [
+            { label: "Band 8.0–9.0", count: Object.entries(bandDist).filter(([b]) => Number(b) >= 8.0).reduce((sum, [, n]) => sum + n, 0), color: C.succ },
+            { label: "Band 7.0–7.5", count: Object.entries(bandDist).filter(([b]) => Number(b) >= 7.0 && Number(b) < 8.0).reduce((sum, [, n]) => sum + n, 0), color: C.accent },
+            { label: "Band 6.0–6.5", count: Object.entries(bandDist).filter(([b]) => Number(b) >= 6.0 && Number(b) < 7.0).reduce((sum, [, n]) => sum + n, 0), color: C.text },
+            { label: "Band 5.0–5.5", count: Object.entries(bandDist).filter(([b]) => Number(b) >= 5.0 && Number(b) < 6.0).reduce((sum, [, n]) => sum + n, 0), color: C.warn },
+            { label: "Band < 5.0", count: Object.entries(bandDist).filter(([b]) => Number(b) < 5.0).reduce((sum, [, n]) => sum + n, 0), color: C.err },
+          ];
 
-          const TabBtn = (key: string, label: string, icon: string, count?: number) => (
-            <button onClick={() => setProfileTab(key as any)} style={{ flex: 1, padding: '11px 4px', fontSize: 12.5, fontWeight: profileTab === key ? 600 : 500, color: profileTab === key ? C.accent : C.sub, background: 'transparent', borderRadius: 0, borderBottom: `2px solid ${profileTab === key ? C.accent : 'transparent'}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Ico name={icon} size={14} /> {label}{count ? <span style={{ fontSize: 10.5, color: C.sub, fontWeight: 500 }}>· {count}</span> : null}</button>
+          const studentAvatar = (name: string, isSel?: boolean, size = 36) => {
+            const parts = (name || "").trim().split(' ').filter(Boolean);
+            const initials = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : (name || "").slice(0, 2);
+            return (
+              <div style={{
+                width: size,
+                height: size,
+                borderRadius: 8,
+                background: isSel ? C.accent : C.bg,
+                color: isSel ? '#fff' : C.text,
+                border: `1px solid ${C.border}`,
+                display: 'grid',
+                placeItems: 'center',
+                fontFamily: 'var(--heading)',
+                fontSize: size >= 40 ? 14 : 12,
+                fontWeight: 700,
+                flexShrink: 0
+              }}>
+                {initials.toUpperCase()}
+              </div>
+            );
+          };
+
+          const secHead = (text: string, icon?: string) => (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginBottom: 12 }}>
+              {icon && <Ico name={icon} size={13} color={C.accent} />}
+              <span>{text}</span>
+            </div>
           );
 
-          const statTile = (label: string, value: any, color?: string) => (
-            <div style={{ background: C.bg, borderRadius: 14, padding: '16px 18px' }}>
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.4, textTransform: 'uppercase' }}>{label}</div>
-              <div style={{ fontFamily: 'var(--display)', fontSize: 28, fontWeight: 500, color: color || C.text, marginTop: 6, lineHeight: 1 }}>{value}</div>
+          const TabBtn = (key: string, label: string, icon: string, count?: number) => (
+            <button
+              type="button"
+              onClick={() => setProfileTab(key as any)}
+              style={{
+                flex: 1,
+                padding: '12px 10px',
+                fontSize: 12.5,
+                fontWeight: profileTab === key ? 700 : 500,
+                fontFamily: 'var(--heading)',
+                letterSpacing: '0.02em',
+                color: profileTab === key ? C.accent : C.sub,
+                background: profileTab === key ? C.card : 'transparent',
+                borderRadius: 0,
+                border: 'none',
+                borderBottom: `2px solid ${profileTab === key ? C.accent : 'transparent'}`,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                transition: 'color 0.15s, background-color 0.15s'
+              }}
+            >
+              <Ico name={icon} size={14} color={profileTab === key ? C.accent : C.sub} />
+              <span>{label}</span>
+              {typeof count === 'number' ? (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: profileTab === key ? C.accent : C.sub, background: profileTab === key ? `${C.accent}12` : 'rgba(26,23,38,0.06)', padding: '1px 6px', borderRadius: 999 }}>
+                  {count}
+                </span>
+              ) : null}
+            </button>
+          );
+
+          const statTile = (label: string, value: any, color?: string, isFirst?: boolean) => (
+            <div style={{ padding: '14px 18px', borderLeft: isFirst ? `3px solid ${C.accent}` : `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)' }}>{label}</div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 26, fontWeight: 600, color: color || C.text, marginTop: 4, lineHeight: 1.1 }}>{value}</div>
             </div>
           );
 
@@ -19350,57 +19599,186 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             const durationStr = r.durationSeconds ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s` : "N/A";
             const copyText = `Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`;
             const open = expandedResultId === r.id;
+            const bandVal = Number(r.band);
+            const accentBorder = !isNaN(bandVal) ? (bandVal >= 7.0 ? C.succ : bandVal >= 6.0 ? C.accent : C.warn) : C.border;
+
             return (
-              <div key={r.id} style={{ background: C.bg, borderRadius: 14, borderLeft: `3px solid ${C.accent}`, overflow: 'hidden' }}>
-                {/* HÀNG GỌN — bấm để bung feedback/chi tiết (hết cuộn dài) */}
-                <button onClick={() => setExpandedResultId(open ? null : r.id)} style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.quizTitle}</div>
-                    <div style={{ fontSize: 11, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <span>{r.date || r.startTime || "N/A"}</span>
+              <div key={r.id} style={{ borderBottom: `1px solid ${C.border}`, borderLeft: `3px solid ${accentBorder}`, background: open ? C.bg : C.card, transition: 'background-color 0.15s' }}>
+                {/* HÀNG GỌN — bấm để bung feedback/chi tiết */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedResultId(open ? null : r.id)}
+                  style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {r.quizTitle}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'var(--mono)' }}>{r.date || r.startTime || "N/A"}</span>
+                      <span style={{ opacity: 0.4 }}>·</span>
                       <span><Ico name="clock" size={11} style={{ verticalAlign: -1, marginRight: 3 }} />{durationStr}</span>
-                      {r.cheatCount > 0
-                        ? <span style={{ color: C.err, fontWeight: 600 }}><Ico name="alert" size={11} style={{ verticalAlign: -1, marginRight: 2 }} />{r.cheatCount}</span>
-                        : <span style={{ color: C.succ, fontWeight: 600 }}><Ico name="check" size={11} style={{ verticalAlign: -1 }} /></span>}
-                      {r.teacherFeedback ? <span style={{ color: C.accent, fontWeight: 600 }}><Ico name="sparkles" size={11} style={{ verticalAlign: -1, marginRight: 2 }} />fb</span> : null}
+                      {r.cheatCount > 0 ? (
+                        <>
+                          <span style={{ opacity: 0.4 }}>·</span>
+                          <span style={{ color: C.err, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                            <Ico name="alert" size={11} color={C.err} />{r.cheatCount}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ opacity: 0.4 }}>·</span>
+                          <span style={{ color: C.succ, display: 'inline-flex', alignItems: 'center' }}><Ico name="check" size={11} color={C.succ} /></span>
+                        </>
+                      )}
+                      {r.teacherFeedback && (
+                        <span style={{ color: C.accent, fontWeight: 700, fontFamily: 'var(--heading)', fontSize: 9.5, textTransform: 'uppercase', background: `${C.accent}15`, padding: '1px 5px', borderRadius: 4 }}>
+                          Feedback
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontFamily: 'var(--display)', fontSize: 20, fontWeight: 500, color: C.accent, lineHeight: 1 }}>{r.score}/{r.total}</div>
-                      <div style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, marginTop: 2 }}>{t('band_label')} {r.band}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, color: C.sub }}>{r.score}/{r.total}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 700, color: C.accent, marginTop: 2 }}>{t('band_label')} {r.band}</div>
                     </div>
-                    <Ico name={open ? 'chevronUp' : 'chevronDown'} size={16} color={C.sub} />
+                    <Ico name={open ? 'chevronUp' : 'chevronDown'} size={15} color={C.sub} />
                   </div>
                 </button>
-                {open && (<div style={{ padding: '0 15px 15px' }}>
-                <div style={{ fontSize: 11.5, color: C.sub, display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginBottom: 12 }}>
-                  <span>{r.startTime || "N/A"}</span>
-                  <span>IP {r.ipAddress || "N/A"}</span>
-                  {r.cheatCount > 0
-                    ? <span style={{ color: C.err, fontWeight: 600 }}>{t('acad_cheat_warn', { n: r.cheatCount })}</span>
-                    : <span style={{ color: C.succ, fontWeight: 600 }}><Ico name="check" size={12} style={{ verticalAlign: -2, marginRight: 3 }} />{t('acad_no_cheat')}</span>}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input type="text" placeholder={t('acad_feedback_ph')} defaultValue={r.teacherFeedback || ""}
-                    onBlur={(e: any) => { if (e.target.value !== r.teacherFeedback) { const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: e.target.value } : x); setQuizResults(nx); syncData({ quizResults: nx }); } }}
-                    style={{ background: C.card, fontSize: 13, padding: '8px 10px' }} />
-                  <button onClick={() => handleAiFeedback(r)} disabled={aiLoadingId === r.id} title={t('ai_tip')} style={{ background: aiLoadingId === r.id ? C.sub : 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff', padding: '0 12px', whiteSpace: 'nowrap', fontWeight: 600, opacity: aiLoadingId === r.id ? 0.7 : 1 }}>{aiLoadingId === r.id ? <Ico name="refresh" size={14} /> : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Ico name="sparkles" size={14} /> AI</span>}</button>
-                  <button onClick={() => handleVoiceFeedback(r.id)} title={t('tip_voice_input')} style={{ background: '#FFE066', color: '#000', padding: '0 11px' }}><Ico name="mic" size={15} /></button>
-                </div>
-                <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
-                  {[t('acad_fb1'), t('acad_fb2'), t('acad_fb3'), t('acad_fb4')].map(ft => (
-                    <button key={ft} onClick={() => { const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: (x.teacherFeedback ? x.teacherFeedback + " " : "") + ft } : x); setQuizResults(nx); syncData({ quizResults: nx }); }} style={{ fontSize: 10.5, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub, borderRadius: 6 }}>{ft}</button>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${C.border}`, flexWrap: 'wrap' }}>
-                  {isWritingQuiz(quizzes.find(quiz => quiz.id === r.quizId)) && <button onClick={() => { const source = quizzes.find(quiz => quiz.id === r.quizId); if (source) { setReviewQuiz({ quiz: source, result: r }); setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" }); } }} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="edit" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />Chấm Writing</button>}
-                  <button onClick={() => copyToClipboard(copyText)} style={{ background: `${C.accent}12`, color: C.accent, fontSize: 11, padding: '6px 11px' }}><Ico name="clipboard" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_copy_zalo')}</button>
-                  <button onClick={() => exportDetailedQuizResult(r)} style={{ background: `${C.succ}12`, color: C.succ, fontSize: 11, padding: '6px 11px' }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_export_detail')}</button>
-                  <button onClick={() => { if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) { const nx = [...bannedIps, r.ipAddress]; setBannedIps(nx); syncData({ bannedIps: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px' }}><Ico name="ban" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('acad_ban_ip')}</button>
-                  <button onClick={() => { if (confirm("Xóa bài thi này?")) { const nx = quizResults.filter(x => x.id !== r.id); setQuizResults(nx); syncData({ quizResults: nx }); } }} style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11, padding: '6px 11px', marginLeft: 'auto' }}><Ico name="trash" size={13} /></button>
-                </div>
-                </div>)}
+
+                {open && (
+                  <div style={{ padding: '0 16px 16px', borderTop: `1px dashed ${C.border}` }}>
+                    <div style={{ fontSize: 11.5, color: C.sub, display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 10, marginBottom: 12 }}>
+                      <span>Bắt đầu: <b style={{ fontFamily: 'var(--mono)' }}>{r.startTime || "N/A"}</b></span>
+                      <span>IP: <b style={{ fontFamily: 'var(--mono)' }}>{r.ipAddress || "N/A"}</b></span>
+                      {r.cheatCount > 0 ? (
+                        <span style={{ color: C.err, fontWeight: 600 }}>{t('acad_cheat_warn', { n: r.cheatCount })}</span>
+                      ) : (
+                        <span style={{ color: C.succ, fontWeight: 600 }}><Ico name="check" size={12} style={{ verticalAlign: -2, marginRight: 3 }} />{t('acad_no_cheat')}</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        type="text"
+                        placeholder={t('acad_feedback_ph')}
+                        defaultValue={r.teacherFeedback || ""}
+                        onBlur={(e: any) => {
+                          if (e.target.value !== r.teacherFeedback) {
+                            const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: e.target.value } : x);
+                            setQuizResults(nx);
+                            syncData({ quizResults: nx });
+                          }
+                        }}
+                        style={{ background: C.card, fontSize: 13, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`, flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAiFeedback(r)}
+                        disabled={aiLoadingId === r.id}
+                        title={t('ai_tip')}
+                        style={{
+                          background: aiLoadingId === r.id ? C.sub : C.accent,
+                          color: '#fff',
+                          padding: '0 14px',
+                          whiteSpace: 'nowrap',
+                          fontWeight: 600,
+                          fontSize: 12,
+                          borderRadius: 8,
+                          border: 'none',
+                          cursor: 'pointer',
+                          opacity: aiLoadingId === r.id ? 0.7 : 1,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5
+                        }}
+                      >
+                        {aiLoadingId === r.id ? <Ico name="refresh" size={13} /> : <><Ico name="sparkles" size={13} /> AI</>}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVoiceFeedback(r.id)}
+                        title={t('tip_voice_input')}
+                        style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, padding: '0 11px', borderRadius: 8, cursor: 'pointer' }}
+                      >
+                        <Ico name="mic" size={14} />
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                      {[t('acad_fb1'), t('acad_fb2'), t('acad_fb3'), t('acad_fb4')].map(ft => (
+                        <button
+                          key={ft}
+                          type="button"
+                          onClick={() => {
+                            const nx = quizResults.map(x => x.id === r.id ? { ...x, teacherFeedback: (x.teacherFeedback ? x.teacherFeedback + " " : "") + ft } : x);
+                            setQuizResults(nx);
+                            syncData({ quizResults: nx });
+                          }}
+                          style={{ fontSize: 11, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub, borderRadius: 6, cursor: 'pointer' }}
+                        >
+                          {ft}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}`, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {isWritingQuiz(quizzes.find(quiz => quiz.id === r.quizId)) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const source = quizzes.find(quiz => quiz.id === r.quizId);
+                            if (source) {
+                              setReviewQuiz({ quiz: source, result: r });
+                              setWritingCommentDraft({ taskId: "", anchorQuote: "", comment: "" });
+                            }
+                          }}
+                          style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}33`, fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <Ico name="edit" size={12} /> Chấm Writing
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(copyText)}
+                        style={{ background: C.card, color: C.text, border: `1px solid ${C.border}`, fontSize: 11.5, fontWeight: 500, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Ico name="copy" size={12} /> {t('acad_copy_zalo')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => exportDetailedQuizResult(r)}
+                        style={{ background: C.card, color: C.succ, border: `1px solid ${C.border}`, fontSize: 11.5, fontWeight: 500, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Ico name="arrowDown" size={12} /> {t('acad_export_detail')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) {
+                            const nx = [...bannedIps, r.ipAddress];
+                            setBannedIps(nx);
+                            syncData({ bannedIps: nx });
+                          }
+                        }}
+                        style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11.5, padding: '5px 10px', borderRadius: 6, cursor: 'pointer' }}
+                      >
+                        {t('acad_ban_ip')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm("Xóa bài thi này?")) {
+                            const nx = quizResults.filter(x => x.id !== r.id);
+                            setQuizResults(nx);
+                            syncData({ quizResults: nx });
+                          }
+                        }}
+                        style={{ background: 'transparent', color: C.err, border: `1px solid ${C.border}`, fontSize: 11.5, padding: '5px 8px', borderRadius: 6, cursor: 'pointer', marginLeft: 'auto' }}
+                      >
+                        <Ico name="trash" size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           };
@@ -19409,351 +19787,1046 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             const open = expandedSessionId === h.id;
             const notePreview = (h.notes || "").replace(/\s+/g, " ").trim();
             return (
-            <div key={h.id} style={{ background: C.bg, borderRadius: 14, borderLeft: `3px solid ${h.isPaid ? C.succ : C.warn}`, overflow: 'hidden' }}>
-              {/* HÀNG GỌN — bấm để bung ghi chú + thao tác */}
-              <button onClick={() => setExpandedSessionId(open ? null : h.id)} style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{h.date} <span style={{ color: C.sub, fontWeight: 400 }}>· {h.teacher}</span></div>
-                  <div style={{ fontSize: 11, color: C.sub, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>{notePreview || t('hist_notes_ph')}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 12, background: h.isPaid ? `${C.succ}15` : `${C.warn}15`, color: h.isPaid ? C.succ : C.warn }}>{fmtMoney(h.earnings)}</span>
-                  <Ico name={open ? 'chevronUp' : 'chevronDown'} size={16} color={C.sub} />
-                </div>
-              </button>
-              {open && (<div style={{ padding: '0 15px 15px' }}>
-              <textarea value={h.notes || ""} onChange={(e: any) => { const nx = history.map(x => x && x.id === h.id ? { ...x, notes: e.target.value } : x); setHistory(nx as Session[]); }} onBlur={() => syncData({ history })} placeholder={t('hist_notes_ph')} style={{ height: 60, fontSize: 13, background: C.card, border: `1px solid ${C.border}` }} />
-              <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
-                {QUICK_NOTES.map((qn: string) => (
-                  <button key={qn} onClick={() => { const nx = history.map(x => x && x.id === h.id ? { ...x, notes: (x.notes ? x.notes + ". " : "") + qn } : x); setHistory(nx as Session[]); syncData({ history: nx }); }} style={{ fontSize: 10, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub }}>{qn}</button>
-                ))}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
-                {!h.isPaid ? (
-                  <button onClick={() => {
-                    const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
-                    const rem = nxHistory.filter(se => se.studentId === h.studentId && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
-                    let nxStudents = students;
-                    if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
-                    setHistory(nxHistory as Session[]); syncData({ history: nxHistory, students: nxStudents });
-                  }} style={{ background: `${C.warn}18`, color: C.warn, fontSize: 12, padding: '6px 12px', border: `1px solid ${C.warn}55` }}>{t('hist_collect_fast')}<Ico name="coins" size={13} style={{ verticalAlign: -2, marginLeft: 6 }} /></button>
-                ) : (
-                  <button onClick={() => { const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false } : x); setHistory(nx as Session[]); syncData({ history: nx }); }} style={{ background: `${C.succ}18`, color: C.succ, fontSize: 12, padding: '6px 12px', border: `1px solid ${C.succ}55` }}>{t('hist_collected')}</button>
+              <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, borderLeft: `3px solid ${h.isPaid ? C.succ : C.warn}`, background: open ? C.bg : C.card }}>
+                {/* HÀNG GỌN — bấm để bung ghi chú + thao tác */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedSessionId(open ? null : h.id)}
+                  style={{ width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text }}>
+                      {h.date} <span style={{ color: C.sub, fontWeight: 400 }}>· {h.teacher}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: C.sub, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 320 }}>
+                      {notePreview || t('hist_notes_ph')}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: h.isPaid ? `${C.succ}12` : `${C.warn}12`, border: `1px solid ${h.isPaid ? C.succ + '33' : C.warn + '33'}`, color: h.isPaid ? C.succ : C.warn }}>
+                      {fmtMoney(h.earnings)}
+                    </span>
+                    <Ico name={open ? 'chevronUp' : 'chevronDown'} size={15} color={C.sub} />
+                  </div>
+                </button>
+
+                {open && (
+                  <div style={{ padding: '0 16px 16px', borderTop: `1px dashed ${C.border}` }}>
+                    <textarea
+                      value={h.notes || ""}
+                      onChange={(e: any) => {
+                        const nx = history.map(x => x && x.id === h.id ? { ...x, notes: e.target.value } : x);
+                        setHistory(nx as Session[]);
+                      }}
+                      onBlur={() => syncData({ history })}
+                      placeholder={t('hist_notes_ph')}
+                      style={{ width: '100%', height: 60, fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', marginTop: 10 }}
+                    />
+                    <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                      {QUICK_NOTES.map((qn: string) => (
+                        <button
+                          key={qn}
+                          type="button"
+                          onClick={() => {
+                            const nx = history.map(x => x && x.id === h.id ? { ...x, notes: (x.notes ? x.notes + ". " : "") + qn } : x);
+                            setHistory(nx as Session[]);
+                            syncData({ history: nx });
+                          }}
+                          style={{ fontSize: 10.5, padding: '4px 8px', background: C.card, border: `1px solid ${C.border}`, color: C.sub, borderRadius: 6, cursor: 'pointer' }}
+                        >
+                          {qn}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+                      {!h.isPaid ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                            const rem = nxHistory.filter(se => se.studentId === h.studentId && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
+                            let nxStudents = students;
+                            if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                            setHistory(nxHistory as Session[]);
+                            syncData({ history: nxHistory, students: nxStudents });
+                          }}
+                          style={{ background: 'transparent', color: C.warn, border: `1px solid ${C.warn}66`, borderRadius: 6, fontSize: 12, fontWeight: 700, padding: '6px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                        >
+                          {t('hist_collect_fast')} <Ico name="coins" size={13} color={C.warn} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false } : x);
+                            setHistory(nx as Session[]);
+                            syncData({ history: nx });
+                          }}
+                          style={{ background: `${C.succ}12`, color: C.succ, border: `1px solid ${C.succ}44`, borderRadius: 6, fontSize: 12, fontWeight: 600, padding: '6px 12px', cursor: 'pointer' }}
+                        >
+                          {t('hist_collected')}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm("Xóa buổi học này?")) {
+                            const nx = history.filter(x => x && x.id !== h.id);
+                            setHistory(nx as Session[]);
+                            syncData({ history: nx });
+                          }
+                        }}
+                        style={{ background: 'transparent', color: C.err, border: 'none', padding: '6px 8px', cursor: 'pointer' }}
+                      >
+                        <Ico name="trash" size={14} color={C.err} />
+                      </button>
+                    </div>
+                  </div>
                 )}
-                <button onClick={() => { if (confirm("Xóa buổi học này?")) { const nx = history.filter(x => x && x.id !== h.id); setHistory(nx as Session[]); syncData({ history: nx }); } }} style={{ background: 'none', color: C.err, fontSize: 11 }}><Ico name="trash" size={14} /></button>
               </div>
-              </div>)}
-            </div>
             );
           };
 
           const headerIconBtn = (icon: string, onClick: any, title: string, danger?: boolean) => (
-            <button onClick={onClick} title={title} style={{ background: danger ? `${C.err}10` : C.bg, color: danger ? C.err : C.sub, border: `1px solid ${C.border}`, padding: '8px 10px', borderRadius: 9 }}><Ico name={icon} size={15} /></button>
+            <button
+              type="button"
+              onClick={onClick}
+              title={title}
+              style={{
+                background: danger ? `${C.err}0d` : C.bg,
+                color: danger ? C.err : C.sub,
+                border: `1px solid ${danger ? C.err + '44' : C.border}`,
+                width: 34,
+                height: 34,
+                borderRadius: 8,
+                display: 'grid',
+                placeItems: 'center',
+                cursor: 'pointer',
+                padding: 0
+              }}
+            >
+              <Ico name={icon} size={15} color={danger ? C.err : C.sub} />
+            </button>
           );
 
           return (
-            <div style={{ display: 'grid', gridTemplateColumns: isWide ? '300px 1fr' : '1fr', gap: 20, alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(290px, 320px) minmax(0, 1fr)' : '1fr', gap: 24, alignItems: 'start' }}>
 
+              {/* CỘT DANH SÁCH HỌC VIÊN (SIDEBAR) */}
               {(isWide || !profile) && (
-                <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '0 10px' }}>
-                      <Ico name="search" size={15} color={C.sub} />
-                      <input placeholder={t('stu_search_ph')} value={searchSt} onChange={e => setSearchSt(e.target.value)} style={{ border: 'none', background: 'transparent', boxShadow: 'none', padding: '9px 0', fontSize: 13 }} />
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  {/* Tìm kiếm & Thêm mới */}
+                  <div style={{ padding: '12px 14px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '0 10px' }}>
+                      <Ico name="search" size={14} color={C.sub} />
+                      <input
+                        placeholder={t('stu_search_ph')}
+                        value={searchSt}
+                        onChange={e => setSearchSt(e.target.value)}
+                        style={{ border: 'none', background: 'transparent', boxShadow: 'none', padding: '8px 0', fontSize: 13, width: '100%', outline: 'none' }}
+                      />
                     </div>
-                    <button onClick={() => { setEditStId(null); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); setShowAddStudent(true); }} title={t('stu_add_new')} style={{ background: C.accent, color: '#fff', width: 40, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center' }}><Ico name="plus" size={18} color="#fff" /></button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditStId(null);
+                        setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" });
+                        setShowAddStudent(true);
+                      }}
+                      title={t('stu_add_new')}
+                      style={{ background: C.accent, color: '#fff', width: 34, height: 34, borderRadius: 8, border: 'none', flexShrink: 0, display: 'grid', placeItems: 'center', cursor: 'pointer' }}
+                    >
+                      <Ico name="plus" size={16} color="#fff" />
+                    </button>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <select value={sortStudentBy} onChange={(e: any) => setSortStudentBy(e.target.value)} style={{ flex: 1, padding: '7px 10px', fontSize: 12.5 }}>
-                      <option value="NAME">{t('stu_sort_name')}</option><option value="EXP">{t('stu_sort_exp')}</option><option value="DEBT">{t('stu_sort_debt')}</option>
+
+                  {/* Sắp xếp & Lọc nợ */}
+                  <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.bg, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <select
+                      value={sortStudentBy}
+                      onChange={(e: any) => setSortStudentBy(e.target.value)}
+                      style={{ flex: 1, padding: '6px 8px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.card, color: C.text }}
+                    >
+                      <option value="NAME">{t('stu_sort_name')}</option>
+                      <option value="EXP">{t('stu_sort_exp')}</option>
+                      <option value="DEBT">{t('stu_sort_debt')}</option>
                     </select>
                     <label style={{ fontSize: 11, fontWeight: 600, color: C.warn, display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={filterUnpaid} onChange={(e) => setFilterUnpaid(e.target.checked)} style={{ width: 'auto', margin: 0 }} />{t('stu_only_debt')}
+                      <input type="checkbox" checked={filterUnpaid} onChange={(e) => setFilterUnpaid(e.target.checked)} style={{ width: 'auto', margin: 0 }} />
+                      {t('stu_only_debt')}
                     </label>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
-                    <button onClick={() => setProfileId(null)} style={{ fontSize: 11.5, fontWeight: 600, color: !profile ? C.accent : C.sub, background: !profile ? `${C.accent}12` : 'transparent', padding: '5px 10px', borderRadius: 8 }}><Ico name="barChart" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_overview')}</button>
-                    <span style={{ fontSize: 11, color: C.sub }}>{t('hub_students_count', { n: listStudents.length })}</span>
-                    <button onClick={exportStudentsCSV} title={t('stu_export_csv')} style={{ fontSize: 11, color: C.succ, background: 'transparent' }}><Ico name="arrowDown" size={13} style={{ verticalAlign: -2, marginRight: 3 }} />{t('stu_export_csv')}</button>
+
+                  {/* Thanh tổng quan & xuất Excel */}
+                  <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.bg, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setProfileId(null)}
+                      style={{
+                        fontSize: 11.5,
+                        fontWeight: 600,
+                        color: !profile ? C.accent : C.sub,
+                        background: !profile ? `${C.accent}12` : 'transparent',
+                        border: `1px solid ${!profile ? C.accent : C.border}`,
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <Ico name="barChart" size={12} color={!profile ? C.accent : C.sub} />
+                      {t('hub_overview')}
+                    </button>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: C.sub }}>
+                      {t('hub_students_count', { n: listStudents.length })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={exportStudentsCSV}
+                      title={t('stu_export_csv')}
+                      style={{ fontSize: 11, color: C.succ, background: 'transparent', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 600 }}
+                    >
+                      <Ico name="arrowDown" size={12} color={C.succ} />
+                      Excel
+                    </button>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: isWide ? '60vh' : 'none', overflowY: 'auto' }}>
-                    {listStudents.map(s => { if (!s) return null; const deb = unpaidOf(s.id); const sel = profileId === s.id; return (
-                      <button key={s.id} onClick={() => { if (profileId === s.id) { setProfileId(null); } else { setProfileId(s.id); setProfileTab('results'); } }} style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10, background: sel ? `${C.accent}12` : C.bg, border: `1px solid ${sel ? C.accent : C.border}` }}>
-                        {getAvatar(s.name)}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>{s.isPinned && <Ico name="pin" size={11} color={C.accent} />}{s.name}</div>
-                          <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>Lv.{s.level || 1} · {s.cefr || '—'}→{s.target || '—'}</div>
-                        </div>
-                        {deb > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: C.err, background: `${C.err}12`, padding: '2px 6px', borderRadius: 6, whiteSpace: 'nowrap' }}>{fmtMoney(deb)}</span>}
-                      </button>
-                    ); })}
-                    {listStudents.length === 0 && <div style={{ textAlign: 'center', color: C.sub, fontSize: 12, padding: 20 }}>—</div>}
+
+                  {/* Danh sách học viên */}
+                  <div style={{ display: 'flex', flexDirection: 'column', maxHeight: isWide ? 'calc(100vh - 240px)' : 'none', overflowY: 'auto' }}>
+                    {listStudents.map(s => {
+                      if (!s) return null;
+                      const deb = unpaidOf(s.id);
+                      const sel = profileId === s.id;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => {
+                            if (profileId === s.id) {
+                              setProfileId(null);
+                            } else {
+                              setProfileId(s.id);
+                              setProfileTab('overview');
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                            padding: '12px 14px',
+                            border: 'none',
+                            borderBottom: `1px solid ${C.border}`,
+                            borderLeft: `3px solid ${sel ? C.accent : 'transparent'}`,
+                            background: sel ? C.bg : C.card,
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s'
+                          }}
+                        >
+                          {studentAvatar(s.name, sel)}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              fontWeight: 700,
+                              fontSize: 13.5,
+                              color: C.text,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {s.isPinned && <Ico name="pin" size={11} color={C.accent} />}
+                              <span>{s.name}</span>
+                            </div>
+                            <div style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 6,
+                              marginTop: 3
+                            }}>
+                              <span style={{ fontSize: 11, color: C.sub, fontFamily: 'var(--mono)' }}>
+                                Lv.{s.level || 1} · {s.cefr || '—'} → {s.target || '—'}
+                              </span>
+                              {deb > 0 && (
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  fontFamily: 'var(--mono)',
+                                  color: C.err,
+                                  background: `${C.err}12`,
+                                  border: `1px solid ${C.err}33`,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  {fmtMoney(deb)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {listStudents.length === 0 && (
+                      <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: 30, fontStyle: 'italic' }}>
+                        — Không có học viên phù hợp —
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
+              {/* CỘT NỘI DUNG CHÍNH (TỔNG QUAN HOẶC CHI TIẾT HỌC VIÊN) */}
               {(isWide || profile) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
 
+                  {/* KHI CHƯA CHỌN HỌC VIÊN: MÀN HÌNH TỔNG QUAN TOÀN TRUNG TÂM */}
                   {!profile && (
                     <>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-                        {statTile(t('hub_total_students'), students.filter(s => s).length)}
-                        {statTile(t('hub_debtors'), debtorCount, C.warn)}
-                        {statTile(t('hub_total_debt'), fmtMoney(allUnpaidTotal), C.err)}
+                      {/* Top KPI Ledger Strip */}
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, display: 'grid', gridTemplateColumns: isWide ? 'repeat(4, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))', overflow: 'hidden' }}>
+                        {statTile(t('hub_total_students'), students.filter(s => s).length, C.text, true)}
+                        {statTile(t('hub_debtors'), debtorCount, debtorCount > 0 ? C.warn : C.text)}
+                        {statTile(t('hub_total_debt'), fmtMoney(allUnpaidTotal), allUnpaidTotal > 0 ? C.err : C.text)}
                         {statTile(t('hub_total_hours'), allHours.toFixed(1) + 'h', C.accent)}
                       </div>
 
+                      {/* Hai cột phân tích cân đối */}
                       <div style={{ display: 'grid', gridTemplateColumns: isWide ? '1fr 1fr' : '1fr', gap: 20 }}>
-                        <div className="card">
-                          {secHead(t('acad_top_students'))}
+                        {/* Cột trái: Top chăm chỉ + Phổ điểm Band */}
+                        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '18px 20px', overflow: 'hidden' }}>
+                          {secHead(t('acad_top_students'), 'trophy')}
                           <div style={{ display: 'grid', gap: 7 }}>
                             {[...students].filter(s => s).sort((a, b) => ((b?.exp || 0) - (a?.exp || 0))).slice(0, 5).map((s, i) => s && (
-                              <button key={s.id} onClick={() => { setProfileId(s.id); setProfileTab('overview'); }} style={{ textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: C.bg, borderRadius: 10 }}>
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => { setProfileId(s.id); setProfileTab('overview'); }}
+                                style={{
+                                  textAlign: 'left',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  padding: '8px 12px',
+                                  background: C.bg,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 8,
+                                  cursor: 'pointer'
+                                }}
+                              >
                                 <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                  <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color: '#fff', background: i === 0 ? '#C9A227' : i === 1 ? '#8E99A3' : i === 2 ? '#B07A48' : C.sub }}>{i + 1}</span>
-                                  <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
+                                  <span style={{ width: 22, height: 22, borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color: '#fff', background: i === 0 ? '#C9A227' : i === 1 ? '#8E99A3' : i === 2 ? '#B07A48' : C.sub }}>{i + 1}</span>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.name}</span>
                                 </span>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: C.accent }}>{s.exp || 0} EXP</span>
+                                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: 'var(--mono)', color: C.accent }}>{s.exp || 0} EXP</span>
                               </button>
                             ))}
                           </div>
-                          {Object.keys(bandDist).length > 0 && (
-                            <div style={{ marginTop: 16 }}>
-                              {secHead(t('acad_band_dist'))}
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                {Object.entries(bandDist).sort((a, b) => Number(b[0]) - Number(a[0])).map(([band, count]) => (
-                                  <span key={band} style={{ fontSize: 11.5, fontWeight: 600, color: C.succ, background: `${C.succ}12`, padding: '4px 10px', borderRadius: 8 }}>Band {band}: {count}</span>
-                                ))}
+
+                          {/* Phổ điểm chuẩn hóa dạng thanh ngang */}
+                          {totalBandGrades > 0 && (
+                            <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                              {secHead(t('acad_band_dist'), 'trending')}
+                              <div style={{ display: 'grid', gap: 8 }}>
+                                {bandTiers.map(tier => {
+                                  const pct = totalBandGrades > 0 ? Math.round((tier.count / totalBandGrades) * 100) : 0;
+                                  return (
+                                    <div key={tier.label}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, marginBottom: 4 }}>
+                                        <span style={{ fontWeight: 600, color: C.text }}>{tier.label}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: C.sub }}>
+                                          <b style={{ color: tier.count > 0 ? tier.color : C.sub }}>{tier.count}</b> ({pct}%)
+                                        </span>
+                                      </div>
+                                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                                        <div style={{ height: '100%', width: `${pct}%`, background: tier.color, borderRadius: 3, transition: 'width 0.3s' }} />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           )}
                         </div>
 
-                        <div className="card">
-                          {secHead(t('ea_title'))}
-                          {errorAnalytics.centerTypes.length === 0 ? <div style={{ color: C.sub, fontSize: 12.5 }}>{t('ea_no_data')}</div> : (<>
-                            <div style={{ display: 'grid', gap: 9 }}>
-                              {errorAnalytics.centerTypes.map(ct => (
-                                <div key={ct.label}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}><span>{ct.label}</span><span style={{ color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>{ct.rate}%</span></div>
-                                  <div style={{ height: 7, background: C.bg, borderRadius: 4, overflow: 'hidden' }}><div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }} /></div>
-                                </div>
-                              ))}
-                            </div>
-                            {errorAnalytics.weakStudents.length > 0 && (
-                              <div style={{ marginTop: 14, display: 'grid', gap: 5 }}>
-                                {errorAnalytics.weakStudents.map((ws, i) => (
-                                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '6px 10px', background: `${C.err}0d`, borderRadius: 8 }}><span style={{ fontWeight: 600 }}>{ws.name}</span><span style={{ color: C.err, fontWeight: 600 }}>{ws.label} ({ws.rate}%)</span></div>
+                        {/* Cột phải: Phân tích dạng bài yếu */}
+                        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '18px 20px', overflow: 'hidden' }}>
+                          {secHead(t('ea_title'), 'target')}
+                          {errorAnalytics.centerTypes.length === 0 ? (
+                            <div style={{ color: C.sub, fontSize: 12.5, fontStyle: 'italic', padding: '16px 0' }}>{t('ea_no_data')}</div>
+                          ) : (
+                            <>
+                              <div style={{ display: 'grid', gap: 9 }}>
+                                {errorAnalytics.centerTypes.slice(0, 6).map(ct => (
+                                  <div key={ct.label}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                                      <span style={{ color: C.text }}>{formatQuestionTypeLabel(ct.label)}</span>
+                                      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>
+                                        {ct.rate}%
+                                      </span>
+                                    </div>
+                                    <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                                      <div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err, borderRadius: 3 }} />
+                                    </div>
+                                  </div>
                                 ))}
                               </div>
-                            )}
-                          </>)}
+                              {errorAnalytics.weakStudents.length > 0 && (
+                                <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+                                  <div style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginBottom: 8 }}>
+                                    Học viên cần lưu ý
+                                  </div>
+                                  <div style={{ display: 'grid', gap: 6 }}>
+                                    {errorAnalytics.weakStudents.map((ws, i) => (
+                                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '8px 12px', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                                        <span style={{ fontWeight: 600, color: C.text }}>{ws.name}</span>
+                                        <span style={{ color: C.err, fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 700 }}>
+                                          {formatQuestionTypeLabel(ws.label)} · {ws.rate}%
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      <div className="card">
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {/* Khối công cụ nhanh & Cấu hình phần thưởng thống nhất */}
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
+                        {/* Header công cụ nhanh */}
+                        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: C.bg }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginRight: 6 }}>
+                            Công cụ nhanh:
+                          </span>
                           {([['calc', t('acad_calc_title'), 'target'], ['push', t('stu_push_title'), 'bell'], ['verify', t('rc_verify_title'), 'lock']] as [string, string, string][]).map(([k, lb, ic]) => (
-                            <button key={k} onClick={() => setOvTool(ovTool === k ? "" : k as any)} style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 14px', borderRadius: 10, border: `1px solid ${ovTool === k ? C.accent : C.border}`, background: ovTool === k ? `${C.accent}12` : C.bg, color: ovTool === k ? C.accent : C.text }}><Ico name={ic} size={14} style={{ verticalAlign: -2, marginRight: 6 }} />{lb}</button>
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => setOvTool(ovTool === k ? "" : k as any)}
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                fontFamily: 'var(--heading)',
+                                padding: '6px 12px',
+                                borderRadius: 8,
+                                border: `1px solid ${ovTool === k ? C.accent : C.border}`,
+                                background: ovTool === k ? C.card : 'transparent',
+                                color: ovTool === k ? C.accent : C.text,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6
+                              }}
+                            >
+                              <Ico name={ic} size={13} color={ovTool === k ? C.accent : C.sub} />
+                              {lb}
+                            </button>
                           ))}
                         </div>
 
-                        {ovTool === 'calc' && (
-                          <div style={{ marginTop: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                              <input type="number" placeholder={t('acad_calc_ph')} value={calcScore === "" ? "" : calcScore} onChange={(e: any) => setCalcScore(e.target.value === "" ? "" : Number(e.target.value))} style={{ width: 120, fontSize: 15 }} />
-                              <span style={{ fontWeight: 600, fontSize: 18, color: C.sub }}>/ 40</span>
-                            </div>
-                            <div style={{ flex: 1, minWidth: 160, background: C.bg, padding: '12px 18px', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span style={{ fontSize: 10.5, fontWeight: 600, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase' }}>Band score</span>
-                              <span style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.accent, lineHeight: 1 }}>{calcScore === "" ? "—" : getIeltsBand(Number(calcScore), 40)}</span>
-                            </div>
-                          </div>
-                        )}
-                        {ovTool === 'push' && (
-                          <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: isWide ? '1fr 1fr 1fr auto' : '1fr', gap: 10, alignItems: 'end' }}>
-                            <select value={pushTarget} onChange={e => setPushTarget(e.target.value)}><option value="ALL">{t('stu_push_all')}</option>{students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
-                            <input placeholder={t('stu_push_subject_ph')} value={pushTitle} onChange={e => setPushTitle(e.target.value)} />
-                            <input placeholder={t('stu_push_content_ph')} value={pushBody} onChange={e => setPushBody(e.target.value)} />
-                            <button onClick={handleSendPush} style={{ background: C.accent, color: '#fff', padding: '12px 20px', height: 46 }}>{t('stu_push_send')}</button>
-                          </div>
-                        )}
-                        {ovTool === 'verify' && (
-                          <div style={{ marginTop: 16 }}>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                              <input value={verifyCodeInput} onChange={e => { setVerifyCodeInput(e.target.value); setVerifyResult(null); }} onKeyDown={e => { if (e.key === 'Enter') handleVerifyCode(); }} placeholder="OS-XXXXX-XXXXX" style={{ flex: 1, fontFamily: 'monospace', fontSize: 15, fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase' }} />
-                              <button onClick={handleVerifyCode} style={{ background: C.accent, color: '#fff', padding: '0 20px', fontWeight: 600 }}>{t('rc_verify_btn')}</button>
-                            </div>
-                            {verifyResult && verifyResult.status === "FAKE" && (<div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: `${C.err}12`, color: C.err, fontWeight: 600 }}><Ico name="xcircle" size={15} color={C.err} /> {t('rc_fake')}</div>)}
-                            {verifyResult && (verifyResult.status === "VALID" || verifyResult.status === "USED") && verifyResult.entry && (
-                              <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: verifyResult.status === "VALID" ? `${C.succ}0d` : `${C.warn}12`, border: `1px solid ${verifyResult.status === "VALID" ? C.succ : C.warn}` }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 }}><span style={{ color: C.sub }}>{t('rc_student')}:</span><b>{verifyResult.entry.studentName}</b><span style={{ color: C.sub }}>{t('rc_item')}:</span><b>{verifyResult.entry.item}</b></div>
-                                {verifyResult.status === "VALID"
-                                  ? <button onClick={handleRedeemCode} style={{ marginTop: 12, background: C.succ, color: '#fff', padding: '10px', fontWeight: 600, width: '100%' }}><Ico name="check" size={15} /> {t('rc_redeem_btn')}</button>
-                                  : <div style={{ marginTop: 10, color: C.warn, fontWeight: 600, fontSize: 12.5 }}><Ico name="alert" size={14} color={C.warn} /> {t('rc_used')}</div>}
+                        {/* Nội dung công cụ đang mở */}
+                        {ovTool && (
+                          <div style={{ padding: '18px 20px', borderBottom: `1px solid ${C.border}` }}>
+                            {ovTool === 'calc' && (
+                              <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <input
+                                    type="number"
+                                    placeholder={t('acad_calc_ph')}
+                                    value={calcScore === "" ? "" : calcScore}
+                                    onChange={(e: any) => setCalcScore(e.target.value === "" ? "" : Number(e.target.value))}
+                                    style={{ width: 110, fontSize: 15, fontFamily: 'var(--mono)', padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }}
+                                  />
+                                  <span style={{ fontWeight: 600, fontSize: 16, color: C.sub, fontFamily: 'var(--mono)' }}>/ 40</span>
+                                </div>
+                                <div style={{ flex: 1, minWidth: 160, background: C.bg, padding: '10px 16px', borderRadius: 10, border: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)' }}>Band score</span>
+                                  <span style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 600, color: C.accent, lineHeight: 1 }}>
+                                    {calcScore === "" ? "—" : getIeltsBand(Number(calcScore), 40)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            {ovTool === 'push' && (
+                              <div style={{ display: 'grid', gridTemplateColumns: isWide ? '1fr 1fr 1fr auto' : '1fr', gap: 10, alignItems: 'end' }}>
+                                <select value={pushTarget} onChange={e => setPushTarget(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 13 }}>
+                                  <option value="ALL">{t('stu_push_all')}</option>
+                                  {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                </select>
+                                <input placeholder={t('stu_push_subject_ph')} value={pushTitle} onChange={e => setPushTitle(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 13 }} />
+                                <input placeholder={t('stu_push_content_ph')} value={pushBody} onChange={e => setPushBody(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, fontSize: 13 }} />
+                                <button type="button" onClick={handleSendPush} style={{ background: C.accent, color: '#fff', padding: '9px 18px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{t('stu_push_send')}</button>
+                              </div>
+                            )}
+
+                            {ovTool === 'verify' && (
+                              <div>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <input
+                                    value={verifyCodeInput}
+                                    onChange={e => { setVerifyCodeInput(e.target.value); setVerifyResult(null); }}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleVerifyCode(); }}
+                                    placeholder="OS-XXXXX-XXXXX"
+                                    style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }}
+                                  />
+                                  <button type="button" onClick={handleVerifyCode} style={{ background: C.accent, color: '#fff', padding: '0 18px', fontWeight: 700, fontSize: 13, borderRadius: 8, border: 'none', cursor: 'pointer' }}>{t('rc_verify_btn')}</button>
+                                </div>
+                                {verifyResult && verifyResult.status === "FAKE" && (
+                                  <div style={{ marginTop: 10, padding: 12, borderRadius: 8, background: `${C.err}12`, border: `1px solid ${C.err}33`, color: C.err, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                    <Ico name="alert" size={15} color={C.err} /> {t('rc_fake')}
+                                  </div>
+                                )}
+                                {verifyResult && (verifyResult.status === "VALID" || verifyResult.status === "USED") && verifyResult.entry && (
+                                  <div style={{ marginTop: 10, padding: 14, borderRadius: 8, background: verifyResult.status === "VALID" ? `${C.succ}0d` : `${C.warn}12`, border: `1px solid ${verifyResult.status === "VALID" ? C.succ : C.warn}` }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 }}>
+                                      <span style={{ color: C.sub }}>{t('rc_student')}:</span><b>{verifyResult.entry.studentName}</b>
+                                      <span style={{ color: C.sub }}>{t('rc_item')}:</span><b>{verifyResult.entry.item}</b>
+                                    </div>
+                                    {verifyResult.status === "VALID" ? (
+                                      <button type="button" onClick={handleRedeemCode} style={{ marginTop: 12, background: C.succ, color: '#fff', padding: '9px', fontWeight: 700, fontSize: 13, width: '100%', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                        <Ico name="check" size={15} /> {t('rc_redeem_btn')}
+                                      </button>
+                                    ) : (
+                                      <div style={{ marginTop: 8, color: C.warn, fontWeight: 600, fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Ico name="alert" size={14} color={C.warn} /> {t('rc_used')}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
                         )}
-                      </div>
 
-                      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                        <div style={{ padding: '16px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: rewardConfigOpen ? `1px solid ${C.border}` : 'none', flexWrap: 'wrap' }}>
-                          <div><div style={{ fontSize: 15, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7 }}><Ico name="gift" size={16} color={C.accent} /> Quà và cơ chế thưởng</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.</div></div>
-                          <button onClick={() => setRewardConfigOpen(value => !value)} style={{ background: rewardConfigOpen ? `${C.accent}12` : C.accent, color: rewardConfigOpen ? C.accent : '#fff', border: `1px solid ${C.accent}`, padding: '8px 11px', fontSize: 12, fontWeight: 800 }}>{rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}</button>
+                        {/* Quà và cơ chế thưởng */}
+                        <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: rewardConfigOpen ? `1px solid ${C.border}` : 'none', flexWrap: 'wrap' }}>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7, color: C.text }}>
+                              <Ico name="gift" size={15} color={C.accent} />
+                              <span>Quà và cơ chế thưởng</span>
+                            </div>
+                            <div style={{ marginTop: 2, fontSize: 12, color: C.sub }}>
+                              Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setRewardConfigOpen(value => !value)}
+                            style={{
+                              background: rewardConfigOpen ? C.bg : C.card,
+                              color: rewardConfigOpen ? C.accent : C.text,
+                              border: `1px solid ${rewardConfigOpen ? C.accent : C.border}`,
+                              padding: '6px 12px',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              borderRadius: 8,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}
+                          </button>
                         </div>
-                        {rewardConfigOpen && <div style={{ padding: 18, display: 'grid', gap: 22 }}>
-                          <section>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}><div><div style={{ fontSize: 13, fontWeight: 800 }}>Catalog quà</div><div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div></div><span style={{ color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span></div>
-                            <div style={{ display: 'grid', gap: 7 }}>
-                              {giftCatalog.map(gift => <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12 }} />
-                                <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12 }} />
-                                <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
-                                <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12 }} />
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{gift.enabled ? 'Bật' : 'Tắt'}</label>
-                                <button onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
-                              </div>)}
+
+                        {rewardConfigOpen && (
+                          <div style={{ padding: 20, display: 'grid', gap: 20 }}>
+                            <section>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}>
+                                <div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Catalog quà</div>
+                                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div>
+                                </div>
+                                <span style={{ fontFamily: 'var(--mono)', color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span>
+                              </div>
+                              <div style={{ display: 'grid', gap: 7 }}>
+                                {giftCatalog.map(gift => (
+                                  <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
+                                      <option value="consumable">Tiêu hao</option>
+                                      <option value="permanent">Vĩnh viễn</option>
+                                    </select>
+                                    <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
+                                      <input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
+                                      {gift.enabled ? 'Bật' : 'Tắt'}
+                                    </label>
+                                    <button type="button" onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                                <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
+                                  <option value="consumable">Tiêu hao</option>
+                                  <option value="permanent">Vĩnh viễn</option>
+                                </select>
+                                <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <button type="button" onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm quà</button>
+                              </div>
+                            </section>
+
+                            <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, color: C.text }}>Cơ chế thưởng</div>
+                              <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
+                              <div style={{ display: 'grid', gap: 7 }}>
+                                {rewardMechanisms.map(rule => (
+                                  <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
+                                    <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
+                                      <input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
+                                      {rule.enabled ? 'Bật' : 'Tắt'}
+                                    </label>
+                                    <button type="button" onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
+                                <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}>
+                                  <input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />
+                                  Bật
+                                </label>
+                                <button type="button" onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
+                              </div>
+                            </section>
+
+                            {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                              <span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700, fontFamily: 'var(--mono)' }}>
+                                {rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void saveReleaseConfiguration()}
+                                disabled={!rewardConfigDirty || rewardConfigSaving}
+                                style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1, cursor: !rewardConfigDirty || rewardConfigSaving ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                              >
+                                <Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={13} />
+                                {rewardConfigSaving ? 'Đang lưu…' : 'Lưu cấu hình'}
+                              </button>
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                              <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12 }} />
-                              <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12 }} />
-                              <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12 }}><option value="consumable">Tiêu hao</option><option value="permanent">Vĩnh viễn</option></select>
-                              <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12 }} />
-                              <button onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm quà</button>
-                            </div>
-                          </section>
-                          <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 18 }}>
-                            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>Cơ chế thưởng</div><div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
-                            <div style={{ display: 'grid', gap: 7 }}>
-                              {rewardMechanisms.map(rule => <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12 }} />
-                                <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
-                                <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12 }} />
-                                <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />{rule.enabled ? 'Bật' : 'Tắt'}</label>
-                                <button onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30 }}><Ico name="trash" size={13} /></button>
-                              </div>)}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                              <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12 }} />
-                              <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)' }} />
-                              <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12 }} />
-                              <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}><input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />Bật</label>
-                              <button onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 11px', fontWeight: 800, fontSize: 12 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
-                            </div>
-                          </section>
-                          {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}><span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700 }}>{rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}</span><button onClick={() => void saveReleaseConfiguration()} disabled={!rewardConfigDirty || rewardConfigSaving} style={{ background: C.accent, color: '#fff', padding: '9px 12px', fontWeight: 800, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1 }}><Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={14} /> {rewardConfigSaving ? 'Đang lưu' : 'Lưu cấu hình'}</button></div>
-                        </div>}
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
 
+                  {/* KHI ĐÃ CHỌN HỌC VIÊN: MÀN HÌNH CHI TIẾT HỒ SƠ */}
                   {profile && (
-                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                      <div style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', borderBottom: `1px solid ${C.border}` }}>
+                    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden' }}>
+                      {/* Header thông tin học viên & Nút thao tác */}
+                      <div style={{ padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', borderBottom: `1px solid ${C.border}` }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                           {!isWide && headerIconBtn('arrowLeft', () => setProfileId(null), 'Back')}
-                          {getAvatar(profile.name)}
+                          {studentAvatar(profile.name, true, 42)}
                           <div>
-                            <div style={{ fontSize: 19, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>{profile.name} {pTrend}</div>
-                            <div style={{ fontSize: 12, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              <span>{getGamificationBadge(profile.level || 1)} Lv.{profile.level || 1}</span>
-                              <span>· {profile.cefr || '—'} → {profile.target || '—'}</span>
-                              {profile.dob && <span>· {getAge(profile.dob)}</span>}
+                            <div style={{ fontFamily: 'var(--display)', fontSize: 20, fontWeight: 600, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span>{profile.name}</span>
+                              {pTrend}
                             </div>
-                            <div style={{ fontSize: 12, color: C.accent, marginTop: 3, display: 'flex', alignItems: 'center', gap: 5 }}>
-                              {profile.email || t('stu_no_email')}
-                              {profile.email && <button onClick={() => copyToClipboard(profile.email as string)} style={{ background: 'transparent', color: C.accent, padding: 0 }}><Ico name="copy" size={12} /></button>}
+                            <div style={{ fontSize: 12, color: C.sub, marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontFamily: 'var(--heading)', fontWeight: 600 }}>{getGamificationBadge(profile.level || 1)} Lv.{profile.level || 1}</span>
+                              <span style={{ opacity: 0.4 }}>·</span>
+                              <span style={{ fontFamily: 'var(--mono)' }}>{profile.cefr || '—'} → {profile.target || '—'}</span>
+                              {profile.dob && (
+                                <>
+                                  <span style={{ opacity: 0.4 }}>·</span>
+                                  <span>{getAge(profile.dob)}</span>
+                                </>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 12, color: C.accent, marginTop: 2, display: 'flex', alignItems: 'center', gap: 5 }}>
+                              <span>{profile.email || t('stu_no_email')}</span>
+                              {profile.email && (
+                                <button type="button" onClick={() => copyToClipboard(profile.email as string)} style={{ background: 'transparent', border: 'none', color: C.accent, padding: 0, cursor: 'pointer', display: 'inline-flex' }}>
+                                  <Ico name="copy" size={12} />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button onClick={() => exportStudentReportPDF(profile)} style={{ background: `${C.accent}15`, color: C.accent, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="fileText" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_export_pdf')}</button>
+
+                        {/* Nhóm nút thao tác */}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => exportStudentReportPDF(profile)}
+                            style={{
+                              background: C.bg,
+                              color: C.accent,
+                              border: `1px solid ${C.border}`,
+                              fontSize: 12.5,
+                              padding: '8px 14px',
+                              height: 34,
+                              fontWeight: 600,
+                              borderRadius: 8,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6
+                            }}
+                          >
+                            <Ico name="fileText" size={14} color={C.accent} />
+                            {t('hub_export_pdf')}
+                          </button>
                           {headerIconBtn('pin', () => { const nx = students.map(x => x.id === profile.id ? { ...x, isPinned: !x.isPinned } : x); setStudents(nx); syncData({ students: nx }); }, t('tip_pin_student'))}
                           {headerIconBtn('edit', () => { setEditStId(profile.id); setNewSt({ ...profile }); setShowAddStudent(true); }, t('common_edit'))}
                           {headerIconBtn('trash', () => { if (confirm(`Xóa học viên ${profile.name}?`)) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
                         </div>
                       </div>
 
+                      {/* Thanh Tabs */}
                       <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, background: C.bg }}>
                         {TabBtn('overview', t('hub_overview'), 'barChart')}
-                        {TabBtn('results', t('hub_tab_results'), 'pin', pResults.length)}
+                        {TabBtn('results', t('hub_tab_results'), 'file', pResults.length)}
                         {TabBtn('sessions', t('hub_tab_sessions'), 'clock', pSessions.length)}
                         {TabBtn('finance', t('hub_tab_finance'), 'coins')}
                       </div>
 
-                      <div style={{ padding: 24 }}>
+                      {/* Nội dung Tab */}
+                      <div style={{ padding: 22 }}>
+                        {/* Tab 1: Tổng quan học viên */}
                         {profileTab === 'overview' && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
-                              {statTile(t('hub_avg_band'), pAvg, C.succ)}
+                            {/* 4-column KPI ledger strip */}
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, display: 'grid', gridTemplateColumns: isWide ? 'repeat(4, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))', overflow: 'hidden' }}>
+                              {statTile(t('hub_avg_band'), pAvg, C.succ, true)}
                               {statTile(t('hub_hours'), pHours.toFixed(1) + 'h')}
                               {statTile(t('hub_tests'), pResults.length)}
                               {statTile(t('hub_debt_short'), pUnpaid > 0 ? fmtMoney(pUnpaid) : '—', pUnpaid > 0 ? C.err : C.sub)}
                             </div>
-                            <div>
-                              {secHead(t('chart_band_title'))}
-                              {bandSeries(pResults).length > 0 ? <BandTrendChart data={bandSeries(pResults)} /> : <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: 20 }}>{t('hub_no_band')}</div>}
+
+                            {/* Biểu đồ Band */}
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '18px 20px' }}>
+                              {secHead(t('chart_band_title'), 'trending')}
+                              {bandSeries(pResults).length > 0 ? (
+                                <BandTrendChart data={bandSeries(pResults)} />
+                              ) : (
+                                <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: '30px 20px', fontStyle: 'italic' }}>
+                                  {t('hub_no_band')}
+                                </div>
+                              )}
                             </div>
+
+                            {/* Phân tích dạng bài yếu của học viên */}
                             {pTypes.length > 0 && (
-                              <div>
-                                {secHead(t('ea_title'))}
-                                <div style={{ display: 'grid', gap: 8 }}>
+                              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '18px 20px' }}>
+                                {secHead(t('ea_title'), 'target')}
+                                <div style={{ display: 'grid', gap: 9 }}>
                                   {pTypes.map(ct => (
                                     <div key={ct.label}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}><span>{ct.label}</span><span style={{ color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>{ct.rate}% <span style={{ color: C.sub, fontWeight: 400 }}>({t('ea_questions_n', { n: ct.total })})</span></span></div>
-                                      <div style={{ height: 7, background: C.bg, borderRadius: 4, overflow: 'hidden' }}><div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }} /></div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                                        <span style={{ color: C.text }}>{formatQuestionTypeLabel(ct.label)}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>
+                                          {ct.rate}% <span style={{ color: C.sub, fontWeight: 400 }}>({t('ea_questions_n', { n: ct.total })})</span>
+                                        </span>
+                                      </div>
+                                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                                        <div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err, borderRadius: 3 }} />
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
                               </div>
                             )}
-                            <div>
-                              {secHead(t('hub_evidence_note'))}
-                              <input type="text" placeholder={t('stu_private_ph')} defaultValue={profile.privateMessage || ""} onBlur={(e: any) => { if (e.target.value !== profile.privateMessage) { const nx = students.map(x => x.id === profile.id ? { ...x, privateMessage: e.target.value } : x); setStudents(nx); syncData({ students: nx }); } }} style={{ fontSize: 12.5, background: `${C.warn}0d`, border: `1px solid ${C.warn}40`, color: C.text }} />
+
+                            {/* Ghi chú riêng của giáo viên */}
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '16px 20px' }}>
+                              {secHead(t('hub_evidence_note'), 'edit')}
+                              <input
+                                type="text"
+                                placeholder={t('stu_private_ph')}
+                                defaultValue={profile.privateMessage || ""}
+                                onBlur={(e: any) => {
+                                  if (e.target.value !== profile.privateMessage) {
+                                    const nx = students.map(x => x.id === profile.id ? { ...x, privateMessage: e.target.value } : x);
+                                    setStudents(nx);
+                                    syncData({ students: nx });
+                                  }
+                                }}
+                                style={{ width: '100%', fontSize: 13, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 12px', color: C.text }}
+                              />
                             </div>
                           </div>
                         )}
 
-                        {profileTab === 'results' && (
-                          <div style={{ display: 'grid', gap: 14 }}>
-                            {pResults.length === 0 ? <div style={{ textAlign: 'center', color: C.sub, padding: 30, fontSize: 13 }}>{t('acad_no_results')}</div> : pResults.map(resultCard)}
-                          </div>
-                        )}
+                        {/* Tab 2: Kết quả thi của học viên */}
+                        {profileTab === 'results' && (() => {
+                          const filteredResults = pResults.filter(r => {
+                            const q = quizzes.find(item => item && item.id === r.quizId);
+                            if (stuResSkillFilter !== "ALL") {
+                              if (stuResSkillFilter === "Writing" && !isWritingQuiz(q)) return false;
+                              if (stuResSkillFilter === "Listening" && q?.type !== "Listening") return false;
+                              if (stuResSkillFilter === "Reading" && q?.type !== "Reading") return false;
+                            }
+                            if (stuResSearch.trim()) {
+                              const kw = stuResSearch.toLowerCase();
+                              if (!safeString(r.quizTitle).toLowerCase().includes(kw)) return false;
+                            }
+                            return true;
+                          });
 
+                          return (
+                            <div style={{ display: 'grid', gap: 14 }}>
+                              {/* Bộ lọc theo kỹ năng và tìm kiếm */}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                  {(["ALL", "Listening", "Reading", "Writing"] as const).map(sk => (
+                                    <button
+                                      key={sk}
+                                      type="button"
+                                      onClick={() => setStuResSkillFilter(sk)}
+                                      style={{
+                                        padding: '5px 11px',
+                                        fontSize: 12,
+                                        fontWeight: stuResSkillFilter === sk ? 700 : 500,
+                                        fontFamily: 'var(--heading)',
+                                        borderRadius: 6,
+                                        border: `1px solid ${stuResSkillFilter === sk ? C.accent : C.border}`,
+                                        background: stuResSkillFilter === sk ? `${C.accent}12` : C.card,
+                                        color: stuResSkillFilter === sk ? C.accent : C.sub,
+                                        cursor: 'pointer'
+                                      }}
+                                    >
+                                      {sk === "ALL" ? "All skills" : sk}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div style={{ position: 'relative', width: 220 }}>
+                                  <input
+                                    placeholder="Search test..."
+                                    value={stuResSearch}
+                                    onChange={e => setStuResSearch(e.target.value)}
+                                    style={{ width: '100%', padding: '6px 10px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.card }}
+                                  />
+                                </div>
+                              </div>
+
+                              {filteredResults.length === 0 ? (
+                                <div style={{ textAlign: 'center', color: C.sub, padding: '40px 20px', background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}`, fontSize: 13, fontStyle: 'italic' }}>
+                                  {stuResSearch || stuResSkillFilter !== "ALL" ? "Không tìm thấy kết quả phù hợp" : t('acad_no_results')}
+                                </div>
+                              ) : (
+                                <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden', background: C.card }}>
+                                  {filteredResults.map(resultCard)}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Tab 3: Buổi học / Điểm danh */}
                         {profileTab === 'sessions' && (
                           <div style={{ display: 'grid', gap: 14 }}>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button onClick={exportCSV} style={{ background: `${C.succ}15`, color: C.succ, fontSize: 12, padding: '7px 14px' }}><Ico name="arrowDown" size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hist_export_excel')}</button>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: C.sub }}>
+                                {pSessions.length} {pSessions.length === 1 ? 'session' : 'sessions'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={exportCSV}
+                                style={{
+                                  background: C.card,
+                                  color: C.succ,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 8,
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  padding: '6px 14px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Ico name="arrowDown" size={13} color={C.succ} />
+                                {t('hist_export_excel')}
+                              </button>
                             </div>
-                            {pSessions.length === 0 ? <div style={{ textAlign: 'center', color: C.sub, padding: 30, fontSize: 13 }}>{t('hist_no_match')}</div> : pSessions.map(sessionCard)}
+                            {pSessions.length === 0 ? (
+                              <div style={{ textAlign: 'center', color: C.sub, padding: '40px 20px', background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}`, fontSize: 13, fontStyle: 'italic' }}>
+                                {t('hist_no_match')}
+                              </div>
+                            ) : (
+                              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden', background: C.card }}>
+                                {pSessions.map(sessionCard)}
+                              </div>
+                            )}
                           </div>
                         )}
 
+                        {/* Tab 4: Tài chính & Phần thưởng */}
                         {profileTab === 'finance' && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                              {statTile(t('hub_total_debt'), pUnpaid > 0 ? fmtMoney(pUnpaid) : '0', pUnpaid > 0 ? C.err : C.succ)}
-                              {statTile(t('hub_coins'), profile.coins || 0, C.warn)}
+                            {/* 2-column hairline ledger strip */}
+                            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', overflow: 'hidden' }}>
+                              {statTile(t('hub_total_debt'), pUnpaid > 0 ? fmtMoney(pUnpaid) : '0', pUnpaid > 0 ? C.err : C.succ, true)}
+                              {statTile(t('hub_coins'), profile.coins || 0, C.text)}
                             </div>
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                              <button onClick={() => { if (confirm(`Tặng 100 OS Coins cho ${profile.name}?`)) { const nx = students.map(x => x.id === profile.id ? { ...x, coins: (x.coins || 0) + 100 } : x); const coinOperation = makeCoinOperation(profile.id, 100, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); } }} style={{ background: `${C.succ}15`, color: C.succ, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="gift" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('stu_reward_coins')}</button>
-                              <button onClick={() => setGiftFor(profile.id)} style={{ background: C.accent, color: '#fff', fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="gift" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('gift_manual_btn')}</button>
-                              {pUnpaid > 0 && <>
-                                <button onClick={() => copyToClipboard(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="clipboard" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_copy_sms')}</button>
-                                <button onClick={() => { if (confirm(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`)) { const msg = `Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`; const nx = students.map(x => x.id === profile.id ? { ...x, debtMessage: msg } : x); setStudents(nx); syncData({ students: nx }); alert("Đã gửi cảnh báo đỏ!"); } }} style={{ background: C.err, color: '#fff', fontSize: 12.5, padding: '8px 14px', fontWeight: 600 }}><Ico name="siren" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('stu_debt_inapp')}</button>
-                              </>}
+
+                            {/* Unified Manuscript Action Bar */}
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Tặng 100 OS Coins cho ${profile.name}?`)) {
+                                    const nx = students.map(x => x.id === profile.id ? { ...x, coins: (x.coins || 0) + 100 } : x);
+                                    const coinOperation = makeCoinOperation(profile.id, 100, "TEACHER_GRANT");
+                                    setStudents(nx);
+                                    syncData({ students: nx, __coinOperation: coinOperation });
+                                  }
+                                }}
+                                style={{
+                                  background: C.card,
+                                  color: C.text,
+                                  border: `1px solid ${C.border}`,
+                                  fontSize: 12.5,
+                                  fontWeight: 600,
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6
+                                }}
+                              >
+                                <Ico name="coins" size={14} color={C.accent} />
+                                {t('stu_reward_coins')}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setGiftFor(profile.id)}
+                                style={{
+                                  background: C.card,
+                                  color: C.text,
+                                  border: `1px solid ${C.border}`,
+                                  fontSize: 12.5,
+                                  fontWeight: 600,
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6
+                                }}
+                              >
+                                <Ico name="gift" size={14} color={C.accent} />
+                                {t('gift_manual_btn')}
+                              </button>
+
+                              {pUnpaid > 0 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyToClipboard(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`)}
+                                    style={{
+                                      background: C.card,
+                                      color: C.text,
+                                      border: `1px solid ${C.border}`,
+                                      fontSize: 12.5,
+                                      fontWeight: 600,
+                                      padding: '8px 14px',
+                                      borderRadius: 8,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 6
+                                    }}
+                                  >
+                                    <Ico name="copy" size={14} color={C.sub} />
+                                    {t('hub_copy_sms')}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (confirm(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`)) {
+                                        const msg = `Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`;
+                                        const nx = students.map(x => x.id === profile.id ? { ...x, debtMessage: msg } : x);
+                                        setStudents(nx);
+                                        syncData({ students: nx });
+                                        alert("Đã gửi cảnh báo đỏ!");
+                                      }
+                                    }}
+                                    style={{
+                                      background: 'transparent',
+                                      color: C.err,
+                                      border: `1px solid ${C.err}44`,
+                                      fontSize: 12.5,
+                                      fontWeight: 600,
+                                      padding: '8px 14px',
+                                      borderRadius: 8,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 6
+                                    }}
+                                  >
+                                    <Ico name="alert" size={14} color={C.err} />
+                                    {t('stu_debt_inapp')}
+                                  </button>
+                                </>
+                              )}
                             </div>
-                            {secHead(t('hub_unpaid_sessions'))}
-                            <div style={{ display: 'grid', gap: 8 }}>
-                              {pSessions.filter(h => !h.isPaid).length === 0 ? <div style={{ color: C.succ, fontSize: 12.5 }}><Ico name="check" size={14} style={{ verticalAlign: -2, marginRight: 5 }} />{t('hub_no_unpaid')}</div> : pSessions.filter(h => !h.isPaid).map(h => (
-                                <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: C.bg, borderRadius: 10 }}>
-                                  <span style={{ fontSize: 12.5 }}>{h.date} · {fmtMoney(h.earnings)}</span>
-                                  <button onClick={() => { const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x); const rem = nxHistory.filter(se => se.studentId === profile.id && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0); let nxStudents = students; if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); } setHistory(nxHistory as Session[]); syncData({ history: nxHistory, students: nxStudents }); }} style={{ background: `${C.warn}18`, color: C.warn, fontSize: 11.5, padding: '5px 11px', border: `1px solid ${C.warn}55` }}>{t('hist_collect_fast')}</button>
-                                </div>
-                              ))}
+
+                            {/* Danh sách các buổi chưa thanh toán */}
+                            <div style={{ marginTop: 8 }}>
+                              {secHead(t('hub_unpaid_sessions'), 'clock')}
+                              <div style={{ display: 'grid', gap: 8 }}>
+                                {pSessions.filter(h => !h.isPaid).length === 0 ? (
+                                  <div style={{ color: C.succ, fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6, padding: '12px 14px', background: `${C.succ}0d`, borderRadius: 8, border: `1px solid ${C.succ}22` }}>
+                                    <Ico name="check" size={14} color={C.succ} />
+                                    <span>{t('hub_no_unpaid')}</span>
+                                  </div>
+                                ) : (
+                                  pSessions.filter(h => !h.isPaid).map(h => (
+                                    <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: C.card, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                                      <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: C.text }}>
+                                        {h.date} · <b style={{ color: C.err }}>{fmtMoney(h.earnings)}</b>
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                                          const rem = nxHistory.filter(se => se.studentId === profile.id && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
+                                          let nxStudents = students;
+                                          if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                                          setHistory(nxHistory as Session[]);
+                                          syncData({ history: nxHistory, students: nxStudents });
+                                        }}
+                                        style={{
+                                          background: 'transparent',
+                                          color: C.warn,
+                                          border: `1px solid ${C.warn}66`,
+                                          borderRadius: 6,
+                                          padding: '5px 12px',
+                                          fontFamily: 'var(--heading)',
+                                          fontSize: 11.5,
+                                          fontWeight: 700,
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        {t('hist_collect_fast')}
+                                      </button>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
                             </div>
                           </div>
                         )}
@@ -19763,7 +20836,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 </div>
               )}
 
-              {/* MODAL TẶNG QUÀ THỦ CÔNG — GV gửi thẳng vào túi đồ HV, không cần xu/gacha */}
+              {/* MODAL TẶNG QUÀ THỦ CÔNG — GV gửi thẳng vào túi đồ HV */}
               {giftFor && (() => {
                 const gst = students.find(s => s.id === giftFor);
                 if (!gst) return null;
@@ -19793,7 +20866,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 };
                 const permChip = (gift: GiftDefinition) => {
                   const has = owned.includes(gift.name);
-                  return <button key={gift.id} disabled={has} onClick={() => givePermanent(gift)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 9, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{gift.name.split(': ')[1] || gift.name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
+                  return <button key={gift.id} disabled={has} onClick={() => givePermanent(gift)} style={{ textAlign: 'left', fontSize: 12, padding: '7px 11px', borderRadius: 8, border: `1px solid ${has ? C.succ : C.border}`, background: has ? `${C.succ}12` : C.bg, color: has ? C.succ : C.text, cursor: has ? 'default' : 'pointer', fontWeight: 600 }}>{has ? <Ico name="check" size={12} style={{verticalAlign:'-1px', marginRight:4, display:'inline-block'}} /> : '+ '}{gift.name.split(': ')[1] || gift.name}{has ? ` · ${t('gift_owned')}` : ''}</button>;
                 };
                 const grp = (title: string, group: string) => (
                   <div>
@@ -19802,22 +20875,22 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   </div>
                 );
                 return (
-                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setGiftFor(null)}>
-                    <div className="card" style={{ width: 600, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
+                  <div style={{ position: 'fixed', inset: 0, background: 'rgba(26,23,38,0.45)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setGiftFor(null)}>
+                    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: '0 20px 48px rgba(26,23,38,0.18)', width: 600, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: 22 }} onClick={(e: any) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-                        <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
-                        <button onClick={() => setGiftFor(null)} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                        <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8, color: C.text }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
+                        <button type="button" onClick={() => setGiftFor(null)} style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 4 }}><Ico name="x" size={18} /></button>
                       </div>
                       <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_coins')}</div>
-                          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{[50, 100, 200, 500, 1000].map(a => <button key={a} onClick={() => giveCoins(a)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '8px 14px', fontWeight: 700, borderRadius: 9 }}>+{a} <Ico name="coins" size={12} style={{ verticalAlign: -1 }} /></button>)}</div>
+                          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{[50, 100, 200, 500, 1000].map(a => <button key={a} type="button" onClick={() => giveCoins(a)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '7px 12px', fontWeight: 700, borderRadius: 8, border: `1px solid ${C.warn}33`, cursor: 'pointer' }}>+{a} <Ico name="coins" size={12} style={{ verticalAlign: -1 }} /></button>)}</div>
                         </div>
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_consumable')}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 7 }}>
-                            {consumableGiftCatalog.filter(item => item.enabled).map(item => <button key={item.id} onClick={() => giveConsumable(item)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 9, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600 }}>+ {item.name}</button>)}
+                            {consumableGiftCatalog.filter(item => item.enabled).map(item => <button key={item.id} type="button" onClick={() => giveConsumable(item)} style={{ textAlign: 'left', fontSize: 12, padding: '8px 11px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text, fontWeight: 600, cursor: 'pointer' }}>+ {item.name}</button>)}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -19834,25 +20907,26 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 );
               })()}
 
+              {/* MODAL THÊM / SỬA HỌC VIÊN */}
               {showAddStudent && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setShowAddStudent(false)}>
-                  <div className="card" style={{ width: 560, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e: any) => e.stopPropagation()}>
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(26,23,38,0.45)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setShowAddStudent(false)}>
+                  <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: '0 20px 48px rgba(26,23,38,0.18)', width: 560, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', padding: 22 }} onClick={(e: any) => e.stopPropagation()}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                      <h3 style={{ margin: 0, fontSize: 16 }}>{editStId ? t('stu_edit_title') : t('stu_add_title')}</h3>
-                      <button onClick={() => setShowAddStudent(false)} style={{ background: 'transparent', color: C.err, fontSize: 22, padding: 0 }}><Ico name="x" size={20} /></button>
+                      <h3 style={{ margin: 0, fontSize: 16, color: C.text }}>{editStId ? t('stu_edit_title') : t('stu_add_title')}</h3>
+                      <button type="button" onClick={() => setShowAddStudent(false)} style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 4 }}><Ico name="x" size={18} /></button>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_fullname')}</label><input value={newSt.name} onChange={(e: any) => setNewSt({ ...newSt, name: e.target.value })} /></div>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_login_email')}</label><input value={newSt.email} onChange={(e: any) => setNewSt({ ...newSt, email: e.target.value })} placeholder="hs@gmail.com" /></div>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_dob')}</label><input type="date" value={newSt.dob || ""} onChange={(e: any) => setNewSt({ ...newSt, dob: e.target.value })} /></div>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_rate')}</label><input type="number" value={newSt.rate} onChange={(e: any) => setNewSt({ ...newSt, rate: Number(e.target.value) })} /></div>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_cefr_now')}</label><input value={newSt.cefr} onChange={(e: any) => setNewSt({ ...newSt, cefr: e.target.value })} /></div>
-                      <div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.sub }}>{t('stu_target_band')}</label><input value={newSt.target} onChange={(e: any) => setNewSt({ ...newSt, target: e.target.value })} /></div>
-                      {editStId && (<div><label style={{ fontSize: 10.5, fontWeight: 600, color: C.warn }}>{t('stu_os_coins')}</label><input type="number" value={newSt.coins || 0} onChange={(e: any) => setNewSt({ ...newSt, coins: Number(e.target.value) })} style={{ borderColor: C.warn }} placeholder={t('stu_coins_ph')} /></div>)}
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_fullname')}</label><input value={newSt.name} onChange={(e: any) => setNewSt({ ...newSt, name: e.target.value })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_login_email')}</label><input value={newSt.email} onChange={(e: any) => setNewSt({ ...newSt, email: e.target.value })} placeholder="hs@gmail.com" style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_dob')}</label><input type="date" value={newSt.dob || ""} onChange={(e: any) => setNewSt({ ...newSt, dob: e.target.value })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_rate')}</label><input type="number" value={newSt.rate} onChange={(e: any) => setNewSt({ ...newSt, rate: Number(e.target.value) })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_cefr_now')}</label><input value={newSt.cefr} onChange={(e: any) => setNewSt({ ...newSt, cefr: e.target.value })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_target_band')}</label><input value={newSt.target} onChange={(e: any) => setNewSt({ ...newSt, target: e.target.value })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }} /></div>
+                      {editStId && (<div><label style={{ fontSize: 11, fontWeight: 700, color: C.warn, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_os_coins')}</label><input type="number" value={newSt.coins || 0} onChange={(e: any) => setNewSt({ ...newSt, coins: Number(e.target.value) })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.warn}`, background: C.bg }} placeholder={t('stu_coins_ph')} /></div>)}
                     </div>
-                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                      <button onClick={() => { handleStudentAction(); setShowAddStudent(false); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "11px" }}>{editStId ? t('stu_update') : t('stu_add_new')}</button>
-                      <button onClick={() => { setEditStId(null); setShowAddStudent(false); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); }} style={{ background: C.bg, color: C.text, padding: "11px 20px" }}>{t('common_cancel')}</button>
+                    <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+                      <button type="button" onClick={() => { handleStudentAction(); setShowAddStudent(false); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "10px", borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{editStId ? t('stu_update') : t('stu_add_new')}</button>
+                      <button type="button" onClick={() => { setEditStId(null); setShowAddStudent(false); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); }} style={{ background: C.bg, color: C.text, padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>{t('common_cancel')}</button>
                     </div>
                   </div>
                 </div>
