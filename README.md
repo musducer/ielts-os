@@ -70,10 +70,15 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Video được phục vụ từ static CDN của chính bản deploy, cache dài hạn và preload video của bài kế tiếp ngay tại màn tổng hợp. Listening/Reading dùng MP4 H.264 720p/30fps tương thích Chromium để video không treo ở màn hình tải.
 - Yêu cầu trở lại fullscreen trước khi tiếp tục nếu thí sinh thoát toàn màn hình.
 
-### Exam Builder và DOCX
+### Exam Builder và Quản lý Đề thi (File Manager)
 
-- Tạo, sửa, preview, nhân bản, bật/tắt và phân phối đề.
-- Cấu hình thời gian, số lần làm, lịch thi, passcode, học sinh mục tiêu, audio, passage, transcript, hình ảnh và đáp án.
+- Giao diện thư viện đề thi thiết kế theo chuẩn Manuscript/Editorial: bố cục giấy ấm, font serif Fraunces, viền hairline 1px và bảng màu tối giản không gây mỏi mắt.
+- Hệ thống quản lý thư mục chuẩn desktop file manager: hỗ trợ thư mục trống bền vững (lưu trữ độc lập qua `examFolders` và đồng bộ Firestore mà không cần tạo quiz nháp rác).
+- Kéo thả trực quan (Drag-and-Drop): hỗ trợ kéo đề thi hoặc thư mục thả trực tiếp vào các thẻ thư mục con hoặc thả vào bất kỳ mắt xích nào trên thanh breadcrumb để di chuyển tức thì.
+- Thao tác thư mục đầy đủ qua Modal tương tác: Tạo mới, Đổi tên, Di chuyển theo cây thư mục trực quan và Xóa thư mục an toàn (tự động chuyển đề con về thư mục cha).
+- Thanh công cụ thao tác hàng loạt (Bulk Command Bar): chọn nhanh theo thư mục, chuyển chế độ Exam/Practice, Publish/Unpublish/Publish ready, di chuyển hàng loạt đến thư mục đích, khóa/mở khóa và xóa an toàn.
+- Bộ lọc và sắp xếp nâng cao: lọc đề theo kỹ năng (Listening, Reading, Writing, Integrated), sắp xếp theo tiêu đề (A-Z), thời gian tạo (Mới nhất) hoặc số lượng câu hỏi, kèm tìm kiếm real-time.
+- Cấu hình đề: thời gian, số lần làm, lịch thi, passcode, học sinh mục tiêu, audio, passage, transcript, hình ảnh và đáp án.
 - Import đề Reading/Listening/Writing/Integrated từ DOCX bằng parser FastAPI; nút DOCX của Exam Builder nhận tối đa 20 file, hiển thị review từng file và chỉ lưu các file hợp lệ sau nút xác nhận.
 - Import bổ sung passage hoặc explanations vào đề có sẵn.
 - Manual explanation hỗ trợ evidence quote và timestamp Listening để review đúng đoạn audio.

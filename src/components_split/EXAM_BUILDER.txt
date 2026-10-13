@@ -1,25 +1,52 @@
         {activeTab === "EXAM_BUILDER" && (() => {
 
-            // Xử lý logic Folder Tree
+            // Xử lý logic Folder Tree & Filtering
             const currentPath = builderFolder;
             const childFolders = new Set<string>();
+
+            // Collect immediate subfolders from allKnownFolders
+            allKnownFolders.forEach(f => {
+                if (f !== currentPath && f.startsWith(currentPath + "/")) {
+                    const remainder = f.substring(currentPath.length + 1);
+                    const nextFolder = remainder.split("/")[0];
+                    if (nextFolder) childFolders.add(nextFolder);
+                }
+            });
+
+            // Match skill filter
+            const matchesSkill = (q: any) => {
+                if (builderSkillFilter === "ALL") return true;
+                const t = String(q?.type || "").toLowerCase();
+                const filter = builderSkillFilter.toLowerCase();
+                return t.includes(filter);
+            };
+
             const childQuizzes: any[] = [];
-
-            const quizzesToProcess = builderSearch ? quizzes.filter((q: any) => q.title.toLowerCase().includes(builderSearch.toLowerCase())) : quizzes;
-
-            quizzesToProcess.forEach((q: any) => {
+            quizzes.forEach((q: any) => {
                 const qPath = q.folder || "Root";
                 if (builderSearch) {
-                    childQuizzes.push(q);
-                } else {
-                    if (qPath === currentPath) {
+                    if (q.title.toLowerCase().includes(builderSearch.toLowerCase()) && matchesSkill(q)) {
                         childQuizzes.push(q);
-                    } else if (qPath.startsWith(currentPath + "/")) {
-                        const remainder = qPath.substring(currentPath.length + 1);
-                        const nextFolder = remainder.split("/")[0];
-                        childFolders.add(nextFolder);
+                    }
+                } else {
+                    if (qPath === currentPath && matchesSkill(q)) {
+                        childQuizzes.push(q);
                     }
                 }
+            });
+
+            // Sort child quizzes
+            childQuizzes.sort((a: any, b: any) => {
+                if (builderSort === "TITLE_ASC") {
+                    return (a.title || "").localeCompare(b.title || "");
+                }
+                if (builderSort === "NEWEST") {
+                    return Number(b.updatedAt || b.createdAt || b.id || 0) - Number(a.updatedAt || a.createdAt || a.id || 0);
+                }
+                if (builderSort === "QUESTIONS") {
+                    return (b.questions?.length || 0) - (a.questions?.length || 0);
+                }
+                return 0;
             });
 
             // Tiền xử lý gộp nhóm câu hỏi trong Builder
@@ -155,28 +182,28 @@
             <div className="card ebx-root" style={{position: 'relative', padding: 0, height: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: `1px solid ${EB.line}`, borderRadius: 18, background: EB.paper, boxShadow: EB.shadow}}>
                 {ebScopedStyle}
 
-                {/* HEAD BAR — hairline, không còn viền accent dày */}
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 26px', background: EB.sheet, zIndex: 90, borderBottom: `1px solid ${EB.line}`, flexShrink: 0}}>
-                    <div style={{display: 'flex', alignItems: 'baseline', gap: 12}}>
-                        <span style={{fontFamily: EB.fDisplay, fontSize: 21, fontWeight: 600, color: EB.ink, letterSpacing: '-0.01em'}}>{t('eb_title')}</span>
-                        <span style={{...ebEyebrow, fontSize: 10, letterSpacing: '0.18em'}}>Workspace</span>
+                {/* HEAD BAR — hairline, Single-Row Editorial Header */}
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 26px', background: EB.sheet, zIndex: 90, borderBottom: `1px solid ${EB.line}`, flexShrink: 0, gap: 16}}>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 2}}>
+                        <div style={{...ebEyebrow, fontSize: 9.5, marginBottom: 0, letterSpacing: '0.18em'}}>Workspace</div>
+                        <div style={{fontFamily: EB.fDisplay, fontSize: 20, fontWeight: 600, color: EB.ink, whiteSpace: 'nowrap', letterSpacing: '-0.01em'}}>Exam Library</div>
                     </div>
 
                     {!editingQuiz && !keyEditingQuiz && !realExamPackageEditor && (
-                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                          <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '9px 16px', borderRadius: EB.radiusSm, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}` }}>
-                            <Ico name="download" size={14} /> {t('eb_upload_docx')}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap' }}>
+                          <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '0 14px', height: 36, borderRadius: EB.radiusSm, cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}`, whiteSpace: 'nowrap' }}>
+                            <Ico name="download" size={14} /> Import (.docx)
                             {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" multiple onChange={handleFileUpload as any} style={{ display: 'none' }} />}
                           </label>
-                          <div style={{display: 'inline-flex', alignItems: 'center', gap: 6, padding: 4, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet}}>
-                            <select aria-label="AI DOCX delivery mode" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationDeliveryMode} onChange={(event: any) => setAiGenerationDeliveryMode(event.target.value)} style={{width: 94, padding: '5px 7px', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, boxShadow: 'none'}}><option value="exam">Exam</option><option value="practice">Practice</option></select>
-                            <select aria-label="AI DOCX publication policy" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationPublicationPolicy} onChange={(event: any) => setAiGenerationPublicationPolicy(event.target.value)} style={{width: 112, padding: '5px 7px', border: 'none', background: 'transparent', fontSize: 11, fontWeight: 700, boxShadow: 'none'}}><option value="draft">Keep draft</option><option value="publish_when_ready">Publish ready</option></select>
-                            <label className="ebx-primary" style={{background: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? EB.sub : EB.ink, color: '#fff', padding: '6px 10px', borderRadius: EB.radiusSm, cursor: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? 'wait' : 'pointer', fontWeight: 700, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5, opacity: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? .65 : 1}}>
+                          <div style={{display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 4px', height: 36, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet}}>
+                            <select aria-label="AI DOCX delivery mode" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationDeliveryMode} onChange={(event: any) => setAiGenerationDeliveryMode(event.target.value)} style={{width: 86, padding: '4px 6px', border: 'none', background: 'transparent', fontSize: 11.5, fontWeight: 700, boxShadow: 'none'}}><option value="exam">Exam</option><option value="practice">Practice</option></select>
+                            <select aria-label="AI DOCX publication policy" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationPublicationPolicy} onChange={(event: any) => setAiGenerationPublicationPolicy(event.target.value)} style={{width: 104, padding: '4px 6px', border: 'none', background: 'transparent', fontSize: 11.5, fontWeight: 700, boxShadow: 'none'}}><option value="draft">Keep draft</option><option value="publish_when_ready">Publish ready</option></select>
+                            <label className="ebx-primary" style={{background: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? EB.sub : EB.ink, color: '#fff', padding: '0 10px', height: 28, borderRadius: 6, cursor: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? 'wait' : 'pointer', fontWeight: 700, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5, opacity: (aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)) ? .65 : 1, whiteSpace: 'nowrap'}}>
                               <Ico name="file" size={13} /> {aiGenerationBusy ? 'Starting…' : 'AI raw DOCX'}
                               {typeof handleAiRawDocxBatchUpload === 'function' && <input type="file" accept=".docx" multiple disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} onChange={handleAiRawDocxBatchUpload as any} style={{display: 'none'}} />}
                             </label>
                           </div>
-                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '9px 20px', fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
+                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '0 16px', height: 36, fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap'}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
                         </div>
                     )}
                 </div>
@@ -404,7 +431,7 @@
                                         <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>TASK INSTRUCTION</span><input value={task.instructions} onChange={event => updateWritingTask(task.id, { instructions: event.target.value })} style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
                                         <div style={{ marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 800, color: EB.sub, marginBottom: 6 }}>PROMPT</div><div style={{ border: `1px solid ${EB.line}`, borderRadius: 8, overflow: 'hidden', background: EB.sheet }}><RichTextEditor value={task.prompt} onChange={(value: string) => updateWritingTask(task.id, { prompt: value })} placeholder={`Enter ${task.title} prompt`} /></div></div>
                                         <label style={{ display: 'grid', gap: 6 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>OPTIONAL MEDIA URL</span><input type="url" value={task.mediaUrl || ''} onChange={event => updateWritingTask(task.id, { mediaUrl: event.target.value })} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
-                                        {!!task.mediaUrl && <img src={task.mediaUrl} alt={`${task.title} prompt`} style={{ display: 'block', maxWidth: '100%', maxHeight: 360, objectFit: 'contain', margin: '16px auto 0', border: `1px solid ${EB.line}` }} />}
+                                        {!!task.mediaUrl && <img src={task.mediaUrl} alt={`${task.title} prompt`} style={{ display: 'block', maxWidth: '100%', maxHeight: 360, width: 'auto', height: 'auto', objectFit: 'contain', margin: '16px auto 0', border: `1px solid ${EB.line}` }} />}
                                     </section>)}
                                 </div>;
                             })()}
@@ -1093,9 +1120,9 @@
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap'}}>
                                                         <label className="ebx-soft" style={{background: EB.sheet, color: EB.ink, fontSize: 12, fontWeight: 700, padding: '9px 14px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: audioUploadProgress !== null ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: audioUploadProgress !== null ? 0.72 : 1}}>
                                                             <Ico name="cloud" size={14} /> {audioUploadProgress !== null ? `${t('eb_audio_uploading')} ${audioUploadProgress}%` : t('eb_upload_audio')}
-                                                            <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
+                                                            <input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.oga,.aac,.webm,.flac" disabled={audioUploadProgress !== null} onChange={(e: any) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleAudioFileUpload(f); }} style={{display: 'none'}} />
                                                         </label>
-                                                        {audioUploadProgress !== null && <button className="ebx-soft" onClick={() => { setAudioUploadProgress(null); setAudioUploadMsg(""); }} style={{background: EB.sheet, color: C.sub, fontSize: 12, fontWeight: 700, padding: '9px 12px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer'}}>Reset upload</button>}
+                                                        {audioUploadProgress !== null && <button className="ebx-soft" onClick={cancelAudioFileUpload} style={{background: EB.sheet, color: C.sub, fontSize: 12, fontWeight: 700, padding: '9px 12px', borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer'}}>{t('eb_cancel_audio_upload')}</button>}
                                                         <button className="ebx-primary" onClick={handleTranscribe} disabled={transcribeLoading || !editingQuiz.audioUrl} style={{background: transcribeLoading ? C.sub : C.accent, color: '#fff', fontSize: 12, fontWeight: 600, padding: '9px 14px', borderRadius: EB.radiusSm, opacity: (transcribeLoading || !editingQuiz.audioUrl) ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}>{transcribeLoading ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="refresh" size={14} /> {transcribeMsg || t('eb_transcribing')}</span> : <span style={{display:'inline-flex',alignItems:'center',gap:6}}><Ico name="headphones" size={14} /> {t('eb_transcribe')}</span>}</button>
                                                         {audioUploadMsg ? <span style={{fontSize: 11, fontWeight: 700, color: audioUploadMsg === t('eb_audio_upload_failed') ? C.err : C.succ}}>{audioUploadMsg}</span> : (editingQuiz.transcript ? <span style={{fontSize: 11, fontWeight: 700, color: C.succ}}>{t('eb_transcript_ready')} ({editingQuiz.transcript.length})</span> : <span style={{fontSize: 11, color: C.sub}}>{t('eb_audio_hosted_hint')}</span>)}
                                                     </div>
@@ -1170,49 +1197,184 @@
 
                     // 3. GIAO DIỆN QUẢN LÝ ĐỀ THI GOOGLE DRIVE STYLE (Hoàn chỉnh tính năng)
                     <div key="drive-list" style={{display: 'flex', flexDirection: 'column', flex: 1, background: EB.paper, minHeight: 0}}>
-                        <div style={{padding: '14px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${EB.line}`, flexWrap: 'wrap', gap: 15, background: EB.sheet}}>
-                            <div style={{display: 'flex', alignItems: 'center', gap: 9, fontSize: 16, fontWeight: 600}}>
-                                <button className="ebx-soft" onClick={() => { setBuilderFolder("Root"); setBuilderSearch(""); }} style={{background: 'transparent', padding: '4px 8px', color: EB.accent, fontSize: 15, fontWeight: 600, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 8}}><Ico name="folder" size={15} color={EB.accent} /> Root</button>
-                                {builderFolder !== "Root" && !builderSearch && builderFolder.split("/").filter(x=>x!=="Root").map((part, idx, arr) => (
-                                    <React.Fragment key={idx}>
-                                        <span style={{color: EB.sub, opacity: .6}}>/</span>
-                                        <button className="ebx-soft" onClick={() => setBuilderFolder("Root/" + arr.slice(0, idx+1).join("/"))} style={{background: 'transparent', padding: '4px 8px', color: idx === arr.length-1 ? EB.ink : EB.accent, fontSize: 15, fontWeight: 600, border: 'none', cursor: 'pointer', borderRadius: 8}}>{part}</button>
-                                    </React.Fragment>
-                                ))}
-                                {builderSearch && <><span style={{color: EB.sub, opacity: .6}}>/</span> <span style={{color: EB.ink}}>{t('eb_search_results')}</span></>}
+                        <div style={{padding: '12px 26px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${EB.line}`, flexWrap: 'wrap', gap: 12, background: EB.sheet}}>
+                            {/* Breadcrumbs & Navigation */}
+                            <div style={{display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 600, flexWrap: 'wrap'}}>
+                                {builderFolder !== "Root" && !builderSearch && (
+                                    <button
+                                        className="ebx-soft"
+                                        onClick={() => {
+                                            const parentPath = builderFolder.includes("/") ? builderFolder.slice(0, builderFolder.lastIndexOf("/")) : "Root";
+                                            setBuilderFolder(parentPath);
+                                        }}
+                                        style={{background: 'transparent', padding: '5px 8px', color: EB.ink, fontSize: 12, fontWeight: 600, border: `1px solid ${EB.line}`, borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginRight: 4}}
+                                        title="Lên 1 cấp"
+                                    >
+                                        <Ico name="arrowLeft" size={12} />
+                                    </button>
+                                )}
 
-                                <button className="ebx-soft" onClick={() => {
-                                    const fName = prompt("Nhập tên thư mục mới:");
-                                    if(fName && fName.trim()) {
-                                        const newFolderPath = builderFolder === "Root" ? `Root/${fName.trim()}` : `${builderFolder}/${fName.trim()}`;
-                                        const dummyQuiz = { id: getTrueTime().toString(), title: "Bản nháp (Xóa nếu không dùng)", type: "Reading", folder: newFolderPath, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] };
-                                        const nx = [dummyQuiz, ...quizzes];
-                                        setQuizzes(nx as any); if(typeof syncData === 'function') syncData({quizzes: nx});
-                                    }
-                                }} style={{background: 'transparent', color: EB.sub, padding: '6px 12px', fontSize: 13, borderRadius: EB.radiusSm, marginLeft: 8, border: `1px solid ${EB.line}`, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="plus" size={13} /> {t('eb_new_folder')}</button>
+                                <button
+                                    className="ebx-soft"
+                                    onClick={() => { setBuilderFolder("Root"); setBuilderSearch(""); }}
+                                    onDragOver={(e) => { e.preventDefault(); setDragOverFolderTarget("Root"); }}
+                                    onDragLeave={() => { if (dragOverFolderTarget === "Root") setDragOverFolderTarget(null); }}
+                                    onDrop={(e) => handleDropOnFolder(e, "Root")}
+                                    style={{
+                                        background: dragOverFolderTarget === "Root" ? EB.accentWash : 'transparent',
+                                        padding: '4px 8px',
+                                        color: builderFolder === "Root" && !builderSearch ? EB.ink : EB.accent,
+                                        fontSize: 14,
+                                        fontWeight: 600,
+                                        border: `1px solid ${dragOverFolderTarget === "Root" ? EB.accent : 'transparent'}`,
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 5,
+                                        borderRadius: 6
+                                    }}
+                                >
+                                    <Ico name="folder" size={14} color={EB.accent} /> Root
+                                </button>
+
+                                {builderFolder !== "Root" && !builderSearch && (() => {
+                                    const parts = builderFolder.split("/").filter(x => x !== "Root");
+                                    return parts.map((part, idx, arr) => {
+                                        const segPath = "Root/" + arr.slice(0, idx + 1).join("/");
+                                        const isLast = idx === arr.length - 1;
+                                        const isOver = dragOverFolderTarget === segPath;
+                                        return (
+                                            <React.Fragment key={idx}>
+                                                <span style={{color: EB.sub, opacity: .4}}>/</span>
+                                                <button
+                                                    className="ebx-soft"
+                                                    onClick={() => setBuilderFolder(segPath)}
+                                                    onDragOver={(e) => { e.preventDefault(); setDragOverFolderTarget(segPath); }}
+                                                    onDragLeave={() => { if (dragOverFolderTarget === segPath) setDragOverFolderTarget(null); }}
+                                                    onDrop={(e) => handleDropOnFolder(e, segPath)}
+                                                    style={{
+                                                        background: isOver ? EB.accentWash : 'transparent',
+                                                        padding: '4px 8px',
+                                                        color: isLast ? EB.ink : EB.accent,
+                                                        fontSize: 14,
+                                                        fontWeight: 600,
+                                                        border: `1px solid ${isOver ? EB.accent : 'transparent'}`,
+                                                        cursor: 'pointer',
+                                                        borderRadius: 6
+                                                    }}
+                                                >
+                                                    {part}
+                                                </button>
+                                            </React.Fragment>
+                                        );
+                                    });
+                                })()}
+
+                                {builderSearch && (
+                                    <>
+                                        <span style={{color: EB.sub, opacity: .4}}>/</span>
+                                        <span style={{color: EB.ink, fontSize: 13, background: EB.wash, padding: '3px 8px', borderRadius: 4}}>
+                                            {t('eb_search_results')}: "{builderSearch}"
+                                        </span>
+                                    </>
+                                )}
+
+                                <button
+                                    className="ebx-soft"
+                                    onClick={() => setFolderModal({ mode: "CREATE", targetFolder: builderFolder, inputValue: "", selectedDest: builderFolder })}
+                                    style={{background: 'transparent', color: EB.ink, padding: '5px 10px', fontSize: 12, borderRadius: 6, marginLeft: 6, border: `1px solid ${EB.line}`, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}
+                                >
+                                    <Ico name="plus" size={12} /> {t('eb_new_folder')}
+                                </button>
                             </div>
-                            <div>
-                                <input placeholder={t('eb_search_quiz_ph')} value={builderSearch} onChange={e => setBuilderSearch(e.target.value)} style={{width: 300, padding: '9px 18px', borderRadius: 30, border: `1px solid ${EB.line}`, background: EB.wash, outline: 'none', fontSize: 14, boxShadow: 'none'}} />
+
+                            {/* Filters, Sort & Search */}
+                            <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                <select
+                                    aria-label="Filter by skill"
+                                    value={builderSkillFilter}
+                                    onChange={(e: any) => setBuilderSkillFilter(e.target.value)}
+                                    style={{padding: '7px 10px', borderRadius: 8, border: `1px solid ${EB.line}`, background: EB.sheet, fontSize: 12, fontWeight: 600, color: EB.ink}}
+                                >
+                                    <option value="ALL">All skills</option>
+                                    <option value="Listening">Listening</option>
+                                    <option value="Reading">Reading</option>
+                                    <option value="Writing">Writing</option>
+                                    <option value="Integrated">Integrated</option>
+                                </select>
+
+                                <select
+                                    aria-label="Sort exams"
+                                    value={builderSort}
+                                    onChange={(e: any) => setBuilderSort(e.target.value)}
+                                    style={{padding: '7px 10px', borderRadius: 8, border: `1px solid ${EB.line}`, background: EB.sheet, fontSize: 12, fontWeight: 600, color: EB.ink}}
+                                >
+                                    <option value="TITLE_ASC">Title (A–Z)</option>
+                                    <option value="NEWEST">Newest</option>
+                                    <option value="QUESTIONS">Questions</option>
+                                </select>
+
+                                <div style={{position: 'relative', display: 'inline-flex', alignItems: 'center'}}>
+                                    <input
+                                        placeholder={t('eb_search_quiz_ph')}
+                                        value={builderSearch}
+                                        onChange={e => setBuilderSearch(e.target.value)}
+                                        style={{width: 220, padding: '7px 12px', paddingRight: builderSearch ? 28 : 12, borderRadius: 8, border: `1px solid ${EB.line}`, background: EB.wash, outline: 'none', fontSize: 12.5, color: EB.ink}}
+                                    />
+                                    {builderSearch && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setBuilderSearch("")}
+                                            style={{position: 'absolute', right: 6, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: EB.sub}}
+                                        >
+                                            <Ico name="x" size={12} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
                         <div style={{flex: 1, overflowY: 'auto', padding: '30px 30px 60px', maxWidth: 1100, width: '100%', margin: '0 auto'}}>
                             {aiGenerationBatch && <section aria-label="AI raw DOCX batch" style={{background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, marginBottom: 28, overflow: 'hidden'}}>
-                                <div style={{padding: '15px 18px', borderBottom: `1px solid ${EB.line}`, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap'}}>
-                                    <div><div style={{...ebEyebrow, marginBottom: 5}}><Ico name="file" size={13} />AI raw DOCX batch</div><div style={{fontSize: 12, color: EB.sub}}>{aiGenerationBatch.delivery_mode === 'practice' ? 'Practice · unlimited attempts · integrity checks off' : 'Exam · remembered restrictions'} · {aiGenerationBatch.publication_policy === 'publish_when_ready' ? 'publish after every gate passes' : 'keep as draft'}</div></div>
-                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}><span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>{aiGenerationCanRetry(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={retryAiGenerationBatch} style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Retry AI</button>}</div>
+                                <div style={{padding: '12px 18px', borderBottom: aiBatchCollapsed ? 'none' : `1px solid ${EB.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+                                    <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+                                        <button type="button" onClick={() => setAiBatchCollapsed(prev => !prev)} style={{background: 'transparent', border: 'none', cursor: 'pointer', padding: 4, display: 'inline-flex', color: EB.sub}} title={aiBatchCollapsed ? "Expand batch" : "Collapse batch"}>
+                                            <span style={{display: 'inline-block', transform: aiBatchCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s'}}><Ico name="chevron" size={13} /></span>
+                                        </button>
+                                        <div><div style={{...ebEyebrow, marginBottom: 2}}><Ico name="file" size={13} />AI raw DOCX batch</div><div style={{fontSize: 11.5, color: EB.sub}}>{aiGenerationBatch.delivery_mode === 'practice' ? 'Practice · unlimited attempts · integrity checks off' : 'Exam · remembered restrictions'} · {aiGenerationBatch.publication_policy === 'publish_when_ready' ? 'publish after every gate passes' : 'keep as draft'}</div></div>
+                                    </div>
+                                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                        <span style={{fontFamily: EB.fMono, fontSize: 11, color: (aiGenerationBatch.results || []).some((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))) ? C.err : aiGenerationBatch.status === 'COMPLETE' ? C.succ : EB.sub}}>{aiGenerationBatch.status} · {aiGenerationBatch.completedCount || 0}/{aiGenerationBatch.results?.length || 0}{(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length ? ` · ${(aiGenerationBatch.results || []).filter((item: any) => /FAILED|MANUAL/i.test(String(item.status || ''))).length} needs review` : ''}</span>
+                                        {aiGenerationBatch.upload_kind === 'DIRECT' && (aiGenerationBatch.results || []).some((item: any) => String(item.status || '').toUpperCase() === 'STAGING') && <button type="button" disabled={aiGenerationBusy} onClick={verifyPendingAiDirectUpload} title="Verify files after an interrupted browser upload." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Verify upload</button>}
+                                        {aiGenerationCanRetry(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={retryAiGenerationBatch} title="Retry only temporary provider failures and resume from the last checkpoint." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.sheet, color: EB.ink, fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Retry transient</button>}
+                                        {aiGenerationCanReprocess(aiGenerationBatch) && <button type="button" disabled={aiGenerationBusy} onClick={reprocessAiGenerationBatch} title="Rebuild failed files created by an older pipeline using their stored source DOCX." style={{padding: '4px 7px', border: `1px solid ${EB.line}`, borderRadius: 2, background: EB.ink, color: '#fff', fontFamily: EB.fMono, fontSize: 10, fontWeight: 700, cursor: aiGenerationBusy ? 'wait' : 'pointer', opacity: aiGenerationBusy ? .6 : 1}}>Reprocess latest</button>}
+                                        {!aiGenerationIsActive(aiGenerationBatch) && (
+                                            <button type="button" onClick={dismissAiGenerationBatch} title="Dismiss completed or failed batch banner" style={{padding: '4px 8px', border: `1px solid ${EB.line}`, borderRadius: 6, background: 'transparent', color: EB.sub, fontFamily: EB.fLabel, fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4}}>
+                                                <Ico name="x" size={12} /> Dismiss
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
-                                <div style={{padding: '10px 18px', display: 'grid', gap: 8}}>{(aiGenerationBatch.results || []).map((item: any, index: number) => {
+                                {!aiBatchCollapsed && <div style={{padding: '10px 18px', display: 'grid', gap: 8}}>{(aiGenerationBatch.results || []).map((item: any, index: number) => {
                                     const progress = item.progress || {};
-                                    const diagnostic = Array.isArray(item.diagnostics) ? item.diagnostics.map((entry: any) => entry?.code).filter(Boolean).join(', ') : '';
+                                    const diagnostics = Array.isArray(item.diagnostics) ? item.diagnostics : [];
+                                    const diagnostic = diagnostics.find((entry: any) => String(entry?.severity || 'FAIL').toUpperCase() === 'FAIL') || diagnostics[0];
+                                    const diagnosticScope = diagnostic ? [diagnostic.code, diagnostic.stage, diagnostic.scope, diagnostic.question_number ? `Q${diagnostic.question_number}` : '', diagnostic.group_id, diagnostic.block_id || (Array.isArray(diagnostic.block_ids) ? diagnostic.block_ids.slice(0, 2).join('+') : ''), diagnostic.occurrence_id].filter(Boolean).join(' · ') : '';
+                                    const diagnosticMessage = String(diagnostic?.message || diagnostic?.details || diagnostic?.remaining_reason || '');
                                     const success = /^(READY_FOR_REVIEW|PUBLISHED|COMPLETE)$/i.test(String(item.status));
                                     const needsReview = /FAIL|MANUAL/i.test(String(item.status));
                                     const questionProgress = progress.question_total ? `${progress.question_completed || 0}/${progress.question_total} questions` : '';
+                                    const directUploadPercent = aiGenerationUploadProgress[String(item.row_id || '')];
                                     return <div key={`${item.row_id || item.original_filename}_${index}`} style={{display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 12, alignItems: 'center', fontSize: 12, padding: '5px 0'}}>
-                                        <div style={{minWidth: 0}}><div style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}}>{item.original_filename}</div><div style={{fontSize: 10.5, color: EB.sub, marginTop: 2}}>{[item.detected_skill, item.validation_state, item.round_trip_state, diagnostic].filter(Boolean).join(' / ')}</div>{(item.error || item.publish_error) && <div style={{fontSize: 10.5, color: C.err, marginTop: 2, lineHeight: 1.35}}>{item.error || item.publish_error}</div>}</div>
-                                        <div style={{fontFamily: EB.fMono, textAlign: 'right', color: success ? C.succ : needsReview ? C.err : EB.sub, whiteSpace: 'nowrap'}}><div>{item.status}{item.question_count ? ` / ${item.question_count}Q` : ''}</div>{(progress.stage || questionProgress) && <div style={{fontSize: 10, color: EB.sub, marginTop: 2}}>{[progress.stage, questionProgress].filter(Boolean).join(' / ')}</div>}{item.docx_job_id && <button type="button" onClick={() => downloadAiGeneratedDocx(item.docx_job_id)} style={{marginTop: 4, padding: '2px 5px', border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, borderRadius: 2, fontSize: 9, fontFamily: EB.fMono, cursor: 'pointer'}}>DOCX</button>}</div>
+                                        <div style={{minWidth: 0}}>
+                                            <div style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: EB.ink}}>{item.original_filename}</div>
+                                            <div style={{fontSize: 10.5, color: EB.sub, marginTop: 2}}>{[item.detected_skill, item.validation_state, item.structure_state, item.round_trip_state, typeof item.source_coverage?.percentage === 'number' ? `${item.source_coverage.percentage}% source` : ''].filter(Boolean).join(' / ')}</div>
+                                            {diagnosticScope && <div style={{fontFamily: EB.fMono, fontSize: 9.5, color: needsReview ? C.err : EB.sub, marginTop: 3, lineHeight: 1.35}}>{diagnosticScope}</div>}
+                                            {(diagnosticMessage || item.error || item.publish_error) && <div style={{fontSize: 10.5, color: C.err, marginTop: 2, lineHeight: 1.35}}>{diagnosticMessage || item.error || item.publish_error}</div>}
+                                        </div>
+                                        <div style={{fontFamily: EB.fMono, textAlign: 'right', color: success ? C.succ : needsReview ? C.err : EB.sub, whiteSpace: 'nowrap'}}><div>{typeof directUploadPercent === 'number' && directUploadPercent < 100 ? `UPLOADING ${directUploadPercent}%` : item.reclaimable ? 'RESUMABLE' : item.status}{item.question_count ? ` / ${item.question_count}Q` : ''}</div>{(progress.stage || questionProgress) && <div style={{fontSize: 10, color: EB.sub, marginTop: 2}}>{[item.reclaimable ? 'LEASE_EXPIRED' : progress.stage, questionProgress].filter(Boolean).join(' / ')}</div>}{item.can_retry && <div style={{fontSize: 9, color: EB.sub, marginTop: 2}}>TRANSIENT_RETRY_AVAILABLE</div>}{item.can_reprocess && <div style={{fontSize: 9, color: EB.sub, marginTop: 2}}>OLDER_PIPELINE</div>}{item.docx_job_id && <button type="button" onClick={() => downloadAiGeneratedDocx(item.docx_job_id)} style={{marginTop: 4, padding: '2px 5px', border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, borderRadius: 2, fontSize: 9, fontFamily: EB.fMono, cursor: 'pointer'}}>DOCX</button>}</div>
                                     </div>;
-                                })}</div>
+                                })}</div>}
                             </section>}
                             {examDocxBatch.length > 0 && (() => {
                                 const readyCount = examDocxBatch.filter(item => item.status === 'ready' && item.quiz).length;
@@ -1256,14 +1418,75 @@
                             })()}
                             {/* KHU VỰC THƯ MỤC */}
                             {builderSearch === "" && childFolders.size > 0 && (
-                                <div style={{marginBottom: 40}}>
-                                    <div style={{...ebEyebrow, marginBottom: 15}}><Ico name="folder" size={13} />{t('eb_folders_area')} <span style={{fontFamily: EB.fMono}}>({childFolders.size})</span></div>
-                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12}}>
-                                        {Array.from(childFolders).map(f => (
-                                            <div key={f} className="ebx-card" onClick={() => setBuilderFolder(builderFolder + "/" + f)} style={{background: EB.sheet, padding: '16px 18px', borderRadius: EB.radius, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, fontWeight: 600}}>
-                                                <span style={{display: 'inline-flex'}}><Ico name="folder" size={22} color={EB.accent} /></span> <span style={{fontSize: 15, color: EB.ink, fontWeight: 600}}>{f}</span>
-                                            </div>
-                                        ))}
+                                <div style={{marginBottom: 32}}>
+                                    <div style={{...ebEyebrow, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6}}>
+                                        <Ico name="folder" size={13} color={EB.accent} />
+                                        <span>{t('eb_folders_area')}</span>
+                                        <span style={{fontFamily: EB.fMono, color: EB.sub}}>({childFolders.size})</span>
+                                    </div>
+                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12}}>
+                                        {Array.from(childFolders).sort((a, b) => a.localeCompare(b)).map(f => {
+                                            const fullPath = builderFolder === "Root" ? `Root/${f}` : `${builderFolder}/${f}`;
+                                            const directAndNestedQuizCount = quizzes.filter((q: any) => {
+                                                const qf = q.folder || "Root";
+                                                return qf === fullPath || qf.startsWith(fullPath + "/");
+                                            }).length;
+                                            const subFolderCount = allKnownFolders.filter(folder => folder.startsWith(fullPath + "/") && folder.slice(fullPath.length + 1).indexOf("/") === -1).length;
+                                            const isOver = dragOverFolderTarget === fullPath;
+
+                                            return (
+                                                <div
+                                                    key={f}
+                                                    className="ebx-card"
+                                                    draggable
+                                                    onDragStart={(e) => {
+                                                        e.dataTransfer.setData("application/json", JSON.stringify({ type: "FOLDER", folderPath: fullPath }));
+                                                    }}
+                                                    onDragOver={(e) => {
+                                                        e.preventDefault();
+                                                        if (dragOverFolderTarget !== fullPath) setDragOverFolderTarget(fullPath);
+                                                    }}
+                                                    onDragLeave={() => {
+                                                        if (dragOverFolderTarget === fullPath) setDragOverFolderTarget(null);
+                                                    }}
+                                                    onDrop={(e) => handleDropOnFolder(e, fullPath)}
+                                                    onClick={() => setBuilderFolder(fullPath)}
+                                                    style={{
+                                                        background: isOver ? EB.accentWash : EB.sheet,
+                                                        padding: '12px 14px',
+                                                        borderRadius: EB.radiusSm,
+                                                        border: `1px solid ${isOver ? EB.accent : EB.line}`,
+                                                        cursor: 'pointer',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        gap: 10,
+                                                        transition: 'border-color 0.15s, background-color 0.15s'
+                                                    }}
+                                                >
+                                                    <div style={{display: 'flex', alignItems: 'center', gap: 10, minWidth: 0}}>
+                                                        <span style={{display: 'inline-flex', flexShrink: 0}}><Ico name="folder" size={20} color={EB.accent} /></span>
+                                                        <div style={{minWidth: 0}}>
+                                                            <div style={{fontSize: 14, color: EB.ink, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{f}</div>
+                                                            <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 1}}>
+                                                                {directAndNestedQuizCount} {directAndNestedQuizCount === 1 ? 'exam' : 'exams'}{subFolderCount > 0 ? ` · ${subFolderCount} sub` : ''}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div style={{display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0}} onClick={(e) => e.stopPropagation()}>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "RENAME", targetFolder: fullPath, inputValue: f, selectedDest: "" })} title="Đổi tên" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                            <Ico name="edit" size={12} />
+                                                        </button>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "MOVE_FOLDER", targetFolder: fullPath, inputValue: "", selectedDest: builderFolder })} title="Di chuyển thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                            <Ico name="arrowRight" size={12} />
+                                                        </button>
+                                                        <button type="button" onClick={() => handleDeleteFolder(fullPath)} title="Xóa thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: C.err}}>
+                                                            <Ico name="trash" size={12} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}
@@ -1295,66 +1518,481 @@
 
                             {/* KHU VỰC ĐỀ THI */}
                             <div>
-                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
-                                    <div style={ebEyebrow}><Ico name="file" size={13} />{t('eb_quiz_list')} <span style={{fontFamily: EB.fMono}}>({childQuizzes.length})</span></div>
-                                    {childQuizzes.length > 0 && <button className="ebx-soft" onClick={() => setSelectedQuizzes(childQuizzes.map((quiz: any) => quiz.id))} style={{background: 'transparent', color: EB.sub, padding: '7px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer'}}>Select folder</button>}
-                                    {selectedQuizzes.length > 0 && (
-                                        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
-                                            <button onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('practice')} style={{background: EB.accent, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Practice</button>
-                                            <button onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('exam')} style={{background: EB.ink, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Exam</button>
-                                            <button onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(true)} style={{background: C.succ, color: '#fff', padding: '8px 13px', fontSize: 12, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Publish</button>
-                                            <button onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(false)} style={{background: 'transparent', color: C.err, padding: '8px 13px', fontSize: 12, borderRadius: 8, border: `1px solid ${C.err}55`, fontWeight: 800, cursor: 'pointer'}}>Unpublish</button>
-                                            <button onClick={() => typeof handlePublishAllReady === 'function' && handlePublishAllReady()} style={{background: 'transparent', color: EB.accent, padding: '8px 13px', fontSize: 12, borderRadius: 8, border: `1px solid ${EB.accent}55`, fontWeight: 800, cursor: 'pointer'}}>Publish ready</button>
-                                            <button onClick={() => {
-                                                const dest = prompt("Nhập đường dẫn thư mục đích (VD: Root/IELTS/Test 1):", "Root");
-                                                if(dest) {
-                                                    const nx = quizzes.map((q: any) => selectedQuizzes.includes(q.id) ? { ...q, folder: dest } : q);
-                                                    setQuizzes(nx); if(typeof syncData === 'function') syncData({quizzes: nx}); setSelectedQuizzes([]);
-                                                }
-                                            }} style={{background: C.accent, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="folder" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_move_folder')}</button>
-                                            <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: C.warn, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="lock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_lock_quiz')}</button>
-                                            <button onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: C.succ, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="unlock" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_unlock_quiz')}</button>
-                                            <button onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: '#111827', color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}>Real package</button>
-                                            <button onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: C.err, color: '#fff', padding: '8px 16px', fontSize: 13, borderRadius: 8, border: 'none', fontWeight: 800, cursor: 'pointer'}}><Ico name="trash" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('eb_delete')}</button>
-                                            <button onClick={() => setSelectedQuizzes([])} style={{background: 'transparent', color: EB.sub, padding: '8px 12px', fontSize: 12, borderRadius: 8, border: `1px solid ${EB.line}`, fontWeight: 800, cursor: 'pointer'}}>Clear</button>
+                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>
+                                    <div style={{...ebEyebrow, display: 'flex', alignItems: 'center', gap: 6}}>
+                                        <Ico name="file" size={13} color={EB.accent} />
+                                        <span>{t('eb_quiz_list')}</span>
+                                        <span style={{fontFamily: EB.fMono, color: EB.sub}}>({childQuizzes.length})</span>
+                                    </div>
+                                    {childQuizzes.length > 0 && (() => {
+                                        const allInFolderSelected = childQuizzes.every((q: any) => selectedQuizzes.includes(q.id));
+                                        return (
+                                            <button
+                                                className="ebx-soft"
+                                                onClick={() => {
+                                                    if (allInFolderSelected) {
+                                                        setSelectedQuizzes(selectedQuizzes.filter((id: any) => !childQuizzes.some((q: any) => q.id === id)));
+                                                    } else {
+                                                        setSelectedQuizzes(Array.from(new Set([...selectedQuizzes, ...childQuizzes.map((q: any) => q.id)])));
+                                                    }
+                                                }}
+                                                style={{background: 'transparent', color: EB.sub, padding: '6px 12px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer'}}
+                                            >
+                                                {allInFolderSelected ? 'Deselect folder' : 'Select folder'}
+                                            </button>
+                                        );
+                                    })()}
+                                </div>
+
+                                {selectedQuizzes.length > 0 && (
+                                    <div style={{
+                                        background: EB.sheet,
+                                        border: `1px solid ${EB.line}`,
+                                        borderRadius: EB.radiusSm,
+                                        padding: '8px 12px',
+                                        marginBottom: 14,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        gap: 10,
+                                        flexWrap: 'wrap',
+                                        boxShadow: '0 2px 8px rgba(26,23,38,0.04)'
+                                    }}>
+                                        <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
+                                            <span style={{fontFamily: EB.fMono, fontSize: 12, fontWeight: 700, color: EB.accent, background: EB.accentWash, padding: '3px 8px', borderRadius: 6}}>
+                                                {selectedQuizzes.length} selected
+                                            </span>
+                                            <button className="ebx-soft" onClick={() => setSelectedQuizzes([])} style={{background: 'transparent', border: 'none', color: EB.sub, fontSize: 12, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline'}}>
+                                                Clear
+                                            </button>
+
+                                            <span style={{color: EB.line, margin: '0 2px'}}>|</span>
+
+                                            {/* Mode */}
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('exam')} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>Exam</button>
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkDeliveryMode === 'function' && handleBulkDeliveryMode('practice')} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>Practice</button>
+
+                                            <span style={{color: EB.line, margin: '0 2px'}}>|</span>
+
+                                            {/* Publish */}
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(true)} style={{background: 'transparent', color: C.succ, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>Publish</button>
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkPublish === 'function' && handleBulkPublish(false)} style={{background: 'transparent', color: EB.sub, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>Unpublish</button>
+                                            <button className="ebx-soft" onClick={() => typeof handlePublishAllReady === 'function' && handlePublishAllReady()} style={{background: 'transparent', color: EB.accent, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>Publish ready</button>
+
+                                            <span style={{color: EB.line, margin: '0 2px'}}>|</span>
+
+                                            {/* Organize */}
+                                            <button className="ebx-soft" onClick={() => setFolderModal({ mode: "MOVE_QUIZZES", inputValue: "", selectedDest: builderFolder })} style={{background: 'transparent', color: EB.accent, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
+                                                <Ico name="folder" size={13} /> {t('eb_move_folder') || 'Move to…'}
+                                            </button>
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
+                                                <Ico name="lock" size={13} /> Lock
+                                            </button>
+                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
+                                                <Ico name="unlock" size={13} /> Unlock
+                                            </button>
+                                            <button className="ebx-soft" onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>
+                                                Real package
+                                            </button>
+                                        </div>
+
+                                        <button className="ebx-soft" onClick={() => typeof handleBulkDeleteQuizzes === 'function' && handleBulkDeleteQuizzes()} style={{background: `${C.err}0a`, color: C.err, padding: '5px 10px', fontSize: 12, border: `1px solid ${C.err}33`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
+                                            <Ico name="trash" size={13} /> {t('eb_delete') || 'Delete'}
+                                        </button>
+                                    </div>
+                                )}
+
+                                <div style={{display: 'grid', gap: 8}}>
+                                    {childQuizzes.map((q: any) => {
+                                        const isSelected = selectedQuizzes.includes(q.id);
+                                        const ghostBtn: any = {background: EB.sheet, color: EB.sub, padding: '6px 10px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5};
+                                        return (
+                                            <div
+                                                key={q.id}
+                                                className="ebx-card"
+                                                draggable
+                                                onDragStart={(e) => {
+                                                    e.dataTransfer.setData("application/json", JSON.stringify({ type: "QUIZ", quizId: q.id }));
+                                                    e.dataTransfer.effectAllowed = "move";
+                                                }}
+                                                style={{
+                                                    background: isSelected ? EB.accentWash : EB.sheet,
+                                                    padding: '12px 16px',
+                                                    borderRadius: EB.radiusSm,
+                                                    border: `1px solid ${isSelected ? EB.accent : EB.line}`,
+                                                    borderLeft: `3px solid ${isSelected ? EB.accent : EB.line}`,
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    flexWrap: 'wrap',
+                                                    gap: 14,
+                                                    transition: 'border-color 0.15s, background-color 0.15s'
+                                                }}
+                                            >
+                                                <div style={{display: 'flex', gap: 12, alignItems: 'center', minWidth: 0, flex: '1 1 360px'}}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        onChange={(e: any) => {
+                                                            if(e.target.checked) setSelectedQuizzes([...selectedQuizzes, q.id]);
+                                                            else setSelectedQuizzes(selectedQuizzes.filter((id: any) => id !== q.id));
+                                                        }}
+                                                        style={{width: 16, height: 16, cursor: 'pointer', accentColor: EB.accent, flexShrink: 0}}
+                                                    />
+                                                    <div style={{width: 36, height: 36, borderRadius: 8, background: EB.wash, display: 'grid', placeItems: 'center', color: q.type === 'Listening' ? EB.accent : EB.ink, flexShrink: 0}}>
+                                                        {q.type === 'Listening' ? <Ico name="headphones" size={18} color={EB.accent} /> : <Ico name="book" size={18} color={EB.ink} />}
+                                                    </div>
+                                                    <div style={{minWidth: 0, flex: 1}}>
+                                                        <div style={{display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 2}}>
+                                                            <span style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 15, color: EB.ink, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                                                                {q.title}
+                                                            </span>
+                                                            {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 12, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={12} color={EB.sub} /></span>}
+                                                            <span style={{display: 'inline-flex', verticalAlign: 'middle', padding: '1px 6px', borderRadius: 999, border: `1px solid ${getDeliveryMode(q) === 'practice' ? C.succ : EB.line}`, color: getDeliveryMode(q) === 'practice' ? C.succ : EB.sub, fontFamily: EB.fMono, fontSize: 9.5, letterSpacing: '.04em'}}>
+                                                                {getDeliveryMode(q).toUpperCase()}
+                                                            </span>
+                                                            <span style={{display: 'inline-flex', verticalAlign: 'middle', padding: '1px 6px', borderRadius: 4, background: q.active ? `${C.succ}15` : EB.wash, color: q.active ? C.succ : EB.sub, fontFamily: EB.fLabel, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
+                                                                {q.active ? 'Published' : 'Draft'}
+                                                            </span>
+                                                        </div>
+                                                        <div style={{fontSize: 12, color: EB.sub, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap'}}>
+                                                            <span>{q.type}</span>
+                                                            <span style={{opacity: .4}}>·</span>
+                                                            <span><span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')}</span>
+                                                            <span style={{opacity: .4}}>·</span>
+                                                            <span><span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')}</span>
+                                                            {q.isLocked ? (
+                                                                <>
+                                                                    <span style={{opacity: .4}}>·</span>
+                                                                    <span style={{color: C.err, fontSize: 11}}>{t('eb_st_locked')}</span>
+                                                                </>
+                                                            ) : null}
+                                                            {builderSearch && q.folder && (
+                                                                <>
+                                                                    <span style={{opacity: .4}}>·</span>
+                                                                    <span style={{fontFamily: EB.fMono, fontSize: 10.5, color: EB.sub}}><Ico name="folder" size={11} style={{verticalAlign: '-1px', marginRight: 3}} />{q.folder}</span>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div style={{display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center'}}>
+                                                    {typeof startExam === 'function' && <button className="ebx-soft" onClick={() => startExam(q, true, false)} style={ghostBtn}><Ico name="eye" size={13} /> {t('eb_preview_exam')}</button>}
+                                                    <button className="ebx-soft" onClick={() => setKeyEditingQuiz(q)} style={{...ghostBtn, color: EB.warn, borderColor: `${C.warn}33`}}><Ico name="key" size={13} /> {t('eb_edit_key_btn')}</button>
+                                                    {typeof duplicateQuiz === 'function' && <button className="ebx-soft" onClick={() => duplicateQuiz(q)} style={ghostBtn}><Ico name="copy" size={13} /> {t('eb_duplicate')}</button>}
+                                                    {typeof handleExportExamKey === 'function' && <button className="ebx-soft" onClick={() => handleExportExamKey(q)} style={ghostBtn}><Ico name="download" size={13} /> Key</button>}
+                                                    {typeof handleRecalculateScores === 'function' && <button className="ebx-soft" onClick={() => handleRecalculateScores(q.id)} title={t('eb_recalc')} style={ghostBtn}><Ico name="refresh" size={13} /></button>}
+                                                    <button className="ebx-primary" onClick={() => setEditingQuiz(JSON.parse(JSON.stringify(q)))} style={{background: EB.accent, color: '#fff', padding: '6px 14px', fontSize: 12.5, border: 'none', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}>
+                                                        <Ico name="edit" size={13} /> {t('eb_edit_exam')}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {childQuizzes.length === 0 && (
+                                        <div style={{
+                                            textAlign: 'center',
+                                            color: EB.sub,
+                                            padding: '48px 24px',
+                                            background: EB.sheet,
+                                            borderRadius: EB.radius,
+                                            border: `1px dashed ${EB.line}`,
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            gap: 8
+                                        }}>
+                                            <Ico name="file" size={26} color={EB.sub} />
+                                            <div style={{fontFamily: EB.fDisplay, fontSize: 16, fontWeight: 600, color: EB.ink}}>
+                                                {builderSearch ? `Không tìm thấy đề thi phù hợp với "${builderSearch}"` : (t('eb_folder_empty') || 'Thư mục này chưa có đề thi')}
+                                            </div>
+                                            <div style={{fontSize: 12.5, color: EB.sub, maxWidth: 360, lineHeight: 1.5}}>
+                                                {builderSearch ? 'Thử tìm với từ khóa khác hoặc xóa bộ lọc để xem tất cả đề thi.' : 'Tạo đề mới hoặc kéo thả đề thi từ các thư mục khác vào đây.'}
+                                            </div>
                                         </div>
                                     )}
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
-                                <div style={{display: 'grid', gap: 10}}>
-                                    {childQuizzes.map((q: any) => {
-                                        const isSelected = selectedQuizzes.includes(q.id);
-                                        const ghostBtn: any = {background: 'transparent', color: EB.sub, padding: '7px 13px', fontSize: 13, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6};
-                                        return (
-                                        <div key={q.id} className="ebx-card" style={{background: isSelected ? `${C.warn}0E` : EB.sheet, padding: '16px 20px', borderRadius: EB.radius, border: `1px solid ${isSelected ? C.warn : EB.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 18}}>
-                                            <div style={{display: 'flex', gap: 16, alignItems: 'center'}}>
-                                                <input type="checkbox" checked={isSelected} onChange={(e: any) => {
-                                                    if(e.target.checked) setSelectedQuizzes([...selectedQuizzes, q.id]);
-                                                    else setSelectedQuizzes(selectedQuizzes.filter((id: any) => id !== q.id));
-                                                }} style={{width: 18, height: 18, cursor: 'pointer', accentColor: C.accent}} />
-                                                <div style={{width: 44, height: 44, borderRadius: EB.radiusSm, background: EB.accentWash, display: 'grid', placeItems: 'center', color: EB.accent, flexShrink: 0}}>{q.type === 'Listening' ? <Ico name="headphones" size={22} /> : <Ico name="book" size={22} />}</div>
-                                                <div>
-                                                    <div style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 18, color: EB.ink, marginBottom: 5, letterSpacing: '-0.01em'}}>
-                                                        {q.title} {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 14, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={13} color={EB.sub} /></span>}
-                                                        <span style={{marginLeft: 8, display: 'inline-flex', verticalAlign: 'middle', padding: '2px 6px', borderRadius: 999, border: `1px solid ${getDeliveryMode(q) === 'practice' ? C.succ : EB.line}`, color: getDeliveryMode(q) === 'practice' ? C.succ : EB.sub, fontFamily: EB.fMono, fontSize: 10, letterSpacing: '.04em'}}>{getDeliveryMode(q).toUpperCase()}</span>
-                                                    </div>
-                                                    <div style={{fontSize: 12.5, color: EB.sub, fontWeight: 500}}>
-                                                        {q.type} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')} <span style={{opacity:.5}}>·</span> <span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')} <span style={{opacity:.5}}>·</span> {q.isLocked ? <span style={{textDecoration: 'line-through'}}>{t('eb_st_locked')}</span> : (q.active ? <span style={{color: C.succ, fontWeight: 600}}>{t('eb_st_open')}</span> : t('eb_st_off'))}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div style={{display: 'flex', gap: 7, flexWrap: 'wrap'}}>
-                                                {typeof startExam === 'function' && <button className="ebx-soft" onClick={() => startExam(q, true, false)} style={ghostBtn}><Ico name="eye" size={14} />{t('eb_preview_exam')}</button>}
-                                                {typeof handleExportExamKey === 'function' && <button className="ebx-soft" onClick={() => handleExportExamKey(q)} style={ghostBtn}><Ico name="download" size={14} />{t('eb_download_key')}</button>}
-                                                {typeof handleRecalculateScores === 'function' && <button className="ebx-soft" onClick={() => handleRecalculateScores(q.id)} style={ghostBtn}><Ico name="refresh" size={14} />{t('eb_recalc')}</button>}
-                                                <button className="ebx-soft" onClick={() => setKeyEditingQuiz(q)} style={{...ghostBtn, color: EB.warn, borderColor: `${C.warn}33`}}><Ico name="key" size={14} />{t('eb_edit_key_btn')}</button>
-                                                {typeof duplicateQuiz === 'function' && <button className="ebx-soft" onClick={() => duplicateQuiz(q)} style={{...ghostBtn, color: C.succ, borderColor: `${C.succ}33`}}><Ico name="copy" size={14} />{t('eb_duplicate')}</button>}
-                                                <button className="ebx-primary" onClick={() => setEditingQuiz(JSON.parse(JSON.stringify(q)))} style={{background: EB.accent, color: '#fff', padding: '7px 20px', fontSize: 13, border: 'none', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="edit" size={14} />{t('eb_edit_exam')}</button>
-                                            </div>
-                                        </div>
-                                    )})}
-                                    {childQuizzes.length === 0 && <div style={{textAlign: 'center', color: EB.sub, padding: 50, fontStyle: 'italic', fontSize: 15}}>{t('eb_folder_empty')}</div>}
+                {/* MODAL FILE MANAGER: TẠO / ĐỔI TÊN / CHUYỂN THƯ MỤC / CHUYỂN ĐỀ THI */}
+                {folderModal && (
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        onClick={() => setFolderModal(null)}
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            background: 'rgba(26, 23, 38, 0.45)',
+                            backdropFilter: 'blur(4px)',
+                            zIndex: 99999,
+                            display: 'grid',
+                            placeItems: 'center',
+                            padding: 16
+                        }}
+                    >
+                        <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                                width: '100%',
+                                maxWidth: 480,
+                                background: EB.sheet,
+                                border: `1px solid ${EB.line}`,
+                                borderRadius: EB.radius,
+                                boxShadow: '0 24px 48px rgba(26, 23, 38, 0.18)',
+                                overflow: 'hidden',
+                                display: 'flex',
+                                flexDirection: 'column'
+                            }}
+                        >
+                            {/* Modal Header */}
+                            <div style={{
+                                padding: '16px 20px',
+                                borderBottom: `1px solid ${EB.line}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                background: EB.wash
+                            }}>
+                                <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                                    <Ico name="folder" size={16} color={EB.accent} />
+                                    <span style={{fontFamily: EB.fDisplay, fontWeight: 700, fontSize: 16, color: EB.ink}}>
+                                        {folderModal.mode === "CREATE" && (t('eb_new_folder') || "Tạo thư mục mới")}
+                                        {folderModal.mode === "RENAME" && "Đổi tên thư mục"}
+                                        {folderModal.mode === "MOVE_FOLDER" && "Di chuyển thư mục"}
+                                        {folderModal.mode === "MOVE_QUIZZES" && `Di chuyển ${selectedQuizzes.length} đề thi`}
+                                    </span>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setFolderModal(null)}
+                                    aria-label="Đóng"
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: EB.sub,
+                                        cursor: 'pointer',
+                                        padding: 4,
+                                        borderRadius: 4,
+                                        display: 'inline-flex'
+                                    }}
+                                >
+                                    <Ico name="x" size={16} />
+                                </button>
+                            </div>
+
+                            {/* Modal Body */}
+                            <div style={{padding: '20px'}}>
+                                {folderModal.mode === "CREATE" && (
+                                    <div>
+                                        <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
+                                            Tên thư mục
+                                        </label>
+                                        <input
+                                            autoFocus
+                                            type="text"
+                                            value={folderModal.inputValue}
+                                            placeholder="Nhập tên thư mục (VD: Test 1, Unit 2...)"
+                                            onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter" && folderModal.inputValue.trim()) {
+                                                    handleCreateFolder(folderModal.inputValue, folderModal.targetFolder || builderFolder);
+                                                    setFolderModal(null);
+                                                }
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '10px 14px',
+                                                borderRadius: EB.radiusSm,
+                                                border: `1px solid ${EB.line}`,
+                                                background: EB.paper,
+                                                color: EB.ink,
+                                                fontSize: 14,
+                                                fontFamily: EB.fBody,
+                                                outline: 'none',
+                                                boxSizing: 'border-box'
+                                            }}
+                                        />
+                                        <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
+                                            Vị trí: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder || builderFolder}</span>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {folderModal.mode === "RENAME" && (
+                                    <div>
+                                        <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
+                                            Tên mới
+                                        </label>
+                                        <input
+                                            autoFocus
+                                            type="text"
+                                            value={folderModal.inputValue}
+                                            placeholder="Tên thư mục mới"
+                                            onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter" && folderModal.inputValue.trim() && folderModal.targetFolder) {
+                                                    handleRenameFolder(folderModal.targetFolder, folderModal.inputValue);
+                                                    setFolderModal(null);
+                                                }
+                                            }}
+                                            style={{
+                                                width: '100%',
+                                                padding: '10px 14px',
+                                                borderRadius: EB.radiusSm,
+                                                border: `1px solid ${EB.line}`,
+                                                background: EB.paper,
+                                                color: EB.ink,
+                                                fontSize: 14,
+                                                fontFamily: EB.fBody,
+                                                outline: 'none',
+                                                boxSizing: 'border-box'
+                                            }}
+                                        />
+                                        <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
+                                            Đường dẫn hiện tại: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder}</span>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && (
+                                    <div>
+                                        <div style={{fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 10}}>
+                                            Chọn thư mục đích
+                                        </div>
+                                        <div style={{
+                                            maxHeight: 260,
+                                            overflowY: 'auto',
+                                            border: `1px solid ${EB.line}`,
+                                            borderRadius: EB.radiusSm,
+                                            background: EB.paper,
+                                            padding: 6,
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: 2
+                                        }}>
+                                            {allKnownFolders
+                                                .filter((f: string) => {
+                                                    if (folderModal.mode === "MOVE_FOLDER" && folderModal.targetFolder) {
+                                                        if (f === folderModal.targetFolder || f.startsWith(folderModal.targetFolder + "/")) {
+                                                            return false;
+                                                        }
+                                                    }
+                                                    return true;
+                                                })
+                                                .map((f: string) => {
+                                                    const depth = f === "Root" ? 0 : f.split("/").length - 1;
+                                                    const isSelected = (folderModal.selectedDest || "Root") === f;
+                                                    const folderName = f === "Root" ? "Root (Gốc)" : f.split("/").pop();
+                                                    return (
+                                                        <button
+                                                            key={f}
+                                                            type="button"
+                                                            onClick={() => setFolderModal({ ...folderModal, selectedDest: f })}
+                                                            style={{
+                                                                padding: '8px 12px',
+                                                                paddingLeft: 12 + depth * 18,
+                                                                borderRadius: EB.radiusSm,
+                                                                border: `1px solid ${isSelected ? EB.accent : 'transparent'}`,
+                                                                background: isSelected ? EB.accentWash : 'transparent',
+                                                                color: isSelected ? EB.accent : EB.ink,
+                                                                cursor: 'pointer',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'space-between',
+                                                                gap: 8,
+                                                                fontSize: 13,
+                                                                fontWeight: isSelected ? 700 : 500,
+                                                                textAlign: 'left'
+                                                            }}
+                                                        >
+                                                            <span style={{display: 'inline-flex', alignItems: 'center', gap: 7}}>
+                                                                <Ico name="folder" size={14} color={isSelected ? EB.accent : EB.sub} />
+                                                                <span>{folderName}</span>
+                                                            </span>
+                                                            {f !== "Root" && (
+                                                                <span style={{fontFamily: EB.fMono, fontSize: 10, color: EB.sub, opacity: 0.7}}>
+                                                                    {f}
+                                                                </span>
+                                                            )}
+                                                        </button>
+                                                    );
+                                                })}
+                                        </div>
+                                        <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 10}}>
+                                            Đích đến: <span style={{color: EB.accent, fontWeight: 700}}>{folderModal.selectedDest || "Root"}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Modal Footer */}
+                            <div style={{
+                                padding: '14px 20px',
+                                borderTop: `1px solid ${EB.line}`,
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: 10,
+                                background: EB.wash
+                            }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setFolderModal(null)}
+                                    style={{
+                                        padding: '8px 14px',
+                                        borderRadius: EB.radiusSm,
+                                        border: `1px solid ${EB.line}`,
+                                        background: EB.sheet,
+                                        color: EB.sub,
+                                        fontSize: 12.5,
+                                        fontWeight: 600,
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (folderModal.mode === "CREATE") {
+                                            if (folderModal.inputValue.trim()) {
+                                                handleCreateFolder(folderModal.inputValue, folderModal.targetFolder || builderFolder);
+                                            }
+                                        } else if (folderModal.mode === "RENAME") {
+                                            if (folderModal.inputValue.trim() && folderModal.targetFolder) {
+                                                handleRenameFolder(folderModal.targetFolder, folderModal.inputValue);
+                                            }
+                                        } else if (folderModal.mode === "MOVE_FOLDER") {
+                                            if (folderModal.targetFolder) {
+                                                const dest = folderModal.selectedDest || "Root";
+                                                const base = folderModal.targetFolder.split("/").pop() || "";
+                                                const newPath = dest === "Root" ? `Root/${base}` : `${dest}/${base}`;
+                                                handleMoveOrRenameFolder(folderModal.targetFolder, newPath);
+                                            }
+                                        } else if (folderModal.mode === "MOVE_QUIZZES") {
+                                            handleMoveQuizzes(selectedQuizzes, folderModal.selectedDest || "Root");
+                                            setSelectedQuizzes([]);
+                                        }
+                                        setFolderModal(null);
+                                    }}
+                                    style={{
+                                        padding: '8px 18px',
+                                        borderRadius: EB.radiusSm,
+                                        border: 'none',
+                                        background: EB.accent,
+                                        color: '#fff',
+                                        fontSize: 12.5,
+                                        fontWeight: 700,
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    {folderModal.mode === "CREATE" && "Tạo thư mục"}
+                                    {folderModal.mode === "RENAME" && "Lưu tên"}
+                                    {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && "Di chuyển"}
+                                </button>
                             </div>
                         </div>
                     </div>

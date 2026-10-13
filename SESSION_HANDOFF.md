@@ -1,5 +1,17 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-13)
 
+## Exam Builder Library Shell & Desktop-Grade File Manager Manuscript Standard — 2026-10-13
+
+- **Hệ thống thư mục chuẩn file manager bền vững**: Thư mục được lưu trữ độc lập trong danh sách `examFolders` (đồng bộ Firestore qua `serverData.examFolders` và sao lưu `localStorage`), cho phép tạo và duy trì thư mục trống thực thụ mà không cần tạo quiz nháp rác `"Bản nháp (Xóa nếu không dùng)"`.
+- **Thao tác thư mục đầy đủ & An toàn**: Hỗ trợ Tạo thư mục mới (`handleCreateFolder`), Đổi tên (`handleRenameFolder`), Di chuyển thư mục (`handleMoveOrRenameFolder` với cơ chế chặn di chuyển vào chính nó hoặc thư mục con), và Xóa thư mục (`handleDeleteFolder` với cơ chế an toàn: tự động chuyển toàn bộ đề thi con về thư mục cha thay vì làm mất dữ liệu).
+- **Tương tác Kéo thả (Drag-and-Drop)**: Cả đề thi và thẻ thư mục đều hỗ trợ kéo thả (`onDragStart`, `onDragOver`, `onDrop` với highlight vùng nhận diện `dragOverFolderTarget`). Người dùng có thể kéo thả đề thi trực tiếp vào thẻ thư mục con hoặc thả vào bất kỳ mắt xích nào trên thanh Breadcrumb (`Root/...`).
+- **Modal quản lý thư mục tương tác (`folderModal`)**: Thay thế toàn bộ `window.prompt()` trình duyệt bằng modal chuẩn Manuscript với cây thư mục dạng lồng cấp (`allKnownFolders`), hỗ trợ tìm vị trí đích bằng 1 cú click cho cả thao tác di chuyển thư mục và di chuyển hàng loạt đề thi (`MOVE_QUIZZES`).
+- **Thanh lệnh thao tác hàng loạt (Bulk Command Bar)**: Tái thiết kế theo chuẩn Manuscript/Editorial tinh gọn với viền hairline mỏng, không màu cầu vồng, hiển thị số lượng đề đã chọn, nút Deselect/Select folder, các cụm nút chức năng theo nhóm (Chế độ thi: Exam/Practice, Xuất bản: Publish/Unpublish/Publish ready, Tổ chức: Move to.../Lock/Unlock/Real package, Xóa hàng loạt an toàn).
+- **Danh sách đề thi**: Card đề thi hiển thị dạng hàng đơn tinh gọn, font Fraunces cho tiêu đề, icon kỹ năng 36×36px, huy hiệu trạng thái Mode/Publish/Lock, và bộ nút hành động đồng nhất (Preview, Key, Duplicate, Download Key, Re-grade, Edit exam).
+- **Bộ lọc & Sắp xếp**: Tích hợp trực tiếp trên thanh breadcrumb: lọc theo kỹ năng (`All`, `Listening`, `Reading`, `Writing`, `Integrated`), sắp xếp theo tiêu đề (`A-Z`), thời gian tạo (`Newest`), số câu hỏi (`Questions`), và ô tìm kiếm real-time.
+- **Batch AI DOCX**: Khối thông tin batch AI DOCX hỗ trợ thu gọn/mở rộng (`aiBatchCollapsed`) và nút bỏ qua ("Dismiss") khi batch không còn tác vụ đang chạy.
+- **Hạ tầng build Windows cp1252**: `compile_app.py` được bổ sung cấu hình tự động reconfigure `sys.stdout` và `sys.stderr` sang `utf-8` khi build bằng `npm run build` trên Windows, tránh lỗi UnicodeEncodeError khi in icon/ký tự đặc biệt.
+
 ## Boot and Sync Screen Manuscript Standard — 2026-10-13
 
 - Standalone `.booting-screen`, `.booting-card`, `.booting-bar`, `.booting-bar-fill`, and `@keyframes bootSlide` added directly to `src/index.css` so pre-login (`authChecking`) and pre-sync (`!loaded`) screens never render unstyled or pinned to top-left before React memos evaluate.

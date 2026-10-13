@@ -4460,6 +4460,19 @@ export default function IeltsSupremeOS() {
   const [stQuizSearch, setStQuizSearch] = useState("");
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
+  const [examFolders, setExamFolders] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("ielts_exam_folders");
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const [builderSkillFilter, setBuilderSkillFilter] = useState<"ALL" | "Listening" | "Reading" | "Writing" | "Integrated">("ALL");
+  const [builderSort, setBuilderSort] = useState<"TITLE_ASC" | "NEWEST" | "QUESTIONS">("TITLE_ASC");
+  const [folderModal, setFolderModal] = useState<null | { mode: "CREATE" | "RENAME" | "MOVE_QUIZZES" | "MOVE_FOLDER"; targetFolder?: string; inputValue: string; selectedDest: string }>(null);
+  const [dragOverFolderTarget, setDragOverFolderTarget] = useState<string | null>(null);
+  const [aiBatchCollapsed, setAiBatchCollapsed] = useState(false);
   const [builderSearch, setBuilderSearch] = useState("");
   const [builderSectionIndex, setBuilderSectionIndex] = useState(0);   
   const [, _setScrollPct] = useState(0);
@@ -5189,6 +5202,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
     setRealExamPackages(clean(d.realExamPackages));
+    if (Array.isArray(d.examFolders)) {
+      const cleanedFolders: string[] = Array.from(new Set<string>((d.examFolders as any[]).map(String).filter(Boolean)));
+      setExamFolders(cleanedFolders);
+      try { localStorage.setItem("ielts_exam_folders", JSON.stringify(cleanedFolders)); } catch (_) {}
+    }
     const recoveredQuestProgress = unconfirmedQuestSubmissions.flatMap((entry: any) =>
       Array.isArray(entry?.questProgress) ? entry.questProgress : []
     );
@@ -8769,6 +8787,197 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const nx = realExamPackages.map(item => item.id === pkg.id ? { ...item, ...patch, updatedAt: Date.now() } : item);
     setRealExamPackages(nx);
     await syncData({ realExamPackages: nx });
+  };
+
+  const dismissAiGenerationBatch = () => {
+    setAiGenerationBatch(null);
+    aiGenerationBatchRef.current = null;
+    if (currentUser?.uid) {
+      try { window.localStorage.removeItem(aiGenerationStorageKey(currentUser.uid)); } catch (_) {}
+    }
+    aiGenerationDriverRef.current = { batchId: "", inFlight: false, stopped: true, epoch: aiGenerationDriverRef.current.epoch + 1 };
+  };
+
+  const allKnownFolders = useMemo(() => {
+    const set = new Set<string>(["Root"]);
+    examFolders.forEach(f => {
+      if (!f) return;
+      const parts = f.split("/").filter(Boolean);
+      let cur = "";
+      parts.forEach((p, idx) => {
+        cur = idx === 0 ? p : `${cur}/${p}`;
+        set.add(cur);
+      });
+    });
+    quizzes.forEach(q => {
+      const f = q.folder || "Root";
+      const parts = f.split("/").filter(Boolean);
+      let cur = "";
+      parts.forEach((p, idx) => {
+        cur = idx === 0 ? p : `${cur}/${p}`;
+        set.add(cur);
+      });
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [examFolders, quizzes]);
+
+  const handleCreateFolder = async (folderName: string, parentPath = builderFolder) => {
+    const trimmed = folderName.trim().replace(/^\/+|\/+$/g, "");
+    if (!trimmed) return;
+    const parent = parentPath.trim().replace(/\/+$/, "") || "Root";
+    const fullPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
+    if (allKnownFolders.includes(fullPath)) {
+      alert("Thư mục đã tồn tại.");
+      return;
+    }
+    const nextFolders = Array.from(new Set([...examFolders, fullPath])).sort();
+    setExamFolders(nextFolders);
+    try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
+    await syncData({ examFolders: nextFolders });
+  };
+
+  const handleMoveOrRenameFolder = async (oldPath: string, newPath: string) => {
+    if (oldPath === "Root" || !oldPath) return;
+    if (newPath === oldPath) return;
+    if (newPath.startsWith(oldPath + "/")) {
+      alert("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.");
+      return;
+    }
+
+    const nextFolders = Array.from(new Set(
+      examFolders.map(f => {
+        if (f === oldPath) return newPath;
+        if (f.startsWith(oldPath + "/")) return newPath + f.slice(oldPath.length);
+        return f;
+      })
+    ));
+    if (!nextFolders.includes(newPath)) nextFolders.push(newPath);
+
+    const updatedQuizzes: Quiz[] = [];
+    const nextQuizzes = quizzes.map(q => {
+      const qf = q.folder || "Root";
+      if (qf === oldPath || qf.startsWith(oldPath + "/")) {
+        const nextFolder = qf === oldPath ? newPath : (newPath + qf.slice(oldPath.length));
+        const updated = { ...q, folder: nextFolder, updatedAt: getTrueTime() };
+        updatedQuizzes.push(updated);
+        return updated;
+      }
+      return q;
+    });
+
+    setQuizzes(nextQuizzes);
+    setExamFolders(nextFolders);
+    try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
+    if (builderFolder === oldPath || builderFolder.startsWith(oldPath + "/")) {
+      setBuilderFolder(builderFolder === oldPath ? newPath : (newPath + builderFolder.slice(oldPath.length)));
+    }
+    await syncData({ examFolders: nextFolders, __quizUpserts: updatedQuizzes });
+  };
+
+  const handleRenameFolder = async (oldPath: string, newName: string) => {
+    if (oldPath === "Root") {
+      alert("Không thể đổi tên thư mục Root.");
+      return;
+    }
+    const trimmed = newName.trim().replace(/^\/+|\/+$/g, "");
+    if (!trimmed) return;
+    const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "Root";
+    const newPath = `${parent}/${trimmed}`;
+    if (newPath === oldPath) return;
+    if (allKnownFolders.includes(newPath)) {
+      alert("Thư mục với tên này đã tồn tại ở vị trí hiện tại.");
+      return;
+    }
+    await handleMoveOrRenameFolder(oldPath, newPath);
+  };
+
+  const handleDeleteFolder = async (targetPath: string) => {
+    if (targetPath === "Root") {
+      alert("Không thể xóa thư mục Root.");
+      return;
+    }
+    const containedQuizzes = quizzes.filter(q => {
+      const f = q.folder || "Root";
+      return f === targetPath || f.startsWith(targetPath + "/");
+    });
+    const containedSubfolders = allKnownFolders.filter(f => f.startsWith(targetPath + "/"));
+
+    const confirmMsg = containedQuizzes.length > 0 || containedSubfolders.length > 0
+      ? `Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`
+      : `Bạn có chắc muốn xóa thư mục trống "${targetPath}"?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    const parentPath = targetPath.includes("/") ? targetPath.slice(0, targetPath.lastIndexOf("/")) : "Root";
+    const nextFolders = examFolders.filter(f => f !== targetPath && !f.startsWith(targetPath + "/"));
+
+    const updatedQuizzes: Quiz[] = [];
+    const nextQuizzes = quizzes.map(q => {
+      const qf = q.folder || "Root";
+      if (qf === targetPath || qf.startsWith(targetPath + "/")) {
+        const updated = { ...q, folder: parentPath, updatedAt: getTrueTime() };
+        updatedQuizzes.push(updated);
+        return updated;
+      }
+      return q;
+    });
+
+    setQuizzes(nextQuizzes);
+    setExamFolders(nextFolders);
+    try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
+    if (builderFolder === targetPath || builderFolder.startsWith(targetPath + "/")) {
+      setBuilderFolder(parentPath);
+    }
+    await syncData({ examFolders: nextFolders, __quizUpserts: updatedQuizzes });
+  };
+
+  const handleMoveQuizzes = async (quizIds: string[], destFolder: string) => {
+    if (!quizIds.length) return;
+    const dest = destFolder.trim() || "Root";
+    const updatedQuizzes: Quiz[] = [];
+    const nextQuizzes = quizzes.map(q => {
+      if (quizIds.includes(q.id)) {
+        if ((q.folder || "Root") !== dest) {
+          const updated = { ...q, folder: dest, updatedAt: getTrueTime() };
+          updatedQuizzes.push(updated);
+          return updated;
+        }
+      }
+      return q;
+    });
+
+    if (updatedQuizzes.length === 0) return;
+
+    let nextFolders = examFolders;
+    if (dest !== "Root" && !examFolders.includes(dest)) {
+      nextFolders = Array.from(new Set([...examFolders, dest])).sort();
+      setExamFolders(nextFolders);
+      try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
+    }
+
+    setQuizzes(nextQuizzes);
+    setSelectedQuizzes(prev => prev.filter(id => !quizIds.includes(id)));
+    await syncData({ __quizUpserts: updatedQuizzes, examFolders: nextFolders });
+  };
+
+  const handleDropOnFolder = async (e: React.DragEvent, destFolder: string) => {
+    e.preventDefault();
+    setDragOverFolderTarget(null);
+    const raw = e.dataTransfer.getData("application/json");
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      if (data.type === "QUIZ" && data.quizId) {
+        const movingIds = selectedQuizzes.includes(data.quizId) ? selectedQuizzes : [data.quizId];
+        await handleMoveQuizzes(movingIds, destFolder);
+      } else if (data.type === "FOLDER" && data.folderPath) {
+        const oldPath = data.folderPath;
+        if (oldPath === destFolder || destFolder.startsWith(oldPath + "/")) return;
+        const fName = oldPath.split("/").pop()!;
+        const newPath = destFolder === "Root" ? `Root/${fName}` : `${destFolder}/${fName}`;
+        await handleMoveOrRenameFolder(oldPath, newPath);
+      }
+    } catch (_) {}
   };
   const requestRealExamFullscreen = (refresh = false) => {
     const root = document.documentElement as any;
