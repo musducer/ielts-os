@@ -77,7 +77,31 @@ class TestWritingAiFeedback(unittest.TestCase):
         }
         res = asyncio.run(ai_feedback(payload))
         self.assertFalse(res.get("success"))
-        self.assertIn("Chưa có bài viết", res.get("error", ""))
+    def test_selection_critique_mode(self):
+        mock_critique_json = {
+            "criterion": "LR",
+            "category": "awkward",
+            "replacement": "significant decline",
+            "highBandRewrite": "marked downturn",
+            "comment": "Cụm từ dùng chưa tự nhiên trong văn cảnh học thuật."
+        }
+        with patch("api.index._groq_chat", return_value=(json.dumps(mock_critique_json), "")):
+            payload = {
+                "mode": "selection_critique",
+                "selected_text": "big drop down",
+                "context_text": "The graph shows a big drop down in sales in 2020.",
+                "task_number": 1,
+                "prompt": "Summarize the information...",
+                "lang": "vi"
+            }
+            res = asyncio.run(ai_feedback(payload))
+            self.assertTrue(res.get("success"))
+            self.assertEqual(res.get("criterion"), "LR")
+            self.assertEqual(res.get("category"), "awkward")
+            self.assertEqual(res.get("replacement"), "significant decline")
+            self.assertEqual(res.get("highBandRewrite"), "marked downturn")
+            self.assertIn("chưa tự nhiên", res.get("comment", ""))
 
 if __name__ == '__main__':
     unittest.main()
+

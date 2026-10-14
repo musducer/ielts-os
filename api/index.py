@@ -3313,8 +3313,99 @@ async def ai_feedback(
     1. Structured Writing Grading (AI Co-pilot cho Writing Task 1 & 2): khi payload có structured=True hoặc (task_number và essay).
     2. Legacy Reading/Listening/General feedback text cho học sinh.
     """
-    is_structured = bool(payload.get("structured")) or bool(payload.get("writing")) or ("task_number" in payload and "essay" in payload)
+    mode = str(payload.get("mode") or "").strip().lower()
+    selected_text = str(payload.get("selected_text") or payload.get("selectedText") or "").strip()
+    is_selection_critique = mode == "selection_critique" or (selected_text and not payload.get("structured"))
     lang = (payload.get("lang") or "vi").lower()
+
+    if is_selection_critique:
+        task_num = int(payload.get("task_number") or payload.get("taskNumber") or 2)
+        prompt = str(payload.get("prompt") or payload.get("taskPrompt") or "").strip()
+        context_text = str(payload.get("context_text") or payload.get("contextText") or "").strip()
+
+        if not selected_text:
+            return {
+                "success": False,
+                "error": "Chưa có đoạn văn bản được chọn." if lang == "vi" else "No selected text provided."
+            }
+
+        sys_prompt = (
+            "You are an expert official IELTS Writing Examiner and master pedagogical coach.\n"
+            f"Analyze ONLY the selected text excerpt from an IELTS Writing Task {task_num} essay in context.\n"
+            "Evaluate this specific excerpt according to official IELTS Public Band Descriptors:\n"
+            "- Grammatical Range & Accuracy (GRA)\n"
+            "- Lexical Resource (LR)\n"
+            "- Coherence & Cohesion (CC)\n"
+            "- Task Achievement (Task 1) / Task Response (Task 2) (TA_TR)\n\n"
+            "You must return ONLY a single valid JSON object strictly matching this schema:\n"
+            "{\n"
+            '  "criterion": "GRA" | "LR" | "CC" | "TA_TR",\n'
+            '  "category": "error" | "awkward" | "upgrade",\n'
+            '  "replacement": "concise minimal English correction that fixes grammar/collocation while keeping the student\'s exact meaning",\n'
+            '  "highBandRewrite": "natural Band 8.0+ English phrasing for this span or clause",\n'
+            '  "comment": "Ngắn gọn bằng tiếng Việt (1-2 câu): chỉ rõ lỗi hoặc điểm chưa tự nhiên và lý do sửa theo tiêu chí IELTS."\n'
+            "}\n\n"
+            "STRICT CLASSIFICATION RULES:\n"
+            "1. 'criterion': MUST be strictly one of: 'GRA', 'LR', 'CC', 'TA_TR'.\n"
+            "2. 'category':\n"
+            "   - 'error': ONLY for objective errors (grammar, subject-verb agreement, verb tense, preposition, spelling, wrong word formation, false collocations).\n"
+            "   - 'awkward': grammatically acceptable but unnatural, wordy, clumsy, repetitive, or non-native phrasing.\n"
+            "   - 'upgrade': the original is already grammatically and lexically correct, but can be elevated to Band 7.5-8.5 academic style.\n"
+            "3. 'replacement': concise minimal English correction preserving student's voice.\n"
+            "4. 'highBandRewrite': natural Band 8.0-8.5 native phrasing.\n"
+            "5. 'comment': 1-2 concise, clear sentences in Vietnamese explaining why to the student.\n"
+            "6. Respond with pure JSON."
+        )
+
+        user_prompt = (
+            f"--- TASK PROMPT ---\n{prompt or '(IELTS Writing task)'}\n\n"
+            f"--- SURROUNDING CONTEXT ---\n{context_text or selected_text}\n\n"
+            f"--- SELECTED EXCERPT TO CRITIQUE ---\n{selected_text}\n\n"
+            "Return JSON."
+        )
+
+        text, err = _groq_chat(sys_prompt, user_prompt, max_tokens=1024, temperature=0.2, json_mode=True)
+        if err:
+            return {"success": False, "error": _friendly_err(err, lang)}
+
+        try:
+            clean_text = text.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            elif clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
+            clean_text = clean_text.strip()
+            data = json.loads(clean_text)
+        except Exception:
+            first_brace = text.find("{")
+            last_brace = text.rfind("}")
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                try:
+                    data = json.loads(text[first_brace:last_brace + 1])
+                except Exception:
+                    return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
+            else:
+                return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
+
+        criterion = str(data.get("criterion") or "GRA").upper()
+        if criterion not in ("GRA", "LR", "CC", "TA_TR"):
+            criterion = "GRA"
+        category = str(data.get("category") or "awkward").lower()
+        if category not in ("error", "awkward", "upgrade", "praise"):
+            category = "awkward"
+
+        return {
+            "success": True,
+            "criterion": criterion,
+            "category": category,
+            "replacement": str(data.get("replacement") or "").strip(),
+            "highBandRewrite": str(data.get("highBandRewrite") or "").strip(),
+            "comment": str(data.get("comment") or "").strip()
+        }
+
+    is_structured = bool(payload.get("structured")) or bool(payload.get("writing")) or ("task_number" in payload and "essay" in payload)
 
     if is_structured:
         task_num = int(payload.get("task_number") or payload.get("taskNumber") or 2)

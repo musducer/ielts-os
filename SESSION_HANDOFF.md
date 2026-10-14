@@ -1,4 +1,30 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-13)
+# IELTS OS — Session Handoff (cập nhật 2026-10-14)
+
+## Writing Feedback Floating Popovers, Smart Auto-Flip, Spring Motion & PDF Dossier Fix — 2026-10-14
+
+- **Triệt tiêu hoàn toàn lỗi giật giật (Jitter / Flicker Loop) khi hover chú thích**:
+  - *Nguyên nhân gốc rễ*: Trước đây, popover được render hoặc đo đạc dựa trên tọa độ cứng không đồng bộ layout, khi mở ở nửa dưới màn hình làm tràn chiều cao container/viewport gây sinh thanh cuộn, thanh cuộn đẩy văn bản dưới con trỏ chuột lệch sang trái 15px khiến kích hoạt ngay sự kiện `mouseleave` (ẩn card), ẩn card thì mất thanh cuộn khiến văn bản thụt lại dưới con trỏ kích hoạt lại `mouseenter` (vòng lặp giật vô tận).
+  - *Giải pháp*:
+    1. Đưa toàn bộ thẻ trôi (`Hover Annotation Card`, `Selection Quick Pill`, `Selection Composer Popover`) ra khỏi cây DOM của bài viết và gắn trực tiếp vào `document.body` qua `FloatingCardPortal` (`createPortal`, `position: fixed`, `zIndex: 1400`).
+    2. Tự động đo đạc kích thước thực tế của card trước khi trình duyệt vẽ (`useLayoutEffect`), tính toán không gian khả dụng trên (`spaceAbove`) và dưới (`spaceBelow`).
+    3. Luật tự động lật thông minh (`Smart Vertical Auto-Flip`): Tự động bật lên trên (`top`) khi không đủ không gian bên dưới (`spaceBelow < height + 10`) hoặc mục tiêu nằm ở 38% đáy màn hình (`anchorRect.bottom > vh * 0.62`), ngược lại mở xuống dưới (`bottom`).
+    4. Kẹp biên an toàn (`Hard Viewport Clamping`): Giới hạn tọa độ trong khoảng cách an toàn `VIEWPORT_PAD = 14px`, triệt tiêu khả năng popover tràn mép màn hình.
+    5. Căn chỉnh mũi tên định hướng (`10x10px Directional Caret Pointer` xoay 45 độ): Tự động khớp vào đỉnh hoặc đáy card trỏ chuẩn xác vào vị trí con trỏ/từ bôi chọn.
+    6. Thuật toán chọn dòng văn bản nhiều dòng (`getTargetClientLineRect`): Khi cụm từ highlight bị ngắt dòng (wrapped text across multiple lines), `target.getClientRects()` sẽ chọn đúng dòng chứa hoặc gần nhất với tọa độ chuột `(e.clientX, e.clientY)` thay vì lấy toàn bộ bounding box khổng lồ bao trọn đoạn.
+    7. Cầu nối chống rung chuột (`Debounced Hover-Intent Bridge`): Trì hoãn mở 60ms để tránh giật khi lướt chuột qua nhiều từ; duy trì mở 150ms khi rời chuột để người dùng kịp di chuột vào card bấm nút "Lưu vào Sổ từ vựng" hoặc xem Band 8+ rewrite; chuyển card tức thì (0ms) nếu đã có một card đang mở.
+    8. Lắng nghe sự kiện cuộn/đổi kích thước màn hình (`scroll` capture phase & `resize`) và phím `Escape` để đóng popover mượt mà, không bị trôi lơ lửng ngoài màn hình.
+  - *Chuyển động mượt mà (Editorial Spring Motion)*: Thêm CSS keyframes `@keyframes wfFloatInBottom` và `@keyframes wfFloatInTop` với đường cong gia tốc `cubic-bezier(0.16, 1, 0.3, 1)` và đổ bóng biên tập tinh tế (`box-shadow: 0 16px 38px -6px rgba(26, 23, 38, 0.18)`).
+- **Sửa dứt điểm lỗi xuất PDF trang trắng (`Blank White PDF Export Bug`)**:
+  - *Nguyên nhân gốc rễ*: Trước đó vùng in ẩn được đặt ẩn hoặc offscreen (`display: none`), khiến `html2canvas` render canvas 0×0 pixel trống rỗng.
+  - *Giải pháp*:
+    1. Quản lý trạng thái xuất PDF qua `isExportingPdf`: khi xuất, React mount một overlay toàn màn hình nhìn thấy được (`position: fixed; inset: 0; z-index: 99999; background: #FAF8F5`) hiển thị thanh chuẩn bị hồ sơ 1 giây.
+    2. Xác thực điều kiện tiên quyết trước khi in: Kiểm tra phần tử `#writing-pdf-dossier-root` có `offsetHeight > 100px` và nội dung văn bản đầy đủ; preload và đợi toàn bộ ảnh biểu đồ Task 1 tải xong với cờ CORS và fallback ẩn ảnh nếu lỗi.
+    3. Thiết lập thông số `html2canvas`: Ép `scrollX: 0, scrollY: 0`, `windowWidth: 820`, `scale: 2`, `backgroundColor: '#FFFFFF'`.
+    4. Trình bày đầy đủ 6 cấu phần học thuật: Header & Hộp điểm tổng quan, Đề bài & Biểu đồ, Bảng điểm 4 tiêu chí & Kế hoạch hành động, Bản bài làm học sinh đánh số chú thích `[1]`, `[2]`, Bảng đối chiếu sửa lỗi chi tiết (với `.pdf-no-break`), và Bản bài viết đã sửa hoàn chỉnh cùng Bài mẫu Band 8.0+.
+- **Tích hợp tính năng AI Nhận xét & Sửa đoạn chọn trực tiếp (`Inline AI Selection Critique`)**:
+  - Bổ sung mode `selection_critique` trong backend `/api/ai_feedback` (`api/index.py`), hỗ trợ giáo viên highlight bất kỳ cụm từ/câu nào để AI tự động phân loại tiêu chí, gợi ý sửa ngắn gọn, viết gợi ý nâng Band 8+, và soạn lời giải thích sư phạm bằng tiếng Việt.
+  - Hỗ trợ 2 chế độ: "AI Sửa" (điền vào form để giáo viên duyệt lại) và "AI Lưu ngay" (tự phân tích và thêm ngay vào bài chấm).
+  - Viết bộ kiểm thử tự động `tests/test_writing_ai_feedback.py` xác thực tính năng backend.
 
 ## Writing Grading (Teacher) & Writing Review (Student) Manuscript Editorial Desk — 2026-10-13
 

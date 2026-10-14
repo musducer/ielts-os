@@ -1,4 +1,5 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useLayoutEffect, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { normalizeWritingTasks, countWritingWords, type WritingTaskDefinition } from './publicRelease';
 
 // ==========================================
@@ -165,6 +166,258 @@ const STOPWORDS = new Set([
 ]);
 
 // ==========================================
+// MULTI-LINE RECT HELPER FOR HIGHLIGHTED SPANS
+// ==========================================
+function getTargetClientLineRect(target: HTMLElement, clientX?: number, clientY?: number): DOMRect {
+  const rects = Array.from(target.getClientRects());
+  if (rects.length <= 1 || clientX === undefined || clientY === undefined) {
+    return target.getBoundingClientRect();
+  }
+  // Find rect containing cursor
+  for (const r of rects) {
+    if (clientX >= r.left - 4 && clientX <= r.right + 4 && clientY >= r.top - 4 && clientY <= r.bottom + 4) {
+      return r;
+    }
+  }
+  // Fallback: rect closest to cursor Y
+  let closest = rects[0];
+  let minDiff = Math.abs((closest.top + closest.bottom) / 2 - clientY);
+  for (let i = 1; i < rects.length; i++) {
+    const diff = Math.abs((rects[i].top + rects[i].bottom) / 2 - clientY);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = rects[i];
+    }
+  }
+  return closest;
+}
+
+// ==========================================
+// UNIVERSAL SMART FLOATING CARD PORTAL
+// ==========================================
+const VIEWPORT_PAD = 14;
+const GAP = 10;
+
+interface FloatingCardPortalProps {
+  isOpen: boolean;
+  anchorRect: DOMRect | null;
+  fallbackWidth?: number;
+  fallbackHeight?: number;
+  preferPlacement?: 'top' | 'bottom';
+  className?: string;
+  style?: React.CSSProperties;
+  showArrow?: boolean;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  children: (placement: 'top' | 'bottom', arrowLeft: number) => React.ReactNode;
+}
+
+const FloatingCardPortal: React.FC<FloatingCardPortalProps> = ({
+  isOpen,
+  anchorRect,
+  fallbackWidth = 340,
+  fallbackHeight = 220,
+  preferPlacement,
+  className = '',
+  style = {},
+  showArrow = true,
+  onMouseEnter,
+  onMouseLeave,
+  children,
+}) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{
+    top: number;
+    left: number;
+    arrowLeft: number;
+    placement: 'top' | 'bottom';
+    ready: boolean;
+  }>({
+    top: 0,
+    left: 0,
+    arrowLeft: fallbackWidth / 2,
+    placement: preferPlacement || 'bottom',
+    ready: false,
+  });
+
+  useLayoutEffect(() => {
+    if (!isOpen || !anchorRect || typeof window === 'undefined') {
+      setCoords(prev => (prev.ready ? { ...prev, ready: false } : prev));
+      return;
+    }
+
+    const cardEl = cardRef.current;
+    const cardRect = cardEl ? cardEl.getBoundingClientRect() : null;
+    const width = (cardRect && cardRect.width > 0) ? cardRect.width : fallbackWidth;
+    const height = (cardRect && cardRect.height > 0) ? cardRect.height : fallbackHeight;
+
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+
+    const spaceBelow = vh - anchorRect.bottom - VIEWPORT_PAD;
+    const spaceAbove = anchorRect.top - VIEWPORT_PAD;
+
+    let placement: 'top' | 'bottom';
+    if (preferPlacement === 'top') {
+      placement = (spaceAbove >= height + GAP || spaceAbove >= spaceBelow) ? 'top' : 'bottom';
+    } else if (preferPlacement === 'bottom') {
+      placement = (spaceBelow >= height + GAP || spaceBelow >= spaceAbove) ? 'bottom' : 'top';
+    } else {
+      // Smart Vertical Flip Rule:
+      // Flip above if not enough space below AND spaceAbove > spaceBelow,
+      // OR target is in lower 38% of viewport (anchorRect.bottom > vh * 0.62) and fits above
+      const shouldFlip =
+        (spaceBelow < height + GAP && spaceAbove > spaceBelow) ||
+        (anchorRect.bottom > vh * 0.62 && spaceAbove >= height + GAP);
+      placement = shouldFlip ? 'top' : 'bottom';
+    }
+
+    let top: number;
+    if (placement === 'top') {
+      top = Math.max(VIEWPORT_PAD, anchorRect.top - height - GAP);
+    } else {
+      top = Math.min(vh - height - VIEWPORT_PAD, anchorRect.bottom + GAP);
+    }
+    // Hard clamp within viewport
+    top = Math.max(VIEWPORT_PAD, Math.min(top, vh - height - VIEWPORT_PAD));
+
+    // Smart Horizontal Alignment & Caret Offset
+    const idealLeft = anchorRect.left + (anchorRect.width / 2) - (width / 2);
+    const left = Math.max(VIEWPORT_PAD, Math.min(idealLeft, vw - width - VIEWPORT_PAD));
+    const arrowLeft = Math.max(18, Math.min(anchorRect.left + (anchorRect.width / 2) - left, width - 18));
+
+    setCoords({ top, left, arrowLeft, placement, ready: true });
+  }, [isOpen, anchorRect, preferPlacement, fallbackWidth, fallbackHeight]);
+
+  if (!isOpen || !anchorRect || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      ref={cardRef}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      data-placement={coords.placement}
+      className={`wf-floating-card ${className}`}
+      style={{
+        position: 'fixed',
+        top: coords.top,
+        left: coords.left,
+        zIndex: 1400,
+        boxSizing: 'border-box',
+        opacity: coords.ready ? 1 : 0,
+        pointerEvents: coords.ready ? 'auto' : 'none',
+        ...style,
+      }}
+    >
+      {/* 10x10px Directional Caret Pointer Arrow (45deg rotated square) */}
+      {showArrow && (
+        <div
+          style={{
+            position: 'absolute',
+            left: coords.arrowLeft - 5,
+            ...(coords.placement === 'bottom'
+              ? { top: -5, borderTop: `1px solid ${C.border}`, borderLeft: `1px solid ${C.border}` }
+              : { bottom: -5, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }
+            ),
+            width: 10,
+            height: 10,
+            background: '#FFFFFF',
+            transform: 'rotate(45deg)',
+            zIndex: 10,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+      {children(coords.placement, coords.arrowLeft)}
+    </div>,
+    document.body
+  );
+};
+
+// ==========================================
+// PRINT DOSSIER ANNOTATED ESSAY RENDERER
+// ==========================================
+function renderDossierAnnotatedEssay(text: string, comments: WritingComment[]) {
+  if (!text || !text.trim()) {
+    return <div style={{ color: '#9590A0', fontStyle: 'italic' }}>Thí sinh chưa nộp bài viết cho Task này.</div>;
+  }
+
+  // 1-based indexed comments matching table row #
+  const indexed = comments.map((c, i) => ({ ...c, indexNum: i + 1 }));
+
+  const commentRanges = indexed.flatMap(c => {
+    const q = c.anchorQuote || '';
+    if (!q) return [];
+    let start = (c.startOffset !== undefined && text.slice(c.startOffset, c.endOffset) === q)
+      ? c.startOffset
+      : text.indexOf(q);
+    if (start < 0) return [];
+    return [{ start, end: start + q.length, comment: c, indexNum: c.indexNum }];
+  });
+
+  const paragraphs = text.split(/\n+/);
+  let currentOffset = 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {paragraphs.map((para, pIdx) => {
+        const paraStart = currentOffset;
+        const paraEnd = paraStart + para.length;
+        currentOffset = paraEnd + 1; // +1 for newline
+
+        const paraComments = commentRanges.filter(r => r.start < paraEnd && r.end > paraStart);
+        const cutPoints = Array.from(new Set([
+          paraStart,
+          paraEnd,
+          ...paraComments.flatMap(r => [
+            Math.max(paraStart, Math.min(paraEnd, r.start)),
+            Math.max(paraStart, Math.min(paraEnd, r.end)),
+          ])
+        ])).sort((a, b) => a - b);
+
+        return (
+          <div key={pIdx} style={{ fontSize: 13, lineHeight: 1.85, color: '#1A1726' }}>
+            <span style={{ fontSize: 10, color: '#9590A0', fontFamily: 'Consolas, monospace', marginRight: 8, userSelect: 'none' }}>
+              ¶{pIdx + 1}
+            </span>
+            {cutPoints.slice(0, -1).map((start, sIdx) => {
+              const end = cutPoints[sIdx + 1];
+              const sliceText = text.slice(start, end);
+              const matching = paraComments.filter(r => r.start <= start && r.end >= end);
+
+              if (matching.length > 0) {
+                const top = matching[0];
+                const cat = top.comment.category || 'error';
+                const color = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
+                const bg = cat === 'error' ? '#FEF2F2' : cat === 'awkward' ? '#FFFBEB' : cat === 'upgrade' ? '#EEF2FF' : '#F0FDF4';
+
+                return (
+                  <span
+                    key={start}
+                    style={{
+                      background: bg,
+                      borderBottom: `2px solid ${color}`,
+                      padding: '1px 3px',
+                      borderRadius: 2,
+                    }}
+                  >
+                    {sliceText}
+                    <sup style={{ fontSize: 10, fontWeight: 800, color, marginLeft: 2, fontFamily: 'Consolas, monospace' }}>
+                      [{top.indexNum}]
+                    </sup>
+                  </span>
+                );
+              }
+              return <span key={start}>{sliceText}</span>;
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ==========================================
 // SELF-CONTAINED SVG ICONS (<Ico>)
 // ==========================================
 const Ico: React.FC<{ name: string; size?: number; color?: string; style?: React.CSSProperties }> = ({
@@ -213,6 +466,8 @@ const Ico: React.FC<{ name: string; size?: number; color?: string; style?: React
       return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="m12 12 5-5"/></svg>;
     case 'diff':
       return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><path d="M16 8h4"/><path d="M4 16h4"/><path d="M6 14v4"/></svg>;
+    case 'loader':
+      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
     default:
       return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/></svg>;
   }
@@ -330,10 +585,11 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const [pulseMarkId, setPulseMarkId] = useState<string | null>(null);
   const [vocabToast, setVocabToast] = useState<string | null>(null);
 
-  // Hover Popover State (with 120ms hover bridge)
+  // Hover Popover State (with smart auto-flip & 60ms open intent / 150ms grace period bridge)
   const [hoveredComment, setHoveredComment] = useState<WritingComment | null>(null);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
-  const hoverTimerRef = useRef<any>(null);
+  const [hoverAnchorRect, setHoverAnchorRect] = useState<DOMRect | null>(null);
+  const openTimerRef = useRef<any>(null);
+  const closeTimerRef = useRef<any>(null);
 
   // Selection Popover State (Teacher 2-stage)
   const [selectionBox, setSelectionBox] = useState<{
@@ -358,6 +614,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     error: string;
     data: any | null;
   }>({ open: false, loading: false, error: '', data: null });
+
+  // PDF Export & AI Selection Critique States
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [aiCritiqueLoading, setAiCritiqueLoading] = useState(false);
 
   // Update handlers
   const updateWritingGrading = (patch: Partial<WritingGrading>) => {
@@ -498,29 +758,146 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     window.getSelection()?.removeAllRanges();
   };
 
-  // Hover Popover Bridge (120ms grace period)
+  // Inline AI Selection Critique Handler
+  const runSelectionAiCritique = async (autoSave: boolean = false) => {
+    if (!selectionBox || aiCritiqueLoading) return;
+    setAiCritiqueLoading(true);
+    try {
+      const res = await fetch('/api/ai_feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'selection_critique',
+          selected_text: selectionBox.text,
+          essay_text: originalEssay,
+          task_number: taskNumber,
+          prompt: activeTask.prompt || activeTask.instructions || '',
+        }),
+      });
+      if (!res.ok) throw new Error('AI critique request failed: ' + res.statusText);
+      const data = await res.json();
+      if (!data.success && !data.criterion) throw new Error(data.error || 'AI không trả về kết quả hợp lệ');
+
+      const nextCrit: CriterionKey = (data.criterion as CriterionKey) || selectionBox.criterion || 'GRA';
+      const nextCat: CommentCategory = (data.category as CommentCategory) || 'error';
+      const nextReplacement = (data.replacement ?? selectionBox.replacement ?? '').trim();
+      const nextHighBand = (data.highBandRewrite ?? '').trim();
+      const nextComment = (data.comment ?? '').trim();
+      const nextTags: string[] = Array.isArray(data.tags) ? data.tags : [];
+
+      if (autoSave) {
+        const newComment: WritingComment = {
+          id: 'cmt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          taskId: activeTask.id,
+          anchorQuote: selectionBox.text,
+          startOffset: selectionBox.start,
+          endOffset: selectionBox.end,
+          criterion: nextCrit,
+          category: nextCat,
+          replacement: nextReplacement || undefined,
+          highBandRewrite: nextHighBand || undefined,
+          tags: nextTags.length ? nextTags : undefined,
+          comment: nextComment || 'Nhận xét từ AI.',
+          createdAt: Date.now(),
+        };
+        updateWritingGrading({
+          comments: [...writingGrading.comments, newComment],
+        });
+        setSelectionBox(null);
+        window.getSelection()?.removeAllRanges();
+      } else {
+        setSelectionBox(prev => prev ? ({
+          ...prev,
+          stage: 2,
+          criterion: nextCrit,
+          category: nextCat,
+          replacement: nextReplacement,
+          highBandRewrite: nextHighBand,
+          showRewrite: Boolean(nextHighBand),
+          tags: nextTags,
+          comment: nextComment,
+        }) : null);
+      }
+    } catch (err) {
+      console.error('AI Selection Critique error:', err);
+      alert('Không thể nhận xét bằng AI: ' + (err as Error).message);
+    } finally {
+      setAiCritiqueLoading(false);
+    }
+  };
+
+  // Hover Popover Bridge (60ms intent delay, 150ms close grace period, multi-line rect selection)
   const triggerHoverEnter = (comment: WritingComment, e: React.MouseEvent) => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
     const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    setPopoverPos({
-      top: rect.bottom + window.scrollY + 6,
-      left: Math.max(16, Math.min(window.innerWidth - 380, rect.left + window.scrollX - 40)),
-    });
-    setHoveredComment(comment);
+    const lineRect = getTargetClientLineRect(target, e.clientX, e.clientY);
+
+    // If another comment card is already active, switch immediately to keep it snappy
+    if (hoveredComment) {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
+      setHoverAnchorRect(lineRect);
+      setHoveredComment(comment);
+    } else {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
+      openTimerRef.current = setTimeout(() => {
+        setHoverAnchorRect(lineRect);
+        setHoveredComment(comment);
+      }, 60);
+    }
   };
 
   const triggerHoverLeave = () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = setTimeout(() => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
       setHoveredComment(null);
-      setPopoverPos(null);
-    }, 120);
+      setHoverAnchorRect(null);
+    }, 150);
   };
 
   const cancelHoverLeave = () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
   };
+
+  // Dismiss hover popover on document scroll or window resize to eliminate layout jitter
+  useEffect(() => {
+    const handleScrollOrResize = () => {
+      if (openTimerRef.current) clearTimeout(openTimerRef.current);
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      setHoveredComment(null);
+      setHoverAnchorRect(null);
+    };
+    window.addEventListener('scroll', handleScrollOrResize, { capture: true, passive: true });
+    window.addEventListener('resize', handleScrollOrResize, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScrollOrResize, { capture: true });
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, []);
+
+  // Dismiss popovers when user presses Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectionBox) setSelectionBox(null);
+        if (hoveredComment) {
+          setHoveredComment(null);
+          setHoverAnchorRect(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectionBox, hoveredComment]);
 
   // Student Vocab Notebook Save
   const handleSaveToVocab = async (word: string, meaning: string, context: string) => {
@@ -688,22 +1065,74 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
 
   // PDF Dossier Export
   const exportPdfDossier = async () => {
+    if (isExportingPdf) return;
+    setIsExportingPdf(true);
     try {
+      // 1. Give React a tick + rAF to mount the full dossier DOM tree into the document
+      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => requestAnimationFrame(r));
+
+      const element = document.getElementById('writing-pdf-dossier-root');
+      if (!element) {
+        throw new Error('Không tìm thấy vùng kết xuất tài liệu PDF (writing-pdf-dossier-root).');
+      }
+
+      if (element.innerText.trim().length === 0 || element.offsetHeight < 100) {
+        console.warn('Dossier element appears empty or unrendered, waiting additional tick...');
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      if (element.innerText.trim().length === 0 || element.offsetHeight < 100) {
+        throw new Error('Nội dung bản điểm rỗng hoặc chưa hiển thị đầy đủ trên màn hình.');
+      }
+
+      // 2. Wait for any Task 1 chart images to load or fail gracefully
+      const images = Array.from(element.querySelectorAll('img'));
+      await Promise.all(
+        images.map(img => {
+          if (img.complete && img.naturalHeight !== 0) return Promise.resolve(true);
+          return new Promise(resolve => {
+            img.onload = () => resolve(true);
+            img.onerror = () => {
+              img.style.display = 'none';
+              resolve(false);
+            };
+            setTimeout(() => resolve(false), 1500); // 1.5s timeout safety
+          });
+        })
+      );
+
+      // 3. Dynamically import html2pdf.js
       const mod: any = await import('html2pdf.js');
       const html2pdf = mod.default || mod;
-      const element = document.getElementById('writing-pdf-dossier-root');
-      if (!element) return;
+
+      const safeStudent = (reviewQuiz?.result?.studentName || 'Student').trim().replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/g, '_');
+      const safeTitle = (activeTask?.title || `Task_${activeTask?.taskNumber || 1}`).trim().replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/g, '_');
+      const safeFileName = `IELTS_Writing_Dossier_${safeStudent}_${safeTitle}.pdf`;
+
       const opt = {
-        margin: [8, 8, 10, 8],
-        filename: `IELTS_Writing_Dossier_${(reviewQuiz.result.studentName || 'Student').replace(/\s+/g, '_')}_${activeTask.title.replace(/\s+/g, '_')}.pdf`,
+        margin: [10, 10, 10, 10],
+        filename: safeFileName,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: '#FFFFFF',
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: 820,
+        },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'], avoid: ['.pdf-no-break', 'tr', 'blockquote'] },
       };
+
       await html2pdf().set(opt).from(element).save();
     } catch (err) {
       console.error('PDF export error:', err);
-      window.print();
+      alert('Không thể tạo file PDF tự động: ' + (err as Error).message + '. Bạn có thể sử dụng Ctrl+P để in trang.');
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -740,6 +1169,40 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         .wf-gutter-num { display: inline-block; width: 28px; color: ${C.subLight}; font-family: var(--mono); font-size: 11px; user-select: none; }
         .wf-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .wf-scrollbar::-webkit-scrollbar-thumb { background: #D5D0C6; border-radius: 4px; }
+
+        @keyframes wfFloatInBottom {
+          from {
+            opacity: 0;
+            transform: translateY(-6px) scale(0.98);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes wfFloatInTop {
+          from {
+            opacity: 0;
+            transform: translateY(6px) scale(0.98);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        .wf-floating-card {
+          font-family: var(--sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+          color: ${C.text};
+          transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1), transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+          box-shadow: 0 16px 38px -6px rgba(26, 23, 38, 0.18), 0 4px 14px -2px rgba(26, 23, 38, 0.08);
+          border-radius: 10px;
+        }
+        .wf-floating-card[data-placement="bottom"] {
+          animation: wfFloatInBottom 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .wf-floating-card[data-placement="top"] {
+          animation: wfFloatInTop 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+        }
       `}</style>
 
       {/* ========================================== */}
@@ -815,8 +1278,15 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             </div>
 
             {/* Export PDF Dossier */}
-            <button onClick={exportPdfDossier} className="wf-btn-hairline" title="Xuất báo cáo chi tiết chuẩn học thuật">
-              <Ico name="download" size={14} /> Dossier PDF
+            <button
+              onClick={exportPdfDossier}
+              disabled={isExportingPdf}
+              className="wf-btn-hairline"
+              title="Xuất báo cáo chi tiết chuẩn học thuật"
+              style={{ opacity: isExportingPdf ? 0.7 : 1, cursor: isExportingPdf ? 'wait' : 'pointer' }}
+            >
+              <Ico name={isExportingPdf ? "loader" : "download"} size={14} />
+              {isExportingPdf ? 'Đang tạo PDF...' : 'Dossier PDF'}
             </button>
 
             {/* Teacher Actions */}
@@ -904,40 +1374,48 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           {/* ---------------------------------------- */}
           <div className="wf-card-panel" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {/* View Mode Bar */}
-            <div style={{ padding: '12px 18px', borderBottom: `1px solid ${C.border}`, background: C.wash, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 11, fontWeight: 900, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.6, marginRight: 4 }}>
-                  Chế độ xem:
+            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.wash, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 10.5, fontWeight: 900, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5, marginRight: 2 }}>
+                  Chế độ:
                 </span>
                 <button
+                  type="button"
                   onClick={() => setViewMode('annotated')}
                   className={`wf-tab-btn ${viewMode === 'annotated' ? 'active' : ''}`}
+                  style={{ padding: '4px 8px', fontSize: 11.5 }}
                 >
-                  <Ico name="fileText" size={13} /> Bản gốc có chú thích
+                  <Ico name="fileText" size={12} /> Chú thích
                 </button>
                 <button
+                  type="button"
                   onClick={() => setViewMode('diff')}
                   className={`wf-tab-btn ${viewMode === 'diff' ? 'active' : ''}`}
+                  style={{ padding: '4px 8px', fontSize: 11.5 }}
                 >
-                  <Ico name="diff" size={13} /> Sửa trực tiếp (Diff)
+                  <Ico name="diff" size={12} /> Sửa trực tiếp (Diff)
                 </button>
                 <button
+                  type="button"
                   onClick={() => setViewMode('clean')}
                   className={`wf-tab-btn ${viewMode === 'clean' ? 'active' : ''}`}
+                  style={{ padding: '4px 8px', fontSize: 11.5 }}
                 >
-                  <Ico name="check" size={13} /> Bản sửa hoàn chỉnh
+                  <Ico name="check" size={12} /> Bản hoàn chỉnh
                 </button>
                 <button
+                  type="button"
                   onClick={() => setViewMode('model')}
                   className={`wf-tab-btn ${viewMode === 'model' ? 'active' : ''}`}
+                  style={{ padding: '4px 8px', fontSize: 11.5 }}
                 >
-                  <Ico name="book" size={13} /> Bài mẫu Band 8+
+                  <Ico name="book" size={12} /> Bài mẫu Band 8+
                 </button>
               </div>
 
               {isTeacher && viewMode === 'annotated' && (
-                <span style={{ fontSize: 11, color: C.sub, fontStyle: 'italic' }}>
-                  Bôi chọn văn bản để thêm nhận xét
+                <span style={{ fontSize: 11, color: C.sub, fontStyle: 'italic', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                  Bôi chọn để thêm nhận xét
                 </span>
               )}
             </div>
@@ -1392,7 +1870,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                           cursor: 'pointer',
                         }}
                       >
-                        {cKey}
+                        {cKey === 'TA_TR' ? (taskNumber === 1 ? 'TA' : 'TR') : cKey}
                       </button>
                     ))}
                   </div>
@@ -1631,355 +2109,463 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       {/* ========================================== */}
       {/* 4. HOVER FLOATING ANNOTATION POPOVER CARD  */}
       {/* ========================================== */}
-      {hoveredComment && popoverPos && (
-        <div
-          onMouseEnter={cancelHoverLeave}
-          onMouseLeave={triggerHoverLeave}
-          style={{
-            position: 'absolute',
-            top: popoverPos.top,
-            left: popoverPos.left,
-            zIndex: 1000,
-            maxWidth: 360,
-            width: '90vw',
-            background: '#FFFFFF',
-            border: `1px solid ${C.border}`,
-            borderLeft: `4px solid ${CATEGORY_META[hoveredComment.category || 'error'].color}`,
-            borderRadius: 10,
-            padding: '12px 14px',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          {/* Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{
-                padding: '2px 6px',
-                borderRadius: 4,
-                fontSize: 10,
-                fontFamily: 'var(--mono)',
-                fontWeight: 800,
-                background: C.wash,
-                color: C.accent,
-              }}>
-                {hoveredComment.criterion || 'GRA'}
-              </span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: CATEGORY_META[hoveredComment.category || 'error'].color }}>
-                {CATEGORY_META[hoveredComment.category || 'error'].label}
-              </span>
-            </div>
+      <FloatingCardPortal
+        isOpen={Boolean(hoveredComment && hoverAnchorRect)}
+        anchorRect={hoverAnchorRect}
+        fallbackWidth={360}
+        fallbackHeight={220}
+        onMouseEnter={cancelHoverLeave}
+        onMouseLeave={triggerHoverLeave}
+      >
+        {(_placement, _arrowLeft) => {
+          if (!hoveredComment) return null;
+          const cat = hoveredComment.category || 'error';
+          const meta = CATEGORY_META[cat];
+          const critLabel = hoveredComment.criterion === 'TA_TR' ? (taskNumber === 1 ? 'TA' : 'TR') : (hoveredComment.criterion || 'GRA');
 
-            {isTeacher && (
-              <button
-                onClick={() => {
-                  updateWritingGrading({
-                    comments: writingGrading.comments.filter(c => c.id !== hoveredComment.id),
-                  });
-                  setHoveredComment(null);
-                }}
-                style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 2 }}
-                title="Xóa nhận xét"
-              >
-                <Ico name="trash" size={13} />
-              </button>
-            )}
-          </div>
-
-          {/* Diff Row */}
-          {hoveredComment.anchorQuote && (
-            <div style={{ marginBottom: 6, paddingBottom: 6, borderBottom: `1px solid ${C.borderLight}` }}>
-              <span style={{ textDecoration: 'line-through', color: C.err, opacity: 0.8, marginRight: 6 }}>
-                {hoveredComment.anchorQuote}
-              </span>
-              {hoveredComment.replacement && (
-                <span style={{ fontWeight: 800, color: C.succ }}>
-                  → {hoveredComment.replacement}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* High-Band Rewrite Callout */}
-          {hoveredComment.highBandRewrite && (
-            <div style={{
-              background: '#EEF2FF',
-              borderLeft: `2px solid ${C.accent}`,
-              padding: '6px 8px',
-              borderRadius: 4,
-              fontSize: 12,
-              marginBottom: 6,
-              color: '#3730A3',
-            }}>
-              <strong>Band 8.0+ Rewrite:</strong> {hoveredComment.highBandRewrite}
-            </div>
-          )}
-
-          {/* Explanation */}
-          <div style={{ color: C.text, marginBottom: 8 }}>
-            {hoveredComment.comment}
-          </div>
-
-          {/* Tags */}
-          {hoveredComment.tags && hoveredComment.tags.length > 0 && (
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
-              {hoveredComment.tags.map((t, ti) => (
-                <span key={ti} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: C.wash, color: C.sub }}>
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Student Save to Vocab Button */}
-          {!isTeacher && hoveredComment.replacement && (
-            <button
-              onClick={() => handleSaveToVocab(hoveredComment.replacement!, hoveredComment.comment, hoveredComment.anchorQuote || '')}
+          return (
+            <div
               style={{
-                width: '100%',
-                padding: '6px 10px',
-                borderRadius: 6,
-                border: `1px solid ${C.accentLine}`,
-                background: C.accentWash,
-                color: C.accent,
-                fontWeight: 700,
-                fontSize: 12,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 5,
+                width: 360,
+                maxWidth: 'calc(100vw - 28px)',
+                maxHeight: 'calc(100vh - 32px)',
+                overflowY: 'auto',
+                background: '#FFFFFF',
+                border: `1px solid ${C.border}`,
+                borderLeft: `4px solid ${meta.color}`,
+                borderRadius: 10,
+                padding: '12px 14px',
+                fontSize: 13,
+                lineHeight: 1.5,
               }}
             >
-              <Ico name="plus" size={12} color={C.accent} /> Lưu cụm từ vào Sổ từ vựng
-            </button>
-          )}
-        </div>
-      )}
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontFamily: 'var(--mono)',
+                    fontWeight: 800,
+                    background: C.wash,
+                    color: C.accent,
+                  }}>
+                    {critLabel}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: meta.color }}>
+                    {meta.label}
+                  </span>
+                </div>
+
+                {isTeacher && (
+                  <button
+                    onClick={() => {
+                      updateWritingGrading({
+                        comments: writingGrading.comments.filter(c => c.id !== hoveredComment.id),
+                      });
+                      setHoveredComment(null);
+                      setHoverAnchorRect(null);
+                    }}
+                    style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 2 }}
+                    title="Xóa nhận xét"
+                  >
+                    <Ico name="trash" size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Diff Row */}
+              {hoveredComment.anchorQuote && (
+                <div style={{ marginBottom: 6, paddingBottom: 6, borderBottom: `1px solid ${C.borderLight}` }}>
+                  <span style={{ textDecoration: 'line-through', color: C.err, opacity: 0.8, marginRight: 6 }}>
+                    {hoveredComment.anchorQuote}
+                  </span>
+                  {hoveredComment.replacement && (
+                    <span style={{ fontWeight: 800, color: C.succ }}>
+                      → {hoveredComment.replacement}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* High-Band Rewrite Callout */}
+              {hoveredComment.highBandRewrite && (
+                <div style={{
+                  background: '#EEF2FF',
+                  borderLeft: `2px solid ${C.accent}`,
+                  padding: '6px 8px',
+                  borderRadius: 4,
+                  fontSize: 12,
+                  marginBottom: 6,
+                  color: '#3730A3',
+                }}>
+                  <strong>Band 8.0+ Rewrite:</strong> {hoveredComment.highBandRewrite}
+                </div>
+              )}
+
+              {/* Explanation */}
+              <div style={{ color: C.text, marginBottom: 8 }}>
+                {hoveredComment.comment}
+              </div>
+
+              {/* Tags */}
+              {hoveredComment.tags && hoveredComment.tags.length > 0 && (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+                  {hoveredComment.tags.map((t, ti) => (
+                    <span key={ti} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: C.wash, color: C.sub }}>
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Student Save to Vocab Button */}
+              {!isTeacher && hoveredComment.replacement && (
+                <button
+                  onClick={() => handleSaveToVocab(hoveredComment.replacement!, hoveredComment.comment, hoveredComment.anchorQuote || '')}
+                  style={{
+                    width: '100%',
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: `1px solid ${C.accentLine}`,
+                    background: C.accentWash,
+                    color: C.accent,
+                    fontWeight: 700,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 5,
+                  }}
+                >
+                  <Ico name="plus" size={12} color={C.accent} /> Lưu cụm từ vào Sổ từ vựng
+                </button>
+              )}
+            </div>
+          );
+        }}
+      </FloatingCardPortal>
 
       {/* ========================================== */}
       {/* 5. TEACHER 2-STAGE SELECTION POPOVER       */}
       {/* ========================================== */}
-      {selectionBox && isTeacher && (
-        <div
-          style={{
-            position: 'absolute',
-            top: selectionBox.stage === 1
-              ? selectionBox.rect.top + window.scrollY - 44
-              : selectionBox.rect.bottom + window.scrollY + 8,
-            left: Math.max(16, Math.min(window.innerWidth - 380, selectionBox.rect.left + window.scrollX - 20)),
-            zIndex: 1100,
-            background: '#FFFFFF',
-            border: `1px solid ${C.border}`,
-            borderRadius: 10,
-            boxShadow: '0 8px 28px rgba(0,0,0,0.15)',
-            padding: selectionBox.stage === 1 ? '4px 6px' : '14px 16px',
-            maxWidth: selectionBox.stage === 1 ? 'auto' : 360,
-          }}
-        >
-          {/* STAGE 1: COMPACT FLOATING PILL */}
-          {selectionBox.stage === 1 ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <button
-                onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'error', criterion: 'GRA' })}
-                style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FEF2F2', color: C.err, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                Lỗi sai
-              </button>
-              <button
-                onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'awkward', criterion: 'LR' })}
-                style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FFFBEB', color: C.warn, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                Chưa tự nhiên
-              </button>
-              <button
-                onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'upgrade', criterion: 'LR' })}
-                style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#EEF2FF', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                Nâng cấp
-              </button>
-              <button
-                onClick={() => setSelectionBox(null)}
-                style={{ padding: '4px 6px', background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer' }}
-              >
-                <Ico name="close" size={13} />
-              </button>
-            </div>
-          ) : (
-            /* STAGE 2: COMPACT POPOVER COMPOSER */
-            <div style={{ display: 'grid', gap: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 12, fontWeight: 800, color: C.text }}>Thêm nhận xét đoạn đã chọn</span>
-                <button
-                  onClick={() => setSelectionBox(null)}
-                  style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 0 }}
-                >
-                  <Ico name="close" size={14} />
-                </button>
-              </div>
+      <FloatingCardPortal
+        isOpen={Boolean(selectionBox && isTeacher)}
+        anchorRect={selectionBox?.rect || null}
+        fallbackWidth={selectionBox?.stage === 1 ? 380 : 380}
+        fallbackHeight={selectionBox?.stage === 1 ? 46 : 460}
+        preferPlacement={selectionBox?.stage === 1 ? 'top' : undefined}
+      >
+        {(_placement, _arrowLeft) => {
+          if (!selectionBox || !isTeacher) return null;
+          const isStage1 = selectionBox.stage === 1;
 
-              {/* Criterion Selector */}
-              <div style={{ display: 'flex', gap: 4 }}>
-                {(['GRA', 'LR', 'CC', 'TA_TR'] as const).map(crit => (
+          return (
+            <div
+              style={{
+                width: isStage1 ? 'auto' : 380,
+                maxWidth: 'calc(100vw - 28px)',
+                maxHeight: 'calc(100vh - 32px)',
+                overflowY: 'auto',
+                background: '#FFFFFF',
+                border: `1px solid ${C.border}`,
+                borderRadius: 10,
+                padding: isStage1 ? '5px 8px' : '14px 16px',
+                boxSizing: 'border-box',
+              }}
+            >
+              {/* STAGE 1: COMPACT FLOATING PILL */}
+              {isStage1 ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
                   <button
-                    key={crit}
-                    onClick={() => setSelectionBox({ ...selectionBox, criterion: crit })}
-                    style={{
-                      flex: 1,
-                      padding: '4px 0',
-                      borderRadius: 6,
-                      fontSize: 11,
-                      fontFamily: 'var(--mono)',
-                      fontWeight: 800,
-                      border: `1px solid ${selectionBox.criterion === crit ? C.accent : C.border}`,
-                      background: selectionBox.criterion === crit ? C.accent : C.wash,
-                      color: selectionBox.criterion === crit ? '#fff' : C.sub,
-                      cursor: 'pointer',
-                    }}
+                    type="button"
+                    onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'error', criterion: 'GRA' })}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FEF2F2', color: C.err, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
                   >
-                    {crit}
+                    Lỗi sai
                   </button>
-                ))}
-              </div>
-
-              {/* Category Selector */}
-              <div style={{ display: 'flex', gap: 4 }}>
-                {(['error', 'awkward', 'upgrade', 'praise'] as const).map(cat => {
-                  const meta = CATEGORY_META[cat];
-                  const isSel = selectionBox.category === cat;
-                  return (
+                  <button
+                    type="button"
+                    onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'awkward', criterion: 'LR' })}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FFFBEB', color: C.warn, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Chưa tự nhiên
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'upgrade', criterion: 'LR' })}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#EEF2FF', color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Nâng cấp
+                  </button>
+                  <div style={{ width: 1, height: 16, background: C.border, margin: '0 2px' }} />
+                  <button
+                    type="button"
+                    disabled={aiCritiqueLoading}
+                    onClick={() => runSelectionAiCritique(false)}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.accentLine}`, background: C.accentWash, color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: aiCritiqueLoading ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title="AI phân tích lỗi, gợi ý sửa và viết giải thích"
+                  >
+                    <Ico name="sparkles" size={12} color={C.accent} />
+                    {aiCritiqueLoading ? 'Đang hỏi AI...' : 'AI Sửa'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={aiCritiqueLoading}
+                    onClick={() => runSelectionAiCritique(true)}
+                    style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.succLine}`, background: C.succWash, color: C.succ, fontSize: 11.5, fontWeight: 700, cursor: aiCritiqueLoading ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title="AI tự sửa và lưu nhận xét ngay"
+                  >
+                    <Ico name="check" size={12} color={C.succ} />
+                    Lưu ngay
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectionBox(null)}
+                    style={{ padding: '4px 6px', background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer' }}
+                  >
+                    <Ico name="close" size={13} />
+                  </button>
+                </div>
+              ) : (
+                /* STAGE 2: COMPACT POPOVER COMPOSER */
+                <div style={{ display: 'grid', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: C.text }}>Thêm nhận xét đoạn đã chọn</span>
+                      {aiCritiqueLoading && (
+                        <span style={{ fontSize: 10.5, color: C.accent, fontWeight: 700 }}>
+                          Đang phân tích...
+                        </span>
+                      )}
+                    </div>
                     <button
-                      key={cat}
-                      onClick={() => setSelectionBox({ ...selectionBox, category: cat })}
+                      type="button"
+                      onClick={() => setSelectionBox(null)}
+                      style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 0 }}
+                    >
+                      <Ico name="close" size={14} />
+                    </button>
+                  </div>
+
+                  {/* AI Auto-Critique Action Strip */}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      type="button"
+                      disabled={aiCritiqueLoading}
+                      onClick={() => runSelectionAiCritique(false)}
                       style={{
                         flex: 1,
-                        padding: '4px 0',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        padding: '5px 8px',
                         borderRadius: 6,
-                        fontSize: 10.5,
+                        border: `1px solid ${C.accentLine}`,
+                        background: C.accentWash,
+                        color: C.accent,
+                        fontSize: 11,
                         fontWeight: 700,
-                        border: `1px solid ${isSel ? meta.color : C.border}`,
-                        background: isSel ? meta.bg : C.wash,
-                        color: isSel ? meta.color : C.sub,
-                        cursor: 'pointer',
+                        cursor: aiCritiqueLoading ? 'wait' : 'pointer',
                       }}
                     >
-                      {cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa chuẩn' : cat === 'upgrade' ? 'Nâng band' : 'Khen'}
+                      <Ico name="sparkles" size={12} color={C.accent} />
+                      {aiCritiqueLoading ? 'AI đang phân tích...' : 'AI Phân tích lại'}
                     </button>
-                  );
-                })}
-              </div>
+                    <button
+                      type="button"
+                      disabled={aiCritiqueLoading}
+                      onClick={() => runSelectionAiCritique(true)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '5px 8px',
+                        borderRadius: 6,
+                        border: `1px solid ${C.succLine}`,
+                        background: C.succWash,
+                        color: C.succ,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: aiCritiqueLoading ? 'wait' : 'pointer',
+                      }}
+                      title="AI phân tích và tự động lưu vào bài chấm ngay"
+                    >
+                      <Ico name="check" size={12} color={C.succ} />
+                      AI Lưu ngay
+                    </button>
+                  </div>
 
-              {/* Replacement input */}
-              <div>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
-                  Sửa thành (Suggested Replacement):
-                </label>
-                <input
-                  type="text"
-                  value={selectionBox.replacement}
-                  onChange={e => setSelectionBox({ ...selectionBox, replacement: e.target.value })}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}
-                />
-              </div>
+                  {/* Criterion Selector */}
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['GRA', 'LR', 'CC', 'TA_TR'] as const).map(crit => {
+                      const label = crit === 'TA_TR' ? (taskNumber === 1 ? 'TA' : 'TR') : crit;
+                      return (
+                        <button
+                          key={crit}
+                          type="button"
+                          onClick={() => setSelectionBox({ ...selectionBox, criterion: crit })}
+                          style={{
+                            flex: 1,
+                            padding: '4px 0',
+                            borderRadius: 6,
+                            fontSize: 11,
+                            fontFamily: 'var(--mono)',
+                            fontWeight: 800,
+                            border: `1px solid ${selectionBox.criterion === crit ? C.accent : C.border}`,
+                            background: selectionBox.criterion === crit ? C.accent : C.wash,
+                            color: selectionBox.criterion === crit ? '#fff' : C.sub,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-              {/* Band 8 Rewrite Toggle */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: C.sub }}>Gợi ý Band 8+ (tùy chọn):</label>
-                  <button
-                    onClick={() => setSelectionBox({ ...selectionBox, showRewrite: !selectionBox.showRewrite })}
-                    style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    {selectionBox.showRewrite ? 'Ẩn' : '+ Thêm'}
-                  </button>
-                </div>
-                {selectionBox.showRewrite && (
-                  <input
-                    type="text"
-                    value={selectionBox.highBandRewrite}
-                    onChange={e => setSelectionBox({ ...selectionBox, highBandRewrite: e.target.value })}
-                    placeholder="Band 8.0+ alternative phrasing..."
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, marginTop: 4 }}
-                  />
-                )}
-              </div>
+                  {/* Category Selector */}
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['error', 'awkward', 'upgrade', 'praise'] as const).map(cat => {
+                      const meta = CATEGORY_META[cat];
+                      const isSel = selectionBox.category === cat;
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() => setSelectionBox({ ...selectionBox, category: cat })}
+                          style={{
+                            flex: 1,
+                            padding: '4px 0',
+                            borderRadius: 6,
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            border: `1px solid ${isSel ? meta.color : C.border}`,
+                            background: isSel ? meta.bg : C.wash,
+                            color: isSel ? meta.color : C.sub,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa chuẩn' : cat === 'upgrade' ? 'Nâng band' : 'Khen'}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-              {/* Quick Tag Chips */}
-              <div>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: C.subLight, display: 'block', marginBottom: 4 }}>
-                  Gắn nhanh thẻ lỗi:
-                </span>
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {QUICK_TAGS[selectionBox.criterion]?.map((tag, ti) => {
-                    const hasTag = selectionBox.tags.includes(tag);
-                    return (
+                  {/* Replacement input */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
+                      Sửa thành (Suggested Replacement):
+                    </label>
+                    <input
+                      type="text"
+                      value={selectionBox.replacement}
+                      onChange={e => setSelectionBox({ ...selectionBox, replacement: e.target.value })}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}
+                    />
+                  </div>
+
+                  {/* Band 8 Rewrite Toggle */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: C.sub }}>Gợi ý Band 8+ (tùy chọn):</label>
                       <button
-                        key={ti}
-                        onClick={() => {
-                          const nextTags = hasTag
-                            ? selectionBox.tags.filter(t => t !== tag)
-                            : [...selectionBox.tags, tag];
-                          setSelectionBox({ ...selectionBox, tags: nextTags });
-                        }}
-                        style={{
-                          fontSize: 10,
-                          padding: '2px 6px',
-                          borderRadius: 4,
-                          border: `1px solid ${hasTag ? C.accent : C.border}`,
-                          background: hasTag ? C.accentWash : C.wash,
-                          color: hasTag ? C.accent : C.sub,
-                          cursor: 'pointer',
-                        }}
+                        onClick={() => setSelectionBox({ ...selectionBox, showRewrite: !selectionBox.showRewrite })}
+                        style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
                       >
-                        {tag}
+                        {selectionBox.showRewrite ? 'Ẩn' : '+ Thêm'}
                       </button>
-                    );
-                  })}
+                    </div>
+                    {selectionBox.showRewrite && (
+                      <input
+                        type="text"
+                        value={selectionBox.highBandRewrite}
+                        onChange={e => setSelectionBox({ ...selectionBox, highBandRewrite: e.target.value })}
+                        placeholder="Band 8.0+ alternative phrasing..."
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, marginTop: 4 }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Quick Tag Chips */}
+                  <div>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.subLight, display: 'block', marginBottom: 4 }}>
+                      Gắn nhanh thẻ lỗi:
+                    </span>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {QUICK_TAGS[selectionBox.criterion]?.map((tag, ti) => {
+                        const hasTag = selectionBox.tags.includes(tag);
+                        return (
+                          <button
+                            key={ti}
+                            onClick={() => {
+                              const nextTags = hasTag
+                                ? selectionBox.tags.filter(t => t !== tag)
+                                : [...selectionBox.tags, tag];
+                              setSelectionBox({ ...selectionBox, tags: nextTags });
+                            }}
+                            style={{
+                              fontSize: 10,
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                              border: `1px solid ${hasTag ? C.accent : C.border}`,
+                              background: hasTag ? C.accentWash : C.wash,
+                              color: hasTag ? C.accent : C.sub,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {tag}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Explanation input */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
+                      Giải thích / Lời khuyên:
+                    </label>
+                    <textarea
+                      value={selectionBox.comment}
+                      onChange={e => setSelectionBox({ ...selectionBox, comment: e.target.value })}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                          handleSaveSelectionComment();
+                        }
+                      }}
+                      placeholder="Giải thích ngắn vì sao cần sửa hoặc cách dùng đúng..."
+                      rows={3}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}
+                    />
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
+                    <button
+                      onClick={() => setSelectionBox(null)}
+                      className="wf-btn-hairline"
+                      style={{ padding: '6px 10px', fontSize: 12 }}
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      onClick={handleSaveSelectionComment}
+                      disabled={!selectionBox.comment.trim()}
+                      className="wf-btn-accent"
+                      style={{ padding: '6px 12px', fontSize: 12 }}
+                    >
+                      Lưu nhận xét
+                    </button>
+                  </div>
                 </div>
-              </div>
-
-              {/* Explanation input */}
-              <div>
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
-                  Giải thích / Lời khuyên:
-                </label>
-                <textarea
-                  value={selectionBox.comment}
-                  onChange={e => setSelectionBox({ ...selectionBox, comment: e.target.value })}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                      handleSaveSelectionComment();
-                    }
-                  }}
-                  placeholder="Giải thích ngắn vì sao cần sửa hoặc cách dùng đúng..."
-                  rows={3}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}
-                />
-              </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
-                <button
-                  onClick={() => setSelectionBox(null)}
-                  className="wf-btn-hairline"
-                  style={{ padding: '6px 10px', fontSize: 12 }}
-                >
-                  Hủy
-                </button>
-                <button
-                  onClick={handleSaveSelectionComment}
-                  disabled={!selectionBox.comment.trim()}
-                  className="wf-btn-accent"
-                  style={{ padding: '6px 12px', fontSize: 12 }}
-                >
-                  Lưu nhận xét
-                </button>
-              </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+          );
+        }}
+      </FloatingCardPortal>
 
       {/* ========================================== */}
       {/* 6. AI CO-PILOT MODAL & DRAFT PREVIEW       */}
@@ -2123,136 +2709,311 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       )}
 
       {/* ========================================== */}
-      {/* 8. HIDDEN PRINT-GRADE PDF DOSSIER ROOT     */}
+      {/* 8. PRINT-GRADE PDF ASSESSMENT DOSSIER       */}
       {/* ========================================== */}
-      <div id="writing-pdf-dossier-root" style={{ display: 'none' }}>
-        <div style={{ padding: '24px 32px', fontFamily: 'Inter, sans-serif', color: '#1A1726', background: '#FFFFFF' }}>
-          {/* Header */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #5B3DF5', paddingBottom: 16, marginBottom: 20 }}>
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 900, color: '#5B3DF5', letterSpacing: 1.2, textTransform: 'uppercase' }}>
-                IELTS OS ACADEMIC WORKSPACE
-              </div>
-              <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 24, margin: '4px 0 6px', color: '#1A1726' }}>
-                Writing Assessment Dossier
-              </h1>
-              <div style={{ fontSize: 12, color: '#6C6777' }}>
-                Student: <strong>{reviewQuiz.result.studentName}</strong> · Test: <strong>{reviewQuiz.quiz.title}</strong>
-              </div>
+      {isExportingPdf && (
+        <div
+          id="writing-pdf-export-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            background: 'rgba(250, 248, 245, 0.96)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            overflowY: 'auto',
+            padding: '40px 16px',
+          }}
+        >
+          {/* Top Status Banner */}
+          <div style={{ marginBottom: 20, textAlign: 'center' }}>
+            <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 18, fontWeight: 700, color: '#1A1726', marginBottom: 4 }}>
+              Đang kết xuất IELTS Writing Assessment Dossier...
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, fontWeight: 900, color: '#6C6777', textTransform: 'uppercase' }}>Overall Writing Band</div>
-              <div style={{ fontFamily: 'Georgia, serif', fontSize: 32, fontWeight: 900, color: '#5B3DF5', lineHeight: 1 }}>
-                {calculatedFinalBand ?? writingGrading.finalBand ?? '—'}
-              </div>
-              <div style={{ fontSize: 11, color: '#6C6777', marginTop: 4 }}>
-                Task 1: Band {taskBand(writingTasks[0]?.id || '') ?? '—'} | Task 2: Band {taskBand(writingTasks[1]?.id || '') ?? '—'}
-              </div>
-            </div>
-          </div>
-
-          {/* 4 Criteria Matrix */}
-          <div style={{ marginBottom: 24 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, color: '#1A1726' }}>
-              Rubric Assessment Breakdown
-            </h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, border: '1px solid #E7E2D9' }}>
-              <thead>
-                <tr style={{ background: '#FAF8F5', borderBottom: '1px solid #E7E2D9', textAlign: 'left' }}>
-                  <th style={{ padding: '8px 10px', width: '25%' }}>Criterion</th>
-                  <th style={{ padding: '8px 10px', width: '12%' }}>Score</th>
-                  <th style={{ padding: '8px 10px' }}>Pedagogical Evaluation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(['TA_TR', 'CC', 'LR', 'GRA'] as const).map(crit => {
-                  const meta = CRITERION_LABELS[crit];
-                  const s = writingGrading.taskScores[activeTask.id]?.[meta.scoreKey];
-                  const note = writingGrading.criteriaNotes?.[activeTask.id]?.[crit];
-                  return (
-                    <tr key={crit} style={{ borderBottom: '1px solid #E7E2D9' }}>
-                      <td style={{ padding: '8px 10px', fontWeight: 700 }}>{taskNumber === 1 ? meta.t1Name : meta.t2Name}</td>
-                      <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontWeight: 800, color: '#5B3DF5' }}>Band {s ?? '—'}</td>
-                      <td style={{ padding: '8px 10px', color: '#4B5563' }}>{note || BAND_DESCRIPTORS[crit][Math.round(Number(s || 6))] || 'Satisfactory'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Action Plan */}
-          {currentBottlenecks.length > 0 && (
-            <div style={{ marginBottom: 24, padding: '12px 16px', background: '#FFFBEB', borderLeft: '4px solid #D97706', borderRadius: 4 }}>
-              <div style={{ fontSize: 12, fontWeight: 900, color: '#D97706', textTransform: 'uppercase', marginBottom: 6 }}>
-                Priority Action Plan (Bottlenecks to Overcome)
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
-                {currentBottlenecks.map((b, i) => <li key={i}>{b}</li>)}
-              </ul>
-            </div>
-          )}
-
-          {/* Student Essay with Superscript Markers */}
-          <div style={{ marginBottom: 24 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
-              Student Essay (Task {activeTask.taskNumber} · {essayStats.words} words)
-            </h3>
-            <div style={{ fontSize: 13, lineHeight: 1.8, padding: '14px 18px', background: '#FAF8F5', border: '1px solid #E7E2D9', borderRadius: 6, whiteSpace: 'pre-wrap' }}>
-              {originalEssay}
+            <div style={{ fontSize: 12, color: '#666175', fontFamily: "'Segoe UI', Inter, Arial, sans-serif" }}>
+              Hệ thống đang chuẩn bị bản in độ nét cao (Scale 2x). Quá trình này mất khoảng 1-2 giây.
             </div>
           </div>
 
-          {/* Correction & Coaching Table */}
-          {activeTaskComments.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, color: '#1A1726' }}>
-                Detailed Corrections & Coaching Points
+          {/* Actual Dossier Print Tree */}
+          <div
+            id="writing-pdf-dossier-root"
+            style={{
+              width: 750,
+              maxWidth: 750,
+              background: '#FFFFFF',
+              color: '#1A1726',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.08)',
+              borderRadius: 4,
+              padding: '36px 32px',
+              boxSizing: 'border-box',
+              fontFamily: "'Segoe UI', Inter, Arial, sans-serif",
+            }}
+          >
+            {/* Header Banner */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #5B3DF5', paddingBottom: 16, marginBottom: 20 }}>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 900, color: '#5B3DF5', letterSpacing: 1.2, textTransform: 'uppercase', fontFamily: 'Consolas, monospace' }}>
+                  IELTS OS — ACADEMIC WRITING ASSESSMENT DOSSIER
+                </div>
+                <h1 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 24, margin: '4px 0 6px', color: '#1A1726', lineHeight: 1.2 }}>
+                  Writing Assessment Dossier
+                </h1>
+                <div style={{ fontSize: 12, color: '#666175' }}>
+                  Học sinh: <strong style={{ color: '#1A1726' }}>{reviewQuiz?.result?.studentName || 'Student'}</strong> · Bài thi: <strong style={{ color: '#1A1726' }}>{reviewQuiz?.quiz?.title || 'IELTS Mock Test'}</strong>
+                </div>
+                <div style={{ fontSize: 11.5, color: '#666175', marginTop: 3 }}>
+                  Phần thi: <strong style={{ color: '#1A1726' }}>{activeTask.title || `Task ${taskNumber}`}</strong> · Số từ bài viết: <strong style={{ color: '#1A1726', fontFamily: 'Consolas, monospace' }}>{countWritingWords(originalEssay)} words</strong> · Ngày chấm: <strong>{new Date().toLocaleDateString('vi-VN')}</strong>
+                </div>
+              </div>
+
+              {/* Band Score Box */}
+              <div style={{ textAlign: 'right', minWidth: 160 }}>
+                <div style={{ fontSize: 9.5, fontWeight: 900, color: '#666175', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Điểm Overall Task {taskNumber}
+                </div>
+                <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 32, fontWeight: 900, color: '#5B3DF5', lineHeight: 1, margin: '2px 0 6px' }}>
+                  Band {taskBand(activeTask.id) ?? calculatedFinalBand ?? writingGrading.finalBand ?? '—'}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, background: '#F6F3EC', border: '1px solid #E4DFD3', borderRadius: 4, padding: '4px 6px', textAlign: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>{taskNumber === 1 ? 'TA' : 'TR'}</div>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.taskAchievement ?? '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>CC</div>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.coherence ?? '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>LR</div>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.lexical ?? '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>GRA</div>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.grammar ?? '—'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 1: TASK PROMPT & VISUAL */}
+            <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+              <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
+                1. Đề bài & Hướng dẫn (Task Prompt)
               </h3>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, border: '1px solid #E7E2D9' }}>
+              <div style={{ padding: '12px 16px', background: '#F6F3EC', border: '1px solid #E4DFD3', borderRadius: 6, fontSize: 12.5, lineHeight: 1.6, color: '#1A1726' }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>{activeTask.title}</div>
+                {activeTask.instructions && <div style={{ marginBottom: 6, color: '#4B5563' }}>{activeTask.instructions}</div>}
+                {activeTask.prompt && (
+                  <div
+                    dangerouslySetInnerHTML={{ __html: activeTask.prompt }}
+                    style={{ marginTop: 4, color: '#1A1726' }}
+                  />
+                )}
+                {activeTask.mediaUrl && (
+                  <div style={{ marginTop: 10, textAlign: 'center' }}>
+                    <img
+                      src={activeTask.mediaUrl}
+                      alt={`Visual Task ${taskNumber}`}
+                      crossOrigin="anonymous"
+                      style={{ maxWidth: '100%', maxHeight: 220, objectFit: 'contain', border: '1px solid #E4DFD3', borderRadius: 4, background: '#FFFFFF' }}
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* SECTION 2: 4 CRITERIA MATRIX & PEDAGOGICAL NOTES */}
+            <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+              <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
+                2. Đánh giá chi tiết 4 tiêu chí chấm điểm
+              </h3>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, border: '1px solid #E4DFD3' }}>
                 <thead>
-                  <tr style={{ background: '#FAF8F5', borderBottom: '1px solid #E7E2D9', textAlign: 'left' }}>
-                    <th style={{ padding: '6px 8px', width: '5%' }}>#</th>
-                    <th style={{ padding: '6px 8px', width: '26%' }}>Original Passage</th>
-                    <th style={{ padding: '6px 8px', width: '26%' }}>Suggested Correction</th>
-                    <th style={{ padding: '6px 8px', width: '10%' }}>Criterion</th>
-                    <th style={{ padding: '6px 8px' }}>Explanation & Advice</th>
+                  <tr style={{ background: '#F6F3EC', borderBottom: '1px solid #E4DFD3', textAlign: 'left' }}>
+                    <th style={{ padding: '7px 10px', width: '26%' }}>Tiêu chí</th>
+                    <th style={{ padding: '7px 10px', width: '14%' }}>Điểm Band</th>
+                    <th style={{ padding: '7px 10px' }}>Nhận xét sư phạm</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {activeTaskComments.map((c, i) => (
-                    <tr key={c.id} style={{ borderBottom: '1px solid #E7E2D9' }}>
-                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: 700 }}>{i + 1}</td>
-                      <td style={{ padding: '6px 8px', color: '#D9383A' }}>{c.anchorQuote || '—'}</td>
-                      <td style={{ padding: '6px 8px', color: '#15803D', fontWeight: 700 }}>{c.replacement || '—'}</td>
-                      <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{c.criterion || 'GRA'}</td>
-                      <td style={{ padding: '6px 8px', color: '#374151' }}>{c.comment}</td>
-                    </tr>
-                  ))}
+                  {(['TA_TR', 'CC', 'LR', 'GRA'] as const).map(crit => {
+                    const meta = CRITERION_LABELS[crit];
+                    const s = writingGrading.taskScores[activeTask.id]?.[meta.scoreKey];
+                    const note = writingGrading.criteriaNotes?.[activeTask.id]?.[crit];
+                    return (
+                      <tr key={crit} style={{ borderBottom: '1px solid #E4DFD3' }}>
+                        <td style={{ padding: '7px 10px', fontWeight: 700 }}>
+                          {taskNumber === 1 ? meta.t1Name : meta.t2Name}
+                        </td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'Consolas, monospace', fontWeight: 800, color: '#5B3DF5' }}>
+                          Band {s ?? '—'}
+                        </td>
+                        <td style={{ padding: '7px 10px', color: '#4B5563', lineHeight: 1.5 }}>
+                          {note || BAND_DESCRIPTORS[crit][Math.round(Number(s || 6))] || 'Đáp ứng yêu cầu.'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-          )}
 
-          {/* Corrected & Model Essay */}
-          {writingGrading.correctedAnswers[activeTask.id] && (
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', marginBottom: 6, color: '#15803D' }}>
-                Clean Corrected Version
-              </h3>
-              <div style={{ fontSize: 12.5, lineHeight: 1.75, whiteSpace: 'pre-wrap', color: '#1A1726' }}>
-                {writingGrading.correctedAnswers[activeTask.id]}
+            {/* Priority Action Plan (Bottlenecks) & General Feedback */}
+            {(currentBottlenecks.length > 0 || writingGrading.generalFeedback) && (
+              <div className="pdf-no-break" style={{ marginBottom: 20, display: 'grid', gap: 10, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                {currentBottlenecks.length > 0 && (
+                  <div style={{ padding: '10px 14px', background: '#FFFBEB', border: '1px solid #FCD34D', borderLeft: '4px solid #B45309', borderRadius: 4 }}>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#B45309', textTransform: 'uppercase', marginBottom: 4 }}>
+                      Trọng tâm khắc phục (Priority Action Plan):
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6, color: '#1A1726' }}>
+                      {currentBottlenecks.map((b, i) => <li key={i}>{b}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {writingGrading.generalFeedback && (
+                  <div style={{ padding: '10px 14px', background: '#EEF2FF', border: '1px solid #C7D2FE', borderLeft: '4px solid #5B3DF5', borderRadius: 4 }}>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', textTransform: 'uppercase', marginBottom: 4 }}>
+                      Nhận xét chung của giáo viên:
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.6, color: '#1A1726', whiteSpace: 'pre-wrap' }}>
+                      {writingGrading.generalFeedback}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* SECTION 3: ANNOTATED STUDENT ESSAY WITH NUMBERED MARKERS */}
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#1A1726' }}>
+                  3. Bài làm của học sinh (Student Essay · {countWritingWords(originalEssay)} words)
+                </h3>
+                <span style={{ fontSize: 11, color: '#666175', fontStyle: 'italic' }}>
+                  Ghi chú: Số [n] gạch chân tương ứng với mục sửa lỗi trong bảng bên dưới.
+                </span>
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.85, padding: '16px 20px', background: '#FAF8F5', border: '1px solid #E4DFD3', borderRadius: 6, color: '#1A1726' }}>
+                {renderDossierAnnotatedEssay(originalEssay, activeTaskComments)}
               </div>
             </div>
-          )}
 
-          {/* Footer signature */}
-          <div style={{ borderTop: '1px solid #E7E2D9', paddingTop: 12, marginTop: 24, display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9590A0' }}>
-            <span>IELTS OS Educational Engine</span>
-            <span>Date: {new Date().toLocaleDateString('vi-VN')}</span>
+            {/* SECTION 4: DETAILED CORRECTIONS & COACHING TABLE */}
+            {activeTaskComments.length > 0 && (
+              <div style={{ marginBottom: 22 }}>
+                <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
+                  4. Bảng sửa lỗi & Gợi ý nâng cấp chi tiết ({activeTaskComments.length} điểm chú thích)
+                </h3>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, border: '1px solid #E4DFD3' }}>
+                  <thead>
+                    <tr style={{ background: '#F6F3EC', borderBottom: '1px solid #E4DFD3', textAlign: 'left' }}>
+                      <th style={{ padding: '6px 8px', width: '5%' }}>#</th>
+                      <th style={{ padding: '6px 8px', width: '26%' }}>Đoạn gốc</th>
+                      <th style={{ padding: '6px 8px', width: '28%' }}>Gợi ý sửa & Nâng Band</th>
+                      <th style={{ padding: '6px 8px', width: '13%' }}>Tiêu chí</th>
+                      <th style={{ padding: '6px 8px' }}>Giải thích & Lời khuyên</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeTaskComments.map((c, i) => {
+                      const cat = c.category || 'error';
+                      const critLabel = c.criterion === 'TA_TR' ? (taskNumber === 1 ? 'TA' : 'TR') : (c.criterion || 'GRA');
+                      const catLabel = cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa tự nhiên' : cat === 'upgrade' ? 'Nâng Band' : 'Điểm sáng';
+                      const catColor = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
+                      return (
+                        <tr key={c.id} className="pdf-no-break" style={{ borderBottom: '1px solid #E4DFD3', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                          <td style={{ padding: '7px 8px', fontFamily: 'Consolas, monospace', fontWeight: 800, color: '#5B3DF5' }}>
+                            [{i + 1}]
+                          </td>
+                          <td style={{ padding: '7px 8px', color: '#C93B3B', textDecoration: c.replacement ? 'line-through' : 'none' }}>
+                            {c.anchorQuote || '—'}
+                          </td>
+                          <td style={{ padding: '7px 8px' }}>
+                            {c.replacement && (
+                              <div style={{ color: '#15803D', fontWeight: 700 }}>
+                                {c.replacement}
+                              </div>
+                            )}
+                            {c.highBandRewrite && (
+                              <div style={{ fontSize: 11, color: '#4F46E5', marginTop: 3 }}>
+                                <strong>Band 8+:</strong> {c.highBandRewrite}
+                              </div>
+                            )}
+                            {!c.replacement && !c.highBandRewrite && <span style={{ color: '#9590A0' }}>—</span>}
+                          </td>
+                          <td style={{ padding: '7px 8px' }}>
+                            <div style={{ fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 11, color: '#1A1726' }}>
+                              {critLabel}
+                            </div>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: catColor }}>
+                              {catLabel}
+                            </span>
+                            {c.tags && c.tags.length > 0 && (
+                              <div style={{ fontSize: 9.5, color: '#666175', marginTop: 2 }}>
+                                {c.tags.join(', ')}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '7px 8px', color: '#374151', lineHeight: 1.5 }}>
+                            {c.comment}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* SECTION 5: CLEAN CORRECTED ESSAY */}
+            {writingGrading.correctedAnswers[activeTask.id] && (
+              <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#15803D' }}>
+                    5. Bài viết đã sửa hoàn chỉnh (Clean Corrected Version)
+                  </h3>
+                  <span style={{ fontSize: 11, color: '#666175', fontFamily: 'Consolas, monospace' }}>
+                    {countWritingWords(writingGrading.correctedAnswers[activeTask.id])} words
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: '#1A1726', padding: '14px 18px', background: '#F0FDF4', border: '1px solid #86EFAC', borderLeft: '4px solid #15803D', borderRadius: 6 }}>
+                  {writingGrading.correctedAnswers[activeTask.id]}
+                </div>
+              </div>
+            )}
+
+            {/* SECTION 6: BAND 8.0+ MODEL ESSAY */}
+            {(writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay) && (
+              <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#5B3DF5' }}>
+                    6. Bài mẫu tham khảo Band 8.0+ (Model Essay)
+                  </h3>
+                  <span style={{ fontSize: 11, color: '#666175', fontFamily: 'Consolas, monospace' }}>
+                    {countWritingWords(writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay || '')} words
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: '#1A1726', padding: '14px 18px', background: '#FAF8F5', border: '1px solid #E4DFD3', borderLeft: '4px solid #5B3DF5', borderRadius: 6 }}>
+                  {writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay}
+                </div>
+              </div>
+            )}
+
+            {/* Footer Signature */}
+            <div style={{ borderTop: '1px solid #E4DFD3', paddingTop: 12, marginTop: 24, display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9590A0' }}>
+              <span>IELTS OS Educational Engine</span>
+              <span>Date: {new Date().toLocaleDateString('vi-VN')} · Academic Assessment Dossier</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
