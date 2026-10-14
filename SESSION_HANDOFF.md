@@ -39,6 +39,24 @@
   - Ép `flexWrap: 'nowrap'` cho thanh công cụ chế độ xem (`Bản gốc`, `Sửa trực tiếp (Diff)`, `Bản sửa hoàn chỉnh`, `Bài mẫu Band 8+`), không bị rớt dòng trên màn hình laptop tiêu chuẩn.
   - Hiển thị nhãn tiêu chí chuẩn `TA / TR` thay cho mã enum kỹ thuật `TA_TR`.
   - Tích hợp nút "Thu gọn đề bài" tinh gọn trên ngăn kéo đề bài & biểu đồ (`Prompt & Visual Drawer`).
+- **Nhúng trực tiếp ảnh biểu đồ Task 1 vào PDF qua Base64/Canvas (`Force-Embed Chart Image via Base64/Canvas`)**:
+  - *Nguyên nhân*: Trang in `iframe` (`about:blank`) trước đây có thể không tải kịp ảnh từ URL ngoài trước khi hộp thoại in xuất hiện, hoặc không tìm thấy URL do ảnh nằm ở field khác (`sections[0].images[0]`, `passage`, hoặc bị unmount khi thu gọn đề bài).
+  - *Giải pháp*:
+    1. Vét URL ảnh qua hàm `resolveChartImageForPdf`: thu thập từ tất cả nguồn khả dĩ (`activeTask.mediaUrl`, `imageUrl`, `chartUrl`, `diagramImageUrl`, `mapImageUrl`, `quiz.sections[i].mediaUrl/images`, `quiz.questions[i].imageUrl`, chuỗi HTML `<img src="..." />` trong `prompt`/`instructions`/`passage`).
+    2. Duy trì thẻ `<img>` trên DOM ngay cả khi thu gọn ngăn kéo đề bài (dùng CSS `height: 0; overflow: hidden; opacity: 0; pointer-events: none;` với cờ `data-wf-chart-img="true"` và `crossOrigin="anonymous"`), giúp trình duyệt tải sẵn ảnh ngầm.
+    3. Bộ chuyển đổi `imageToDataUrl` 4 bước: (A) Vẽ trực tiếp từ `<img>` trên DOM lên `<canvas>` lấy `data:image/png;base64,...` (0ms delay); (B) `fetch()` + `FileReader` đọc Blob; (C) `new Image()` kèm `crossOrigin="anonymous"` vẽ canvas; (D) Fallback URL tuyệt đối kèm thẻ `<base href="${origin}/">` trong `<head>`.
+    4. Render khối `.dossier-chart-box` cố định ngay dưới nội dung đề bài tại Mục 1 của PDF, không cắt bỏ `<img>` trong HTML prompt.
+    5. Đợi toàn bộ ảnh trong iframe decode thành công (`await img.decode()`, `img.complete && img.naturalWidth > 0`) cộng thêm 250ms paint settle delay trước khi kích hoạt `print()`.
+- **Thanh lọc 100% Emojis & Ký tự text symbol (Zero-Emoji Compliance)**:
+  - Loại bỏ hoàn toàn các emoji Unicode (`🎉`, `✅`) và ký tự text (`✓`, `×`, `⚠`) trong toàn bộ `src/WritingFeedback.tsx`.
+  - Thay thế bằng các icon SVG nội tại chuẩn nét (`<Ico name="checkBadge" />`, `<Ico name="close" />`, `<Ico name="alert" />`, và các phần tử `<svg>` inline), bảo đảm giao diện nhất quán theo đúng chuẩn Manuscript Editorial Desk.
+- **Sửa lỗi tính điểm Overall Band khi chỉ chấm 1 task (`Single-Task & Partial Band Calculation`)**:
+  - *Nguyên nhân*: Công thức cũ tính cứng `(T1 + T2 * 2) / 3`, khi Task 2 chưa chấm (`T2 = 0`) hoặc bài thi chỉ có Task 1 (`T1 = 6`, `T2 = 0`), hệ thống ra `(6 + 0) / 3 = 2.0`.
+  - *Giải pháp*:
+    1. Nếu cả 2 task có band `> 0`: áp dụng công thức chính thức của IELTS `Math.round(((T1 + T2 * 2) / 3) * 2) / 2`.
+    2. Nếu chỉ có Task 1 `> 0` (Task 2 = 0 hoặc bài thi chỉ có 1 task): lấy điểm Task 1 làm điểm tính toán (nhãn hiển thị linh hoạt `Task 1 Band` hoặc `T1 Band (Partial)`).
+    3. Nếu chỉ có Task 2 `> 0`: lấy điểm Task 2 (nhãn `Task 2 Band` hoặc `T2 Band (Partial)`).
+    4. Cho phép giáo viên bấm Publish bài thi đơn task hoặc bài thi đã chấm 1 task mà không bị nút Publish khóa do thiếu task còn lại.
 - **Tích hợp tính năng AI Nhận xét & Sửa đoạn chọn trực tiếp (`Inline AI Selection Critique`)**:
   - Bổ sung mode `selection_critique` trong backend `/api/ai_feedback` (`api/index.py`), hỗ trợ giáo viên highlight bất kỳ cụm từ/câu nào để AI tự động phân loại tiêu chí, gợi ý sửa ngắn gọn, viết gợi ý nâng Band 8+, và soạn lời giải thích sư phạm bằng tiếng Việt.
   - Hỗ trợ 2 chế độ: "AI Sửa" (điền vào form để giáo viên duyệt lại) và "AI Lưu ngay" (tự phân tích và thêm ngay vào bài chấm).

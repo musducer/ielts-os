@@ -767,6 +767,7 @@ export function buildVectorPdfDossierHtml(params: {
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
+  <base href="${typeof window !== 'undefined' ? window.location.origin : ''}/" />
   <title>IELTS Writing Assessment Dossier - ${escapeHtml(params.studentName)}</title>
   <style>
     @page {
@@ -865,8 +866,8 @@ export function buildVectorPdfDossierHtml(params: {
         ${params.taskInstructions ? `<div style="margin-bottom: 6px; color: #4B5563;">${escapeHtml(params.taskInstructions)}</div>` : ''}
         ${params.taskPrompt ? `<div style="margin-top: 4px;">${params.taskPrompt}</div>` : ''}
         ${params.mediaUrl ? `
-          <div style="margin-top: 10px; text-align: center;">
-            <img src="${escapeHtml(params.mediaUrl)}" alt="Visual Graphic" crossOrigin="anonymous" style="max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid #E4DFD3; border-radius: 4px; background: #FFFFFF;" />
+          <div class="dossier-chart-box" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #DCD6C8; text-align: center; break-inside: avoid; page-break-inside: avoid;">
+            <img id="pdf-dossier-chart-img" src="${params.mediaUrl.startsWith('data:') ? params.mediaUrl : escapeHtml(params.mediaUrl)}" alt="Task Visual Graphic" crossOrigin="anonymous" style="display: block; margin: 0 auto; max-width: 100%; max-height: 300px; width: auto; height: auto; object-fit: contain; background: #FFFFFF; padding: 10px; border: 1px solid #E4DFD3; border-radius: 6px;" />
           </div>
         ` : ''}
       </div>
@@ -1029,6 +1030,8 @@ const Ico: React.FC<{ name: string; size?: number; color?: string; className?: s
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><path d="M16 8h4"/><path d="M4 16h4"/><path d="M6 14v4"/></svg>;
       case 'loader':
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
+      case 'checkBadge':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
       default:
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/></svg>;
     }
@@ -1040,6 +1043,176 @@ const Ico: React.FC<{ name: string; size?: number; color?: string; className?: s
     </span>
   );
 };
+
+// ==========================================
+// IMAGE TO DATA URL (CANVAS / BLOB EMBEDDING)
+// ==========================================
+export async function imageToDataUrl(url: string, existingImgEl?: HTMLImageElement | null): Promise<string> {
+  if (!url) return '';
+  if (url.startsWith('data:image/')) return url;
+
+  // Attempt A: Direct Canvas Draw from Loaded DOM <img>
+  if (existingImgEl && existingImgEl.complete && existingImgEl.naturalWidth > 0 && existingImgEl.naturalHeight > 0) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = existingImgEl.naturalWidth;
+      canvas.height = existingImgEl.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(existingImgEl, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+        if (dataUrl && dataUrl.startsWith('data:image/png;base64,')) {
+          return dataUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('Canvas direct draw from existingImgEl failed (likely CORS restriction):', e);
+    }
+  }
+
+  // Attempt B: fetch + FileReader
+  try {
+    let res: Response | null = null;
+    try {
+      res = await fetch(url, { mode: 'cors', credentials: 'include' });
+    } catch {
+      try {
+        res = await fetch(url, { mode: 'cors' });
+      } catch {
+        res = null;
+      }
+    }
+    if (res && res.ok) {
+      const blob = await res.blob();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') resolve(reader.result);
+          else reject(new Error('FileReader did not yield string'));
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      if (dataUrl && dataUrl.startsWith('data:')) {
+        return dataUrl;
+      }
+    }
+  } catch (e) {
+    console.warn('fetch + FileReader toDataURL failed:', e);
+  }
+
+  // Attempt C: new Image() with crossOrigin = 'anonymous'
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+          } else {
+            reject(new Error('Canvas context not available'));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.onerror = () => reject(new Error('Image failed to load with crossOrigin'));
+      setTimeout(() => reject(new Error('Image load timed out')), 3500);
+      img.src = url;
+    });
+    if (dataUrl && dataUrl.startsWith('data:image/')) {
+      return dataUrl;
+    }
+  } catch (e) {
+    console.warn('new Image() with crossOrigin failed:', e);
+  }
+
+  // Attempt D: Fallback to normalized absolute URL
+  try {
+    return new URL(url, window.location.origin).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Harvest the chart image source from all possible props, live DOM, and HTML strings,
+ * then convert it into an inline base64 data URL for print-to-PDF embedding.
+ */
+export async function resolveChartImageForPdf(
+  activeTask: WritingTaskDefinition,
+  activeTaskIndex: number,
+  quiz: any
+): Promise<string> {
+  const candidates: string[] = [];
+
+  // Check explicit props/fields on active task
+  const taskAny = activeTask as any;
+  if (taskAny.mediaUrl) candidates.push(taskAny.mediaUrl);
+  if (taskAny.imageUrl) candidates.push(taskAny.imageUrl);
+  if (taskAny.chartUrl) candidates.push(taskAny.chartUrl);
+  if (taskAny.diagramImageUrl) candidates.push(taskAny.diagramImageUrl);
+  if (taskAny.mapImageUrl) candidates.push(taskAny.mapImageUrl);
+
+  // Live DOM chart image (guaranteed match with screen)
+  const existingDomImg = typeof document !== 'undefined'
+    ? document.querySelector<HTMLImageElement>('img[data-wf-chart-img="true"]')
+    : null;
+  if (existingDomImg?.currentSrc) candidates.push(existingDomImg.currentSrc);
+  if (existingDomImg?.src) candidates.push(existingDomImg.src);
+
+  // Quiz / section / question props
+  if (quiz) {
+    if (quiz.mediaUrl) candidates.push(quiz.mediaUrl);
+    if (quiz.imageUrl) candidates.push(quiz.imageUrl);
+
+    const sec = quiz.sections?.[activeTaskIndex];
+    if (sec?.mediaUrl) candidates.push(sec.mediaUrl);
+    if (sec?.imageUrl) candidates.push(sec.imageUrl);
+    if (sec?.images?.[0]) candidates.push(sec.images[0]);
+    if (sec?.image) candidates.push(sec.image);
+
+    const q = quiz.questions?.[activeTaskIndex] || quiz.questions?.[0];
+    if (q?.imageUrl) candidates.push(q.imageUrl);
+    if (q?.mediaUrl) candidates.push(q.mediaUrl);
+    if (q?.image) candidates.push(q.image);
+
+    // Extract any <img ... src="..."> embedded inside HTML strings
+    const htmlStrings = [activeTask.prompt, activeTask.instructions, sec?.passage, quiz.passage, q?.groupContext];
+    for (const html of htmlStrings) {
+      if (typeof html === 'string') {
+        const matches = Array.from(html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi));
+        for (const m of matches) {
+          if (m[1]) candidates.push(m[1]);
+        }
+      }
+    }
+  }
+
+  // Find first non-empty valid candidate
+  const rawUrl = candidates
+    .map(c => String(c || '').trim())
+    .find(c => Boolean(c) && !c.startsWith('javascript:')) || '';
+
+  if (!rawUrl) return '';
+
+  let targetUrl = rawUrl;
+  if (!targetUrl.startsWith('data:') && !targetUrl.startsWith('blob:')) {
+    try {
+      targetUrl = new URL(targetUrl, window.location.origin).href;
+    } catch {
+      targetUrl = rawUrl;
+    }
+  }
+
+  return await imageToDataUrl(targetUrl, existingDomImg);
+}
 
 // ==========================================
 // MAIN COMPONENT (MANUSCRIPT EDITORIAL DESK)
@@ -1130,10 +1303,72 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     return values.every(scoreIsValid) ? roundedBand(values.reduce((sum, v) => sum + v, 0) / values.length) : undefined;
   };
 
-  const taskBands = writingTasks.map(t => taskBand(t.id));
-  const calculatedFinalBand = taskBands.length === 2 && taskBands.every(scoreIsValid)
-    ? roundedBand((Number(taskBands[0]) + Number(taskBands[1]) * 2) / 3)
-    : undefined;
+  const t1Band = taskBand(writingTasks[0]?.id || '');
+  const t2Band = taskBand(writingTasks[1]?.id || '');
+
+  const { calculatedFinalBand, overallBandLabel } = useMemo(() => {
+    const hasT1 = t1Band !== undefined && t1Band > 0;
+    const hasT2 = t2Band !== undefined && t2Band > 0;
+
+    // Both tasks graded > 0: official IELTS weighted band (1/3 Task 1 + 2/3 Task 2)
+    if (hasT1 && hasT2) {
+      const weighted = Math.round(((t1Band + t2Band * 2) / 3) * 2) / 2;
+      return { calculatedFinalBand: weighted, overallBandLabel: 'Overall Band' };
+    }
+    // Only Task 1 graded > 0 (single task test or Task 2 ungraded/0)
+    if (hasT1 && !hasT2) {
+      const label = writingTasks.length === 1 ? 'Task 1 Band' : 'T1 Band (Partial)';
+      return { calculatedFinalBand: t1Band, overallBandLabel: label };
+    }
+    // Only Task 2 graded > 0 (single task test or Task 1 ungraded/0)
+    if (hasT2 && !hasT1) {
+      const label = writingTasks.length === 1 ? 'Task 2 Band' : 'T2 Band (Partial)';
+      return { calculatedFinalBand: t2Band, overallBandLabel: label };
+    }
+    // Both explicitly 0
+    if (t1Band === 0 && t2Band === 0) {
+      return { calculatedFinalBand: 0, overallBandLabel: 'Overall Band' };
+    }
+    if (t1Band === 0 && t2Band === undefined) {
+      return { calculatedFinalBand: 0, overallBandLabel: 'Task 1 Band' };
+    }
+    if (t2Band === 0 && t1Band === undefined) {
+      return { calculatedFinalBand: 0, overallBandLabel: 'Task 2 Band' };
+    }
+    return { calculatedFinalBand: undefined, overallBandLabel: 'Overall Band' };
+  }, [t1Band, t2Band, writingTasks.length]);
+
+  const activeTaskChartUrl = useMemo(() => {
+    const taskAny = activeTask as any;
+    const fromTask = taskAny.mediaUrl || taskAny.imageUrl || taskAny.chartUrl || taskAny.diagramImageUrl || taskAny.mapImageUrl;
+    if (fromTask) return String(fromTask).trim();
+
+    const taskIdx = writingTasks.findIndex(t => t.id === activeTask.id);
+    const resolvedIdx = taskIdx >= 0 ? taskIdx : (activeTask.taskNumber ? activeTask.taskNumber - 1 : 0);
+    const quizAny = reviewQuiz?.quiz as any;
+    if (quizAny) {
+      const sec = quizAny.sections?.[resolvedIdx];
+      const fromSec = sec?.mediaUrl || sec?.imageUrl || sec?.images?.[0] || sec?.image;
+      if (fromSec) return String(fromSec).trim();
+
+      const q = quizAny.questions?.[resolvedIdx] || (resolvedIdx === 0 ? quizAny.questions?.[0] : undefined);
+      const fromQ = q?.imageUrl || q?.mediaUrl || q?.image;
+      if (fromQ) return String(fromQ).trim();
+
+      if (resolvedIdx === 0 && (quizAny.mediaUrl || quizAny.imageUrl)) {
+        return String(quizAny.mediaUrl || quizAny.imageUrl).trim();
+      }
+
+      const htmlSources = [activeTask.prompt, activeTask.instructions, sec?.passage, quizAny.passage, q?.groupContext];
+      for (const src of htmlSources) {
+        if (typeof src === 'string') {
+          const match = src.match(/<img[^>]+src=["']([^"']+)["']/i);
+          if (match && match[1]) return match[1].trim();
+        }
+      }
+    }
+    return '';
+  }, [activeTask, writingTasks, reviewQuiz]);
 
   const studentCanSeeGrade = writingGrading.status === 'published';
 
@@ -1280,15 +1515,15 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             setStatusMessage('Bản chấm đã lưu cục bộ trên thiết bị và sẽ tự động đồng bộ khi có mạng.');
           } else {
             setActionStatus(publish ? 'published_ok' : 'saved_ok');
-            setStatusMessage(publish ? '🎉 Đã publish bài chấm cho học sinh thành công!' : '✅ Đã lưu bản nháp thành công!');
+            setStatusMessage(publish ? 'Đã xuất bản bài chấm cho học sinh thành công!' : 'Đã lưu bản nháp thành công!');
           }
         } else {
           setActionStatus('saved_ok');
-          setStatusMessage('✅ Đã lưu bản chấm trên thiết bị!');
+          setStatusMessage('Đã lưu bản chấm trên thiết bị!');
         }
       } else {
         setActionStatus('saved_ok');
-        setStatusMessage('✅ Đã cập nhật bài chấm!');
+        setStatusMessage('Đã cập nhật bài chấm!');
       }
       setTimeout(() => {
         setActionStatus('idle');
@@ -1533,7 +1768,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     const nextNotebook = [card, ...(me.vocabNotebook || [])];
     const ok = await saveMyVocabNotebook(nextNotebook, me.vocabTombstones || []);
     if (ok) {
-      setVocabToast(`✓ Đã lưu "${cleanWord}" vào Sổ từ vựng!`);
+      setVocabToast(`Đã lưu "${cleanWord}" vào Sổ từ vựng!`);
       setTimeout(() => setVocabToast(null), 3000);
     } else {
       alert('Không thể lưu từ vào sổ từ vựng.');
@@ -1553,7 +1788,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           task_title: activeTask.title,
           prompt: activeTask.prompt || activeTask.instructions || '',
           essay: originalEssay,
-          media_url: activeTask.mediaUrl || '',
+          media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
           lang: 'vi',
         }),
       });
@@ -1676,7 +1911,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       const quizTitle = (reviewQuiz?.quiz?.title || 'IELTS Mock Test').trim();
       const taskTitle = (activeTask?.title || `Task ${taskNumber}`).trim();
       const wordCount = countWritingWords(originalEssay);
-      const overallBand = taskBand(activeTask.id) ?? calculatedFinalBand ?? writingGrading.finalBand ?? '—';
+      const activeBand = taskBand(activeTask.id);
+      const overallBand = activeBand !== undefined && activeBand > 0
+        ? activeBand
+        : (calculatedFinalBand ?? writingGrading.finalBand ?? '—');
 
       const taskScores = {
         ta: writingGrading.taskScores[activeTask.id]?.taskAchievement ?? '—',
@@ -1686,6 +1924,12 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       };
 
       const annotatedEssayHtml = buildDossierAnnotatedEssayHtml(originalEssay, accurateActiveComments);
+
+      // Bulletproof Chart Image Extraction & Base64 Embedding
+      const activeTaskIndex = writingTasks.findIndex(t => t.id === activeTask.id) >= 0
+        ? writingTasks.findIndex(t => t.id === activeTask.id)
+        : (taskNumber - 1);
+      const resolvedChartDataUrlOrUrl = await resolveChartImageForPdf(activeTask, activeTaskIndex, reviewQuiz.quiz);
 
       const html = buildVectorPdfDossierHtml({
         studentName,
@@ -1698,7 +1942,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         criteriaNotes: writingGrading.criteriaNotes?.[activeTask.id],
         taskInstructions: activeTask.instructions,
         taskPrompt: activeTask.prompt,
-        mediaUrl: activeTask.mediaUrl,
+        mediaUrl: resolvedChartDataUrlOrUrl || undefined,
         bottlenecks: currentBottlenecks,
         generalFeedback: writingGrading.generalFeedback,
         annotatedEssayHtml,
@@ -1729,18 +1973,26 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       doc.write(html);
       doc.close();
 
-      // Wait for all images inside iframe to load
+      // Wait for all images inside iframe to load and decode
       const images = Array.from(doc.querySelectorAll('img'));
       await Promise.all(
-        images.map(img => {
-          if (img.complete && img.naturalHeight !== 0) return Promise.resolve(true);
+        images.map(async img => {
+          if (img.complete && img.naturalWidth > 0) return true;
+          try {
+            if (typeof img.decode === 'function') {
+              await img.decode();
+            }
+          } catch {
+            // decode failure ignored
+          }
+          if (img.complete && img.naturalWidth > 0) return true;
           return new Promise(resolve => {
             img.onload = () => resolve(true);
             img.onerror = () => {
-              img.style.display = 'none';
+              console.warn('PDF dossier image failed to load:', img.src);
               resolve(false);
             };
-            setTimeout(() => resolve(false), 2500);
+            setTimeout(() => resolve(false), 3000);
           });
         })
       );
@@ -1918,13 +2170,23 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             {/* Score Stamp */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 12px', background: C.wash, border: `1px solid ${C.border}`, borderRadius: 10 }}>
               <div>
-                <div style={{ fontSize: 9, fontWeight: 900, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase' }}>Overall Band</div>
+                <div style={{ fontSize: 9, fontWeight: 900, color: C.sub, letterSpacing: 0.6, textTransform: 'uppercase' }}>
+                  {overallBandLabel}
+                </div>
                 <div style={{ fontFamily: 'var(--display)', fontSize: 24, lineHeight: 1, color: C.accent, fontWeight: 800 }}>
-                  {calculatedFinalBand ?? writingGrading.finalBand ?? '—'}
+                  {calculatedFinalBand !== undefined ? calculatedFinalBand : (writingGrading.finalBand !== undefined ? writingGrading.finalBand : '—')}
                 </div>
               </div>
               <div style={{ borderLeft: `1px solid ${C.border}`, paddingLeft: 10, fontSize: 11, color: C.sub, fontFamily: 'var(--mono)' }}>
-                T1: <strong>{taskBand(writingTasks[0]?.id || '') ?? '—'}</strong> · T2: <strong>{taskBand(writingTasks[1]?.id || '') ?? '—'}</strong>
+                {writingTasks.length > 1 ? (
+                  <>
+                    T1: <strong>{t1Band !== undefined ? t1Band : '—'}</strong> · T2: <strong>{t2Band !== undefined ? t2Band : '—'}</strong>
+                  </>
+                ) : (
+                  <>
+                    Task {taskNumber}: <strong>{taskBand(activeTask.id) !== undefined ? taskBand(activeTask.id) : '—'}</strong>
+                  </>
+                )}
               </div>
             </div>
 
@@ -2002,8 +2264,20 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 background: studentCanSeeGrade ? C.succWash : C.warnWash,
                 color: studentCanSeeGrade ? C.succ : C.warn,
                 border: `1px solid ${studentCanSeeGrade ? C.succLine : C.warnLine}`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
               }}>
-                {studentCanSeeGrade ? '✓ Đã công bố kết quả' : 'Đang chờ giáo viên chấm'}
+                {studentCanSeeGrade ? (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    Đã công bố kết quả
+                  </>
+                ) : (
+                  'Đang chờ giáo viên chấm'
+                )}
               </span>
             )}
           </div>
@@ -2032,13 +2306,20 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             {(actionStatus === 'saving_draft' || actionStatus === 'publishing') && (
               <Ico name="loader" size={15} className="wf-spin" />
             )}
+            {(actionStatus === 'saved_ok' || actionStatus === 'published_ok') && (
+              <Ico name="checkBadge" size={16} color="#166534" />
+            )}
+            {actionStatus === 'error' && (
+              <Ico name="alert" size={16} color="#991B1B" />
+            )}
             <span>{statusMessage}</span>
             <button
               type="button"
               onClick={() => setActionStatus('idle')}
-              style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}
+              aria-label="Đóng thông báo"
+              style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '2px 4px' }}
             >
-              ×
+              <Ico name="close" size={14} />
             </button>
           </div>
         </div>
@@ -2047,44 +2328,55 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       {/* ========================================== */}
       {/* 2. COLLAPSIBLE PROMPT & VISUAL DRAWER      */}
       {/* ========================================== */}
-      {promptDrawerOpen && (
-        <section style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '18px 24px' }}>
-          <div style={{ maxWidth: 1440, margin: '0 auto', display: 'grid', gridTemplateColumns: activeTask.mediaUrl ? '1fr 340px' : '1fr', gap: 24, alignItems: 'start' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                  Task {activeTask.taskNumber} Instructions & Prompt
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setPromptDrawerOpen(false)}
-                  style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                >
-                  <Ico name="chevronUp" size={13} /> Thu gọn đề bài
-                </button>
+      <section
+        style={{
+          background: C.card,
+          borderBottom: promptDrawerOpen ? `1px solid ${C.border}` : 'none',
+          padding: promptDrawerOpen ? '18px 24px' : 0,
+          height: promptDrawerOpen ? 'auto' : 0,
+          overflow: 'hidden',
+          opacity: promptDrawerOpen ? 1 : 0,
+          pointerEvents: promptDrawerOpen ? 'auto' : 'none',
+          transition: 'opacity 0.2s ease, padding 0.2s ease',
+        }}
+      >
+        <div style={{ maxWidth: 1440, margin: '0 auto', display: 'grid', gridTemplateColumns: activeTaskChartUrl ? '1fr 340px' : '1fr', gap: 24, alignItems: 'start' }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                Task {activeTask.taskNumber} Instructions & Prompt
               </div>
-              <h2 style={{ fontFamily: 'var(--display)', fontSize: 20, margin: '0 0 10px' }}>{activeTask.title}</h2>
-              {activeTask.instructions && <p style={{ fontSize: 13, color: C.sub, lineHeight: 1.6, margin: '0 0 10px' }}>{activeTask.instructions}</p>}
-              {activeTask.prompt && (
-                <div
-                  dangerouslySetInnerHTML={{ __html: activeTask.prompt }}
-                  style={{ fontSize: 14, lineHeight: 1.65, color: C.text, padding: '12px 16px', background: C.wash, border: `1px solid ${C.border}`, borderRadius: 8 }}
-                />
-              )}
+              <button
+                type="button"
+                onClick={() => setPromptDrawerOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              >
+                <Ico name="chevronUp" size={13} /> Thu gọn đề bài
+              </button>
             </div>
-            {activeTask.mediaUrl && (
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, background: '#fff', textAlign: 'center' }}>
-                <img
-                  src={activeTask.mediaUrl}
-                  alt={`Task ${activeTask.taskNumber} chart`}
-                  style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto' }}
-                />
-                <span style={{ fontSize: 11, color: C.sub, marginTop: 4, display: 'block' }}>Task visual graphic</span>
-              </div>
+            <h2 style={{ fontFamily: 'var(--display)', fontSize: 20, margin: '0 0 10px' }}>{activeTask.title}</h2>
+            {activeTask.instructions && <p style={{ fontSize: 13, color: C.sub, lineHeight: 1.6, margin: '0 0 10px' }}>{activeTask.instructions}</p>}
+            {activeTask.prompt && (
+              <div
+                dangerouslySetInnerHTML={{ __html: activeTask.prompt }}
+                style={{ fontSize: 14, lineHeight: 1.65, color: C.text, padding: '12px 16px', background: C.wash, border: `1px solid ${C.border}`, borderRadius: 8 }}
+              />
             )}
           </div>
-        </section>
-      )}
+          {activeTaskChartUrl && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, background: '#fff', textAlign: 'center' }}>
+              <img
+                data-wf-chart-img="true"
+                crossOrigin="anonymous"
+                src={activeTaskChartUrl}
+                alt={`Task ${activeTask.taskNumber} chart`}
+                style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto' }}
+              />
+              <span style={{ fontSize: 11, color: C.sub, marginTop: 4, display: 'block' }}>Task visual graphic</span>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* ========================================== */}
       {/* 3. TWO-COLUMN SPLIT WORKSPACE              */}
@@ -2325,7 +2617,18 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   color: essayStats.words >= targetWords ? C.succ : C.warn,
                   border: `1px solid ${essayStats.words >= targetWords ? C.succLine : C.warnLine}`,
                 }}>
-                  {essayStats.words >= targetWords ? '✓' : '⚠'} {essayStats.words} / {targetWords} words
+                  {essayStats.words >= targetWords ? (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  ) : (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="8" x2="12" y2="12"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                  )}
+                  <span>{essayStats.words} / {targetWords} words</span>
                   {essayStats.words < targetWords && ` (-${targetWords - essayStats.words}w)`}
                 </span>
 
@@ -2473,10 +2776,11 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                             {isTeacher && (
                               <button
                                 onClick={() => updateTaskBottlenecks(activeTask.id, currentBottlenecks.filter((_, i) => i !== idx))}
-                                style={{ background: 'transparent', border: 'none', color: C.subLight, marginLeft: 6, cursor: 'pointer', padding: 0 }}
+                                style={{ background: 'transparent', border: 'none', color: C.subLight, marginLeft: 6, cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle' }}
                                 title="Xóa"
+                                aria-label="Xóa mục trọng tâm"
                               >
-                                ×
+                                <Ico name="close" size={11} />
                               </button>
                             )}
                           </li>
@@ -3390,10 +3694,19 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 )}
 
                 {/* Annotations Count */}
-                <div style={{ fontSize: 13, color: C.sub }}>
-                  ✓ Phát hiện <strong>{aiModal.data.annotations?.length || 0} chú thích lỗi/nâng cấp</strong> bám sát văn bản bài viết.
-                  <br />
-                  ✓ Đã tạo sẵn <strong>Bản sửa hoàn chỉnh</strong> và <strong>Bài mẫu Band 8.5</strong>.
+                <div style={{ fontSize: 13, color: C.sub, display: 'grid', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    <span>Phát hiện <strong>{aiModal.data.annotations?.length || 0} chú thích lỗi/nâng cấp</strong> bám sát văn bản bài viết.</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    <span>Đã tạo sẵn <strong>Bản sửa hoàn chỉnh</strong> và <strong>Bài mẫu Band 8.5</strong>.</span>
+                  </div>
                 </div>
 
                 {/* Actions */}
@@ -3427,8 +3740,14 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           fontWeight: 700,
           boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
           zIndex: 3000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
         }}>
-          {vocabToast}
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#22C55E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>{vocabToast}</span>
         </div>
       )}
 
