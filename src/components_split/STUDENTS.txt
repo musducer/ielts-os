@@ -116,7 +116,7 @@
 
           const resultCard = (r: QuizResult) => {
             const durationStr = r.durationSeconds ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s` : "N/A";
-            const copyText = `Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`;
+            const copyText = tx(`Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`, `IELTS CBT Exam Result\nStudent: ${r.studentName}\nExam: ${r.quizTitle}\nScore: ${r.score}/${r.total} (Band ${r.band})\nDuration: ${durationStr}`);
             const open = expandedResultId === r.id;
             const bandVal = Number(r.band);
             const accentBorder = !isNaN(bandVal) ? (bandVal >= 7.0 ? C.succ : bandVal >= 6.0 ? C.accent : C.warn) : C.border;
@@ -169,7 +169,7 @@
                 {open && (
                   <div style={{ padding: '0 16px 16px', borderTop: `1px dashed ${C.border}` }}>
                     <div style={{ fontSize: 11.5, color: C.sub, display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 10, marginBottom: 12 }}>
-                      <span>Bắt đầu: <b style={{ fontFamily: 'var(--mono)' }}>{r.startTime || "N/A"}</b></span>
+                      <span>{tx('Bắt đầu:', 'Started:')} <b style={{ fontFamily: 'var(--mono)' }}>{r.startTime || "N/A"}</b></span>
                       <span>IP: <b style={{ fontFamily: 'var(--mono)' }}>{r.ipAddress || "N/A"}</b></span>
                       {r.cheatCount > 0 ? (
                         <span style={{ color: C.err, fontWeight: 600 }}>{t('acad_cheat_warn', { n: r.cheatCount })}</span>
@@ -252,7 +252,7 @@
                           }}
                           style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}33`, fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                         >
-                          <Ico name="edit" size={12} /> Chấm Writing
+                          <Ico name="edit" size={12} /> {tx('Chấm Writing', 'Grade Writing')}
                         </button>
                       )}
                       <button
@@ -272,7 +272,7 @@
                       <button
                         type="button"
                         onClick={() => {
-                          if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) {
+                          if (r.ipAddress && confirm(tx(`Cấm IP ${r.ipAddress}?`, `Ban IP ${r.ipAddress}?`))) {
                             const nx = [...bannedIps, r.ipAddress];
                             setBannedIps(nx);
                             syncData({ bannedIps: nx });
@@ -285,7 +285,7 @@
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm("Xóa bài thi này?")) {
+                          if (confirm(tx("Xóa bài thi này?", "Delete this exam result?"))) {
                             const nx = quizResults.filter(x => x.id !== r.id);
                             setQuizResults(nx);
                             syncData({ quizResults: nx });
@@ -391,7 +391,7 @@
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm("Xóa buổi học này?")) {
+                          if (confirm(tx("Xóa buổi học này?", "Delete this class session?"))) {
                             const nx = history.filter(x => x && x.id !== h.id);
                             setHistory(nx as Session[]);
                             syncData({ history: nx, __deletedHistoryIds: [String(h.id)] });
@@ -595,7 +595,7 @@
                     })}
                     {listStudents.length === 0 && (
                       <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: 30, fontStyle: 'italic' }}>
-                        — Không có học viên phù hợp —
+                        — {tx('Không có học viên phù hợp', 'No matching students')} —
                       </div>
                     )}
                   </div>
@@ -700,7 +700,7 @@
                               {errorAnalytics.weakStudents.length > 0 && (
                                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
                                   <div style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginBottom: 8 }}>
-                                    Học viên cần lưu ý
+                                    {tx('Học viên cần lưu ý', 'Students Needing Attention')}
                                   </div>
                                   <div style={{ display: 'grid', gap: 6 }}>
                                     {errorAnalytics.weakStudents.map((ws, i) => (
@@ -724,7 +724,7 @@
                         {/* Header công cụ nhanh */}
                         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: C.bg }}>
                           <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginRight: 6 }}>
-                            Công cụ nhanh:
+                            {tx('Công cụ nhanh:', 'Quick tools:')}
                           </span>
                           {([['calc', t('acad_calc_title'), 'target'], ['push', t('stu_push_title'), 'bell'], ['verify', t('rc_verify_title'), 'lock']] as [string, string, string][]).map(([k, lb, ic]) => (
                             <button
@@ -832,10 +832,10 @@
                           <div>
                             <div style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7, color: C.text }}>
                               <Ico name="gift" size={15} color={C.accent} />
-                              <span>Quà và cơ chế thưởng</span>
+                              <span>{tx('Quà và cơ chế thưởng', 'Gifts & Reward Mechanisms')}</span>
                             </div>
                             <div style={{ marginTop: 2, fontSize: 12, color: C.sub }}>
-                              Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.
+                              {tx('Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.', 'Shared configuration for shop, Gacha, Quests, and study rewards.')}
                             </div>
                           </div>
                           <button
@@ -852,7 +852,7 @@
                               cursor: 'pointer'
                             }}
                           >
-                            {rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}
+                            {rewardConfigOpen ? tx('Thu gọn', 'Collapse') : tx('Cấu hình', 'Configure')}
                           </button>
                         </div>
 
@@ -861,74 +861,74 @@
                             <section>
                               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}>
                                 <div>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Catalog quà</div>
-                                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{tx('Catalog quà', 'Gift catalog')}</div>
+                                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>{tx("Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.", "Disable gifts to stop new distribution/sale; existing inventory and transactions remain.")}</div>
                                 </div>
-                                <span style={{ fontFamily: 'var(--mono)', color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span>
+                                <span style={{ fontFamily: 'var(--mono)', color: C.sub, fontSize: 11 }}>{giftCatalog.length} {tx('mục', 'items')}</span>
                               </div>
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {giftCatalog.map(gift => (
                                   <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
-                                      <option value="consumable">Tiêu hao</option>
-                                      <option value="permanent">Vĩnh viễn</option>
+                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Chi tiết quà", "Gift details")} placeholder={tx("Chi tiết", "Details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label={tx("Loại quà", "Gift type")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
+                                      <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
+                                      <option value="permanent">{tx('Vĩnh viễn', 'Permanent')}</option>
                                     </select>
-                                    <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label={tx("Giá quà", "Gift price")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
                                       <input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
-                                      {gift.enabled ? 'Bật' : 'Tắt'}
+                                      {gift.enabled ? tx('Bật', 'Enabled') : tx('Tắt', 'Disabled')}
                                     </label>
-                                    <button type="button" onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                    <button type="button" onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title={tx("Xóa quà khỏi catalog", "Delete gift from catalog")} style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
                                   </div>
                                 ))}
                               </div>
                               <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                                <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder={tx("Quà mới", "New gift")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder={tx("Chi tiết hiển thị", "Display details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
-                                  <option value="consumable">Tiêu hao</option>
-                                  <option value="permanent">Vĩnh viễn</option>
+                                  <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
+                                  <option value="permanent">{tx('Vĩnh viễn', 'Permanent')}</option>
                                 </select>
-                                <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <button type="button" onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm quà</button>
+                                <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder={tx("Giá", "Price")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <button type="button" onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError(tx('Nhập tên quà trước khi thêm.', 'Enter gift name before adding.')); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError(tx('Tên quà đã tồn tại.', 'Gift name already exists.')); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> {tx('Thêm quà', 'Add gift')}</button>
                               </div>
                             </section>
 
                             <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-                              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, color: C.text }}>Cơ chế thưởng</div>
-                              <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, color: C.text }}>{tx('Cơ chế thưởng', 'Reward Rules')}</div>
+                              <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>{tx('Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.', 'Coins granted for specific event triggers. Disable to pause.')}</div>
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {rewardMechanisms.map(rule => (
                                   <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên cơ chế thưởng", "Reward rule name")} placeholder={tx("Tên quy tắc", "Rule name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label={tx("Mã sự kiện", "Event code")} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label={tx("Số OS Coins", "OS Coins amount")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
                                       <input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
-                                      {rule.enabled ? 'Bật' : 'Tắt'}
+                                      {rule.enabled ? tx('Bật', 'Enabled') : tx('Tắt', 'Disabled')}
                                     </label>
-                                    <button type="button" onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                    <button type="button" onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title={tx("Xóa cơ chế", "Delete rule")} style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
                                   </div>
                                 ))}
                               </div>
                               <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                                <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder={tx("Tên quy tắc mới", "New rule name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder={tx("Xu", "Coins")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}>
                                   <input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />
-                                  Bật
+                                  {tx("Bật", "Enabled")}
                                 </label>
-                                <button type="button" onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
+                                <button type="button" onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError(tx('Nhập mã sự kiện trước khi thêm.', 'Enter event code before adding.')); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError(tx('Mã sự kiện đã tồn tại.', 'Event code already exists.')); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> {tx('Thêm cơ chế', 'Add rule')}</button>
                               </div>
                             </section>
 
                             {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
                             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                               <span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700, fontFamily: 'var(--mono)' }}>
-                                {rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}
+                                {rewardConfigDirty ? tx('Có thay đổi chưa lưu', 'Unsaved changes') : tx('Đã đồng bộ', 'Synced')}
                               </span>
                               <button
                                 type="button"
@@ -937,7 +937,7 @@
                                 style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1, cursor: !rewardConfigDirty || rewardConfigSaving ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
                               >
                                 <Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={13} />
-                                {rewardConfigSaving ? 'Đang lưu…' : 'Lưu cấu hình'}
+                                {rewardConfigSaving ? tx('Đang lưu…', 'Saving…') : tx('Lưu cấu hình', 'Save settings')}
                               </button>
                             </div>
                           </div>
@@ -1006,7 +1006,7 @@
                           </button>
                           {headerIconBtn('pin', () => { const nx = students.map(x => x.id === profile.id ? { ...x, isPinned: !x.isPinned } : x); setStudents(nx); syncData({ students: nx }); }, t('tip_pin_student'))}
                           {headerIconBtn('edit', () => { setEditStId(profile.id); setNewSt({ ...profile }); setShowAddStudent(true); }, t('common_edit'))}
-                          {headerIconBtn('trash', () => { if (confirm(`Xóa học viên ${profile.name}?`)) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
+                          {headerIconBtn('trash', () => { if (confirm(tx(`Xóa học viên ${profile.name}?`, `Delete student ${profile.name}?`))) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
                         </div>
                       </div>
 
@@ -1139,7 +1139,7 @@
 
                               {filteredResults.length === 0 ? (
                                 <div style={{ textAlign: 'center', color: C.sub, padding: '40px 20px', background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}`, fontSize: 13, fontStyle: 'italic' }}>
-                                  {stuResSearch || stuResSkillFilter !== "ALL" ? "Không tìm thấy kết quả phù hợp" : t('acad_no_results')}
+                                  {stuResSearch || stuResSkillFilter !== "ALL" ? tx("Không tìm thấy kết quả phù hợp", "No matching results found") : t('acad_no_results')}
                                 </div>
                               ) : (
                                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden', background: C.card }}>
@@ -1204,7 +1204,7 @@
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`Tặng 100 OS Coins cho ${profile.name}?`)) {
+                                  if (confirm(tx(`Tặng 100 OS Coins cho ${profile.name}?`, `Gift 100 OS Coins to ${profile.name}?`))) {
                                     const nx = students.map(x => x.id === profile.id ? { ...x, coins: (x.coins || 0) + 100 } : x);
                                     const coinOperation = makeCoinOperation(profile.id, 100, "TEACHER_GRANT");
                                     setStudents(nx);
@@ -1254,7 +1254,7 @@
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => copyToClipboard(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`)}
+                                    onClick={() => copyToClipboard(tx(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`, `Dear parent, student ${profile.name} currently has an unpaid tuition balance of ${fmtMoney(pUnpaid)}. Please kindly arrange payment with the center!`))}
                                     style={{
                                       background: C.card,
                                       color: C.text,
@@ -1276,12 +1276,12 @@
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      if (confirm(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`)) {
-                                        const msg = `Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`;
+                                      if (confirm(tx(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`, `Send RED WARNING to ${profile.name}'s screen?`))) {
+                                        const msg = tx(`Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`, `Hello ${profile.name},\n\nThe system has recorded an outstanding tuition balance of ${fmtMoney(pUnpaid)}.\n\nPlease settle this promptly to avoid interruption to your study and testing access on the platform!`);
                                         const nx = students.map(x => x.id === profile.id ? { ...x, debtMessage: msg } : x);
                                         setStudents(nx);
                                         syncData({ students: nx });
-                                        alert("Đã gửi cảnh báo đỏ!");
+                                        alert(tx("Đã gửi cảnh báo đỏ!", "Red warning sent!"));
                                       }
                                     }}
                                     style={{
@@ -1417,11 +1417,11 @@
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_permanent')}</div>
-                          {grp('Danh hiệu', 'titles')}
-                          {grp('Giao diện', 'themes')}
+                          {grp(tx('Danh hiệu', 'Titles'), 'titles')}
+                          {grp(tx('Giao diện', 'Themes'), 'themes')}
                           {grp('Khung avatar', 'frames')}
-                          {grp('Linh thú', 'pets')}
-                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Khác</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
+                          {grp(tx('Linh thú', 'Pets'), 'pets')}
+                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx('Khác', 'Other')}</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
                         </div>
                       </div>
                     </div>

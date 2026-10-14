@@ -16,6 +16,32 @@
     // Tên các vật phẩm cosmetic (render bằng SVG tự vẽ — xem renderFrameArt / renderPetArt phía dưới)
     const STUDENT_FRAME_NAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
     const STUDENT_PET_NAMES = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+    const COSMETIC_EN_MAP: Record<string, string> = {
+      "Giao diện: Hoàng Kim": "Theme: Golden Sovereign",
+      "Giao diện: Nửa Đêm":   "Theme: Midnight Navy",
+      "Giao diện: Anh Đào":   "Theme: Sakura Bloom",
+      "Giao diện: Rừng Sâu":  "Theme: Emerald Forest",
+      "Khung avatar: Vương Miện": "Avatar Frame: Crown of Sol",
+      "Khung avatar: Rồng Lửa":   "Avatar Frame: Infernal Dragon",
+      "Khung avatar: Băng Giá":   "Avatar Frame: Frostbite Sigil",
+      "Khung avatar: Cầu Vồng":   "Avatar Frame: Prismatic Aurora",
+      "Khung avatar: Sao Băng":   "Avatar Frame: Shooting Star",
+      "Linh thú: Cú Mèo":         "Companion: Celestial Owl",
+      "Linh thú: Mèo Thần Tài":   "Companion: Fortune Cat",
+      "Linh thú: Rồng Con":       "Companion: Baby Drake",
+      "Linh thú: Cáo Lửa":        "Companion: Flame Fox",
+      "Linh thú: Chim Cánh Cụt":  "Companion: Frost Penguin",
+      "Linh thú: Gấu Trúc":       "Companion: Zen Panda",
+    };
+    const formatCosmeticDisplayName = (rawName: string) => {
+      if (isVi) return rawName;
+      if (COSMETIC_EN_MAP[rawName]) return COSMETIC_EN_MAP[rawName];
+      if (rawName.startsWith("Danh hiệu: ")) return "Title: " + rawName.slice(11);
+      if (rawName.startsWith("Giao diện: ")) return "Theme: " + rawName.slice(11);
+      if (rawName.startsWith("Khung avatar: ")) return "Avatar Frame: " + rawName.slice(14);
+      if (rawName.startsWith("Linh thú: ")) return "Companion: " + rawName.slice(10);
+      return rawName;
+    };
     const _eqTheme = me?.inventory?.equippedTheme || '';
     const _themed = !!STUDENT_THEMES[_eqTheme];
     const C = _themed ? { ..._C_BASE, ...STUDENT_THEMES[_eqTheme] } : _C_BASE;
@@ -389,15 +415,15 @@
                 reviewedQuizId: r.id,
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`);
+            alert(tx(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`, `REVIEW MASTER: +${reviewReward} Coins for reviewing exam errors!`));
         }
     };
 
     const handleBuyConsumable = (gift: GiftDefinition) => {
         const itemName = gift.name;
         const price = Math.max(0, Number(gift.price) || 0);
-        if ((me.coins || 0) < price) { alert("Bạn không đủ OS Coins!"); return; }
-        if (confirm(`Dùng ${price} xu để đổi "${itemName}"?`)) {
+        if ((me.coins || 0) < price) { alert(tx("Bạn không đủ OS Coins!", "Not enough OS Coins!")); return; }
+        if (confirm(tx(`Dùng ${price} xu để đổi "${formatCosmeticDisplayName(itemName)}"?`, `Use ${price} coins to redeem "${formatCosmeticDisplayName(itemName)}"?`))) {
             const currentCons = { ...(me.inventory?.consumables || {}) };
             const currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             const newInv = { 
@@ -411,7 +437,7 @@
                 giftSnapshot: { id: gift.id, name: gift.name, price, details: gift.details, kind: gift.kind },
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
+            alert(tx("Đổi thành công! Quà đã được chuyển vào Túi đồ.", "Redemption successful! Reward moved to Inventory."));
             setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
         }
     };
@@ -419,33 +445,33 @@
     const handleRollGacha = () => {
         const gachaCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
         const duplicateRefund = configuredRewardCoins("GACHA_DUPLICATE_REFUND", 200);
-        if ((me.coins || 0) < gachaCost) { alert(`Cần ${gachaCost} Xu để quay Gacha!`); return; }
-        if (confirm(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`)) {
+        if ((me.coins || 0) < gachaCost) { alert(tx(`Cần ${gachaCost} Xu để quay Gacha!`, `Need ${gachaCost} Coins to roll Gacha!`)); return; }
+        if (confirm(tx(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`, `Spend ${gachaCost} Coins to open Mystery Box?`))) {
             const pool: Array<{ type: "PERMANENT" | "CONSUMABLE" | "NONE"; name: string; gift?: GiftDefinition }> = [
                 ...permanentGiftCatalog.filter(item => item.enabled).map(item => ({ type: "PERMANENT" as const, name: item.name, gift: item })),
                 ...consumableGiftCatalog.filter(item => item.enabled).map(item => ({ type: "CONSUMABLE" as const, name: item.name, gift: item })),
-                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" },
-                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" }
+                { type: "NONE" as const, name: tx("Chúc bạn may mắn lần sau", "Better luck next time") },
+                { type: "NONE" as const, name: tx("Chúc bạn may mắn lần sau", "Better luck next time") }
             ];
             const reward = pool[Math.floor(Math.random() * pool.length)];
             let newCoins = (me.coins || 0) - gachaCost;
             const currentCons = { ...(me.inventory?.consumables || {}) };
             let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             let addedPermanentName = "";
-            let msg = `BẠN QUAY TRÚNG: ${reward.name}`;
+            let msg = tx(`BẠN QUAY TRÚNG: ${formatCosmeticDisplayName(reward.name)}`, `YOU WON: ${formatCosmeticDisplayName(reward.name)}`);
 
             if (reward.type === "PERMANENT") {
                 if (currentPerms.includes(reward.name)) {
                     newCoins += duplicateRefund;
-                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`;
+                    msg += tx(`\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`, `\n\nYou already own this item. Auto-converted to +${duplicateRefund} Coins compensation!`);
                 } else {
                     currentPerms = [...currentPerms, reward.name];
                     addedPermanentName = reward.name;
-                    msg += `\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`;
+                    msg += tx(`\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`, `\n\nAdded to Inventory (Permanent Items)!`);
                 }
             } else if (reward.type === "CONSUMABLE") {
                 currentCons[reward.name] = (currentCons[reward.name] || 0) + 1;
-                msg += `\n\nĐã thêm vào Túi đồ!`;
+                msg += tx(`\n\nĐã thêm vào Túi đồ!`, `\n\nAdded to Inventory!`);
             }
 
             const newInv = { ...(me.inventory || {}), consumables: currentCons, permanents: currentPerms };
@@ -464,7 +490,7 @@
     };
 
     const handleUseItem = (itemName: string) => {
-        if (!confirm(`XÁC NHẬN SỬ DỤNG [${itemName}]?\n\nLƯU Ý: Chỉ bấm Đồng ý khi bạn đang gặp mặt hoặc nhắn tin trực tiếp với Giáo viên để xuất trình mã nhận thưởng. Vật phẩm sẽ bị trừ ngay lập tức!\n\nTiếp tục?`)) return;
+        if (!confirm(tx(`XÁC NHẬN SỬ DỤNG [${formatCosmeticDisplayName(itemName)}]?\n\nLƯU Ý: Chỉ bấm Đồng ý khi bạn đang gặp mặt hoặc nhắn tin trực tiếp với Giáo viên để xuất trình mã nhận thưởng. Vật phẩm sẽ bị trừ ngay lập tức!\n\nTiếp tục?`, `CONFIRM USING [${formatCosmeticDisplayName(itemName)}]?\n\nNOTE: Only confirm when meeting or messaging your Teacher directly to redeem this reward code. The item will be deducted immediately!\n\nContinue?`))) return;
         const currentCons = { ...(me.inventory?.consumables || {}) };
         if (currentCons[itemName] > 1) currentCons[itemName] -= 1;
         else delete currentCons[itemName];
@@ -636,7 +662,7 @@
               {([
                 { k: 'home', icon: 'home', label: t('ptab_home') },
                 { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-                { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
+                { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
                 { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
                 { k: 'progress', icon: 'trending', label: t('ptab_progress') },
                 { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -696,7 +722,7 @@
                   );
               })()}
               <div>
-                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || "bạn"}</span></h2>
+                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || tx("bạn", "friend")}</span></h2>
                 {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 5, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
                 <p style={{color: C.sub, margin: 0, fontSize: 13}}>{t('ready_conquer')}</p>
               </div>
@@ -720,7 +746,7 @@
           {useCodeObj && (
               <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                   <h2 style={{color: C.succ, fontSize: 32}}>{t('reward_code_title')}</h2>
-                  <p style={{fontSize: 18, textAlign: 'center'}}>{t('item_label')}: <b>{useCodeObj!.name}</b></p>
+                  <p style={{fontSize: 18, textAlign: 'center'}}>{t('item_label')}: <b>{formatCosmeticDisplayName(useCodeObj!.name)}</b></p>
                   <div style={{background: '#fff', padding: 20, borderRadius: 12, margin: '20px 0'}}>
                       <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${useCodeObj!.code}`} alt="QR Code" />
                   </div>
@@ -744,7 +770,7 @@
                       <div style={{flex: 1, overflowY: 'auto', display: 'grid', gap: 10}}>
                           {invTab === "CONSUMABLE" && Object.entries(me.inventory?.consumables || {}).map(([name, count]) => (
                               <div key={name} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${C.border}`}}>
-                                  <div><div style={{fontWeight: 900}}>{name}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
+                                  <div><div style={{fontWeight: 900}}>{formatCosmeticDisplayName(name)}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
                                   <button onClick={() => handleUseItem(name)} style={{background: C.succ, color: '#fff', padding: '8px 16px'}}>{t('use_now')}</button>
                               </div>
                           ))}
@@ -771,7 +797,7 @@
     <div key={safeName} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${isEquipped ? C.succ : C.border}`}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth: 0}}>
             {preview}
-            <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{safeName}</div>
+            <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{formatCosmeticDisplayName(safeName)}</div>
         </div>
         <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
             <button onClick={() => handleEquipItem(safeName)} style={{background: isEquipped ? C.succ : C.bg, color: isEquipped ? '#fff' : C.text, border: `1px solid ${C.border}`, padding: '8px 16px', fontWeight: 700}}>{isEquipped ? <span style={{display:'inline-flex',alignItems:'center',gap:4}}><Ico name="check" size={13} /> {i18n.language === 'vi' ? 'Đang dùng' : 'Equipped'}</span> : t('equip_btn')}</button>
@@ -797,7 +823,7 @@
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.succ, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 6 }}>
                 {avgBand} <span style={{ fontSize: 16 }}>{trendIcon}</span>
               </div>
-              <div style={{ fontSize: 11, color: C.sub }}>{validBandScores.length} bài thi gần nhất</div>
+              <div style={{ fontSize: 11, color: C.sub }}>{validBandScores.length} {tx('bài thi gần nhất', 'recent tests')}</div>
             </div>
 
             <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
@@ -819,13 +845,13 @@
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.text, letterSpacing: -0.5 }}>
                 {(myHistory.reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}<span style={{ fontSize: 16, fontStyle: 'italic', color: C.sub }}>h</span>
               </div>
-              <div style={{ fontSize: 11, color: C.sub }}>Thời gian làm bài & học</div>
+              <div style={{ fontSize: 11, color: C.sub }}>{tx('Thời gian làm bài & học', 'Study & Testing Time')}</div>
             </div>
 
             <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
                   <div style={{ background: `${C.accent}15`, color: C.accent, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="trophy" size={15} color={C.accent} /></div>
-                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>Cấp độ & EXP</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx("Cấp độ & EXP", "Level & EXP")}</span>
               </div>
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.accent, letterSpacing: -0.5 }}>
                 Lv.{me.level || 1}
@@ -866,17 +892,17 @@
                 <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Ico name="monitor" size={13} color={C.accent} />
-                    <span>Luyện thi hôm nay</span>
+                    <span>{tx('Luyện thi hôm nay', 'Practice Today')}</span>
                   </div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
-                    Sẵn sàng thử sức với bài thi mới để cải thiện điểm số?
+                    {tx('Sẵn sàng thử sức với bài thi mới để cải thiện điểm số?', 'Ready to take a new test to boost your score?')}
                   </div>
                   <div style={{ fontSize: 12.5, color: C.sub }}>
-                    Hệ thống có sẵn các bài luyện Listening, Reading và Writing bám sát cấu trúc đề thi thật.
+                    {tx('Hệ thống có sẵn các bài luyện Listening, Reading và Writing bám sát cấu trúc đề thi thật.', 'Practice tests for Listening, Reading, and Writing aligned with real exam format.')}
                   </div>
                   <button onClick={() => setPortalTab('exams')} style={{ alignSelf: 'flex-start', background: C.accent, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                     <Ico name="play" size={13} />
-                    <span>Vào phòng thi ngay</span>
+                    <span>{tx('Vào phòng thi ngay', 'Enter Test Room')}</span>
                   </button>
                 </div>
               )}
@@ -889,7 +915,7 @@
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <div>
-                    <span style={{ fontSize: 12, color: C.sub }}>Mục tiêu IELTS: </span>
+                    <span style={{ fontSize: 12, color: C.sub }}>{tx('Mục tiêu IELTS: ', 'IELTS Target: ')}</span>
                     <span style={{ fontSize: 18, fontWeight: 900, color: C.accent }}>Band {me.target || "N/A"}</span>
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: targetGap > 0 ? C.warn : C.succ }}>
@@ -908,33 +934,33 @@
                     <Ico name="book" size={13} color={C.accent} />
                     <span>{t('vocab_notebook')}</span>
                   </div>
-                  <span style={{ fontSize: 11, color: C.sub, fontWeight: 700 }}>{vocabCards.length} từ trong sổ</span>
+                  <span style={{ fontSize: 11, color: C.sub, fontWeight: 700 }}>{vocabCards.length} {tx('từ trong sổ', 'words in notebook')}</span>
                 </div>
                 {dueCount > 0 ? (
                   <>
                     <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
-                      Bạn có <span style={{ color: C.warn, fontWeight: 900 }}>{dueCount} từ</span> cần ôn tập hôm nay
+                      {tx('Bạn có', 'You have')} <span style={{ color: C.warn, fontWeight: 900 }}>{dueCount} {tx('từ', 'words')}</span> {tx('cần ôn tập hôm nay', 'due for review today')}
                     </div>
                     <div style={{ fontSize: 12.5, color: C.sub }}>
-                      Thuật toán lặp lại ngắt quãng (Spaced Repetition) sẽ giúp bạn ghi nhớ sâu và lâu hơn.
+                      {tx('Thuật toán lặp lại ngắt quãng (Spaced Repetition) sẽ giúp bạn ghi nhớ sâu và lâu hơn.', 'Spaced repetition reinforces retention effectively.')}
                     </div>
                     <button onClick={() => { setPortalTab('vocab'); setVocabView('study'); setStudyFlipped(false); }} style={{ alignSelf: 'flex-start', background: `linear-gradient(135deg, ${C.accent}, #4f46e5)`, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                       <Ico name="cards" size={14} />
-                      <span>Ôn tập ngay ({dueCount})</span>
+                      <span>{tx('Ôn tập ngay', 'Review Now')} ({dueCount})</span>
                     </button>
                   </>
                 ) : (
                   <>
                     <div style={{ fontSize: 15, fontWeight: 800, color: C.succ, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Ico name="check" size={16} color={C.succ} />
-                      <span>Đã hoàn thành ôn tập hôm nay!</span>
+                      <span>{tx('Đã hoàn thành ôn tập hôm nay!', 'All caught up for today!')}</span>
                     </div>
                     <div style={{ fontSize: 12.5, color: C.sub }}>
-                      Không có từ nào đến hạn cần ôn. Bạn có thể duyệt danh sách hoặc học thêm từ mới.
+                      {tx('Không có từ nào đến hạn cần ôn. Bạn có thể duyệt danh sách hoặc học thêm từ mới.', 'No words due for review right now. Browse your list or learn new vocabulary.')}
                     </div>
                     <button onClick={() => setPortalTab('vocab')} style={{ alignSelf: 'flex-start', background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                       <Ico name="book" size={14} />
-                      <span>Xem toàn bộ sổ từ vựng</span>
+                      <span>{tx('Xem toàn bộ sổ từ vựng', 'View Vocabulary Notebook')}</span>
                     </button>
                   </>
                 )}
@@ -945,16 +971,16 @@
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <div style={{ fontSize: 11, fontWeight: 900, color: C.sub, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Ico name="trending" size={13} color={C.sub} />
-                    <span>Kết quả bài thi gần nhất</span>
+                    <span>{tx('Kết quả bài thi gần nhất', 'Latest Test Results')}</span>
                   </div>
                   {sortedQuizResultsDesc.length > 3 && (
                     <button onClick={() => setPortalTab('progress')} style={{ background: 'transparent', border: 'none', color: C.accent, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', padding: 0 }}>
-                      Xem tất cả
+                      {tx("Xem tất cả", "View all")}
                     </button>
                   )}
                 </div>
                 {sortedQuizResultsDesc.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: C.sub, padding: '12px 0', textAlign: 'center' }}>Chưa có kết quả bài thi nào.</div>
+                  <div style={{ fontSize: 12.5, color: C.sub, padding: '12px 0', textAlign: 'center' }}>{tx('Chưa có kết quả bài thi nào.', 'No test results yet.')}</div>
                 ) : (
                   <div style={{ display: 'grid', gap: 8 }}>
                     {sortedQuizResultsDesc.slice(0, 3).map(r => (
@@ -994,12 +1020,12 @@
                 {t('gacha_spin')}
               </h3>
               <p style={{ margin: '6px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.5 }}>
-                {i18n.language === 'vi' ? 'Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.' : 'Roll for random themes, golden avatar frames, living companions, or gifts.'}
+                tx('Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.', 'Roll for random themes, golden avatar frames, living companions, or gifts.')
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>{i18n.language === 'vi' ? 'Chi phí' : 'Cost'}</div>
+                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>tx('Chi phí', 'Cost')</div>
                 <div style={{ fontSize: 17, fontWeight: 900, color: C.warn, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                   <Ico name="coins" size={16} color={C.warn} />
                   <span>{gachaSpinCost.toLocaleString('en-US')}</span>
@@ -1025,7 +1051,7 @@
                 }}
               >
                 <Ico name="sparkles" size={15} />
-                <span>{i18n.language === 'vi' ? 'Quay ngay' : 'Roll Now'}</span>
+                <span>tx('Quay ngay', 'Roll Now')</span>
               </button>
             </div>
           </div>
@@ -1050,11 +1076,11 @@
                       <button onClick={() => handleBuyConsumable(gift)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>{gift.price} <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
                     </div>
                   ))}
-                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>Cửa hàng hiện chưa có quà tiêu hao.</div>}
+                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>{tx("Cửa hàng hiện chưa có quà tiêu hao.", "No consumable items currently in store.")}</div>}
               </div>
               {Array.isArray(me.myRewards) && me.myRewards!.length > 0 && (
                  <div style={{marginTop: 24, paddingTop: 20, borderTop: `1px dashed ${C.border}`, fontSize: 13}}>
-                     <div style={{fontWeight: 800, color: C.succ, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7}}><Ico name="bag" size={14} /> Túi đồ cũ (Đang nâng cấp):</div>
+                     <div style={{fontWeight: 800, color: C.succ, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7}}><Ico name="bag" size={14} /> {tx("Túi đồ cũ (Đang nâng cấp):", "Legacy Inventory (Upgrading):")}</div>
                      <ul style={{margin: 0, paddingLeft: 20}}>
                          {me.myRewards!.map((id: string) => <li key={id} style={{color: C.sub, marginBottom: 4}}>{id}</li>)}
                      </ul>
@@ -1244,7 +1270,7 @@
                 <button
                   type="button"
                   onClick={() => pronounceVocab(dailyExp.word)}
-                  title={t('vocab_pronounce') || 'Phát âm'}
+                  title={t('vocab_pronounce') || tx('Phát âm', 'Pronounce')}
                   style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.accent, cursor: 'pointer' }}
                 >
                   <Ico name="volume2" size={16} />
@@ -1268,7 +1294,7 @@
                   }}
                 >
                   <Ico name={(isDailyExpSaved || dailyExpSavedFeedback) ? "check" : "book"} size={14} />
-                  <span>{(isDailyExpSaved || dailyExpSavedFeedback) ? (i18n.language === 'vi' ? 'Đã trong sổ tay' : 'Added to notebook') : (i18n.language === 'vi' ? '+ Lưu vào sổ tay' : '+ Add to notebook')}</span>
+                  <span>{(isDailyExpSaved || dailyExpSavedFeedback) ? tx('Đã trong sổ tay', 'Added to notebook') : tx('+ Lưu vào sổ tay', '+ Add to notebook')}</span>
                 </button>
               </div>
             </div>
@@ -1311,7 +1337,7 @@
                             transition: 'all .15s ease'
                           }}
                         >
-                          {sk === 'All' ? (i18n.language === 'vi' ? 'Tất cả kỹ năng' : 'All Skills') : sk}
+                          {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
                         </button>
                       );
                     })}
@@ -1535,7 +1561,7 @@
                   const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
                   const isPractice = isPracticeQuiz(q) || (q.practiceMode === true) || Number(q.maxAttempts) >= 99 || Number(q.maxAttempts) === Number.MAX_SAFE_INTEGER;
                   const attemptDisplay = isPractice
-                    ? `${t('previous_attempts')}: ${attemptCount} (${i18n.language === 'vi' ? 'Không giới hạn' : 'Unlimited'})`
+                    ? `${t('previous_attempts')}: ${attemptCount} (${tx('Không giới hạn', 'Unlimited')})`
                     : `${t('previous_attempts')}: ${attemptCount}/${q.maxAttempts || 1}`;
                   let statusText = "";
                   let isAvailable = false;
@@ -1594,7 +1620,7 @@
                               </div>
                           ) : isLockedByOtherDevice ? (
                               <button onClick={() => {
-                                  if(confirm("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?")) {
+                                  if(confirm(tx("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?", "THIS EXAM IS OPEN ON ANOTHER DEVICE!\n\nIf you continue, the session on that device will be terminated immediately. Are you sure you want to force entry?"))) {
                                       const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
                                       const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
                                       setStudents(nx); syncData({ students: nx });
@@ -1607,13 +1633,13 @@
                       </div>
                   )
               })}
-              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>Chưa có đề {studentExamSkillTab} khả dụng.</div>}
+              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{tx(`Chưa có đề ${studentExamSkillTab} khả dụng.`, `No available ${studentExamSkillTab} exams.`)}</div>}
             </div>
             )}
 
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
-                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>Chưa có kết quả {studentExamSkillTab}.</div>}
+                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{tx(`Chưa có kết quả ${studentExamSkillTab}.`, `No ${studentExamSkillTab} results yet.`)}</div>}
                     {[...resultsForSkill].filter(Boolean).sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)).map(r => {
                         if (!r) return null;
                         return (
@@ -1682,7 +1708,7 @@
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
+              { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
 import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
@@ -246,16 +247,17 @@ const fetchWithTimeout = async (url: string, init: RequestInit = {}, timeoutMs =
 const readApiJson = async (response: Response) => {
     const raw = await response.text();
     let data: any = null;
+    const isVi = typeof localStorage !== 'undefined' && (localStorage.getItem('i18nextLng') || '').toLowerCase().startsWith('vi');
     try {
         data = raw ? JSON.parse(raw) : {};
     } catch {
         const isServerFailure = response.status >= 500 || /an error occurred|function invocation|timeout/i.test(raw);
         throw new Error(isServerFailure
-            ? "Máy chủ AI mất quá lâu khi xử lý yêu cầu. Vui lòng thử lại sau ít phút."
-            : `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).`);
+            ? (isVi ? "Máy chủ AI mất quá lâu khi xử lý yêu cầu. Vui lòng thử lại sau ít phút." : "AI server timed out while processing your request. Please try again in a few moments.")
+            : (isVi ? `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).` : `AI server returned an invalid response (HTTP ${response.status || "unknown"}).`));
     }
     if (!response.ok) {
-        throw new Error(String(data?.detail || data?.error || `Máy chủ AI báo lỗi (HTTP ${response.status}).`));
+        throw new Error(String(data?.detail || data?.error || (isVi ? `Máy chủ AI báo lỗi (HTTP ${response.status}).` : `AI server reported an error (HTTP ${response.status}).`)));
     }
     return data;
 };
@@ -1682,10 +1684,16 @@ const manualTimestampToSeconds = (value: any) => {
 
 const parseManualExplanation = (value: any): ManualExplanation | undefined => {
   const rawSource = typeof value === "object" && value ? value.rawText : value;
-  const rawText = String(rawSource || "")
+  const rawClean = String(rawSource || "")
     .replace(/^\s*\[EXPLANATION\]\s*/i, "")
-    .replace(/^\s*\d+\s*[:.)-]\s*/, "")
-    .trim();
+    .replace(/^\s*\d+(?:\s*(?:[-–—]|,)\s*\d+)*\s*[:.)-]\s*/, "");
+  // Normalize horizontal whitespace [ \t]+ to single space, normalize newlines, preserve \n\n
+  const rawText = rawClean
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
   if (!rawText) return undefined;
   const parsedQuotes = Array.from(new Set(Array.from(rawText.matchAll(/"([^"]+)"/g))
     .map(match => match[1].replace(/\s+/g, " ").trim())
@@ -2510,6 +2518,8 @@ interface BandPoint {
 }
 
 const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandPoint[]; color?: string; height?: number }) => {
+    const { i18n } = useTranslation();
+    const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
     const [showAll, setShowAll] = useState(false);
     const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
@@ -2525,7 +2535,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
     }, [data]);
 
     if (validPts.length === 0) {
-        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— Chưa có dữ liệu điểm band hợp lệ —</div>;
+        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— {isVi ? "Chưa có dữ liệu điểm band hợp lệ" : "No valid band score data yet"} —</div>;
     }
 
     const hasMany = validPts.length > 15;
@@ -2582,7 +2592,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
                                 cursor: "pointer"
                             }}
                         >
-                            Recent 15
+                            {isVi ? "15 bài gần nhất" : "Recent 15"}
                         </button>
                         <button
                             type="button"
@@ -2600,7 +2610,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
                                 cursor: "pointer"
                             }}
                         >
-                            All ({validPts.length})
+                            {isVi ? `Tất cả (${validPts.length})` : `All (${validPts.length})`}
                         </button>
                     </div>
                 )}
@@ -3721,6 +3731,8 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
 
 export default function IeltsSupremeOS() {
   const { t, i18n } = useTranslation();
+  const isVi = String(i18n.language || '').toLowerCase().startsWith('vi');
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userRole, setUserRole] = useState<"TEACHER" | "STUDENT" | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
@@ -3989,6 +4001,17 @@ export default function IeltsSupremeOS() {
   const [keyEditingQuiz, setKeyEditingQuiz] = useState<Quiz | null>(null);
   const [activeExam, setActiveExam] = useState<Quiz | null>(null);
   const [pendingExamState, setPendingExamState] = useState<{quiz: Quiz, isPreview: boolean, isStudentTestUI: boolean} | null>(null);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!lightboxImageUrl) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxImageUrl(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxImageUrl]);
+
   // I18N: áp ngôn ngữ theo vai trò khi đăng nhập/đổi vai trò; LUÔN ép "en" khi đang trong phòng thi.
   useEffect(() => {
     if (activeExam) { i18n.changeLanguage("en"); }
@@ -4381,7 +4404,7 @@ export default function IeltsSupremeOS() {
   const [pushTarget, setPushTarget] = useState<"ALL" | string>("ALL");
 
   const handleSendPush = () => {
-      if (!pushTitle || !pushBody) { alert("Vui lòng nhập đủ tiêu đề và nội dung!"); return; }
+      if (!pushTitle || !pushBody) { alert(tx("Vui lòng nhập đủ tiêu đề và nội dung!", "Please enter both title and body!")); return; }
       const nx = students.map(s => {
           if (pushTarget === "ALL" || pushTarget === s.id) {
               const currentPending = s.pendingNotifications || [];
@@ -4392,7 +4415,7 @@ export default function IeltsSupremeOS() {
       setStudents(nx as Student[]);
       syncData({ students: nx });
       setPushTitle(""); setPushBody("");
-      alert("Đã gửi Push Notification thành công!");
+      alert(tx("Đã gửi Push Notification thành công!", "Push notification sent successfully!"));
   };
 
   useEffect(() => {
@@ -5338,7 +5361,7 @@ useEffect(() => {
       }
       writeOfflineQueue(email, []);
       if (legacy) localStorage.removeItem(`ielts_offline_result_${email}`);
-      alert(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`);
+      alert(tx(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`, `Successfully synced ${q.length} offline exam results to server!`));
     } catch (e) {
       console.warn("Flush offline queue failed, preserving the local queue:", e);
     }
@@ -8787,16 +8810,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       staged.forEach(item => formData.append("files", item.file));
       const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
       const data = await readApiJson(response);
-      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
+      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || tx("Không thể phân tích batch DOCX.", "Unable to parse DOCX batch."));
       const results = Array.isArray(data?.results) ? data.results : [];
       setQuestDocxBatch(staged.map((item, index) => {
         const result = results.find((entry: any) => Number(entry?.index) === index);
         return result?.success && result?.quiz
           ? { ...item, status: "ready" as const, quiz: result.quiz as Quiz }
-          : { ...item, status: "error" as const, error: String(result?.error || "Không thể phân tích file này.") };
+          : { ...item, status: "error" as const, error: String(result?.error || tx("Không thể phân tích file này.", "Unable to parse this file.")) };
       }));
     } catch (error: any) {
-      const message = error?.message || "Không thể phân tích batch DOCX.";
+      const message = error?.message || tx("Không thể phân tích batch DOCX.", "Unable to parse DOCX batch.");
       setQuestDocxBatch(staged.map(item => ({ ...item, status: "error" as const, error: message })));
     } finally {
       setQuestDocxBatchBusy(false);
@@ -8816,7 +8839,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const confirmQuestDocxBatch = async () => {
     if (userRole !== "TEACHER" || questDocxBatchBusy || !questDocxBatch.length) return;
     if (questDocxBatch.some(item => item.status !== "ready" || !item.quiz)) {
-      alert("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.");
+      alert(tx("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.", "Fix or remove invalid files before creating the topic assignment."));
       return;
     }
     const createdAt = getTrueTime();
@@ -8835,7 +8858,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       id: `topic_${createdAt}_${Math.random().toString(36).slice(2, 7)}`,
       title: `Quest: ${preparedQuizzes[0]?.title || "DOCX import"}`,
       topicCategory: "DOCX import",
-      description: "Các bài được tạo theo thứ tự file DOCX đã xác nhận.",
+      description: tx("Các bài được tạo theo thứ tự file DOCX đã xác nhận.", "Tests created in the order of confirmed DOCX files."),
       audience: "ALL",
       targetStudentIds: [],
       nodes: preparedQuizzes.map((quiz, index) => ({
@@ -8858,7 +8881,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       await runTransaction(db, async transaction => {
         const workspace = await transaction.get(DB_DOC_REF);
-        if (!workspace.exists()) throw new Error("Không tìm thấy workspace để tạo chuyên đề.");
+        if (!workspace.exists()) throw new Error(tx("Không tìm thấy workspace để tạo chuyên đề.", "Workspace not found for creating topic assignment."));
         const storedAssignments = workspace.data()?.topicAssignments;
         const existingAssignments = (Array.isArray(storedAssignments) ? storedAssignments : []) as TopicAssignment[];
         preparedQuizzes.forEach(quiz => transaction.set(doc(QUIZZES_COLLECTION_REF, quiz.id), JSON.parse(JSON.stringify(quiz))));
@@ -8868,10 +8891,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setTopicAssignments(previous => [...previous, assignment]);
       setQuestDocxBatch([]);
       setTopicAssignmentEditor(assignment);
-      alert("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.");
+      alert(tx("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.", "Topic assignment created from batch in order. Check steps and click save if further adjustments are needed."));
     } catch (error: any) {
       console.error("Quest DOCX batch confirmation failed:", error);
-      alert(error?.message || "Không thể tạo chuyên đề từ batch DOCX.");
+      alert(error?.message || tx("Không thể tạo chuyên đề từ batch DOCX.", "Failed to create topic assignment from DOCX batch."));
     } finally {
       setQuestDocxBatchBusy(false);
     }
@@ -8895,7 +8918,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!file) return;
     const currentQuiz = editingQuizRef.current;
     if (!currentQuiz) {
-      alert("Hãy mở đề cần chỉnh trước.");
+      alert(tx("Hãy mở đề cần chỉnh trước.", "Please open an exam to edit first."));
       return;
     }
     try {
@@ -8903,31 +8926,31 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (mode === "replace_sections") {
         const patchQuiz = data.quiz;
         if (!patchQuiz?.questions?.length) {
-          alert("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.");
+          alert(tx("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.", "The supplement file has no valid questions/passages to replace."));
           return;
         }
         const activeSection = Number(currentQuiz._activePassageTab || 0);
         const merged = mergeQuizSectionsFromSupplement(currentQuiz, patchQuiz, activeSection);
         if (!merged.replaced) {
-          alert("Không tìm thấy passage/section hợp lệ trong file bổ sung.");
+          alert(tx("Không tìm thấy passage/section hợp lệ trong file bổ sung.", "No valid passage/section found in the supplement file."));
           return;
         }
         editingQuizRef.current = merged.quiz;
         setEditingQuiz(merged.quiz);
-        alert(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`);
+        alert(tx(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`, `Replaced ${merged.replaced} passage/section starting from tab ${activeSection + 1}. Click Save to sync.`));
         return;
       }
       const merged = mergeQuizManualExplanationsFromSupplement(currentQuiz, data);
       if (!merged.imported) {
-        alert("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.");
+        alert(tx("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.", "No [EXPLANATION] matching question numbers found in the current exam."));
         return;
       }
       editingQuizRef.current = merged.quiz;
       setEditingQuiz(merged.quiz);
-      alert(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`);
+      alert(tx(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`, `Imported explanations for ${merged.imported} questions. Click Save to sync.`));
     } catch (error: any) {
       logErrorToSystem("UPLOAD_DOCX_SUPPLEMENT_FAIL", error?.message || String(error), { fileName: file.name, mode });
-      alert("Không xử lý được file bổ sung: " + (error?.message || String(error)));
+      alert(tx("Không xử lý được file bổ sung: ", "Failed to process supplement file: ") + (error?.message || String(error)));
     }
   };
 
@@ -8948,13 +8971,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (existingIndex !== -1) updated[existingIndex] = persisted;
           else updated.unshift(persisted);
           setQuizCatalogState(updated);
-          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
           return true;
           } catch (error: any) {
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
-              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+              alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+              alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
           }
@@ -8966,7 +8989,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const currentSnapshot = editingQuizRef.current;
           if (!currentSnapshot) return false;
           if (!currentSnapshot.title) {
-              alert("Vui lòng nhập tên đề thi!");
+              alert(tx("Vui lòng nhập tên đề thi!", "Please enter the exam title!"));
               return false;
           }
 
@@ -8984,13 +9007,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setQuizCatalogState(updated);
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
-          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
           return true;
           } catch (error: any) {
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
-              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+              alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+              alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
           }
@@ -9009,12 +9032,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
       void syncData({ quizzes: [newQuiz] }).then(saved => {
-          alert(saved ? "Exam duplicated successfully!" : "The copy is saved on this device and will retry automatically when the connection returns.");
+          alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
   };
 
   const handleBulkLock = (locked: boolean) => {
-      if(!confirm(`Confirm Lock / Unlock ${selectedQuizzes.length} exams?`)) return;
+      if(!confirm(tx(`Xác nhận Khóa / Mở khóa ${selectedQuizzes.length} đề thi?`, `Confirm Lock / Unlock ${selectedQuizzes.length} exams?`))) return;
       const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
@@ -9025,7 +9048,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
       const saved = await syncData({ __quizUpserts: updates });
       if (!saved) {
-          alert(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`);
+          alert(tx(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`, `${action}: sync failed. Changes are kept safely on this device and will retry automatically.`));
       }
   };
 
@@ -9172,25 +9195,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
     setRealExamPackages(nx);
     const saved = await syncData({ realExamPackages: nx });
-    if (!saved) alert("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.");
+    if (!saved) alert(tx("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.", "Failed to sync real exam package. Data is safely stored on this device."));
     return saved;
   };
   const createRealExamPackageFromSelection = async () => {
     const selected = selectedQuizzes.map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
     if (selected.length !== 2 && selected.length !== 3) {
-      alert("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).");
+      alert(tx("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).", "Select exactly 2 exams (Listening + Reading) or 3 exams (Listening + Reading + Writing)."));
       return;
     }
     const ordered = [...selected].sort((a, b) => quizSkillRank(a) - quizSkillRank(b));
     const ranks = ordered.map(quizSkillRank);
     const valid = ranks[0] === 0 && ranks[1] === 1 && (ordered.length === 2 || ranks[2] === 2);
     if (!valid) {
-      alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
+      alert(tx("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.", "Real exam package must follow the order: Listening - Reading or Listening - Reading - Writing."));
       return;
     }
     const pkg: RealExamPackage = {
       id: makeRealExamId(),
-      title: `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`,
+      title: `Real Exam Package ${new Date().toLocaleDateString(isVi ? "vi-VN" : "en-US")}`,
       active: false,
       mode: ordered.length === 3 ? "LRW" : "LR",
       quizIds: ordered.map(quiz => quiz.id),
@@ -9204,7 +9227,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     setRealExamPackageEditor(pkg);
   };
   const deleteRealExamPackage = async (pkgId: string) => {
-    if (!confirm("Xóa gói bài thi thật này?")) return;
+    if (!confirm(tx("Xóa gói bài thi thật này?", "Delete this real exam package?"))) return;
     const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
     setRealExamPackages(nx);
     await syncData({ realExamPackages: nx });
@@ -9257,7 +9280,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const parent = normalizeFolderPath(parentPath);
     const fullPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
     if (allKnownFolders.map(normalizeFolderPath).includes(fullPath)) {
-      alert("Thư mục đã tồn tại.");
+      alert(tx("Thư mục đã tồn tại.", "Folder already exists."));
       return;
     }
     const nextFolders = Array.from(new Set([...examFolders.map(normalizeFolderPath), fullPath])).filter(f => f && f !== "Root").sort();
@@ -9272,7 +9295,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (oldPath === "Root" || !oldPath || !newPath) return;
     if (newPath === oldPath) return;
     if (newPath.startsWith(oldPath + "/")) {
-      alert("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.");
+      alert(tx("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.", "Cannot move a folder into itself or a subfolder."));
       return;
     }
 
@@ -9344,7 +9367,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleRenameFolder = async (rawOldPath: string, newName: string) => {
     const oldPath = normalizeFolderPath(rawOldPath);
     if (oldPath === "Root") {
-      alert("Không thể đổi tên thư mục Root.");
+      alert(tx("Không thể đổi tên thư mục Root.", "Cannot rename Root folder."));
       return;
     }
     const trimmed = newName.trim().replace(/^\/+|\/+$/g, "");
@@ -9353,7 +9376,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const newPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
     if (newPath === oldPath) return;
     if (allKnownFolders.map(normalizeFolderPath).includes(newPath)) {
-      alert("Thư mục với tên này đã tồn tại ở vị trí hiện tại.");
+      alert(tx("Thư mục với tên này đã tồn tại ở vị trí hiện tại.", "A folder with this name already exists in the current location."));
       return;
     }
     await handleMoveOrRenameFolder(oldPath, newPath);
@@ -9362,7 +9385,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleDeleteFolder = async (rawTargetPath: string) => {
     const targetPath = normalizeFolderPath(rawTargetPath);
     if (targetPath === "Root") {
-      alert("Không thể xóa thư mục Root.");
+      alert(tx("Không thể xóa thư mục Root.", "Cannot delete Root folder."));
       return;
     }
     const containedQuizzes = quizzesRef.current.filter(q => {
@@ -9375,8 +9398,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     });
 
     const confirmMsg = containedQuizzes.length > 0 || containedSubfolders.length > 0
-      ? `Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`
-      : `Bạn có chắc muốn xóa thư mục trống "${targetPath}"?`;
+      ? tx(`Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`, `Folder "${targetPath}" contains ${containedQuizzes.length} exams and ${containedSubfolders.length} subfolders.\n\nAre you sure you want to delete it? All contained exams will be moved to the parent folder.`)
+      : tx(`Bạn có chắc muốn xóa thư mục trống "${targetPath}"?`, `Are you sure you want to delete the empty folder "${targetPath}"?`);
 
     if (!confirm(confirmMsg)) return;
 
@@ -9707,8 +9730,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert(tx("Bài thi này chưa tới giờ mở!", "This exam has not started yet!")); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert(tx("Bài thi này đã quá hạn và bị đóng!", "This exam has expired and is now closed!")); return; }
           
           if (!deliveryPolicy.isPractice && deliveryPolicy.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -9720,14 +9743,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
           
           if (!isQuestLaunch && !isRealExamLaunch && quiz.passcode) {
-              const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
-              if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
+              const pass = prompt(tx("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):", "Enter test room passcode (If none, leave blank and click OK):"));
+              if (pass !== quiz.passcode) { alert(tx("Mã bảo vệ không đúng!", "Incorrect passcode!")); return; }
           }
 
           if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (!deliveryPolicy.isPractice && myHistory.length >= deliveryPolicy.maxAttempts) {
-                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`);
+                  alert(tx(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`, `You have used all available attempts! (Maximum ${deliveryPolicy.maxAttempts} attempts)`));
                   return;
               }
           }
@@ -10314,7 +10337,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       otherIndex !== index && other.event === rule.event
     ));
     if (duplicateGiftName || duplicateEvent) {
-      setRewardConfigError(duplicateGiftName ? "Tên quà không được trùng." : "Mỗi sự kiện thưởng chỉ được có một quy tắc.");
+      setRewardConfigError(duplicateGiftName ? tx("Tên quà không được trùng.", "Gift names cannot be duplicated.") : tx("Mỗi sự kiện thưởng chỉ được có một quy tắc.", "Each reward event can only have one rule."));
       return;
     }
     setRewardConfigSaving(true);
@@ -10322,7 +10345,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const saved = await syncData({ giftCatalog: nextGifts, rewardMechanisms: nextRewards });
       if (!saved) {
-        setRewardConfigError("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.");
+        setRewardConfigError(tx("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.", "Could not save. Changes remain on this device and will retry when online."));
         return;
       }
       setGiftCatalog(nextGifts);
@@ -10763,9 +10786,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const CREAM = "#F6EBCB", CREAM_DIM = "rgba(246,235,203,0.56)", INK = "#1a1305";
     const lxYear = new Date().getFullYear();
     const lxFeats: [string, string, string][] = [
-      ["01", "Phòng thi chuẩn IDP", "Giao diện computer-based mô phỏng phòng thi thật."],
-      ["02", "Chấm & phân tích tức thì", "Band điểm, hạn chế và lộ trình cải thiện ngay sau khi nộp."],
-      ["03", "Chống gian lận", "Tích hợp Safe Exam Browser, khoá môi trường thi."],
+      ["01", tx("Phòng thi chuẩn IDP", "Standard IDP Test Room"), tx("Giao diện computer-based mô phỏng phòng thi thật.", "Computer-based interface simulating real exam conditions.")],
+      ["02", tx("Chấm & phân tích tức thì", "Instant Scoring & Analytics"), tx("Band điểm, hạn chế và lộ trình cải thiện ngay sau khi nộp.", "Band scores, bottlenecks, and action plans right after submission.")],
+      ["03", tx("Chống gian lận", "Anti-Cheat Protection"), tx("Tích hợp Safe Exam Browser, khoá môi trường thi.", "Integrated Safe Exam Browser with secure test lockdown.")],
     ];
     const lxNoise = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`;
     // WOW #1: spotlight bám con trỏ — cập nhật CSS var trực tiếp lên DOM (không re-render).
@@ -10822,15 +10845,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .lx-eye:hover{ color:${GOLD} !important; }
         `}</style>
 
-        {loginLoading && <div role="status" aria-live="assertive" aria-label="Đang xác thực thông tin đăng nhập" style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+        {loginLoading && <div role="status" aria-live="assertive" aria-label={tx("Đang xác thực thông tin đăng nhập", "Verifying login credentials")} style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
           <div style={{ width: "min(360px, 100%)", textAlign: "center", color: CREAM }}>
             <div style={{ width: 82, height: 82, margin: "0 auto 28px", display: "grid", placeItems: "center", border: `1px solid ${GOLD}55`, borderRadius: "50%", boxShadow: `0 0 0 12px ${GOLD}0d, 0 20px 54px ${GOLD}22` }}>
               <BrandLogo size={38} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} />
             </div>
             <div style={{ width: 36, height: 36, margin: "0 auto 24px", border: `3px solid ${GOLD}2e`, borderTopColor: GOLD_BRIGHT, borderRadius: "50%", animation: "lxVerifySpin .8s linear infinite" }} />
             <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 2.4, color: GOLD, marginBottom: 12 }}>VERIFYING ACCESS</div>
-            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>Đang xác thực đăng nhập</div>
-            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>Vui lòng chờ trong giây lát.</div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
+            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>{tx("Vui lòng chờ trong giây lát.", "Please wait a moment.")}</div>
           </div>
         </div>}
 
@@ -10856,8 +10879,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                 {/* số thứ tự khổng lồ kiểu tạp chí, mờ phía sau */}
                 <div aria-hidden style={{ position: "absolute", top: -88, left: -14, fontFamily: "var(--display)", fontSize: "clamp(160px, 20vw, 260px)", fontWeight: 600, lineHeight: 1, color: "rgba(231,196,112,0.055)", pointerEvents: "none", userSelect: "none" }}>№</div>
                 <div className="lx-rise" style={{ position: "relative", fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: GOLD, marginBottom: 24, animationDelay: ".15s" }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 className="lx-rise" style={{ position: "relative", fontFamily: "var(--display)", fontSize: "clamp(44px, 5vw, 70px)", lineHeight: 1.02, fontWeight: 500, margin: "0 0 24px", letterSpacing: -1, color: CREAM, animationDelay: ".25s" }}>Vừa học vừa thi<br/><span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Tiến bộ tức thì!</span></h1>
-                <p className="lx-rise" style={{ position: "relative", fontSize: 16.5, lineHeight: 1.75, color: CREAM_DIM, maxWidth: 460, margin: "0 0 36px", animationDelay: ".35s" }}>Hệ thống thi thử chuẩn IDP, chấm điểm tức thì, sổ từ vựng thông minh và quản lý lớp học.</p>
+                <h1 className="lx-rise" style={{ position: "relative", fontFamily: "var(--display)", fontSize: "clamp(44px, 5vw, 70px)", lineHeight: 1.02, fontWeight: 500, margin: "0 0 24px", letterSpacing: -1, color: CREAM, animationDelay: ".25s" }}>{tx("Vừa học vừa thi", "Practice & Test")}<br/><span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("Tiến bộ tức thì!", "Instant Progress!")}</span></h1>
+                <p className="lx-rise" style={{ position: "relative", fontSize: 16.5, lineHeight: 1.75, color: CREAM_DIM, maxWidth: 460, margin: "0 0 36px", animationDelay: ".35s" }}>{tx("Hệ thống thi thử chuẩn IDP, chấm điểm tức thì, sổ từ vựng thông minh và quản lý lớp học.", "Standard IDP computer-based mock tests, instant grading, smart vocabulary notebook, and classroom management.")}</p>
                 <div className="lx-rise" style={{ maxWidth: 480, animationDelay: ".45s" }}>
                     {lxFeats.map(([n, h, d]) => (
                         <div key={n} className="lx-feat">
@@ -10882,8 +10905,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                     <BrandWordmark size={16} color={CREAM} light />
                 </div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: GOLD, marginBottom: 10 }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 style={{ fontFamily: "var(--display)", fontSize: "clamp(30px, 8vw, 40px)", lineHeight: 1.05, fontWeight: 500, margin: "0 0 12px", letterSpacing: -0.6 }}>Vừa học vừa thi <span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>tiến bộ tức thì.</span></h1>
-                <p style={{ fontSize: 14, lineHeight: 1.6, color: CREAM_DIM, margin: 0 }}>Thi thử chuẩn IDP · chấm điểm tức thì · sổ từ vựng thông minh.</p>
+                <h1 style={{ fontFamily: "var(--display)", fontSize: "clamp(30px, 8vw, 40px)", lineHeight: 1.05, fontWeight: 500, margin: "0 0 12px", letterSpacing: -0.6 }}>{tx("Vừa học vừa thi ", "Practice & Test ")}<span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("tiến bộ tức thì.", "instant progress.")}</span></h1>
+                <p style={{ fontSize: 14, lineHeight: 1.6, color: CREAM_DIM, margin: 0 }}>{tx("Thi thử chuẩn IDP · chấm điểm tức thì · sổ từ vựng thông minh.", "Standard IDP mock tests · instant grading · smart vocabulary.")}</p>
             </div>
             <div onMouseMove={lxCardMove} onMouseLeave={lxCardLeave} className="lx-card lx-rise" style={{ width: 430, maxWidth: "100%", animationDelay: ".35s" }}>
                 <div className="lx-cardinner" style={{ position: "relative", background: "linear-gradient(165deg, rgba(30,25,15,0.74), rgba(10,9,7,0.84))", border: "1px solid rgba(231,196,112,0.18)", borderRadius: 24, padding: "42px 38px", boxShadow: "0 44px 96px -34px rgba(0,0,0,0.92), inset 0 1px 0 rgba(231,196,112,0.13)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)" }}>
@@ -11109,12 +11132,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvRenderExplanationCopy = (value: string) => {
           const text = String(value || '').trim();
           if (!text) return null;
-          let paragraphs = text.split(/\n{2,}/).map(part => part.trim()).filter(Boolean);
-          if (paragraphs.length === 1) {
-              const sentences = paragraphs[0].match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g)?.map(sentence => sentence.trim()).filter(Boolean) || paragraphs;
-              if (sentences.length > 2) paragraphs = Array.from({ length: Math.ceil(sentences.length / 2) }, (_, index) => sentences.slice(index * 2, index * 2 + 2).join(' '));
-          }
-          return <div className="rv-explanation-copy">{paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>;
+          const paragraphs = text.split(/\n+/).map(part => part.trim()).filter(Boolean);
+          return <div className="rv-explanation-copy">{paragraphs.map((paragraph, index) => <p key={index} className="rv-explain-p">{paragraph}</p>)}</div>;
       };
       // Kept only for parsing legacy stored explanations below. New explanations
       // never promote ordinary quoted prose to evidence controls.
@@ -11128,7 +11147,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }, audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>) => {
           if (rvActiveIsListening) {
               const cleanText = String(txt || '')
-                  .replace(/\s*[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|â€“|â€”|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/g, '')
+                  .replace(/\s*[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/g, '')
+                  .replace(/[ \t]{2,}/g, ' ')
                   .replace(/\n{3,}/g, '\n\n')
                   .trim();
               const segments: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> = (Array.isArray(audioEvidenceSegments) && audioEvidenceSegments.length
@@ -11165,7 +11185,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               .filter(quote => quote && rvCanJumpToEvidence(quote))
               .slice(0, 1);
           const evidenceQuotes = verifiedQuotes.length ? verifiedQuotes.slice(0, 1) : legacyQuotes;
-          const prose = source.replace(/\s*\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]\s*/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+          const prose = source.replace(/\s*\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]\s*/gi, ' ').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
           return <>
               {rvRenderExplanationCopy(prose)}
               {!!evidenceQuotes.length && <button type="button" onClick={() => rvJumpToEvidence(evidenceQuotes)} title="Locate the verified evidence in the reading passage" aria-label="Locate verified evidence" className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>}
@@ -11214,8 +11234,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           void requestReviewAudioPlayback();
       };
       const rvRenderManualExplanationCopy = (manual: ManualExplanation) => {
-          const parts = String(manual.rawText || '').split(/("[^"]+")/g).filter(part => part.length > 0);
-          return <div className="rv-manual-copy">{parts.map((part, index) => part.startsWith('"') && part.endsWith('"') ? <span key={index} className="rv-manual-quote">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>)}</div>;
+          const raw = String(manual.rawText || '').trim();
+          const paras = raw.split(/\n+/).map(p => p.trim()).filter(Boolean);
+          return <div className="rv-manual-copy">
+              {paras.map((para, pIdx) => {
+                  const parts = para.split(/("[^"]+")/g).filter(part => part.length > 0);
+                  return (
+                      <p key={pIdx} className="rv-explain-p" style={{ marginBottom: pIdx < paras.length - 1 ? 8 : 0 }}>
+                          {parts.map((part, index) => part.startsWith('"') && part.endsWith('"') ? <span key={index} className="rv-manual-quote">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>)}
+                      </p>
+                  );
+              })}
+          </div>;
       };
       const rvRenderReviewActions = (question: any, studentAnswer?: any, aiQuestion?: any) => {
           if (!question?.id) return null;
@@ -11651,7 +11681,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   })}
                               </div>
                           )}
-                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => <img key={idx} src={imgUrl} alt="Reading passage illustration" style={{maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15}} />)}
+                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
+                              <img
+                                  key={idx}
+                                  src={imgUrl}
+                                  alt="Reading passage illustration"
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setLightboxImageUrl(imgUrl)}
+                                  title={tx("Bấm để phóng to", "Click to zoom")}
+                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15, cursor: 'zoom-in' }}
+                              />
+                          ))}
                           {hasSlots ? (() => {
                               const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>|\[HEADING_SLOT\]/gi);
                               return (
@@ -12190,6 +12231,19 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               const renderTextBox = (box:DiagramTextBox) => textOnly(box.text || "").split(/(\[\d+\])/g).map((part:string,index:number)=>{const marker=part.match(/^\[(\d+)\]$/);return marker?renderResultGap(marker[1],`${box.id}-gap-${index}`):<span key={`${box.id}-text-${index}`}>{part}</span>;});
                               return <section key={`diagram-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  {imageUrl && (
+                                      <div style={{ marginBottom: 10 }}>
+                                          <button
+                                              type="button"
+                                              onClick={() => setLightboxImageUrl(imageUrl)}
+                                              title={tx("Bấm để phóng to sơ đồ", "Click to zoom diagram")}
+                                              style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: C.text, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                                          >
+                                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                              <span>{tx("Phóng to sơ đồ", "Zoom diagram")}</span>
+                                          </button>
+                                      </div>
+                                  )}
                                   <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
                                       <div style={{position:'relative',minWidth:760,aspectRatio:diagramAspectRatio,background:'#fff'}}>
                                           {imageUrl && <img src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
@@ -12226,7 +12280,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   {q.instruction && <div style={{fontSize:14, lineHeight:1.5, marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
-                                          {mapUrl ? <img src={mapUrl} alt="Map labelling diagram" /> : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
+                                          {mapUrl ? (
+                                              <div
+                                                  role="button"
+                                                  tabIndex={0}
+                                                  onClick={() => setLightboxImageUrl(mapUrl)}
+                                                  title={tx("Bấm để phóng to hình ảnh bản đồ", "Click to zoom map")}
+                                                  style={{ cursor: 'zoom-in', display: 'inline-block' }}
+                                              >
+                                                  <img src={mapUrl} alt="Map labelling diagram" />
+                                              </div>
+                                          ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
                                               const state = rvCompletionAnswer(question);
@@ -12285,7 +12349,41 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           const questionBodyHtml = rvQuestionBodyHtml(q.text);
                           return (
                           <React.Fragment key={q.id}>
-                              {showContext && <div className="group-context" dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />}
+                              {showContext && (
+                                  <div className="group-context">
+                                      <div dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />
+                                      {Boolean((q as any).groupImageUrl || (q as any).diagramImageUrl) && (
+                                          <div
+                                              style={{
+                                                  marginTop: 10,
+                                                  marginBottom: 10,
+                                                  textAlign: 'center',
+                                                  cursor: 'zoom-in',
+                                                  background: '#fff',
+                                                  border: `1px solid ${C.border}`,
+                                                  borderRadius: 8,
+                                                  padding: 8,
+                                                  display: 'inline-block',
+                                                  maxWidth: '100%',
+                                              }}
+                                              role="button"
+                                              tabIndex={0}
+                                              onClick={() => setLightboxImageUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
+                                              title={tx("Bấm để phóng to hình ảnh sơ đồ", "Click to zoom diagram")}
+                                          >
+                                              <img
+                                                  src={(q as any).groupImageUrl || (q as any).diagramImageUrl}
+                                                  alt="Diagram reference"
+                                                  style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 4 }}
+                                              />
+                                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 11, color: C.sub, fontWeight: 600 }}>
+                                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                                  <span>{tx("Bấm để phóng to", "Click to zoom")}</span>
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
+                              )}
                               <div className={`rv-exam-review-card ${isCorrect ? 'correct' : (isPartial ? 'partial' : 'wrong')}`}>
                                   <div className="rv-exam-question-head">Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}{questionBodyHtml ? ': ' : ''}{questionBodyHtml && <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: questionBodyHtml}} />}</div>
                                   {rvShowOpts ? (
@@ -12327,6 +12425,88 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       )})}
                   </div>
               </div>
+          {/* Lightbox Modal for Diagrams & Visuals */}
+          {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
+              <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={tx("Phóng to hình ảnh", "Image zoom")}
+                  style={{
+                      position: 'fixed',
+                      inset: 0,
+                      zIndex: 999999,
+                      background: 'rgba(15, 23, 42, 0.78)',
+                      backdropFilter: 'blur(6px)',
+                      WebkitBackdropFilter: 'blur(6px)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 24,
+                      animation: 'fadeIn 0.15s ease-out',
+                  }}
+                  onClick={() => setLightboxImageUrl(null)}
+              >
+                  <div
+                      style={{
+                          position: 'relative',
+                          maxWidth: 'min(92vw, 1100px)',
+                          maxHeight: '90vh',
+                          background: '#ffffff',
+                          borderRadius: 12,
+                          padding: 16,
+                          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                  >
+                      <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                              {tx("Hình ảnh sơ đồ phóng to", "Enlarged Diagram")}
+                          </span>
+                          <button
+                              type="button"
+                              onClick={() => setLightboxImageUrl(null)}
+                              title={tx("Đóng (Esc)", "Close (Esc)")}
+                              aria-label={tx("Đóng", "Close")}
+                              style={{
+                                  background: '#f1f5f9',
+                                  border: 'none',
+                                  borderRadius: 6,
+                                  padding: '5px 8px',
+                                  cursor: 'pointer',
+                                  color: '#475569',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  transition: 'background 0.15s',
+                              }}
+                          >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                              <span>{tx("Đóng", "Close")}</span>
+                          </button>
+                      </div>
+                      <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                          <img
+                              src={lightboxImageUrl}
+                              alt="Enlarged diagram visual"
+                              style={{
+                                  maxWidth: '100%',
+                                  maxHeight: 'calc(90vh - 80px)',
+                                  objectFit: 'contain',
+                                  display: 'block',
+                                  borderRadius: 6,
+                              }}
+                          />
+                      </div>
+                  </div>
+              </div>,
+              document.body
+          )}
           </div>
       );
   }
@@ -12350,10 +12530,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           <div style={{ background: '#fff3cd', border: '1px solid #ffe69c', padding: 20, borderRadius: 8, marginTop: 20 }}>
                               <div style={{ fontWeight: 900, color: '#856404', marginBottom: 15, fontSize: 16 }}><Ico name="wrench" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('seb_steps_header')}</div>
                               <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 12, color: '#664d03' }}>
-                                  <li><b>Tải phần mềm gốc:</b> Truy cập trang web chính thức <a href="https://safeexambrowser.org/download_en.html" target="_blank" rel="noreferrer" style={{ color: '#0969da', fontWeight: 'bold', textDecoration: 'underline' }}>safeexambrowser.org</a> để tải và cài đặt phiên bản SEB phù hợp cho máy tính của bạn (Windows hoặc macOS).</li>
-                                  <li><b>Tải file phòng thi:</b> Bấm "Đã hiểu và quay lại" để đóng thông báo này. Chuyển sang Tab <b>Kho Tài Liệu (Drive)</b> trên hệ thống IELTS OS. Tìm và tải file cấu hình đuôi <b>.seb</b> (VD: <i>IELTS_OS.seb</i>) mà giáo viên đã cung cấp.</li>
-                                  <li><b>Đóng ứng dụng:</b> Tắt tất cả các phần mềm nhắn tin, trình duyệt khác, hoặc phần mềm quay màn hình đang chạy trên máy tính.</li>
-                                  <li><b>Kích hoạt:</b> Nhấn đúp chuột vào file <b>.seb</b> vừa tải về. SEB sẽ tự động khởi động, khóa máy tính và đưa bạn thẳng vào không gian thi an toàn. Bắt đầu đăng nhập và thi như bình thường.</li>
+                                  <li><b>{tx('Tải phần mềm gốc:', 'Download original software:')}</b> {tx('Truy cập trang web chính thức', 'Visit the official website')} <a href="https://safeexambrowser.org/download_en.html" target="_blank" rel="noreferrer" style={{ color: '#0969da', fontWeight: 'bold', textDecoration: 'underline' }}>safeexambrowser.org</a> {tx('để tải và cài đặt phiên bản SEB phù hợp cho máy tính của bạn (Windows hoặc macOS).', 'to download and install the appropriate SEB version for your computer (Windows or macOS).')}</li>
+                                  <li><b>{tx('Tải file phòng thi:', 'Download exam file:')}</b> {tx('Bấm "Đã hiểu và quay lại" để đóng thông báo này. Chuyển sang Tab Kho Tài Liệu (Drive) trên hệ thống IELTS OS. Tìm và tải file cấu hình đuôi .seb (VD: IELTS_OS.seb) mà giáo viên đã cung cấp.', 'Click "Return" below to close this notice. Switch to the Drive Tab on IELTS OS. Find and download the .seb configuration file (e.g. IELTS_OS.seb) provided by your teacher.')}</li>
+                                  <li><b>{tx('Đóng ứng dụng:', 'Close other apps:')}</b> {tx('Tắt tất cả các phần mềm nhắn tin, trình duyệt khác, hoặc phần mềm quay màn hình đang chạy trên máy tính.', 'Close all messaging applications, other browsers, or screen recording software running on your computer.')}</li>
+                                  <li><b>{tx('Kích hoạt:', 'Launch:')}</b> {tx('Nhấn đúp chuột vào file .seb vừa tải về. SEB sẽ tự động khởi động, khóa máy tính và đưa bạn thẳng vào không gian thi an toàn. Bắt đầu đăng nhập và thi như bình thường.', 'Double-click the downloaded .seb file. SEB will automatically launch, lock down the computer, and bring you directly into the secure exam environment. Log in and take your test as usual.')}</li>
                               </ol>
                           </div>
                       </div>
@@ -12826,7 +13006,7 @@ if (q.type === "DRAG_DROP_HEADING") {
                                       </span>
                                   )}
                                   {q.type === "DRAG_DROP" && !isInjectedIntoContext && !isInlineInjected && examCurrentQId !== q.id && (
-                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : "Kéo đáp án thả vào đây"}>
+                                      <span className={`idp-dropzone ${(examAnswers[q.id] as string) ? 'filled' : ''}`} data-qid={q.id} draggable={!!examAnswers[q.id]} title={examAnswers[q.id] ? "Drag or click, then choose another answer box" : tx("Kéo đáp án thả vào đây", "Drag answer here")}>
                                           {(examAnswers[q.id] as string) || firstGlobalIdx}
                                       </span>
                                   )}
@@ -13493,6 +13673,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .mh-heading-option { box-sizing:border-box; display:inline-flex; align-items:center; width:max-content; max-width:100%; min-height:25px; height:25px; padding:0 4px; margin:0 0 8px; border-radius:6px; border:1px solid #8a8f98; cursor:move; user-select:none; transition:opacity .15s, background .15s, outline .15s; background:var(--ecard); color:var(--etext); white-space:nowrap; }
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
+
+                      /* External Diagram Labelling (Side-by-side: Left diagram with zoom, Right questions/bank) */
+                      .idp-external-diagram-split { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.15fr); gap: 24px; align-items: start; margin: 12px 0 20px; }
+                      .idp-external-diagram-col-visual { position: sticky; top: 16px; display: flex; flex-direction: column; align-items: center; }
+                      .idp-external-diagram-card { position: relative; width: 100%; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06); cursor: zoom-in; transition: transform 0.15s, box-shadow 0.15s; text-align: center; user-select: none; }
+                      .idp-external-diagram-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12); }
+                      .idp-external-diagram-card img { display: block; max-width: 100%; max-height: 480px; height: auto; object-fit: contain; margin: 0 auto; border-radius: 4px; }
+                      .idp-diagram-zoom-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 10px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; font-weight: 600; color: #475569; }
+                      .idp-external-diagram-col-content { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+                      .idp-external-diagram-drag-list { display: flex; flex-direction: column; gap: 12px; }
+                      .idp-external-diagram-drag-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; }
+                      .idp-external-diagram-drag-row .idp-dropzone { min-width: 120px; max-width: 220px; height: 32px; min-height: 32px; display: flex; align-items: center; justify-content: center; }
+                      .idp-external-diagram-bank { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; }
+                      .idp-external-diagram-bank-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 8px; }
+                      .idp-external-diagram-bank-items { display: flex; flex-wrap: wrap; gap: 8px; }
+                      @media (max-width: 860px) {
+                        .idp-external-diagram-split { grid-template-columns: 1fr; gap: 16px; }
+                        .idp-external-diagram-col-visual { position: static; }
+                      }
                       .mh-heading-option span { font-size:13px; line-height:1.32; color:var(--etext); font-weight:700; white-space:nowrap; }
                       .idp-drag-summary { line-height: 2.2; }
                       /* Giữ giãn dòng cho đoạn tóm tắt kể cả khi mang class highlightable-content (vốn ép line-height 1.15) */
@@ -13561,7 +13760,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div className={`exam-time-toast ${timeAlert.urgency === 'urgent' ? 'is-urgent' : ''}`} role="status" aria-live="polite">
                           <span className="exam-time-toast-icon"><Ico name="clock" size={16} color="currentColor" /></span>
                           <span className="exam-time-toast-copy">{timeAlert.message}</span>
-                          <button type="button" className="exam-time-toast-dismiss" onClick={dismissExamTimeAlert} aria-label={i18n.language === 'vi' ? 'Đóng cảnh báo thời gian' : 'Dismiss time warning'}><Ico name="x" size={13} color="currentColor" />{i18n.language === 'vi' ? 'Đã hiểu' : 'Dismiss'}</button>
+                          <button type="button" className="exam-time-toast-dismiss" onClick={dismissExamTimeAlert} aria-label={tx('Đóng cảnh báo thời gian', 'Dismiss time warning')}><Ico name="x" size={13} color="currentColor" />{tx('Đã hiểu', 'Dismiss')}</button>
                       </div>
                   )}
                   
@@ -13688,7 +13887,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                           const nx = students.map(s => (s.email || "").toLowerCase() === (currentUser.email || "").toLowerCase() ? { ...s, pendingNotifications: [] } : s);
                                           setStudents(nx); syncData({ students: nx });
                                       }
-                                  }} style={{ background: '#24292f', color: '#fff', border: 'none', padding: '8px 24px', borderRadius: 4, fontWeight: 'bold', cursor: 'pointer' }}>Đóng & Đánh dấu đã đọc</button>
+                                  }} style={{ background: '#24292f', color: '#fff', border: 'none', padding: '8px 24px', borderRadius: 4, fontWeight: 'bold', cursor: 'pointer' }}>{tx('Đóng & Đánh dấu đã đọc', 'Close & Mark as read')}</button>
                               </div>
                           </div>
                       </div>
@@ -13993,10 +14192,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div className="exam-question-col" style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--ebg)', position: 'relative' }}>
                   {/* NÚT CHUYỂN CÂU NỔI (giống realieltsexams) */}
                   <div className="idp-qnav-fab no-print">
-                      <button className="idp-qnav-btn" title="Câu trước" onClick={() => navigateQuestion(-1)}>
+                      <button className="idp-qnav-btn" title={tx("Câu trước", "Previous question")} onClick={() => navigateQuestion(-1)}>
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
                       </button>
-                      <button className="idp-qnav-btn" title="Câu sau" onClick={() => navigateQuestion(1)}>
+                      <button className="idp-qnav-btn" title={tx("Câu sau", "Next question")} onClick={() => navigateQuestion(1)}>
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                       </button>
                   </div>
@@ -14215,7 +14414,26 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
                    showInstruction = !isHtmlEmpty(displayInstruction);
                    const mainPassage = activeExam?.sections ? activeExam.sections[currentSectionIndex]?.passage : (activeExam.passage || visibleGroups[0]?.context || "");
-                   const showContext = !isMapPlanMatching && !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage);
+                   const externalDiagramImageUrl = (() => {
+                       for (const q of group.questions) {
+                           const u = String((q as any).groupImageUrl || (q as any).diagramImageUrl || (q as any).imageUrl || (q as any).mapImageUrl || '').trim();
+                           if (u) return u;
+                       }
+                       const match = (group.context || '').match(/<img[^>]+src=["']([^"']+)["']/i) || (group.instruction || '').match(/<img[^>]+src=["']([^"']+)["']/i);
+                       return match?.[1] ? match[1].trim() : '';
+                   })();
+                   const isExternalDiagramGroup = Boolean(
+                       externalDiagramImageUrl &&
+                       !isDiagramLabelGroup &&
+                       !isMapDragGroup &&
+                       !isFlowChartGroup &&
+                       !isDragDropHeadingGroup &&
+                       !isMapPlanMatching
+                   );
+                   const displaySafeContext = isExternalDiagramGroup
+                       ? safeHtml.replace(/<img\b[^>]*>/gi, "").replace(/IMAGE:\s*\S+/gi, "").trim()
+                       : safeHtml;
+                   const showContext = !isMapPlanMatching && !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage) && (!isExternalDiagramGroup || displaySafeContext.replace(/<[^>]*>/g, '').trim().length > 0);
 
                   // ĐàFIX: Tự động tính toán Header "Questions X-Y" chuẩn IDP
                   const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === group.questions[0].id) + 1;
@@ -14528,6 +14746,98 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        </div>;
                    };
 
+                    const renderExternalDiagramGroup = () => {
+                        const isDrag = isDragDropGroup && dragOptions.length > 0;
+                        const reuseTags = group.questions.length > dragOptions.length;
+                        const usedWords = group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean);
+                        const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
+
+                        return (
+                            <div className="idp-external-diagram-split">
+                                {/* LEFT COLUMN: DIAGRAM CARD */}
+                                <div className="idp-external-diagram-col-visual">
+                                    <div
+                                        className="idp-external-diagram-card"
+                                        role="button"
+                                        tabIndex={0}
+                                        title={tx("Bấm để phóng to hình ảnh sơ đồ", "Click to zoom diagram")}
+                                        onClick={() => setLightboxImageUrl(externalDiagramImageUrl)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setLightboxImageUrl(externalDiagramImageUrl);
+                                            }
+                                        }}
+                                    >
+                                        <img src={externalDiagramImageUrl} alt="Diagram or map reference" />
+                                        <div className="idp-diagram-zoom-badge">
+                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                            <span>{tx("Bấm để phóng to", "Click to zoom")}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* RIGHT COLUMN: QUESTIONS + DRAG BANK */}
+                                <div className="idp-external-diagram-col-content">
+                                    {isDrag ? (
+                                        <>
+                                            <div className="idp-external-diagram-drag-list">
+                                                {group.questions.map((q: any) => {
+                                                    const gi = groupQuestionNumbers[group.questions.indexOf(q)] || group.questions.indexOf(q) + 1;
+                                                    const val = examAnswers[q.id] as string;
+                                                    return (
+                                                        <div key={q.id} id={`question-${q.id}`} className="idp-external-diagram-drag-row">
+                                                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                                <span style={{ fontWeight: 800, color: '#334155' }}>{gi}.</span>
+                                                                <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text || '')} />
+                                                            </div>
+                                                            <span
+                                                                className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                                data-qid={q.id}
+                                                                draggable={!!val}
+                                                                onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                                                onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                                                onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                                onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                                                title={val ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                                            >
+                                                                {val || gi}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {/* OPTION BANK DIRECTLY BELOW ROWS */}
+                                            <div className="idp-external-diagram-bank"
+                                                onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
+                                                onDrop={(event: any) => { event.preventDefault(); const sourceQid = readDraggedSource(event); if (sourceQid) { handleAnswerChange(sourceQid, '', 'DRAG_DROP'); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); } }}>
+                                                <div className="idp-external-diagram-bank-title">{dragBankLabel || tx("Danh sách đáp án", "Options")}</div>
+                                                <div className="idp-external-diagram-bank-items">
+                                                    {bankWords.map((opt: string, idx: number) => (
+                                                        <div
+                                                            key={idx}
+                                                            className={`idp-wordbank-item ${selectedDragAnswer === String(opt) ? 'selected' : ''}`}
+                                                            draggable
+                                                            onClick={() => selectBankAnswer(String(opt))}
+                                                            onDragStart={(e: any) => beginAnswerDrag(e, opt, opt)}
+                                                        >
+                                                            <span>{opt}</span>
+                                                        </div>
+                                                    ))}
+                                                    {bankWords.length === 0 && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>—</span>}
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        renderQuestionsList(group, injectedList)
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    };
+
                    return (
                       <div key={group.questions[0].id} data-dnd-question-ids={group.questions.map((q: any) => q.id).join('|')} style={{marginBottom: 'var(--q-gap)'}}>
                           <div className="question-rubric">
@@ -14540,7 +14850,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           
                           {showContext && !isWordBankDrag && (
                                       <div className={`idp-context-box${isFlowChartGroup ? ' idp-flowchart-title' : ''}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                          <StaticHtmlBlock className="highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} html={safeHtml} />
+                                          <StaticHtmlBlock className="highlightable-content" dataField="groupContext" dataQid={group.questions[0]?.id} html={displaySafeContext} />
                                   </div>
                           )}
 
@@ -14580,6 +14890,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               ) : (
                                   <div style={{overflowX: 'auto'}}>{renderMatchingTable()}</div>
                               )
+                          ) : isExternalDiagramGroup ? (
+                              renderExternalDiagramGroup()
                           ) : isDragDropHeadingGroup ? (
                                                       (() => {
                                                         const usedIds = new Set(group.questions.map((q: any) => {
@@ -15081,6 +15393,89 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                  )}
                              </div>
                          )}
+
+                  {/* Lightbox Modal for External Diagrams & Visuals */}
+                  {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
+                      <div
+                          role="dialog"
+                          aria-modal="true"
+                          aria-label={tx("Phóng to hình ảnh", "Image zoom")}
+                          style={{
+                              position: 'fixed',
+                              inset: 0,
+                              zIndex: 999999,
+                              background: 'rgba(15, 23, 42, 0.78)',
+                              backdropFilter: 'blur(6px)',
+                              WebkitBackdropFilter: 'blur(6px)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 24,
+                              animation: 'fadeIn 0.15s ease-out',
+                          }}
+                          onClick={() => setLightboxImageUrl(null)}
+                      >
+                          <div
+                              style={{
+                                  position: 'relative',
+                                  maxWidth: 'min(92vw, 1100px)',
+                                  maxHeight: '90vh',
+                                  background: '#ffffff',
+                                  borderRadius: 12,
+                                  padding: 16,
+                                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                          >
+                              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                                      {tx("Hình ảnh sơ đồ phóng to", "Enlarged Diagram")}
+                                  </span>
+                                  <button
+                                      type="button"
+                                      onClick={() => setLightboxImageUrl(null)}
+                                      title={tx("Đóng (Esc)", "Close (Esc)")}
+                                      aria-label={tx("Đóng", "Close")}
+                                      style={{
+                                          background: '#f1f5f9',
+                                          border: 'none',
+                                          borderRadius: 6,
+                                          padding: '5px 8px',
+                                          cursor: 'pointer',
+                                          color: '#475569',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: 4,
+                                          fontSize: 12,
+                                          fontWeight: 600,
+                                          transition: 'background 0.15s',
+                                      }}
+                                  >
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                      <span>{tx("Đóng", "Close")}</span>
+                                  </button>
+                              </div>
+                              <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                                  <img
+                                      src={lightboxImageUrl}
+                                      alt="Enlarged diagram visual"
+                                      style={{
+                                          maxWidth: '100%',
+                                          maxHeight: 'calc(90vh - 80px)',
+                                          objectFit: 'contain',
+                                          display: 'block',
+                                          borderRadius: 6,
+                                      }}
+                                  />
+                              </div>
+                          </div>
+                      </div>,
+                      document.body
+                  )}
                   </div>
               );
           }
@@ -15340,6 +15735,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     // Tên các vật phẩm cosmetic (render bằng SVG tự vẽ — xem renderFrameArt / renderPetArt phía dưới)
     const STUDENT_FRAME_NAMES = ["Khung avatar: Vương Miện", "Khung avatar: Rồng Lửa", "Khung avatar: Băng Giá", "Khung avatar: Cầu Vồng", "Khung avatar: Sao Băng"];
     const STUDENT_PET_NAMES = ["Linh thú: Cú Mèo", "Linh thú: Mèo Thần Tài", "Linh thú: Rồng Con", "Linh thú: Cáo Lửa", "Linh thú: Chim Cánh Cụt", "Linh thú: Gấu Trúc"];
+    const COSMETIC_EN_MAP: Record<string, string> = {
+      "Giao diện: Hoàng Kim": "Theme: Golden Sovereign",
+      "Giao diện: Nửa Đêm":   "Theme: Midnight Navy",
+      "Giao diện: Anh Đào":   "Theme: Sakura Bloom",
+      "Giao diện: Rừng Sâu":  "Theme: Emerald Forest",
+      "Khung avatar: Vương Miện": "Avatar Frame: Crown of Sol",
+      "Khung avatar: Rồng Lửa":   "Avatar Frame: Infernal Dragon",
+      "Khung avatar: Băng Giá":   "Avatar Frame: Frostbite Sigil",
+      "Khung avatar: Cầu Vồng":   "Avatar Frame: Prismatic Aurora",
+      "Khung avatar: Sao Băng":   "Avatar Frame: Shooting Star",
+      "Linh thú: Cú Mèo":         "Companion: Celestial Owl",
+      "Linh thú: Mèo Thần Tài":   "Companion: Fortune Cat",
+      "Linh thú: Rồng Con":       "Companion: Baby Drake",
+      "Linh thú: Cáo Lửa":        "Companion: Flame Fox",
+      "Linh thú: Chim Cánh Cụt":  "Companion: Frost Penguin",
+      "Linh thú: Gấu Trúc":       "Companion: Zen Panda",
+    };
+    const formatCosmeticDisplayName = (rawName: string) => {
+      if (isVi) return rawName;
+      if (COSMETIC_EN_MAP[rawName]) return COSMETIC_EN_MAP[rawName];
+      if (rawName.startsWith("Danh hiệu: ")) return "Title: " + rawName.slice(11);
+      if (rawName.startsWith("Giao diện: ")) return "Theme: " + rawName.slice(11);
+      if (rawName.startsWith("Khung avatar: ")) return "Avatar Frame: " + rawName.slice(14);
+      if (rawName.startsWith("Linh thú: ")) return "Companion: " + rawName.slice(10);
+      return rawName;
+    };
     const _eqTheme = me?.inventory?.equippedTheme || '';
     const _themed = !!STUDENT_THEMES[_eqTheme];
     const C = _themed ? { ..._C_BASE, ...STUDENT_THEMES[_eqTheme] } : _C_BASE;
@@ -15713,15 +16134,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 reviewedQuizId: r.id,
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`);
+            alert(tx(`CHIẾN THẦN REVIEW: +${reviewReward} Xu vì đã xem lại lỗi sai trong bài thi!`, `REVIEW MASTER: +${reviewReward} Coins for reviewing exam errors!`));
         }
     };
 
     const handleBuyConsumable = (gift: GiftDefinition) => {
         const itemName = gift.name;
         const price = Math.max(0, Number(gift.price) || 0);
-        if ((me.coins || 0) < price) { alert("Bạn không đủ OS Coins!"); return; }
-        if (confirm(`Dùng ${price} xu để đổi "${itemName}"?`)) {
+        if ((me.coins || 0) < price) { alert(tx("Bạn không đủ OS Coins!", "Not enough OS Coins!")); return; }
+        if (confirm(tx(`Dùng ${price} xu để đổi "${formatCosmeticDisplayName(itemName)}"?`, `Use ${price} coins to redeem "${formatCosmeticDisplayName(itemName)}"?`))) {
             const currentCons = { ...(me.inventory?.consumables || {}) };
             const currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             const newInv = { 
@@ -15735,7 +16156,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 giftSnapshot: { id: gift.id, name: gift.name, price, details: gift.details, kind: gift.kind },
             });
             setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation });
-            alert("Đổi thành công! Quà đã được chuyển vào Túi đồ.");
+            alert(tx("Đổi thành công! Quà đã được chuyển vào Túi đồ.", "Redemption successful! Reward moved to Inventory."));
             setShowCelebration(true); setTimeout(() => setShowCelebration(false), 5000);
         }
     };
@@ -15743,33 +16164,33 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const handleRollGacha = () => {
         const gachaCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
         const duplicateRefund = configuredRewardCoins("GACHA_DUPLICATE_REFUND", 200);
-        if ((me.coins || 0) < gachaCost) { alert(`Cần ${gachaCost} Xu để quay Gacha!`); return; }
-        if (confirm(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`)) {
+        if ((me.coins || 0) < gachaCost) { alert(tx(`Cần ${gachaCost} Xu để quay Gacha!`, `Need ${gachaCost} Coins to roll Gacha!`)); return; }
+        if (confirm(tx(`Dùng ${gachaCost} Xu để mở Hộp Quà Ngẫu Nhiên?`, `Spend ${gachaCost} Coins to open Mystery Box?`))) {
             const pool: Array<{ type: "PERMANENT" | "CONSUMABLE" | "NONE"; name: string; gift?: GiftDefinition }> = [
                 ...permanentGiftCatalog.filter(item => item.enabled).map(item => ({ type: "PERMANENT" as const, name: item.name, gift: item })),
                 ...consumableGiftCatalog.filter(item => item.enabled).map(item => ({ type: "CONSUMABLE" as const, name: item.name, gift: item })),
-                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" },
-                { type: "NONE" as const, name: "Chúc bạn may mắn lần sau" }
+                { type: "NONE" as const, name: tx("Chúc bạn may mắn lần sau", "Better luck next time") },
+                { type: "NONE" as const, name: tx("Chúc bạn may mắn lần sau", "Better luck next time") }
             ];
             const reward = pool[Math.floor(Math.random() * pool.length)];
             let newCoins = (me.coins || 0) - gachaCost;
             const currentCons = { ...(me.inventory?.consumables || {}) };
             let currentPerms = Array.isArray(me.inventory?.permanents) ? [...me.inventory!.permanents] : [];
             let addedPermanentName = "";
-            let msg = `BẠN QUAY TRÚNG: ${reward.name}`;
+            let msg = tx(`BẠN QUAY TRÚNG: ${formatCosmeticDisplayName(reward.name)}`, `YOU WON: ${formatCosmeticDisplayName(reward.name)}`);
 
             if (reward.type === "PERMANENT") {
                 if (currentPerms.includes(reward.name)) {
                     newCoins += duplicateRefund;
-                    msg += `\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`;
+                    msg += tx(`\n\nBạn đã sở hữu vật phẩm này. Hệ thống tự động chuyển hóa thành +${duplicateRefund} Xu đền bù!`, `\n\nYou already own this item. Auto-converted to +${duplicateRefund} Coins compensation!`);
                 } else {
                     currentPerms = [...currentPerms, reward.name];
                     addedPermanentName = reward.name;
-                    msg += `\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`;
+                    msg += tx(`\n\nĐã thêm vào Túi đồ (Tab Vĩnh viễn)!`, `\n\nAdded to Inventory (Permanent Items)!`);
                 }
             } else if (reward.type === "CONSUMABLE") {
                 currentCons[reward.name] = (currentCons[reward.name] || 0) + 1;
-                msg += `\n\nĐã thêm vào Túi đồ!`;
+                msg += tx(`\n\nĐã thêm vào Túi đồ!`, `\n\nAdded to Inventory!`);
             }
 
             const newInv = { ...(me.inventory || {}), consumables: currentCons, permanents: currentPerms };
@@ -15788,7 +16209,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     };
 
     const handleUseItem = (itemName: string) => {
-        if (!confirm(`XÁC NHẬN SỬ DỤNG [${itemName}]?\n\nLƯU Ý: Chỉ bấm Đồng ý khi bạn đang gặp mặt hoặc nhắn tin trực tiếp với Giáo viên để xuất trình mã nhận thưởng. Vật phẩm sẽ bị trừ ngay lập tức!\n\nTiếp tục?`)) return;
+        if (!confirm(tx(`XÁC NHẬN SỬ DỤNG [${formatCosmeticDisplayName(itemName)}]?\n\nLƯU Ý: Chỉ bấm Đồng ý khi bạn đang gặp mặt hoặc nhắn tin trực tiếp với Giáo viên để xuất trình mã nhận thưởng. Vật phẩm sẽ bị trừ ngay lập tức!\n\nTiếp tục?`, `CONFIRM USING [${formatCosmeticDisplayName(itemName)}]?\n\nNOTE: Only confirm when meeting or messaging your Teacher directly to redeem this reward code. The item will be deducted immediately!\n\nContinue?`))) return;
         const currentCons = { ...(me.inventory?.consumables || {}) };
         if (currentCons[itemName] > 1) currentCons[itemName] -= 1;
         else delete currentCons[itemName];
@@ -15960,7 +16381,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               {([
                 { k: 'home', icon: 'home', label: t('ptab_home') },
                 { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-                { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
+                { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
                 { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
                 { k: 'progress', icon: 'trending', label: t('ptab_progress') },
                 { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -16020,7 +16441,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   );
               })()}
               <div>
-                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || "bạn"}</span></h2>
+                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || tx("bạn", "friend")}</span></h2>
                 {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 5, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
                 <p style={{color: C.sub, margin: 0, fontSize: 13}}>{t('ready_conquer')}</p>
               </div>
@@ -16044,7 +16465,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           {useCodeObj && (
               <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff'}}>
                   <h2 style={{color: C.succ, fontSize: 32}}>{t('reward_code_title')}</h2>
-                  <p style={{fontSize: 18, textAlign: 'center'}}>{t('item_label')}: <b>{useCodeObj!.name}</b></p>
+                  <p style={{fontSize: 18, textAlign: 'center'}}>{t('item_label')}: <b>{formatCosmeticDisplayName(useCodeObj!.name)}</b></p>
                   <div style={{background: '#fff', padding: 20, borderRadius: 12, margin: '20px 0'}}>
                       <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${useCodeObj!.code}`} alt="QR Code" />
                   </div>
@@ -16068,7 +16489,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div style={{flex: 1, overflowY: 'auto', display: 'grid', gap: 10}}>
                           {invTab === "CONSUMABLE" && Object.entries(me.inventory?.consumables || {}).map(([name, count]) => (
                               <div key={name} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${C.border}`}}>
-                                  <div><div style={{fontWeight: 900}}>{name}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
+                                  <div><div style={{fontWeight: 900}}>{formatCosmeticDisplayName(name)}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
                                   <button onClick={() => handleUseItem(name)} style={{background: C.succ, color: '#fff', padding: '8px 16px'}}>{t('use_now')}</button>
                               </div>
                           ))}
@@ -16095,7 +16516,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     <div key={safeName} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${isEquipped ? C.succ : C.border}`}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth: 0}}>
             {preview}
-            <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{safeName}</div>
+            <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{formatCosmeticDisplayName(safeName)}</div>
         </div>
         <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
             <button onClick={() => handleEquipItem(safeName)} style={{background: isEquipped ? C.succ : C.bg, color: isEquipped ? '#fff' : C.text, border: `1px solid ${C.border}`, padding: '8px 16px', fontWeight: 700}}>{isEquipped ? <span style={{display:'inline-flex',alignItems:'center',gap:4}}><Ico name="check" size={13} /> {i18n.language === 'vi' ? 'Đang dùng' : 'Equipped'}</span> : t('equip_btn')}</button>
@@ -16121,7 +16542,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.succ, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 6 }}>
                 {avgBand} <span style={{ fontSize: 16 }}>{trendIcon}</span>
               </div>
-              <div style={{ fontSize: 11, color: C.sub }}>{validBandScores.length} bài thi gần nhất</div>
+              <div style={{ fontSize: 11, color: C.sub }}>{validBandScores.length} {tx('bài thi gần nhất', 'recent tests')}</div>
             </div>
 
             <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
@@ -16143,13 +16564,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.text, letterSpacing: -0.5 }}>
                 {(myHistory.reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}<span style={{ fontSize: 16, fontStyle: 'italic', color: C.sub }}>h</span>
               </div>
-              <div style={{ fontSize: 11, color: C.sub }}>Thời gian làm bài & học</div>
+              <div style={{ fontSize: 11, color: C.sub }}>{tx('Thời gian làm bài & học', 'Study & Testing Time')}</div>
             </div>
 
             <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
                   <div style={{ background: `${C.accent}15`, color: C.accent, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="trophy" size={15} color={C.accent} /></div>
-                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>Cấp độ & EXP</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx("Cấp độ & EXP", "Level & EXP")}</span>
               </div>
               <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.accent, letterSpacing: -0.5 }}>
                 Lv.{me.level || 1}
@@ -16190,17 +16611,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Ico name="monitor" size={13} color={C.accent} />
-                    <span>Luyện thi hôm nay</span>
+                    <span>{tx('Luyện thi hôm nay', 'Practice Today')}</span>
                   </div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
-                    Sẵn sàng thử sức với bài thi mới để cải thiện điểm số?
+                    {tx('Sẵn sàng thử sức với bài thi mới để cải thiện điểm số?', 'Ready to take a new test to boost your score?')}
                   </div>
                   <div style={{ fontSize: 12.5, color: C.sub }}>
-                    Hệ thống có sẵn các bài luyện Listening, Reading và Writing bám sát cấu trúc đề thi thật.
+                    {tx('Hệ thống có sẵn các bài luyện Listening, Reading và Writing bám sát cấu trúc đề thi thật.', 'Practice tests for Listening, Reading, and Writing aligned with real exam format.')}
                   </div>
                   <button onClick={() => setPortalTab('exams')} style={{ alignSelf: 'flex-start', background: C.accent, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                     <Ico name="play" size={13} />
-                    <span>Vào phòng thi ngay</span>
+                    <span>{tx('Vào phòng thi ngay', 'Enter Test Room')}</span>
                   </button>
                 </div>
               )}
@@ -16213,7 +16634,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <div>
-                    <span style={{ fontSize: 12, color: C.sub }}>Mục tiêu IELTS: </span>
+                    <span style={{ fontSize: 12, color: C.sub }}>{tx('Mục tiêu IELTS: ', 'IELTS Target: ')}</span>
                     <span style={{ fontSize: 18, fontWeight: 900, color: C.accent }}>Band {me.target || "N/A"}</span>
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: targetGap > 0 ? C.warn : C.succ }}>
@@ -16232,33 +16653,33 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     <Ico name="book" size={13} color={C.accent} />
                     <span>{t('vocab_notebook')}</span>
                   </div>
-                  <span style={{ fontSize: 11, color: C.sub, fontWeight: 700 }}>{vocabCards.length} từ trong sổ</span>
+                  <span style={{ fontSize: 11, color: C.sub, fontWeight: 700 }}>{vocabCards.length} {tx('từ trong sổ', 'words in notebook')}</span>
                 </div>
                 {dueCount > 0 ? (
                   <>
                     <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
-                      Bạn có <span style={{ color: C.warn, fontWeight: 900 }}>{dueCount} từ</span> cần ôn tập hôm nay
+                      {tx('Bạn có', 'You have')} <span style={{ color: C.warn, fontWeight: 900 }}>{dueCount} {tx('từ', 'words')}</span> {tx('cần ôn tập hôm nay', 'due for review today')}
                     </div>
                     <div style={{ fontSize: 12.5, color: C.sub }}>
-                      Thuật toán lặp lại ngắt quãng (Spaced Repetition) sẽ giúp bạn ghi nhớ sâu và lâu hơn.
+                      {tx('Thuật toán lặp lại ngắt quãng (Spaced Repetition) sẽ giúp bạn ghi nhớ sâu và lâu hơn.', 'Spaced repetition reinforces retention effectively.')}
                     </div>
                     <button onClick={() => { setPortalTab('vocab'); setVocabView('study'); setStudyFlipped(false); }} style={{ alignSelf: 'flex-start', background: `linear-gradient(135deg, ${C.accent}, #4f46e5)`, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                       <Ico name="cards" size={14} />
-                      <span>Ôn tập ngay ({dueCount})</span>
+                      <span>{tx('Ôn tập ngay', 'Review Now')} ({dueCount})</span>
                     </button>
                   </>
                 ) : (
                   <>
                     <div style={{ fontSize: 15, fontWeight: 800, color: C.succ, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Ico name="check" size={16} color={C.succ} />
-                      <span>Đã hoàn thành ôn tập hôm nay!</span>
+                      <span>{tx('Đã hoàn thành ôn tập hôm nay!', 'All caught up for today!')}</span>
                     </div>
                     <div style={{ fontSize: 12.5, color: C.sub }}>
-                      Không có từ nào đến hạn cần ôn. Bạn có thể duyệt danh sách hoặc học thêm từ mới.
+                      {tx('Không có từ nào đến hạn cần ôn. Bạn có thể duyệt danh sách hoặc học thêm từ mới.', 'No words due for review right now. Browse your list or learn new vocabulary.')}
                     </div>
                     <button onClick={() => setPortalTab('vocab')} style={{ alignSelf: 'flex-start', background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                       <Ico name="book" size={14} />
-                      <span>Xem toàn bộ sổ từ vựng</span>
+                      <span>{tx('Xem toàn bộ sổ từ vựng', 'View Vocabulary Notebook')}</span>
                     </button>
                   </>
                 )}
@@ -16269,16 +16690,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <div style={{ fontSize: 11, fontWeight: 900, color: C.sub, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Ico name="trending" size={13} color={C.sub} />
-                    <span>Kết quả bài thi gần nhất</span>
+                    <span>{tx('Kết quả bài thi gần nhất', 'Latest Test Results')}</span>
                   </div>
                   {sortedQuizResultsDesc.length > 3 && (
                     <button onClick={() => setPortalTab('progress')} style={{ background: 'transparent', border: 'none', color: C.accent, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', padding: 0 }}>
-                      Xem tất cả
+                      {tx("Xem tất cả", "View all")}
                     </button>
                   )}
                 </div>
                 {sortedQuizResultsDesc.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: C.sub, padding: '12px 0', textAlign: 'center' }}>Chưa có kết quả bài thi nào.</div>
+                  <div style={{ fontSize: 12.5, color: C.sub, padding: '12px 0', textAlign: 'center' }}>{tx('Chưa có kết quả bài thi nào.', 'No test results yet.')}</div>
                 ) : (
                   <div style={{ display: 'grid', gap: 8 }}>
                     {sortedQuizResultsDesc.slice(0, 3).map(r => (
@@ -16318,12 +16739,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {t('gacha_spin')}
               </h3>
               <p style={{ margin: '6px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.5 }}>
-                {i18n.language === 'vi' ? 'Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.' : 'Roll for random themes, golden avatar frames, living companions, or gifts.'}
+                tx('Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.', 'Roll for random themes, golden avatar frames, living companions, or gifts.')
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>{i18n.language === 'vi' ? 'Chi phí' : 'Cost'}</div>
+                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>tx('Chi phí', 'Cost')</div>
                 <div style={{ fontSize: 17, fontWeight: 900, color: C.warn, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                   <Ico name="coins" size={16} color={C.warn} />
                   <span>{gachaSpinCost.toLocaleString('en-US')}</span>
@@ -16349,7 +16770,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 }}
               >
                 <Ico name="sparkles" size={15} />
-                <span>{i18n.language === 'vi' ? 'Quay ngay' : 'Roll Now'}</span>
+                <span>tx('Quay ngay', 'Roll Now')</span>
               </button>
             </div>
           </div>
@@ -16374,11 +16795,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <button onClick={() => handleBuyConsumable(gift)} style={{background: `${C.warn}20`, color: C.warn, fontWeight: 800, padding: '10px', width: '100%'}}>{gift.price} <Ico name="coins" size={13} style={{verticalAlign:'-2px', display:'inline-block'}} /></button>
                     </div>
                   ))}
-                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>Cửa hàng hiện chưa có quà tiêu hao.</div>}
+                  {!consumableGiftCatalog.some(gift => gift.enabled) && <div style={{color: C.sub, fontSize: 13, padding: '18px 0'}}>{tx("Cửa hàng hiện chưa có quà tiêu hao.", "No consumable items currently in store.")}</div>}
               </div>
               {Array.isArray(me.myRewards) && me.myRewards!.length > 0 && (
                  <div style={{marginTop: 24, paddingTop: 20, borderTop: `1px dashed ${C.border}`, fontSize: 13}}>
-                     <div style={{fontWeight: 800, color: C.succ, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7}}><Ico name="bag" size={14} /> Túi đồ cũ (Đang nâng cấp):</div>
+                     <div style={{fontWeight: 800, color: C.succ, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 7}}><Ico name="bag" size={14} /> {tx("Túi đồ cũ (Đang nâng cấp):", "Legacy Inventory (Upgrading):")}</div>
                      <ul style={{margin: 0, paddingLeft: 20}}>
                          {me.myRewards!.map((id: string) => <li key={id} style={{color: C.sub, marginBottom: 4}}>{id}</li>)}
                      </ul>
@@ -16568,7 +16989,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 <button
                   type="button"
                   onClick={() => pronounceVocab(dailyExp.word)}
-                  title={t('vocab_pronounce') || 'Phát âm'}
+                  title={t('vocab_pronounce') || tx('Phát âm', 'Pronounce')}
                   style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.accent, cursor: 'pointer' }}
                 >
                   <Ico name="volume2" size={16} />
@@ -16592,7 +17013,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   }}
                 >
                   <Ico name={(isDailyExpSaved || dailyExpSavedFeedback) ? "check" : "book"} size={14} />
-                  <span>{(isDailyExpSaved || dailyExpSavedFeedback) ? (i18n.language === 'vi' ? 'Đã trong sổ tay' : 'Added to notebook') : (i18n.language === 'vi' ? '+ Lưu vào sổ tay' : '+ Add to notebook')}</span>
+                  <span>{(isDailyExpSaved || dailyExpSavedFeedback) ? tx('Đã trong sổ tay', 'Added to notebook') : tx('+ Lưu vào sổ tay', '+ Add to notebook')}</span>
                 </button>
               </div>
             </div>
@@ -16635,7 +17056,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             transition: 'all .15s ease'
                           }}
                         >
-                          {sk === 'All' ? (i18n.language === 'vi' ? 'Tất cả kỹ năng' : 'All Skills') : sk}
+                          {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
                         </button>
                       );
                     })}
@@ -16859,7 +17280,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
                   const isPractice = isPracticeQuiz(q) || (q.practiceMode === true) || Number(q.maxAttempts) >= 99 || Number(q.maxAttempts) === Number.MAX_SAFE_INTEGER;
                   const attemptDisplay = isPractice
-                    ? `${t('previous_attempts')}: ${attemptCount} (${i18n.language === 'vi' ? 'Không giới hạn' : 'Unlimited'})`
+                    ? `${t('previous_attempts')}: ${attemptCount} (${tx('Không giới hạn', 'Unlimited')})`
                     : `${t('previous_attempts')}: ${attemptCount}/${q.maxAttempts || 1}`;
                   let statusText = "";
                   let isAvailable = false;
@@ -16918,7 +17339,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               </div>
                           ) : isLockedByOtherDevice ? (
                               <button onClick={() => {
-                                  if(confirm("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?")) {
+                                  if(confirm(tx("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?", "THIS EXAM IS OPEN ON ANOTHER DEVICE!\n\nIf you continue, the session on that device will be terminated immediately. Are you sure you want to force entry?"))) {
                                       const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
                                       const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
                                       setStudents(nx); syncData({ students: nx });
@@ -16931,13 +17352,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   )
               })}
-              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>Chưa có đề {studentExamSkillTab} khả dụng.</div>}
+              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{tx(`Chưa có đề ${studentExamSkillTab} khả dụng.`, `No available ${studentExamSkillTab} exams.`)}</div>}
             </div>
             )}
 
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
-                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>Chưa có kết quả {studentExamSkillTab}.</div>}
+                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{tx(`Chưa có kết quả ${studentExamSkillTab}.`, `No ${studentExamSkillTab} results yet.`)}</div>}
                     {[...resultsForSkill].filter(Boolean).sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)).map(r => {
                         if (!r) return null;
                         return (
@@ -17006,7 +17427,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             {([
               { k: 'home', icon: 'home', label: t('ptab_home') },
               { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
+              { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
               { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
               { k: 'progress', icon: 'trending', label: t('ptab_progress') },
               { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
@@ -17297,7 +17718,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             )}
 
                             <button
-                              onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)}
+                              onClick={() => copyToClipboard(tx(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`, `Hi, friendly reminder that you have an IELTS session today at ${s.time} in ${s.location}!`))}
                               style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
@@ -17585,7 +18006,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       ) : (
                         <button onClick={() => { const nx=schedules.map(x => x.id===s.id ? {...x, status: 'PENDING' as const} : x); setSchedules(nx); syncData({schedules:nx}); }} style={{ flex: 1, background: C.card, color: C.sub, border: `1px solid ${C.border}`, fontSize: 12, padding: '7px 8px', borderRadius: 9 }}>{t('att_reschedule')}</button>
                       )}
-                      <button onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)} style={{ background: `${C.succ}20`, color: C.succ, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('remind_schedule')}><Ico name="bell" size={13} /></button>
+                      <button onClick={() => copyToClipboard(tx(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`, `Hi, friendly reminder that you have an IELTS session today at ${s.time} in ${s.location}!`))} style={{ background: `${C.succ}20`, color: C.succ, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('remind_schedule')}><Ico name="bell" size={13} /></button>
                       <button onClick={()=>{ const nx=schedules.filter(x=>x && x.id!==s.id); setSchedules(nx); syncData({schedules:nx, __deletedScheduleIds: [String(s.id)]}); }} style={{ color: C.err, background: `${C.err}10`, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('common_delete')}><Ico name="trash" size={13} /></button>
                     </div>
                   </div>
@@ -17817,7 +18238,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     setExamBuilderSaveState("error");
                     alert(String(error?.message || error).includes('QUIZ_REVISION_CONFLICT') ? 'The assessment changed elsewhere. Reload before saving.' : 'Could not save this assessment.');
                 }
-                if (!saved) alert("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.");
+                if (!saved) alert(tx("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.", "Could not sync quiz to server. Local draft kept to retry."));
             };
 
             // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====
@@ -17894,7 +18315,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               {typeof handleAiRawDocxBatchUpload === 'function' && <input type="file" accept=".docx" multiple disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} onChange={handleAiRawDocxBatchUpload as any} style={{display: 'none'}} />}
                             </label>
                           </div>
-                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '0 16px', height: 36, fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap'}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
+                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: tx("Đề thi mới", "New Exam"), type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '0 16px', height: 36, fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap'}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
                         </div>
                     )}
                 </div>
@@ -17936,7 +18357,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <button className="ebx-primary" onClick={() => {
                             const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
                             setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
-                            alert("Đã đồng bộ Key!");
+                            alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
                       </div>
                     </div>
@@ -17947,47 +18368,47 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <div style={{ maxWidth: 1080, margin: '0 auto', padding: '34px 32px 70px' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, marginBottom: 30, flexWrap: 'wrap' }}>
                                 <div>
-                                    <div style={{ ...ebEyebrow, marginBottom: 10 }}><Ico name="shield" size={13} />Gói bài thi thật</div>
-                                    <h2 style={{ margin: 0, fontFamily: EB.fDisplay, fontSize: 34, letterSpacing: '-0.025em', lineHeight: 1.08, color: EB.ink }}>Cấu hình bài thi mô phỏng</h2>
-                                    <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.</p>
+                                    <div style={{ ...ebEyebrow, marginBottom: 10 }}><Ico name="shield" size={13} />{tx("Gói bài thi thật", "Real Exam Package")}</div>
+                                    <h2 style={{ margin: 0, fontFamily: EB.fDisplay, fontSize: 34, letterSpacing: '-0.025em', lineHeight: 1.08, color: EB.ink }}>{tx("Cấu hình bài thi mô phỏng", "Mock Exam Configuration")}</h2>
+                                    <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>{tx("Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.", "Runs in sequence: Listening, Reading, then Writing if applicable. Results are kept private and students return to the lobby after each skill.")}</p>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
-                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />Đóng</button>
+                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
                                     <button className="ebx-primary" onClick={async () => {
                                         const draft = realExamPackageEditor;
                                         const ordered = (draft.quizIds || []).filter(Boolean).map(id => quizzes.find((quiz: any) => quiz.id === id)).filter(Boolean) as Quiz[];
                                         const expectedCount = draft.mode === 'LRW' ? 3 : 2;
                                         const validOrder = ordered.length === expectedCount && ordered.map(quizSkillRank).every((rank, index) => rank === index);
-                                        if (!String(draft.title || '').trim()) { alert('Nhập tên gói bài thi.'); return; }
-                                        if (!validOrder) { alert('Chọn đúng đề theo thứ tự Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.')); return; }
-                                        if (draft.scheduledStart && draft.scheduledEnd && parseVNTime(draft.scheduledEnd) <= parseVNTime(draft.scheduledStart)) { alert('Thời điểm đóng phải sau thời điểm mở.'); return; }
+                                        if (!String(draft.title || '').trim()) { alert(tx('Nhập tên gói bài thi.', 'Please enter the exam package title.')); return; }
+                                        if (!validOrder) { alert(tx('Chọn đúng đề theo thứ tự Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.'), 'Select tests in order: Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.'))); return; }
+                                        if (draft.scheduledStart && draft.scheduledEnd && parseVNTime(draft.scheduledEnd) <= parseVNTime(draft.scheduledStart)) { alert(tx('Thời điểm đóng phải sau thời điểm mở.', 'Closing time must be after opening time.')); return; }
                                         await saveRealExamPackage({ ...draft, quizIds: ordered.map(quiz => quiz.id), maxAttempts: Math.max(1, Number(draft.maxAttempts) || 1) });
                                         setSelectedQuizzes([]);
                                         setRealExamPackageEditor(null);
-                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />Lưu gói thi</button>
+                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />{tx("Lưu gói thi", "Save package")}</button>
                                 </div>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 340px)', gap: 22, alignItems: 'start' }}>
                                 <div style={{ display: 'grid', gap: 18 }}>
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="fileText" size={13} />Thông tin gói thi</div>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="fileText" size={13} />{tx("Thông tin gói thi", "Package Information")}</div>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 144px', gap: 14 }}>
-                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Tên hiển thị
-                                                <input value={realExamPackageEditor.title || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, title: event.target.value } : prev)} placeholder="Ví dụ: Mock test 03" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} />
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Tên hiển thị", "Display name")}
+                                                <input value={realExamPackageEditor.title || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, title: event.target.value } : prev)} placeholder={tx("Ví dụ: Mock test 03", "e.g. Mock test 03")} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} />
                                             </label>
-                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Số lượt mỗi học sinh
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Số lượt mỗi học sinh", "Max attempts per student")}
                                                 <input type="number" min="1" value={Math.max(1, Number(realExamPackageEditor.maxAttempts) || 1)} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, maxAttempts: Math.max(1, Number(event.target.value) || 1) } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none', fontVariantNumeric: 'tabular-nums' }} />
                                             </label>
                                         </div>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginTop: 14 }}>Mật khẩu vào gói
-                                            <div style={{ position: 'relative' }}><Ico name="key" size={15} color={EB.sub} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} /><input type="text" value={realExamPackageEditor.passcode || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, passcode: event.target.value } : prev)} placeholder="Để trống nếu không cần" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 36px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} /></div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginTop: 14 }}>{tx("Mật khẩu vào gói", "Package passcode")}
+                                            <div style={{ position: 'relative' }}><Ico name="key" size={15} color={EB.sub} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} /><input type="text" value={realExamPackageEditor.passcode || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, passcode: event.target.value } : prev)} placeholder={tx("Để trống nếu không cần", "Leave blank if not needed")} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 36px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} /></div>
                                         </label>
                                     </section>
 
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
-                                            <div style={ebEyebrow}><Ico name="list" size={13} />Chuỗi kỹ năng</div>
+                                            <div style={ebEyebrow}><Ico name="list" size={13} />{tx("Chuỗi kỹ năng", "Skill Sequence")}</div>
                                             <div style={{ display: 'flex', gap: 5, padding: 3, background: EB.wash, borderRadius: 8 }}>
                                                 {(['LR', 'LRW'] as const).map(mode => <button key={mode} type="button" onClick={() => setRealExamPackageEditor(prev => {
                                                     if (!prev) return prev;
@@ -18010,9 +18431,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     </section>
 
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="users" size={13} />Học sinh được làm</div>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="users" size={13} />{tx("Học sinh được làm", "Target Audience")}</div>
                                         <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
-                                            {([['ALL', 'Toàn bộ học sinh'], ['SPECIFIC', 'Chọn học sinh']] as const).map(([audience, label]) => <button type="button" key={audience} onClick={() => setRealExamPackageEditor(prev => prev ? { ...prev, audience } : prev)} style={{ padding: '8px 11px', borderRadius: 7, border: `1px solid ${realExamPackageEditor.audience === audience ? EB.accent : EB.line}`, background: realExamPackageEditor.audience === audience ? `${EB.accent}10` : EB.sheet, color: realExamPackageEditor.audience === audience ? EB.accent : EB.sub, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>{label}</button>)}
+                                            {([['ALL', tx('Toàn bộ học sinh', 'All students')], ['SPECIFIC', tx('Chọn học sinh', 'Select students')]] as const).map(([audience, label]) => <button type="button" key={audience} onClick={() => setRealExamPackageEditor(prev => prev ? { ...prev, audience } : prev)} style={{ padding: '8px 11px', borderRadius: 7, border: `1px solid ${realExamPackageEditor.audience === audience ? EB.accent : EB.line}`, background: realExamPackageEditor.audience === audience ? `${EB.accent}10` : EB.sheet, color: realExamPackageEditor.audience === audience ? EB.accent : EB.sub, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>{label}</button>)}
                                         </div>
                                         {realExamPackageEditor.audience === 'SPECIFIC' && <div style={{ maxHeight: 240, overflowY: 'auto', borderTop: `1px solid ${EB.line}` }}>{students.map((student: any) => {
                                             const checked = (realExamPackageEditor.targetStudentIds || []).includes(student.id);
@@ -18023,18 +18444,18 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                                 <aside style={{ display: 'grid', gap: 18 }}>
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 20 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 15 }}><Ico name="calendar" size={13} />Lịch mở gói</div>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginBottom: 13 }}>Mở từ
+                                        <div style={{ ...ebEyebrow, marginBottom: 15 }}><Ico name="calendar" size={13} />{tx("Lịch mở gói", "Package Schedule")}</div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginBottom: 13 }}>{tx("Mở từ", "Opens from")}
                                             <input type="datetime-local" value={realExamPackageEditor.scheduledStart || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledStart: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
                                         </label>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Đóng lúc
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Đóng lúc", "Closes at")}
                                             <input type="datetime-local" value={realExamPackageEditor.scheduledEnd || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledEnd: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
                                         </label>
-                                        <p style={{ margin: '12px 0 0', fontSize: 11, lineHeight: 1.5, color: EB.sub }}>Để trống hai trường nếu gói có thể mở bất kỳ lúc nào.</p>
+                                        <p style={{ margin: '12px 0 0', fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{tx("Để trống hai trường nếu gói có thể mở bất kỳ lúc nào.", "Leave both blank if the package can be accessed anytime.")}</p>
                                     </section>
                                     <section style={{ border: `1px solid ${realExamPackageEditor.active ? C.succ : EB.line}`, borderRadius: EB.radius, padding: 20, background: realExamPackageEditor.active ? `${C.succ}0b` : EB.sheet }}>
-                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><Ico name={realExamPackageEditor.active ? 'check' : 'lock'} size={18} color={realExamPackageEditor.active ? C.succ : EB.sub} /><div><div style={{ fontSize: 14, fontWeight: 800, color: realExamPackageEditor.active ? C.succ : EB.ink }}>{realExamPackageEditor.active ? 'Đang mở cho học sinh' : 'Đang để bản nháp'}</div><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{realExamPackageEditor.active ? 'Học sinh đúng đối tượng có thể nhìn thấy gói trong thời gian đã cài.' : 'Gói chỉ được lưu, chưa xuất hiện ở phía học sinh.'}</div></div></div>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 15, cursor: 'pointer', fontSize: 12, fontWeight: 800, color: EB.ink }}><input type="checkbox" checked={!!realExamPackageEditor.active} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, active: event.target.checked } : prev)} />Xuất bản gói thi</label>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><Ico name={realExamPackageEditor.active ? 'check' : 'lock'} size={18} color={realExamPackageEditor.active ? C.succ : EB.sub} /><div><div style={{ fontSize: 14, fontWeight: 800, color: realExamPackageEditor.active ? C.succ : EB.ink }}>{realExamPackageEditor.active ? tx('Đang mở cho học sinh', 'Open for students') : tx('Đang để bản nháp', 'Draft status')}</div><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{realExamPackageEditor.active ? tx('Học sinh đúng đối tượng có thể nhìn thấy gói trong thời gian đã cài.', 'Eligible students can access this package during the scheduled window.') : tx('Gói chỉ được lưu, chưa xuất hiện ở phía học sinh.', 'Package is saved but not visible to students.')}</div></div></div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 15, cursor: 'pointer', fontSize: 12, fontWeight: 800, color: EB.ink }}><input type="checkbox" checked={!!realExamPackageEditor.active} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, active: event.target.checked } : prev)} />{tx('Xuất bản gói thi', 'Publish exam package')}</label>
                                     </section>
                                 </aside>
                             </div>
@@ -18074,7 +18495,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 )})}
                             </div>
                             <div style={{padding: 14, borderTop: `1px solid ${EB.line}`, display: isWritingQuiz(editingQuiz) ? 'none' : 'grid', gap: 8}}>
-                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: "Câu hỏi mới", options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
+                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: tx("Câu hỏi mới", "New question"), options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
                                 <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "BLANK", text: "", groupContext: "", correctAnswer: ""}]} : prev)} style={{background: EB.accentWash, color: EB.accent, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${C.accent}22`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="edit" size={13} />{t('eb_add_blank_group')}</button>
                             </div>
                         </aside>
@@ -18231,7 +18652,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="MATCHING">{t('eb_opt_match')}</option>
                                                     <option value="BLANK">{t('eb_opt_blank')}</option>
                                                     <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
-                                                    <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
+                                                    <option value="DRAG_DROP_HEADING">{tx("Matching Headings (kéo thả)", "Matching Headings (Drag & Drop)")}</option>
                                                     <option value="MAP_DRAG">Map labelling (drag onto map)</option>
                                                     <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
@@ -18287,7 +18708,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 }} style={{...iconBtn, width: 'auto', padding: '0 13px', gap: 6, fontSize: 13, fontWeight: 600}}><Ico name="copy" size={14} />{t('eb_duplicate')}</button>
 
                                                 <button className="ebx-soft" onClick={() => {
-                                                    if (confirm("Chắc chắn xóa câu hỏi này?")) {
+                                                    if (confirm(tx("Chắc chắn xóa câu hỏi này?", "Are you sure you want to delete this question?"))) {
                                                         setEditingQuiz((prev: any) => {
                                                             if (!prev) return prev;
                                                             const nQ = (prev.questions || []).filter((_: any, i: number) => i < qIndex || i > lastIdx);
@@ -18378,21 +18799,21 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <div>
                                                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:10}}>
                                                     <label style={{...ebEyebrow, display:'flex'}}><Ico name="link" size={13} />List of Headings</label>
-                                                    <button className="ebx-soft" onClick={()=>writeHeads([...heads, ''])} style={{background:EB.accentWash, color:EB.accent, border:`1px solid ${C.accent}22`, padding:'7px 13px', borderRadius:EB.radiusSm, fontWeight:600, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:6}}><Ico name="plus" size={13} />Thêm heading</button>
+                                                    <button className="ebx-soft" onClick={()=>writeHeads([...heads, ''])} style={{background:EB.accentWash, color:EB.accent, border:`1px solid ${C.accent}22`, padding:'7px 13px', borderRadius:EB.radiusSm, fontWeight:600, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:6}}><Ico name="plus" size={13} />{tx('Thêm heading', 'Add heading')}</button>
                                                 </div>
                                                 <div style={{display:'flex', flexDirection:'column', gap:8, marginBottom:24}}>
                                                     {heads.map((txt:string, hi:number) => (
                                                         <div key={hi} style={{display:'flex', alignItems:'center', gap:10, background:EB.sheet, border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, padding:'8px 12px'}}>
                                                             <span style={{fontFamily:EB.fMono, fontWeight:700, color:EB.accent, fontSize:13, minWidth:30, fontStyle:'italic'}}>{ROMAN[hi]}.</span>
-                                                            <input value={txt} onChange={(e:any)=>{ const nx=[...heads]; nx[hi]=e.target.value; writeHeads(nx); }} placeholder="Nội dung heading" style={{flex:1, padding:'8px 10px', fontSize:14, border:'none', background:EB.wash, borderRadius:8, fontWeight:500, outline:'none', color:EB.ink, boxShadow:'none'}} />
+                                                            <input value={txt} onChange={(e:any)=>{ const nx=[...heads]; nx[hi]=e.target.value; writeHeads(nx); }} placeholder={tx("Nội dung heading", "Heading text")} style={{flex:1, padding:'8px 10px', fontSize:14, border:'none', background:EB.wash, borderRadius:8, fontWeight:500, outline:'none', color:EB.ink, boxShadow:'none'}} />
                                                             <button className="ebx-icon" onClick={()=>writeHeads(heads.filter((_:any,i:number)=>i!==hi))} style={{background:'transparent', color:EB.err, border:`1px solid ${C.err}33`, width:30, height:30, borderRadius:8, cursor:'pointer', flexShrink:0}}><Ico name="trash" size={13} /></button>
                                                         </div>
                                                     ))}
-                                                    {heads.length===0 && <div style={{fontSize:13, color:EB.sub, fontStyle:'italic', padding:'4px 2px'}}>Chưa có heading. Bấm "Thêm heading".</div>}
+                                                    {heads.length===0 && <div style={{fontSize:13, color:EB.sub, fontStyle:'italic', padding:'4px 2px'}}>{tx('Chưa có heading. Bấm "Thêm heading".', 'No headings yet. Click "Add heading".')}</div>}
                                                 </div>
                                                 <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
-                                                    <div style={{...ebEyebrow, marginBottom:6, display:'flex'}}><Ico name="key" size={13} />Đáp án (đoạn → heading)</div>
-                                                    <div style={{fontSize:12, color:EB.sub, marginBottom:14}}>Mỗi đoạn (A, B, C…) là 1 câu theo thứ tự. Chọn heading đúng.</div>
+                                                    <div style={{...ebEyebrow, marginBottom:6, display:'flex'}}><Ico name="key" size={13} />{tx('Đáp án (đoạn → heading)', 'Answers (paragraph → heading)')}</div>
+                                                    <div style={{fontSize:12, color:EB.sub, marginBottom:14}}>{tx('Mỗi đoạn (A, B, C…) là 1 câu theo thứ tự. Chọn heading đúng.', 'Each paragraph (A, B, C...) corresponds to a question in sequence. Choose the correct heading.')}</div>
                                                     <div style={{display:'grid', gap:10}}>
                                                         {grp.questions.map((qItem:any, offset:number) => {
                                                             const letter = String.fromCharCode(65+offset);
@@ -18401,7 +18822,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <div key={qItem.id} style={{display:'flex', alignItems:'center', gap:12}}>
                                                                 <div style={{width:30, height:30, borderRadius:'50%', background:EB.accentWash, color:EB.accent, display:'grid', placeItems:'center', fontWeight:700, fontSize:13, flexShrink:0}}>{letter}</div>
                                                                 <select value={cur} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, correctAnswer:e.target.value}:qIt)} style={{flex:1, padding:'9px 12px', fontSize:14, border:`1px solid ${EB.line}`, background:EB.sheet, borderRadius:10, fontWeight:600, color:EB.ink, boxShadow:'none'}}>
-                                                                    <option value="">— chọn heading —</option>
+                                                                    <option value="">{tx("— chọn heading —", "— select heading —")}</option>
                                                                     {heads.map((txt:string, hi:number) => <option key={hi} value={ROMAN[hi]}>{ROMAN[hi]}. {txt}</option>)}
                                                                 </select>
                                                             </div>
@@ -18607,6 +19028,60 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
+                                                {/* DIAGRAM / REFERENCE IMAGE URL (Optional for Diagram Labelling & Visuals) */}
+                                                {(() => {
+                                                    const groupImgUrl = String(q.groupImageUrl || q.diagramImageUrl || '');
+                                                    const handleGroupImageChange = (newUrl: string) => {
+                                                        updateGroup((qItem: any) => ({
+                                                            ...qItem,
+                                                            groupImageUrl: newUrl,
+                                                            diagramImageUrl: newUrl || undefined,
+                                                        }));
+                                                    };
+                                                    return (
+                                                        <div style={{ marginBottom: 16, background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '14px 16px' }}>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                                                <label style={{ ...ebEyebrow, display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                                                                    <Ico name="image" size={13} />
+                                                                    {tx("Hình ảnh sơ đồ / Minh hoạ (Tuỳ chọn cho Diagram Labelling)", "Diagram / Reference Image URL (Optional for Diagram Labelling)")}
+                                                                </label>
+                                                                {groupImgUrl && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="ebx-soft"
+                                                                        onClick={() => handleGroupImageChange('')}
+                                                                        style={{ background: 'transparent', border: 'none', color: EB.err, fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                                                    >
+                                                                        <Ico name="trash" size={13} /> {tx("Xoá ảnh", "Remove image")}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                                                <input
+                                                                    type="text"
+                                                                    value={groupImgUrl}
+                                                                    onChange={(e: any) => handleGroupImageChange(e.target.value)}
+                                                                    placeholder="https://.../diagram.png"
+                                                                    style={{ flex: 1, padding: '9px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet, color: EB.ink, fontSize: 13 }}
+                                                                />
+                                                            </div>
+                                                            {groupImgUrl && (
+                                                                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12, padding: 8, background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: 6 }}>
+                                                                    <img
+                                                                        src={groupImgUrl}
+                                                                        alt="Diagram Preview"
+                                                                        style={{ maxHeight: 90, maxWidth: 160, objectFit: 'contain', borderRadius: 4, background: '#fff', border: `1px solid ${EB.line}` }}
+                                                                        onError={(e: any) => { e.currentTarget.style.display = 'none'; }}
+                                                                    />
+                                                                    <div style={{ fontSize: 12, color: EB.sub }}>
+                                                                        <div><strong>{tx("Xem trước sơ đồ", "Diagram Preview")}</strong></div>
+                                                                        <div>{tx("Học sinh sẽ thấy hình này ở cột trái kèm tính năng phóng to (lightbox).", "Students will see this in the left column with click-to-zoom.")}</div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
                                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>
                                                     <label style={{...ebEyebrow, display: 'flex'}}><Ico name="edit" size={13} />{t('eb_inline_para')}</label>
                                                     <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
@@ -18652,7 +19127,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                                 <div style={{ fontFamily: EB.fMono, fontWeight: 700, color: isMissing ? C.err : EB.accent, fontSize: 13, minWidth: 30, display: 'flex', alignItems: 'center', gap: 4 }}>
                                                                     {qNum} {isMissing && <span title={t('eb_blank_missing_title')} style={{cursor: 'help', display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="alert" size={13} color={C.warn} /></span>}
                                                                 </div>
-                                                                {showText && <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, text:e.target.value}:qIt)} placeholder="Nội dung câu (vd: Plastic was first made in ___)" style={{ flex: 2, padding: '8px 10px', fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 8, fontWeight: 500, outline: 'none', color: EB.ink, boxShadow: 'none' }} />}
+                                                                {showText && <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, text:e.target.value}:qIt)} placeholder={tx("Nội dung câu (vd: Plastic was first made in ___)", "Question text (e.g.: Plastic was first made in ___)")} style={{ flex: 2, padding: '8px 10px', fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 8, fontWeight: 500, outline: 'none', color: EB.ink, boxShadow: 'none' }} />}
                                                                 <input value={qItem.correctAnswer as string} onChange={(e: any) => updateGroup((qIt: any, o: number) => o === offset ? { ...qIt, correctAnswer: e.target.value } : qIt)} placeholder={t('eb_blank_answer_ph')} style={{ flex: 1, padding: '8px 10px', fontSize: 14, border: 'none', background: EB.wash, borderRadius: 8, fontWeight: 600, outline: 'none', color: EB.ink, boxShadow: 'none' }} />
                                                             </div>
                                                         )})}
@@ -18899,7 +19374,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             setBuilderFolder(parentPath);
                                         }}
                                         style={{background: 'transparent', padding: '5px 8px', color: EB.ink, fontSize: 12, fontWeight: 600, border: `1px solid ${EB.line}`, borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginRight: 4}}
-                                        title="Lên 1 cấp"
+                                        title={tx("Lên 1 cấp", "Go up one level")}
                                     >
                                         <Ico name="arrowLeft" size={12} />
                                     </button>
@@ -19075,34 +19550,34 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     <div style={{display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', padding: '18px 20px 16px', flexWrap: 'wrap'}}>
                                         <div>
                                             <div style={{...ebEyebrow, marginBottom: 7}}><Ico name="file" size={13} />Batch DOCX</div>
-                                            <div style={{fontFamily: EB.fDisplay, color: EB.ink, fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em'}}>Kiểm tra trước khi thêm vào thư viện</div>
-                                            <p style={{margin: '5px 0 0', color: EB.sub, fontSize: 12.5, lineHeight: 1.55}}>Lưu vào <b style={{color: EB.ink}}>{examDocxBatch[0]?.targetFolder || 'Root'}</b>. File lỗi không chặn các file hợp lệ.</p>
+                                            <div style={{fontFamily: EB.fDisplay, color: EB.ink, fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em'}}>{tx("Kiểm tra trước khi thêm vào thư viện", "Verify before adding to library")}</div>
+                                            <p style={{margin: '5px 0 0', color: EB.sub, fontSize: 12.5, lineHeight: 1.55}}>{tx('Lưu vào', 'Save to')} <b style={{color: EB.ink}}>{examDocxBatch[0]?.targetFolder || 'Root'}</b>. {tx('File lỗi không chặn các file hợp lệ.', 'Failed files do not block valid files.')}</p>
                                         </div>
-                                        <span style={{fontFamily: EB.fMono, color: EB.sub, fontSize: 12, paddingTop: 4}}>{examDocxBatchBusy ? 'Đang phân tích…' : `${readyCount} sẵn sàng${errorCount ? ` · ${errorCount} cần bỏ` : ''}`}</span>
+                                        <span style={{fontFamily: EB.fMono, color: EB.sub, fontSize: 12, paddingTop: 4}}>{examDocxBatchBusy ? tx('Đang phân tích…', 'Analyzing…') : `${readyCount} ${tx('sẵn sàng', 'ready')}${errorCount ? ` · ${errorCount} ${tx('cần bỏ', 'rejected')}` : ''}`}</span>
                                     </div>
                                     <div style={{borderTop: `1px solid ${EB.line}`}}>
                                         {examDocxBatch.map(item => {
                                             const parsedQuiz = item.quiz;
                                             const isWriting = isWritingQuiz(parsedQuiz);
                                             const questionCount = isWriting ? normalizeWritingTasks(parsedQuiz).length : (parsedQuiz?.questions || []).length;
-                                            const unit = isWriting ? 'phần Writing' : 'câu hỏi';
+                                            const unit = isWriting ? tx('phần Writing', 'Writing tasks') : tx('câu hỏi', 'questions');
                                             const color = item.status === 'ready' ? C.succ : item.status === 'error' ? C.err : EB.sub;
-                                            const label = item.status === 'ready' ? 'Sẵn sàng' : item.status === 'error' ? 'Lỗi parse' : 'Đang phân tích';
+                                            const label = item.status === 'ready' ? tx('Sẵn sàng', 'Ready') : item.status === 'error' ? tx('Lỗi parse', 'Parse error') : tx('Đang phân tích', 'Analyzing');
                                             return <div key={item.id} style={{display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 14, alignItems: 'center', padding: '13px 20px', borderBottom: `1px solid ${EB.line}`}}>
                                                 <div style={{minWidth: 0}}>
                                                     <div style={{fontSize: 13.5, fontWeight: 700, color: EB.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.file.name}</div>
-                                                    {item.status === 'ready' && parsedQuiz ? <div style={{marginTop: 3, color: EB.sub, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{parsedQuiz.type} · {parsedQuiz.title || item.file.name.replace(/\.docx$/i, '')} · {questionCount} {unit}</div> : <div style={{marginTop: 3, color: item.status === 'error' ? C.err : EB.sub, fontSize: 12, lineHeight: 1.4}}>{item.error || 'Đang gửi file tới parser…'}</div>}
+                                                    {item.status === 'ready' && parsedQuiz ? <div style={{marginTop: 3, color: EB.sub, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{parsedQuiz.type} · {parsedQuiz.title || item.file.name.replace(/\.docx$/i, '')} · {questionCount} {unit}</div> : <div style={{marginTop: 3, color: item.status === 'error' ? C.err : EB.sub, fontSize: 12, lineHeight: 1.4}}>{item.error || tx('Đang gửi file tới parser…', 'Sending file to parser…')}</div>}
                                                 </div>
                                                 <span style={{fontSize: 11.5, fontWeight: 800, color, whiteSpace: 'nowrap'}}>{label}</span>
-                                                <button className="ebx-icon" type="button" aria-label={`Bỏ ${item.file.name}`} disabled={examDocxBatchBusy} onClick={() => removeExamDocxBatchItem(item.id)} style={{width: 30, height: 30, border: `1px solid ${EB.line}`, background: 'transparent', color: EB.sub, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}><Ico name="x" size={14} /></button>
+                                                <button className="ebx-icon" type="button" aria-label={tx(`Bỏ ${item.file.name}`, `Remove ${item.file.name}`)} disabled={examDocxBatchBusy} onClick={() => removeExamDocxBatchItem(item.id)} style={{width: 30, height: 30, border: `1px solid ${EB.line}`, background: 'transparent', color: EB.sub, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}><Ico name="x" size={14} /></button>
                                             </div>;
                                         })}
                                     </div>
                                     <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', flexWrap: 'wrap', background: retrying ? `${C.warn}0a` : EB.washSoft}}>
-                                        <div style={{fontSize: 12, color: retrying ? C.warn : EB.sub, lineHeight: 1.45}}>{retrying ? 'Đề đã được giữ an toàn trên thiết bị này. Bạn có thể thử đồng bộ lại đúng batch này.' : 'Bấm thêm để lưu toàn bộ file hợp lệ trong một lần; mặc định chúng ở trạng thái nháp.'}</div>
+                                        <div style={{fontSize: 12, color: retrying ? C.warn : EB.sub, lineHeight: 1.45}}>{retrying ? tx('Đề đã được giữ an toàn trên thiết bị này. Bạn có thể thử đồng bộ lại đúng batch này.', 'Exams are preserved safely on this device. You can retry syncing this batch.') : tx('Bấm thêm để lưu toàn bộ file hợp lệ trong một lần; mặc định chúng ở trạng thái nháp.', 'Click add to save all valid files at once; by default they are saved as drafts.')}</div>
                                         <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
-                                            <button className="ebx-soft" type="button" disabled={examDocxBatchBusy} onClick={cancelExamDocxBatch} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '8px 12px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 700, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}>{retrying ? 'Đóng review' : 'Bỏ batch'}</button>
-                                            <button className="ebx-primary" type="button" disabled={examDocxBatchBusy || readyCount === 0} onClick={confirmExamDocxBatch} style={{background: EB.accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 800, cursor: examDocxBatchBusy || readyCount === 0 ? 'wait' : 'pointer', opacity: examDocxBatchBusy || readyCount === 0 ? .6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name={examDocxBatchBusy ? 'refresh' : retrying ? 'refresh' : 'save'} size={13} />{examDocxBatchBusy ? 'Đang xử lý…' : retrying ? `Đồng bộ lại ${readyCount} đề` : `Thêm ${readyCount} đề hợp lệ`}</button>
+                                            <button className="ebx-soft" type="button" disabled={examDocxBatchBusy} onClick={cancelExamDocxBatch} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '8px 12px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 700, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}>{retrying ? tx('Đóng review', 'Close review') : tx('Bỏ batch', 'Discard batch')}</button>
+                                            <button className="ebx-primary" type="button" disabled={examDocxBatchBusy || readyCount === 0} onClick={confirmExamDocxBatch} style={{background: EB.accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 800, cursor: examDocxBatchBusy || readyCount === 0 ? 'wait' : 'pointer', opacity: examDocxBatchBusy || readyCount === 0 ? .6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name={examDocxBatchBusy ? 'refresh' : retrying ? 'refresh' : 'save'} size={13} />{examDocxBatchBusy ? tx('Đang xử lý…', 'Processing…') : retrying ? tx(`Đồng bộ lại ${readyCount} đề`, `Resync ${readyCount} exams`) : tx(`Thêm ${readyCount} đề hợp lệ`, `Add ${readyCount} valid exams`)}</button>
                                         </div>
                                     </div>
                                 </section>;
@@ -19168,13 +19643,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         </div>
                                                     </div>
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0}} onClick={(e) => e.stopPropagation()}>
-                                                        <button type="button" onClick={() => setFolderModal({ mode: "RENAME", targetFolder: fullPath, inputValue: f, selectedDest: "" })} title="Đổi tên" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "RENAME", targetFolder: fullPath, inputValue: f, selectedDest: "" })} title={tx("Đổi tên", "Rename")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
                                                             <Ico name="edit" size={12} />
                                                         </button>
-                                                        <button type="button" onClick={() => setFolderModal({ mode: "MOVE_FOLDER", targetFolder: fullPath, inputValue: "", selectedDest: builderFolder })} title="Di chuyển thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "MOVE_FOLDER", targetFolder: fullPath, inputValue: "", selectedDest: builderFolder })} title={tx("Di chuyển thư mục", "Move folder")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
                                                             <Ico name="arrowRight" size={12} />
                                                         </button>
-                                                        <button type="button" onClick={() => handleDeleteFolder(fullPath)} title="Xóa thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: C.err}}>
+                                                        <button type="button" onClick={() => handleDeleteFolder(fullPath)} title={tx("Xóa thư mục", "Delete folder")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: C.err}}>
                                                             <Ico name="trash" size={12} />
                                                         </button>
                                                     </div>
@@ -19398,10 +19873,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         }}>
                                             <Ico name="file" size={26} color={EB.sub} />
                                             <div style={{fontFamily: EB.fDisplay, fontSize: 16, fontWeight: 600, color: EB.ink}}>
-                                                {builderSearch ? `Không tìm thấy đề thi phù hợp với "${builderSearch}"` : (t('eb_folder_empty') || 'Thư mục này chưa có đề thi')}
+                                                {builderSearch ? tx(`Không tìm thấy đề thi phù hợp với "${builderSearch}"`, `No exams matching "${builderSearch}"`) : (t('eb_folder_empty') || tx('Thư mục này chưa có đề thi', 'This folder is empty'))}
                                             </div>
                                             <div style={{fontSize: 12.5, color: EB.sub, maxWidth: 360, lineHeight: 1.5}}>
-                                                {builderSearch ? 'Thử tìm với từ khóa khác hoặc xóa bộ lọc để xem tất cả đề thi.' : 'Tạo đề mới hoặc kéo thả đề thi từ các thư mục khác vào đây.'}
+                                                {builderSearch ? tx('Thử tìm với từ khóa khác hoặc xóa bộ lọc để xem tất cả đề thi.', 'Try different keywords or clear filters to see all exams.') : tx('Tạo đề mới hoặc kéo thả đề thi từ các thư mục khác vào đây.', 'Create a new exam or drag and drop exams from other folders here.')}
                                             </div>
                                         </div>
                                     )}
@@ -19454,16 +19929,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                                     <Ico name="folder" size={16} color={EB.accent} />
                                     <span style={{fontFamily: EB.fDisplay, fontWeight: 700, fontSize: 16, color: EB.ink}}>
-                                        {folderModal.mode === "CREATE" && (t('eb_new_folder') || "Tạo thư mục mới")}
-                                        {folderModal.mode === "RENAME" && "Đổi tên thư mục"}
-                                        {folderModal.mode === "MOVE_FOLDER" && "Di chuyển thư mục"}
-                                        {folderModal.mode === "MOVE_QUIZZES" && `Di chuyển ${selectedQuizzes.length} đề thi`}
+                                        {folderModal.mode === "CREATE" && (t('eb_new_folder') || tx("Tạo thư mục mới", "Create new folder"))}
+                                        {folderModal.mode === "RENAME" && tx("Đổi tên thư mục", "Rename folder")}
+                                        {folderModal.mode === "MOVE_FOLDER" && tx("Di chuyển thư mục", "Move folder")}
+                                        {folderModal.mode === "MOVE_QUIZZES" && tx(`Di chuyển ${selectedQuizzes.length} đề thi`, `Move ${selectedQuizzes.length} exams`)}
                                     </span>
                                 </div>
                                 <button
                                     type="button"
                                     onClick={() => setFolderModal(null)}
-                                    aria-label="Đóng"
+                                    aria-label={tx("Đóng", "Close")}
                                     style={{
                                         background: 'transparent',
                                         border: 'none',
@@ -19483,13 +19958,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 {folderModal.mode === "CREATE" && (
                                     <div>
                                         <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
-                                            Tên thư mục
+                                            {tx("Tên thư mục", "Folder name")}
                                         </label>
                                         <input
                                             autoFocus
                                             type="text"
                                             value={folderModal.inputValue}
-                                            placeholder="Nhập tên thư mục (VD: Test 1, Unit 2...)"
+                                            placeholder={tx("Nhập tên thư mục (VD: Test 1, Unit 2...)", "Enter folder name (e.g. Test 1, Unit 2...)")}
                                             onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
                                             onKeyDown={(e) => {
                                                 if (e.key === "Enter" && folderModal.inputValue.trim()) {
@@ -19511,7 +19986,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             }}
                                         />
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
-                                            Vị trí: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder || builderFolder}</span>
+                                            {tx('Vị trí:', 'Location:')} <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder || builderFolder}</span>
                                         </div>
                                     </div>
                                 )}
@@ -19519,13 +19994,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 {folderModal.mode === "RENAME" && (
                                     <div>
                                         <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
-                                            Tên mới
+                                            {tx("Tên mới", "New name")}
                                         </label>
                                         <input
                                             autoFocus
                                             type="text"
                                             value={folderModal.inputValue}
-                                            placeholder="Tên thư mục mới"
+                                            placeholder={tx("Tên thư mục mới", "New folder name")}
                                             onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
                                             onKeyDown={(e) => {
                                                 if (e.key === "Enter" && folderModal.inputValue.trim() && folderModal.targetFolder) {
@@ -19547,7 +20022,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             }}
                                         />
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
-                                            Đường dẫn hiện tại: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder}</span>
+                                            {tx("Đường dẫn hiện tại:", "Current path:")} <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder}</span>
                                         </div>
                                     </div>
                                 )}
@@ -19555,7 +20030,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && (
                                     <div>
                                         <div style={{fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 10}}>
-                                            Chọn thư mục đích
+                                            {tx("Chọn thư mục đích", "Select destination folder")}
                                         </div>
                                         <div style={{
                                             maxHeight: 260,
@@ -19583,7 +20058,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     const f = normalizeFolderPath(rawF);
                                                     const depth = f === "Root" ? 0 : f.split("/").length - 1;
                                                     const isSelected = normalizeFolderPath(folderModal.selectedDest || "Root") === f;
-                                                    const folderName = f === "Root" ? "Root (Gốc)" : f.split("/").pop();
+                                                    const folderName = f === "Root" ? tx("Root (Gốc)", "Root") : f.split("/").pop();
                                                     return (
                                                         <button
                                                             key={f}
@@ -19620,7 +20095,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 })}
                                         </div>
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 10}}>
-                                            Đích đến: <span style={{color: EB.accent, fontWeight: 700}}>{folderModal.selectedDest || "Root"}</span>
+                                            {tx("Đích đến:", "Destination:")} <span style={{color: EB.accent, fontWeight: 700}}>{folderModal.selectedDest || "Root"}</span>
                                         </div>
                                     </div>
                                 )}
@@ -19649,7 +20124,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         cursor: 'pointer'
                                     }}
                                 >
-                                    Hủy
+                                    {tx("Hủy", "Cancel")}
                                 </button>
                                 <button
                                     type="button"
@@ -19686,9 +20161,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         cursor: 'pointer'
                                     }}
                                 >
-                                    {folderModal.mode === "CREATE" && "Tạo thư mục"}
-                                    {folderModal.mode === "RENAME" && "Lưu tên"}
-                                    {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && "Di chuyển"}
+                                    {folderModal.mode === "CREATE" && tx("Tạo thư mục", "Create folder")}
+                                    {folderModal.mode === "RENAME" && tx("Lưu tên", "Save name")}
+                                    {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && tx("Di chuyển", "Move")}
                                 </button>
                             </div>
                         </div>
@@ -20031,7 +20506,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            
                            <div style={{marginTop: 15, paddingTop: 15, borderTop: `1px dashed ${C.border}`}}>
                                <button onClick={() => {
-                                   const msg = prompt(`Nhập thông báo gửi đến thí sinh ${session.studentName} (VD: Đính chính câu 5, cộng 5 phút...):`);
+                                   const msg = prompt(tx(`Nhập thông báo gửi đến thí sinh ${session.studentName} (VD: Đính chính câu 5, cộng 5 phút...):`, `Enter message for student ${session.studentName} (e.g. Question 5 erratum, +5 mins...):`));
                                    if (msg) {
                                        const targetStudent = students.find(s => s.id === session.studentId);
                                        if (targetStudent) {
@@ -20040,7 +20515,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                            const nx = students.map(s => s.id === session.studentId ? { ...s, pendingNotifications: [...currentPending, newNotif] } : s);
                                            setStudents(nx);
                                            syncData({ students: nx });
-                                           alert("Đã gửi tin nhắn thành công!");
+                                           alert(tx("Đã gửi tin nhắn thành công!", "Message sent successfully!"));
                                        }
                                    }
                                }} style={{background: '#EFF6FF', color: '#1E3A8A', border: '1px solid #BFDBFE', padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 800, width: '100%', display: 'flex', justifyContent: 'center', gap: 8}}>
@@ -20181,7 +20656,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
           const resultCard = (r: QuizResult) => {
             const durationStr = r.durationSeconds ? `${Math.floor(r.durationSeconds / 60)}m ${r.durationSeconds % 60}s` : "N/A";
-            const copyText = `Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`;
+            const copyText = tx(`Kết quả thi IELTS CBT\nHọc viên: ${r.studentName}\nĐề: ${r.quizTitle}\nĐiểm: ${r.score}/${r.total} (Band ${r.band})\nThời gian làm: ${durationStr}`, `IELTS CBT Exam Result\nStudent: ${r.studentName}\nExam: ${r.quizTitle}\nScore: ${r.score}/${r.total} (Band ${r.band})\nDuration: ${durationStr}`);
             const open = expandedResultId === r.id;
             const bandVal = Number(r.band);
             const accentBorder = !isNaN(bandVal) ? (bandVal >= 7.0 ? C.succ : bandVal >= 6.0 ? C.accent : C.warn) : C.border;
@@ -20234,7 +20709,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {open && (
                   <div style={{ padding: '0 16px 16px', borderTop: `1px dashed ${C.border}` }}>
                     <div style={{ fontSize: 11.5, color: C.sub, display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 10, marginBottom: 12 }}>
-                      <span>Bắt đầu: <b style={{ fontFamily: 'var(--mono)' }}>{r.startTime || "N/A"}</b></span>
+                      <span>{tx('Bắt đầu:', 'Started:')} <b style={{ fontFamily: 'var(--mono)' }}>{r.startTime || "N/A"}</b></span>
                       <span>IP: <b style={{ fontFamily: 'var(--mono)' }}>{r.ipAddress || "N/A"}</b></span>
                       {r.cheatCount > 0 ? (
                         <span style={{ color: C.err, fontWeight: 600 }}>{t('acad_cheat_warn', { n: r.cheatCount })}</span>
@@ -20317,7 +20792,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           }}
                           style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}33`, fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                         >
-                          <Ico name="edit" size={12} /> Chấm Writing
+                          <Ico name="edit" size={12} /> {tx('Chấm Writing', 'Grade Writing')}
                         </button>
                       )}
                       <button
@@ -20337,7 +20812,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <button
                         type="button"
                         onClick={() => {
-                          if (r.ipAddress && confirm(`Cấm IP ${r.ipAddress}?`)) {
+                          if (r.ipAddress && confirm(tx(`Cấm IP ${r.ipAddress}?`, `Ban IP ${r.ipAddress}?`))) {
                             const nx = [...bannedIps, r.ipAddress];
                             setBannedIps(nx);
                             syncData({ bannedIps: nx });
@@ -20350,7 +20825,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm("Xóa bài thi này?")) {
+                          if (confirm(tx("Xóa bài thi này?", "Delete this exam result?"))) {
                             const nx = quizResults.filter(x => x.id !== r.id);
                             setQuizResults(nx);
                             syncData({ quizResults: nx });
@@ -20456,7 +20931,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm("Xóa buổi học này?")) {
+                          if (confirm(tx("Xóa buổi học này?", "Delete this class session?"))) {
                             const nx = history.filter(x => x && x.id !== h.id);
                             setHistory(nx as Session[]);
                             syncData({ history: nx, __deletedHistoryIds: [String(h.id)] });
@@ -20660,7 +21135,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     })}
                     {listStudents.length === 0 && (
                       <div style={{ textAlign: 'center', color: C.sub, fontSize: 12.5, padding: 30, fontStyle: 'italic' }}>
-                        — Không có học viên phù hợp —
+                        — {tx('Không có học viên phù hợp', 'No matching students')} —
                       </div>
                     )}
                   </div>
@@ -20765,7 +21240,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               {errorAnalytics.weakStudents.length > 0 && (
                                 <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
                                   <div style={{ fontSize: 10.5, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginBottom: 8 }}>
-                                    Học viên cần lưu ý
+                                    {tx('Học viên cần lưu ý', 'Students Needing Attention')}
                                   </div>
                                   <div style={{ display: 'grid', gap: 6 }}>
                                     {errorAnalytics.weakStudents.map((ws, i) => (
@@ -20789,7 +21264,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         {/* Header công cụ nhanh */}
                         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: C.bg }}>
                           <span style={{ fontSize: 11, fontWeight: 700, color: C.sub, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'var(--heading)', marginRight: 6 }}>
-                            Công cụ nhanh:
+                            {tx('Công cụ nhanh:', 'Quick tools:')}
                           </span>
                           {([['calc', t('acad_calc_title'), 'target'], ['push', t('stu_push_title'), 'bell'], ['verify', t('rc_verify_title'), 'lock']] as [string, string, string][]).map(([k, lb, ic]) => (
                             <button
@@ -20897,10 +21372,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           <div>
                             <div style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7, color: C.text }}>
                               <Ico name="gift" size={15} color={C.accent} />
-                              <span>Quà và cơ chế thưởng</span>
+                              <span>{tx('Quà và cơ chế thưởng', 'Gifts & Reward Mechanisms')}</span>
                             </div>
                             <div style={{ marginTop: 2, fontSize: 12, color: C.sub }}>
-                              Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.
+                              {tx('Cấu hình dùng chung cho cửa hàng, Gacha, Quest và phần thưởng học tập.', 'Shared configuration for shop, Gacha, Quests, and study rewards.')}
                             </div>
                           </div>
                           <button
@@ -20917,7 +21392,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               cursor: 'pointer'
                             }}
                           >
-                            {rewardConfigOpen ? 'Thu gọn' : 'Cấu hình'}
+                            {rewardConfigOpen ? tx('Thu gọn', 'Collapse') : tx('Cấu hình', 'Configure')}
                           </button>
                         </div>
 
@@ -20926,74 +21401,74 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             <section>
                               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}>
                                 <div>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Catalog quà</div>
-                                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.</div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{tx('Catalog quà', 'Gift catalog')}</div>
+                                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>{tx("Tắt quà để ngừng cấp/bán mới; giao dịch và túi đồ cũ vẫn giữ nguyên.", "Disable gifts to stop new distribution/sale; existing inventory and transactions remain.")}</div>
                                 </div>
-                                <span style={{ fontFamily: 'var(--mono)', color: C.sub, fontSize: 11 }}>{giftCatalog.length} mục</span>
+                                <span style={{ fontFamily: 'var(--mono)', color: C.sub, fontSize: 11 }}>{giftCatalog.length} {tx('mục', 'items')}</span>
                               </div>
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {giftCatalog.map(gift => (
                                   <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên quà" placeholder="Tên quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Chi tiết quà" placeholder="Chi tiết" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label="Loại quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
-                                      <option value="consumable">Tiêu hao</option>
-                                      <option value="permanent">Vĩnh viễn</option>
+                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Chi tiết quà", "Gift details")} placeholder={tx("Chi tiết", "Details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label={tx("Loại quà", "Gift type")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
+                                      <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
+                                      <option value="permanent">{tx('Vĩnh viễn', 'Permanent')}</option>
                                     </select>
-                                    <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Giá quà" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input type="number" min="0" value={gift.price} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, price: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label={tx("Giá quà", "Gift price")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: gift.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
                                       <input type="checkbox" checked={gift.enabled} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
-                                      {gift.enabled ? 'Bật' : 'Tắt'}
+                                      {gift.enabled ? tx('Bật', 'Enabled') : tx('Tắt', 'Disabled')}
                                     </label>
-                                    <button type="button" onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title="Xóa quà khỏi catalog" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                    <button type="button" onClick={() => stageGiftCatalog(giftCatalog.filter(item => item.id !== gift.id))} title={tx("Xóa quà khỏi catalog", "Delete gift from catalog")} style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
                                   </div>
                                 ))}
                               </div>
                               <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1fr) minmax(170px, 1.2fr) 120px 90px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                                <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Quà mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder="Chi tiết hiển thị" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={giftDraft.name || ''} onChange={event => setGiftDraft(previous => ({ ...previous, name: event.target.value }))} placeholder={tx("Quà mới", "New gift")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={giftDraft.details || ''} onChange={event => setGiftDraft(previous => ({ ...previous, details: event.target.value }))} placeholder={tx("Chi tiết hiển thị", "Display details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <select value={giftDraft.kind || 'consumable'} onChange={event => setGiftDraft(previous => ({ ...previous, kind: event.target.value as GiftDefinition['kind'] }))} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
-                                  <option value="consumable">Tiêu hao</option>
-                                  <option value="permanent">Vĩnh viễn</option>
+                                  <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
+                                  <option value="permanent">{tx('Vĩnh viễn', 'Permanent')}</option>
                                 </select>
-                                <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Giá" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <button type="button" onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError('Nhập tên quà trước khi thêm.'); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError('Tên quà đã tồn tại.'); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm quà</button>
+                                <input type="number" min="0" value={giftDraft.price ?? 0} onChange={event => setGiftDraft(previous => ({ ...previous, price: Math.max(0, Number(event.target.value) || 0) }))} placeholder={tx("Giá", "Price")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <button type="button" onClick={() => { const name = String(giftDraft.name || '').trim(); if (!name) { setRewardConfigError(tx('Nhập tên quà trước khi thêm.', 'Enter gift name before adding.')); return; } if (giftCatalog.some(item => item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) { setRewardConfigError(tx('Tên quà đã tồn tại.', 'Gift name already exists.')); return; } stageGiftCatalog([...giftCatalog, { id: `gift_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name, details: String(giftDraft.details || '').trim(), kind: giftDraft.kind === 'permanent' ? 'permanent' : 'consumable', group: giftDraft.kind === 'permanent' ? 'custom' : undefined, price: Math.max(0, Number(giftDraft.price) || 0), enabled: giftDraft.enabled !== false, updatedAt: getTrueTime() }]); setGiftDraft({ kind: 'consumable', enabled: true, price: 0, name: '', details: '' }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> {tx('Thêm quà', 'Add gift')}</button>
                               </div>
                             </section>
 
                             <section style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-                              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, color: C.text }}>Cơ chế thưởng</div>
-                              <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2, color: C.text }}>{tx('Cơ chế thưởng', 'Reward Rules')}</div>
+                              <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>{tx('Số xu áp dụng cho đúng mã sự kiện. Tắt quy tắc là tắt cấp thưởng tương ứng.', 'Coins granted for specific event triggers. Disable to pause.')}</div>
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {rewardMechanisms.map(rule => (
                                   <div key={rule.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(150px, 1.1fr) 95px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label="Tên cơ chế thưởng" placeholder="Tên quy tắc" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label="Mã sự kiện" placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                    <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label="Số OS Coins" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={rule.name} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên cơ chế thưởng", "Reward rule name")} placeholder={tx("Tên quy tắc", "Rule name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input value={rule.event} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, event: event.target.value.toUpperCase().replace(/\s+/g, '_'), updatedAt: getTrueTime() } : item))} aria-label={tx("Mã sự kiện", "Event code")} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <input type="number" min="0" value={rule.coins} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, coins: Math.max(0, Number(event.target.value) || 0), updatedAt: getTrueTime() } : item))} aria-label={tx("Số OS Coins", "OS Coins amount")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: rule.enabled ? C.succ : C.sub, fontSize: 11, fontWeight: 700 }}>
                                       <input type="checkbox" checked={rule.enabled} onChange={event => stageRewardMechanisms(rewardMechanisms.map(item => item.id === rule.id ? { ...item, enabled: event.target.checked, updatedAt: getTrueTime() } : item))} style={{ width: 'auto' }} />
-                                      {rule.enabled ? 'Bật' : 'Tắt'}
+                                      {rule.enabled ? tx('Bật', 'Enabled') : tx('Tắt', 'Disabled')}
                                     </label>
-                                    <button type="button" onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title="Xóa cơ chế" style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
+                                    <button type="button" onClick={() => stageRewardMechanisms(rewardMechanisms.filter(item => item.id !== rule.id))} title={tx("Xóa cơ chế", "Delete rule")} style={{ background: `${C.err}0d`, color: C.err, border: `1px solid ${C.err}35`, width: 30, height: 30, borderRadius: 6, display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Ico name="trash" size={13} /></button>
                                   </div>
                                 ))}
                               </div>
                               <div style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(140px, 1fr) minmax(170px, 1.1fr) 95px 82px auto' : '1fr 1fr', gap: 7, marginTop: 10 }}>
-                                <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder="Tên quy tắc mới" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input value={rewardDraft.name || ''} onChange={event => setRewardDraft(previous => ({ ...previous, name: event.target.value }))} placeholder={tx("Tên quy tắc mới", "New rule name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <input value={rewardDraft.event || ''} onChange={event => setRewardDraft(previous => ({ ...previous, event: event.target.value.toUpperCase().replace(/\s+/g, '_') }))} placeholder="EVENT_CODE" style={{ padding: '8px 9px', fontSize: 12, fontFamily: 'var(--mono)', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
-                                <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder="Xu" style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                <input type="number" min="0" value={rewardDraft.coins ?? 0} onChange={event => setRewardDraft(previous => ({ ...previous, coins: Math.max(0, Number(event.target.value) || 0) }))} placeholder={tx("Xu", "Coins")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, color: C.succ, fontSize: 11, fontWeight: 700 }}>
                                   <input type="checkbox" checked={rewardDraft.enabled !== false} onChange={event => setRewardDraft(previous => ({ ...previous, enabled: event.target.checked }))} style={{ width: 'auto' }} />
-                                  Bật
+                                  {tx("Bật", "Enabled")}
                                 </label>
-                                <button type="button" onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError('Nhập mã sự kiện trước khi thêm.'); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError('Mã sự kiện đã tồn tại.'); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> Thêm cơ chế</button>
+                                <button type="button" onClick={() => { const event = String(rewardDraft.event || '').trim().toUpperCase(); if (!event) { setRewardConfigError(tx('Nhập mã sự kiện trước khi thêm.', 'Enter event code before adding.')); return; } if (rewardMechanisms.some(item => item.event === event)) { setRewardConfigError(tx('Mã sự kiện đã tồn tại.', 'Event code already exists.')); return; } stageRewardMechanisms([...rewardMechanisms, { id: `reward_${getTrueTime()}_${Math.random().toString(36).slice(2, 7)}`, name: String(rewardDraft.name || event).trim(), event, coins: Math.max(0, Number(rewardDraft.coins) || 0), enabled: rewardDraft.enabled !== false, updatedAt: getTrueTime() }]); setRewardDraft({ event: '', name: '', coins: 0, enabled: true }); }} style={{ background: `${C.accent}12`, color: C.accent, border: `1px solid ${C.accent}35`, padding: '8px 12px', fontWeight: 700, fontSize: 12, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Ico name="plus" size={13} /> {tx('Thêm cơ chế', 'Add rule')}</button>
                               </div>
                             </section>
 
                             {rewardConfigError && <div role="alert" style={{ color: C.err, fontSize: 12, fontWeight: 700 }}>{rewardConfigError}</div>}
                             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                               <span style={{ color: rewardConfigDirty ? C.warn : C.succ, fontSize: 11, fontWeight: 700, fontFamily: 'var(--mono)' }}>
-                                {rewardConfigDirty ? 'Có thay đổi chưa lưu' : 'Đã đồng bộ'}
+                                {rewardConfigDirty ? tx('Có thay đổi chưa lưu', 'Unsaved changes') : tx('Đã đồng bộ', 'Synced')}
                               </span>
                               <button
                                 type="button"
@@ -21002,7 +21477,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, opacity: !rewardConfigDirty || rewardConfigSaving ? .55 : 1, cursor: !rewardConfigDirty || rewardConfigSaving ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
                               >
                                 <Ico name={rewardConfigSaving ? 'refresh' : 'save'} size={13} />
-                                {rewardConfigSaving ? 'Đang lưu…' : 'Lưu cấu hình'}
+                                {rewardConfigSaving ? tx('Đang lưu…', 'Saving…') : tx('Lưu cấu hình', 'Save settings')}
                               </button>
                             </div>
                           </div>
@@ -21071,7 +21546,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           </button>
                           {headerIconBtn('pin', () => { const nx = students.map(x => x.id === profile.id ? { ...x, isPinned: !x.isPinned } : x); setStudents(nx); syncData({ students: nx }); }, t('tip_pin_student'))}
                           {headerIconBtn('edit', () => { setEditStId(profile.id); setNewSt({ ...profile }); setShowAddStudent(true); }, t('common_edit'))}
-                          {headerIconBtn('trash', () => { if (confirm(`Xóa học viên ${profile.name}?`)) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
+                          {headerIconBtn('trash', () => { if (confirm(tx(`Xóa học viên ${profile.name}?`, `Delete student ${profile.name}?`))) { const nx = students.filter(x => x && x.id !== profile.id); setStudents(nx as Student[]); syncData({ students: nx }); setProfileId(null); } }, t('common_delete'), true)}
                         </div>
                       </div>
 
@@ -21204,7 +21679,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                               {filteredResults.length === 0 ? (
                                 <div style={{ textAlign: 'center', color: C.sub, padding: '40px 20px', background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}`, fontSize: 13, fontStyle: 'italic' }}>
-                                  {stuResSearch || stuResSkillFilter !== "ALL" ? "Không tìm thấy kết quả phù hợp" : t('acad_no_results')}
+                                  {stuResSearch || stuResSkillFilter !== "ALL" ? tx("Không tìm thấy kết quả phù hợp", "No matching results found") : t('acad_no_results')}
                                 </div>
                               ) : (
                                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden', background: C.card }}>
@@ -21269,7 +21744,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`Tặng 100 OS Coins cho ${profile.name}?`)) {
+                                  if (confirm(tx(`Tặng 100 OS Coins cho ${profile.name}?`, `Gift 100 OS Coins to ${profile.name}?`))) {
                                     const nx = students.map(x => x.id === profile.id ? { ...x, coins: (x.coins || 0) + 100 } : x);
                                     const coinOperation = makeCoinOperation(profile.id, 100, "TEACHER_GRANT");
                                     setStudents(nx);
@@ -21319,7 +21794,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => copyToClipboard(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`)}
+                                    onClick={() => copyToClipboard(tx(`Chào phụ huynh, hiện tại em ${profile.name} đang còn khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}. Phụ huynh vui lòng hoàn thiện giúp trung tâm nhé!`, `Dear parent, student ${profile.name} currently has an unpaid tuition balance of ${fmtMoney(pUnpaid)}. Please kindly arrange payment with the center!`))}
                                     style={{
                                       background: C.card,
                                       color: C.text,
@@ -21341,12 +21816,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      if (confirm(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`)) {
-                                        const msg = `Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`;
+                                      if (confirm(tx(`Gửi CẢNH BÁO ĐỎ tới màn hình của ${profile.name}?`, `Send RED WARNING to ${profile.name}'s screen?`))) {
+                                        const msg = tx(`Chào ${profile.name},\n\nHệ thống ghi nhận bạn đang có khoản học phí chưa thanh toán là ${fmtMoney(pUnpaid)}.\n\nVui lòng hoàn thiện sớm để không bị gián đoạn quá trình học và làm bài thi trên nền tảng nhé!`, `Hello ${profile.name},\n\nThe system has recorded an outstanding tuition balance of ${fmtMoney(pUnpaid)}.\n\nPlease settle this promptly to avoid interruption to your study and testing access on the platform!`);
                                         const nx = students.map(x => x.id === profile.id ? { ...x, debtMessage: msg } : x);
                                         setStudents(nx);
                                         syncData({ students: nx });
-                                        alert("Đã gửi cảnh báo đỏ!");
+                                        alert(tx("Đã gửi cảnh báo đỏ!", "Red warning sent!"));
                                       }
                                     }}
                                     style={{
@@ -21482,11 +21957,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_permanent')}</div>
-                          {grp('Danh hiệu', 'titles')}
-                          {grp('Giao diện', 'themes')}
+                          {grp(tx('Danh hiệu', 'Titles'), 'titles')}
+                          {grp(tx('Giao diện', 'Themes'), 'themes')}
                           {grp('Khung avatar', 'frames')}
-                          {grp('Linh thú', 'pets')}
-                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>Khác</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
+                          {grp(tx('Linh thú', 'Pets'), 'pets')}
+                          {permanentGiftCatalog.some(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")) && <div><div style={{ fontSize: 11, fontWeight: 700, color: C.sub, margin: '4px 0 7px', textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx('Khác', 'Other')}</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 7 }}>{permanentGiftCatalog.filter(item => item.enabled && !["titles", "themes", "frames", "pets"].includes(item.group || "")).map(permChip)}</div></div>}
                         </div>
                       </div>
                     </div>
@@ -21734,6 +22209,89 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </div>
           )}
         </>
+      )}
+
+      {/* Lightbox Modal for Diagrams & Visuals */}
+      {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={tx("Phóng to hình ảnh", "Image zoom")}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 999999,
+            background: 'rgba(15, 23, 42, 0.78)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            animation: 'fadeIn 0.15s ease-out',
+          }}
+          onClick={() => setLightboxImageUrl(null)}
+        >
+          <div
+            style={{
+              position: 'relative',
+              maxWidth: 'min(92vw, 1100px)',
+              maxHeight: '90vh',
+              background: '#ffffff',
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                {tx("Hình ảnh phóng to", "Enlarged Image")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLightboxImageUrl(null)}
+                title={tx("Đóng (Esc)", "Close (Esc)")}
+                aria-label={tx("Đóng", "Close")}
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  color: '#475569',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  transition: 'background 0.15s',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span>{tx("Đóng", "Close")}</span>
+              </button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+              <img
+                src={lightboxImageUrl}
+                alt="Enlarged visual"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: 'calc(90vh - 80px)',
+                  objectFit: 'contain',
+                  display: 'block',
+                  borderRadius: 6,
+                }}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

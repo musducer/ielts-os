@@ -41,7 +41,7 @@
                            
                            <div style={{marginTop: 15, paddingTop: 15, borderTop: `1px dashed ${C.border}`}}>
                                <button onClick={() => {
-                                   const msg = prompt(`Nhập thông báo gửi đến thí sinh ${session.studentName} (VD: Đính chính câu 5, cộng 5 phút...):`);
+                                   const msg = prompt(tx(`Nhập thông báo gửi đến thí sinh ${session.studentName} (VD: Đính chính câu 5, cộng 5 phút...):`, `Enter message for student ${session.studentName} (e.g. Question 5 erratum, +5 mins...):`));
                                    if (msg) {
                                        const targetStudent = students.find(s => s.id === session.studentId);
                                        if (targetStudent) {
@@ -50,7 +50,7 @@
                                            const nx = students.map(s => s.id === session.studentId ? { ...s, pendingNotifications: [...currentPending, newNotif] } : s);
                                            setStudents(nx);
                                            syncData({ students: nx });
-                                           alert("Đã gửi tin nhắn thành công!");
+                                           alert(tx("Đã gửi tin nhắn thành công!", "Message sent successfully!"));
                                        }
                                    }
                                }} style={{background: '#EFF6FF', color: '#1E3A8A', border: '1px solid #BFDBFE', padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 800, width: '100%', display: 'flex', justifyContent: 'center', gap: 8}}>

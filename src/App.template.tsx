@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import type * as Three from "three";
 import DOMPurify from "dompurify";
 import { annotationHTML, applySelectionAnnotation, renderAnnotationLayers, removeAnnotation, topHighlight } from './annotationLayers';
@@ -246,16 +247,17 @@ const fetchWithTimeout = async (url: string, init: RequestInit = {}, timeoutMs =
 const readApiJson = async (response: Response) => {
     const raw = await response.text();
     let data: any = null;
+    const isVi = typeof localStorage !== 'undefined' && (localStorage.getItem('i18nextLng') || '').toLowerCase().startsWith('vi');
     try {
         data = raw ? JSON.parse(raw) : {};
     } catch {
         const isServerFailure = response.status >= 500 || /an error occurred|function invocation|timeout/i.test(raw);
         throw new Error(isServerFailure
-            ? "Máy chủ AI mất quá lâu khi xử lý yêu cầu. Vui lòng thử lại sau ít phút."
-            : `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).`);
+            ? (isVi ? "Máy chủ AI mất quá lâu khi xử lý yêu cầu. Vui lòng thử lại sau ít phút." : "AI server timed out while processing your request. Please try again in a few moments.")
+            : (isVi ? `Máy chủ AI trả về phản hồi không hợp lệ (HTTP ${response.status || "unknown"}).` : `AI server returned an invalid response (HTTP ${response.status || "unknown"}).`));
     }
     if (!response.ok) {
-        throw new Error(String(data?.detail || data?.error || `Máy chủ AI báo lỗi (HTTP ${response.status}).`));
+        throw new Error(String(data?.detail || data?.error || (isVi ? `Máy chủ AI báo lỗi (HTTP ${response.status}).` : `AI server reported an error (HTTP ${response.status}).`)));
     }
     return data;
 };
@@ -1682,10 +1684,16 @@ const manualTimestampToSeconds = (value: any) => {
 
 const parseManualExplanation = (value: any): ManualExplanation | undefined => {
   const rawSource = typeof value === "object" && value ? value.rawText : value;
-  const rawText = String(rawSource || "")
+  const rawClean = String(rawSource || "")
     .replace(/^\s*\[EXPLANATION\]\s*/i, "")
-    .replace(/^\s*\d+\s*[:.)-]\s*/, "")
-    .trim();
+    .replace(/^\s*\d+(?:\s*(?:[-–—]|,)\s*\d+)*\s*[:.)-]\s*/, "");
+  // Normalize horizontal whitespace [ \t]+ to single space, normalize newlines, preserve \n\n
+  const rawText = rawClean
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
   if (!rawText) return undefined;
   const parsedQuotes = Array.from(new Set(Array.from(rawText.matchAll(/"([^"]+)"/g))
     .map(match => match[1].replace(/\s+/g, " ").trim())
@@ -2510,6 +2518,8 @@ interface BandPoint {
 }
 
 const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandPoint[]; color?: string; height?: number }) => {
+    const { i18n } = useTranslation();
+    const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
     const [showAll, setShowAll] = useState(false);
     const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
@@ -2525,7 +2535,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
     }, [data]);
 
     if (validPts.length === 0) {
-        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— Chưa có dữ liệu điểm band hợp lệ —</div>;
+        return <div style={{ textAlign: "center", color: "#8E8B99", padding: "30px 16px", fontSize: 13, fontStyle: "italic" }}>— {isVi ? "Chưa có dữ liệu điểm band hợp lệ" : "No valid band score data yet"} —</div>;
     }
 
     const hasMany = validPts.length > 15;
@@ -2582,7 +2592,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
                                 cursor: "pointer"
                             }}
                         >
-                            Recent 15
+                            {isVi ? "15 bài gần nhất" : "Recent 15"}
                         </button>
                         <button
                             type="button"
@@ -2600,7 +2610,7 @@ const BandTrendChart = ({ data, color = "#5B3DF5", height = 185 }: { data: BandP
                                 cursor: "pointer"
                             }}
                         >
-                            All ({validPts.length})
+                            {isVi ? `Tất cả (${validPts.length})` : `All (${validPts.length})`}
                         </button>
                     </div>
                 )}
@@ -3721,6 +3731,8 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
 
 export default function IeltsSupremeOS() {
   const { t, i18n } = useTranslation();
+  const isVi = String(i18n.language || '').toLowerCase().startsWith('vi');
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userRole, setUserRole] = useState<"TEACHER" | "STUDENT" | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
@@ -3989,6 +4001,17 @@ export default function IeltsSupremeOS() {
   const [keyEditingQuiz, setKeyEditingQuiz] = useState<Quiz | null>(null);
   const [activeExam, setActiveExam] = useState<Quiz | null>(null);
   const [pendingExamState, setPendingExamState] = useState<{quiz: Quiz, isPreview: boolean, isStudentTestUI: boolean} | null>(null);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!lightboxImageUrl) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxImageUrl(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxImageUrl]);
+
   // I18N: áp ngôn ngữ theo vai trò khi đăng nhập/đổi vai trò; LUÔN ép "en" khi đang trong phòng thi.
   useEffect(() => {
     if (activeExam) { i18n.changeLanguage("en"); }
@@ -4381,7 +4404,7 @@ export default function IeltsSupremeOS() {
   const [pushTarget, setPushTarget] = useState<"ALL" | string>("ALL");
 
   const handleSendPush = () => {
-      if (!pushTitle || !pushBody) { alert("Vui lòng nhập đủ tiêu đề và nội dung!"); return; }
+      if (!pushTitle || !pushBody) { alert(tx("Vui lòng nhập đủ tiêu đề và nội dung!", "Please enter both title and body!")); return; }
       const nx = students.map(s => {
           if (pushTarget === "ALL" || pushTarget === s.id) {
               const currentPending = s.pendingNotifications || [];
@@ -4392,7 +4415,7 @@ export default function IeltsSupremeOS() {
       setStudents(nx as Student[]);
       syncData({ students: nx });
       setPushTitle(""); setPushBody("");
-      alert("Đã gửi Push Notification thành công!");
+      alert(tx("Đã gửi Push Notification thành công!", "Push notification sent successfully!"));
   };
 
   useEffect(() => {
@@ -5338,7 +5361,7 @@ useEffect(() => {
       }
       writeOfflineQueue(email, []);
       if (legacy) localStorage.removeItem(`ielts_offline_result_${email}`);
-      alert(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`);
+      alert(tx(`Đã đồng bộ ${q.length} bài thi offline lên máy chủ thành công!`, `Successfully synced ${q.length} offline exam results to server!`));
     } catch (e) {
       console.warn("Flush offline queue failed, preserving the local queue:", e);
     }
@@ -8787,16 +8810,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       staged.forEach(item => formData.append("files", item.file));
       const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
       const data = await readApiJson(response);
-      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
+      if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || tx("Không thể phân tích batch DOCX.", "Unable to parse DOCX batch."));
       const results = Array.isArray(data?.results) ? data.results : [];
       setQuestDocxBatch(staged.map((item, index) => {
         const result = results.find((entry: any) => Number(entry?.index) === index);
         return result?.success && result?.quiz
           ? { ...item, status: "ready" as const, quiz: result.quiz as Quiz }
-          : { ...item, status: "error" as const, error: String(result?.error || "Không thể phân tích file này.") };
+          : { ...item, status: "error" as const, error: String(result?.error || tx("Không thể phân tích file này.", "Unable to parse this file.")) };
       }));
     } catch (error: any) {
-      const message = error?.message || "Không thể phân tích batch DOCX.";
+      const message = error?.message || tx("Không thể phân tích batch DOCX.", "Unable to parse DOCX batch.");
       setQuestDocxBatch(staged.map(item => ({ ...item, status: "error" as const, error: message })));
     } finally {
       setQuestDocxBatchBusy(false);
@@ -8816,7 +8839,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const confirmQuestDocxBatch = async () => {
     if (userRole !== "TEACHER" || questDocxBatchBusy || !questDocxBatch.length) return;
     if (questDocxBatch.some(item => item.status !== "ready" || !item.quiz)) {
-      alert("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.");
+      alert(tx("Sửa hoặc bỏ các file lỗi trước khi tạo chuyên đề.", "Fix or remove invalid files before creating the topic assignment."));
       return;
     }
     const createdAt = getTrueTime();
@@ -8835,7 +8858,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       id: `topic_${createdAt}_${Math.random().toString(36).slice(2, 7)}`,
       title: `Quest: ${preparedQuizzes[0]?.title || "DOCX import"}`,
       topicCategory: "DOCX import",
-      description: "Các bài được tạo theo thứ tự file DOCX đã xác nhận.",
+      description: tx("Các bài được tạo theo thứ tự file DOCX đã xác nhận.", "Tests created in the order of confirmed DOCX files."),
       audience: "ALL",
       targetStudentIds: [],
       nodes: preparedQuizzes.map((quiz, index) => ({
@@ -8858,7 +8881,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       await runTransaction(db, async transaction => {
         const workspace = await transaction.get(DB_DOC_REF);
-        if (!workspace.exists()) throw new Error("Không tìm thấy workspace để tạo chuyên đề.");
+        if (!workspace.exists()) throw new Error(tx("Không tìm thấy workspace để tạo chuyên đề.", "Workspace not found for creating topic assignment."));
         const storedAssignments = workspace.data()?.topicAssignments;
         const existingAssignments = (Array.isArray(storedAssignments) ? storedAssignments : []) as TopicAssignment[];
         preparedQuizzes.forEach(quiz => transaction.set(doc(QUIZZES_COLLECTION_REF, quiz.id), JSON.parse(JSON.stringify(quiz))));
@@ -8868,10 +8891,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setTopicAssignments(previous => [...previous, assignment]);
       setQuestDocxBatch([]);
       setTopicAssignmentEditor(assignment);
-      alert("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.");
+      alert(tx("Đã tạo chuyên đề theo đúng thứ tự batch. Kiểm tra chặng và bấm lưu nếu cần chỉnh thêm.", "Topic assignment created from batch in order. Check steps and click save if further adjustments are needed."));
     } catch (error: any) {
       console.error("Quest DOCX batch confirmation failed:", error);
-      alert(error?.message || "Không thể tạo chuyên đề từ batch DOCX.");
+      alert(error?.message || tx("Không thể tạo chuyên đề từ batch DOCX.", "Failed to create topic assignment from DOCX batch."));
     } finally {
       setQuestDocxBatchBusy(false);
     }
@@ -8895,7 +8918,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!file) return;
     const currentQuiz = editingQuizRef.current;
     if (!currentQuiz) {
-      alert("Hãy mở đề cần chỉnh trước.");
+      alert(tx("Hãy mở đề cần chỉnh trước.", "Please open an exam to edit first."));
       return;
     }
     try {
@@ -8903,31 +8926,31 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (mode === "replace_sections") {
         const patchQuiz = data.quiz;
         if (!patchQuiz?.questions?.length) {
-          alert("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.");
+          alert(tx("File bổ sung chưa có câu hỏi/passage hợp lệ để thay.", "The supplement file has no valid questions/passages to replace."));
           return;
         }
         const activeSection = Number(currentQuiz._activePassageTab || 0);
         const merged = mergeQuizSectionsFromSupplement(currentQuiz, patchQuiz, activeSection);
         if (!merged.replaced) {
-          alert("Không tìm thấy passage/section hợp lệ trong file bổ sung.");
+          alert(tx("Không tìm thấy passage/section hợp lệ trong file bổ sung.", "No valid passage/section found in the supplement file."));
           return;
         }
         editingQuizRef.current = merged.quiz;
         setEditingQuiz(merged.quiz);
-        alert(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`);
+        alert(tx(`Đã thay ${merged.replaced} passage/section bắt đầu từ tab ${activeSection + 1}. Bấm Save để đồng bộ.`, `Replaced ${merged.replaced} passage/section starting from tab ${activeSection + 1}. Click Save to sync.`));
         return;
       }
       const merged = mergeQuizManualExplanationsFromSupplement(currentQuiz, data);
       if (!merged.imported) {
-        alert("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.");
+        alert(tx("Không tìm thấy [EXPLANATION] khớp số câu trong đề hiện tại.", "No [EXPLANATION] matching question numbers found in the current exam."));
         return;
       }
       editingQuizRef.current = merged.quiz;
       setEditingQuiz(merged.quiz);
-      alert(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`);
+      alert(tx(`Đã import explanation cho ${merged.imported} câu. Bấm Save để đồng bộ.`, `Imported explanations for ${merged.imported} questions. Click Save to sync.`));
     } catch (error: any) {
       logErrorToSystem("UPLOAD_DOCX_SUPPLEMENT_FAIL", error?.message || String(error), { fileName: file.name, mode });
-      alert("Không xử lý được file bổ sung: " + (error?.message || String(error)));
+      alert(tx("Không xử lý được file bổ sung: ", "Failed to process supplement file: ") + (error?.message || String(error)));
     }
   };
 
@@ -8948,13 +8971,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (existingIndex !== -1) updated[existingIndex] = persisted;
           else updated.unshift(persisted);
           setQuizCatalogState(updated);
-          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
           return true;
           } catch (error: any) {
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
-              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+              alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+              alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
           }
@@ -8966,7 +8989,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const currentSnapshot = editingQuizRef.current;
           if (!currentSnapshot) return false;
           if (!currentSnapshot.title) {
-              alert("Vui lòng nhập tên đề thi!");
+              alert(tx("Vui lòng nhập tên đề thi!", "Please enter the exam title!"));
               return false;
           }
 
@@ -8984,13 +9007,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setQuizCatalogState(updated);
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
-          alert(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`);
+          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
           return true;
           } catch (error: any) {
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
-              alert('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.');
+              alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
-              alert(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`);
+              alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
           }
@@ -9009,12 +9032,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
       void syncData({ quizzes: [newQuiz] }).then(saved => {
-          alert(saved ? "Exam duplicated successfully!" : "The copy is saved on this device and will retry automatically when the connection returns.");
+          alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
   };
 
   const handleBulkLock = (locked: boolean) => {
-      if(!confirm(`Confirm Lock / Unlock ${selectedQuizzes.length} exams?`)) return;
+      if(!confirm(tx(`Xác nhận Khóa / Mở khóa ${selectedQuizzes.length} đề thi?`, `Confirm Lock / Unlock ${selectedQuizzes.length} exams?`))) return;
       const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
       setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
   }
@@ -9025,7 +9048,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       setQuizCatalogState(quizzesRef.current.map(quiz => byId.get(quiz.id) || quiz));
       const saved = await syncData({ __quizUpserts: updates });
       if (!saved) {
-          alert(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`);
+          alert(tx(`${action}: chưa đồng bộ được. Các thay đổi vẫn được giữ an toàn trên thiết bị và sẽ tự thử lại.`, `${action}: sync failed. Changes are kept safely on this device and will retry automatically.`));
       }
   };
 
@@ -9172,25 +9195,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
     setRealExamPackages(nx);
     const saved = await syncData({ realExamPackages: nx });
-    if (!saved) alert("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.");
+    if (!saved) alert(tx("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.", "Failed to sync real exam package. Data is safely stored on this device."));
     return saved;
   };
   const createRealExamPackageFromSelection = async () => {
     const selected = selectedQuizzes.map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
     if (selected.length !== 2 && selected.length !== 3) {
-      alert("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).");
+      alert(tx("Chọn đúng 2 đề (Listening + Reading) hoặc 3 đề (Listening + Reading + Writing).", "Select exactly 2 exams (Listening + Reading) or 3 exams (Listening + Reading + Writing)."));
       return;
     }
     const ordered = [...selected].sort((a, b) => quizSkillRank(a) - quizSkillRank(b));
     const ranks = ordered.map(quizSkillRank);
     const valid = ranks[0] === 0 && ranks[1] === 1 && (ordered.length === 2 || ranks[2] === 2);
     if (!valid) {
-      alert("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.");
+      alert(tx("Gói thi thật phải theo thứ tự Listening - Reading hoặc Listening - Reading - Writing.", "Real exam package must follow the order: Listening - Reading or Listening - Reading - Writing."));
       return;
     }
     const pkg: RealExamPackage = {
       id: makeRealExamId(),
-      title: `Real Exam Package ${new Date().toLocaleDateString("vi-VN")}`,
+      title: `Real Exam Package ${new Date().toLocaleDateString(isVi ? "vi-VN" : "en-US")}`,
       active: false,
       mode: ordered.length === 3 ? "LRW" : "LR",
       quizIds: ordered.map(quiz => quiz.id),
@@ -9204,7 +9227,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     setRealExamPackageEditor(pkg);
   };
   const deleteRealExamPackage = async (pkgId: string) => {
-    if (!confirm("Xóa gói bài thi thật này?")) return;
+    if (!confirm(tx("Xóa gói bài thi thật này?", "Delete this real exam package?"))) return;
     const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
     setRealExamPackages(nx);
     await syncData({ realExamPackages: nx });
@@ -9257,7 +9280,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const parent = normalizeFolderPath(parentPath);
     const fullPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
     if (allKnownFolders.map(normalizeFolderPath).includes(fullPath)) {
-      alert("Thư mục đã tồn tại.");
+      alert(tx("Thư mục đã tồn tại.", "Folder already exists."));
       return;
     }
     const nextFolders = Array.from(new Set([...examFolders.map(normalizeFolderPath), fullPath])).filter(f => f && f !== "Root").sort();
@@ -9272,7 +9295,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (oldPath === "Root" || !oldPath || !newPath) return;
     if (newPath === oldPath) return;
     if (newPath.startsWith(oldPath + "/")) {
-      alert("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.");
+      alert(tx("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.", "Cannot move a folder into itself or a subfolder."));
       return;
     }
 
@@ -9344,7 +9367,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleRenameFolder = async (rawOldPath: string, newName: string) => {
     const oldPath = normalizeFolderPath(rawOldPath);
     if (oldPath === "Root") {
-      alert("Không thể đổi tên thư mục Root.");
+      alert(tx("Không thể đổi tên thư mục Root.", "Cannot rename Root folder."));
       return;
     }
     const trimmed = newName.trim().replace(/^\/+|\/+$/g, "");
@@ -9353,7 +9376,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const newPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
     if (newPath === oldPath) return;
     if (allKnownFolders.map(normalizeFolderPath).includes(newPath)) {
-      alert("Thư mục với tên này đã tồn tại ở vị trí hiện tại.");
+      alert(tx("Thư mục với tên này đã tồn tại ở vị trí hiện tại.", "A folder with this name already exists in the current location."));
       return;
     }
     await handleMoveOrRenameFolder(oldPath, newPath);
@@ -9362,7 +9385,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleDeleteFolder = async (rawTargetPath: string) => {
     const targetPath = normalizeFolderPath(rawTargetPath);
     if (targetPath === "Root") {
-      alert("Không thể xóa thư mục Root.");
+      alert(tx("Không thể xóa thư mục Root.", "Cannot delete Root folder."));
       return;
     }
     const containedQuizzes = quizzesRef.current.filter(q => {
@@ -9375,8 +9398,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     });
 
     const confirmMsg = containedQuizzes.length > 0 || containedSubfolders.length > 0
-      ? `Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`
-      : `Bạn có chắc muốn xóa thư mục trống "${targetPath}"?`;
+      ? tx(`Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`, `Folder "${targetPath}" contains ${containedQuizzes.length} exams and ${containedSubfolders.length} subfolders.\n\nAre you sure you want to delete it? All contained exams will be moved to the parent folder.`)
+      : tx(`Bạn có chắc muốn xóa thư mục trống "${targetPath}"?`, `Are you sure you want to delete the empty folder "${targetPath}"?`);
 
     if (!confirm(confirmMsg)) return;
 
@@ -9707,8 +9730,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       
       if (!isTeacherPreview && !isStudentTestUI) {
           const now = getRealTime();
-          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert("Bài thi này chưa tới giờ mở!"); return; }
-          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert("Bài thi này đã quá hạn và bị đóng!"); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledStart && now < parseVNTime(quiz.scheduledStart)) { alert(tx("Bài thi này chưa tới giờ mở!", "This exam has not started yet!")); return; }
+          if (!isQuestLaunch && !isRealExamLaunch && quiz.scheduledEnd && now > parseVNTime(quiz.scheduledEnd)) { alert(tx("Bài thi này đã quá hạn và bị đóng!", "This exam has expired and is now closed!")); return; }
           
           if (!deliveryPolicy.isPractice && deliveryPolicy.isSEBRequired) {
               const isSEB = navigator.userAgent.includes("SEB");
@@ -9720,14 +9743,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
           
           if (!isQuestLaunch && !isRealExamLaunch && quiz.passcode) {
-              const pass = prompt("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):");
-              if (pass !== quiz.passcode) { alert("Mã bảo vệ không đúng!"); return; }
+              const pass = prompt(tx("Nhập mã bảo vệ phòng thi (Nếu không có, cứ để trống và bấm OK):", "Enter test room passcode (If none, leave blank and click OK):"));
+              if (pass !== quiz.passcode) { alert(tx("Mã bảo vệ không đúng!", "Incorrect passcode!")); return; }
           }
 
           if (currentUser && !isQuestLaunch && !isRealExamLaunch) {
               const myHistory = quizResults.filter(r => r.quizId === quiz.id && r.studentId === students.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())?.id);
               if (!deliveryPolicy.isPractice && myHistory.length >= deliveryPolicy.maxAttempts) {
-                  alert(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`);
+                  alert(tx(`Bạn đã hết số lần làm bài! (Tối đa ${deliveryPolicy.maxAttempts} lần)`, `You have used all available attempts! (Maximum ${deliveryPolicy.maxAttempts} attempts)`));
                   return;
               }
           }
@@ -10314,7 +10337,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       otherIndex !== index && other.event === rule.event
     ));
     if (duplicateGiftName || duplicateEvent) {
-      setRewardConfigError(duplicateGiftName ? "Tên quà không được trùng." : "Mỗi sự kiện thưởng chỉ được có một quy tắc.");
+      setRewardConfigError(duplicateGiftName ? tx("Tên quà không được trùng.", "Gift names cannot be duplicated.") : tx("Mỗi sự kiện thưởng chỉ được có một quy tắc.", "Each reward event can only have one rule."));
       return;
     }
     setRewardConfigSaving(true);
@@ -10322,7 +10345,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const saved = await syncData({ giftCatalog: nextGifts, rewardMechanisms: nextRewards });
       if (!saved) {
-        setRewardConfigError("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.");
+        setRewardConfigError(tx("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.", "Could not save. Changes remain on this device and will retry when online."));
         return;
       }
       setGiftCatalog(nextGifts);
@@ -10763,9 +10786,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const CREAM = "#F6EBCB", CREAM_DIM = "rgba(246,235,203,0.56)", INK = "#1a1305";
     const lxYear = new Date().getFullYear();
     const lxFeats: [string, string, string][] = [
-      ["01", "Phòng thi chuẩn IDP", "Giao diện computer-based mô phỏng phòng thi thật."],
-      ["02", "Chấm & phân tích tức thì", "Band điểm, hạn chế và lộ trình cải thiện ngay sau khi nộp."],
-      ["03", "Chống gian lận", "Tích hợp Safe Exam Browser, khoá môi trường thi."],
+      ["01", tx("Phòng thi chuẩn IDP", "Standard IDP Test Room"), tx("Giao diện computer-based mô phỏng phòng thi thật.", "Computer-based interface simulating real exam conditions.")],
+      ["02", tx("Chấm & phân tích tức thì", "Instant Scoring & Analytics"), tx("Band điểm, hạn chế và lộ trình cải thiện ngay sau khi nộp.", "Band scores, bottlenecks, and action plans right after submission.")],
+      ["03", tx("Chống gian lận", "Anti-Cheat Protection"), tx("Tích hợp Safe Exam Browser, khoá môi trường thi.", "Integrated Safe Exam Browser with secure test lockdown.")],
     ];
     const lxNoise = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`;
     // WOW #1: spotlight bám con trỏ — cập nhật CSS var trực tiếp lên DOM (không re-render).
@@ -10822,15 +10845,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .lx-eye:hover{ color:${GOLD} !important; }
         `}</style>
 
-        {loginLoading && <div role="status" aria-live="assertive" aria-label="Đang xác thực thông tin đăng nhập" style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+        {loginLoading && <div role="status" aria-live="assertive" aria-label={tx("Đang xác thực thông tin đăng nhập", "Verifying login credentials")} style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
           <div style={{ width: "min(360px, 100%)", textAlign: "center", color: CREAM }}>
             <div style={{ width: 82, height: 82, margin: "0 auto 28px", display: "grid", placeItems: "center", border: `1px solid ${GOLD}55`, borderRadius: "50%", boxShadow: `0 0 0 12px ${GOLD}0d, 0 20px 54px ${GOLD}22` }}>
               <BrandLogo size={38} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} />
             </div>
             <div style={{ width: 36, height: 36, margin: "0 auto 24px", border: `3px solid ${GOLD}2e`, borderTopColor: GOLD_BRIGHT, borderRadius: "50%", animation: "lxVerifySpin .8s linear infinite" }} />
             <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 2.4, color: GOLD, marginBottom: 12 }}>VERIFYING ACCESS</div>
-            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>Đang xác thực đăng nhập</div>
-            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>Vui lòng chờ trong giây lát.</div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
+            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>{tx("Vui lòng chờ trong giây lát.", "Please wait a moment.")}</div>
           </div>
         </div>}
 
@@ -10856,8 +10879,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                 {/* số thứ tự khổng lồ kiểu tạp chí, mờ phía sau */}
                 <div aria-hidden style={{ position: "absolute", top: -88, left: -14, fontFamily: "var(--display)", fontSize: "clamp(160px, 20vw, 260px)", fontWeight: 600, lineHeight: 1, color: "rgba(231,196,112,0.055)", pointerEvents: "none", userSelect: "none" }}>№</div>
                 <div className="lx-rise" style={{ position: "relative", fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: GOLD, marginBottom: 24, animationDelay: ".15s" }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 className="lx-rise" style={{ position: "relative", fontFamily: "var(--display)", fontSize: "clamp(44px, 5vw, 70px)", lineHeight: 1.02, fontWeight: 500, margin: "0 0 24px", letterSpacing: -1, color: CREAM, animationDelay: ".25s" }}>Vừa học vừa thi<br/><span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>Tiến bộ tức thì!</span></h1>
-                <p className="lx-rise" style={{ position: "relative", fontSize: 16.5, lineHeight: 1.75, color: CREAM_DIM, maxWidth: 460, margin: "0 0 36px", animationDelay: ".35s" }}>Hệ thống thi thử chuẩn IDP, chấm điểm tức thì, sổ từ vựng thông minh và quản lý lớp học.</p>
+                <h1 className="lx-rise" style={{ position: "relative", fontFamily: "var(--display)", fontSize: "clamp(44px, 5vw, 70px)", lineHeight: 1.02, fontWeight: 500, margin: "0 0 24px", letterSpacing: -1, color: CREAM, animationDelay: ".25s" }}>{tx("Vừa học vừa thi", "Practice & Test")}<br/><span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("Tiến bộ tức thì!", "Instant Progress!")}</span></h1>
+                <p className="lx-rise" style={{ position: "relative", fontSize: 16.5, lineHeight: 1.75, color: CREAM_DIM, maxWidth: 460, margin: "0 0 36px", animationDelay: ".35s" }}>{tx("Hệ thống thi thử chuẩn IDP, chấm điểm tức thì, sổ từ vựng thông minh và quản lý lớp học.", "Standard IDP computer-based mock tests, instant grading, smart vocabulary notebook, and classroom management.")}</p>
                 <div className="lx-rise" style={{ maxWidth: 480, animationDelay: ".45s" }}>
                     {lxFeats.map(([n, h, d]) => (
                         <div key={n} className="lx-feat">
@@ -10882,8 +10905,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                     <BrandWordmark size={16} color={CREAM} light />
                 </div>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: GOLD, marginBottom: 10 }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 style={{ fontFamily: "var(--display)", fontSize: "clamp(30px, 8vw, 40px)", lineHeight: 1.05, fontWeight: 500, margin: "0 0 12px", letterSpacing: -0.6 }}>Vừa học vừa thi <span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>tiến bộ tức thì.</span></h1>
-                <p style={{ fontSize: 14, lineHeight: 1.6, color: CREAM_DIM, margin: 0 }}>Thi thử chuẩn IDP · chấm điểm tức thì · sổ từ vựng thông minh.</p>
+                <h1 style={{ fontFamily: "var(--display)", fontSize: "clamp(30px, 8vw, 40px)", lineHeight: 1.05, fontWeight: 500, margin: "0 0 12px", letterSpacing: -0.6 }}>{tx("Vừa học vừa thi ", "Practice & Test ")}<span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("tiến bộ tức thì.", "instant progress.")}</span></h1>
+                <p style={{ fontSize: 14, lineHeight: 1.6, color: CREAM_DIM, margin: 0 }}>{tx("Thi thử chuẩn IDP · chấm điểm tức thì · sổ từ vựng thông minh.", "Standard IDP mock tests · instant grading · smart vocabulary.")}</p>
             </div>
             <div onMouseMove={lxCardMove} onMouseLeave={lxCardLeave} className="lx-card lx-rise" style={{ width: 430, maxWidth: "100%", animationDelay: ".35s" }}>
                 <div className="lx-cardinner" style={{ position: "relative", background: "linear-gradient(165deg, rgba(30,25,15,0.74), rgba(10,9,7,0.84))", border: "1px solid rgba(231,196,112,0.18)", borderRadius: 24, padding: "42px 38px", boxShadow: "0 44px 96px -34px rgba(0,0,0,0.92), inset 0 1px 0 rgba(231,196,112,0.13)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)" }}>
@@ -11283,6 +11306,89 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             </div>
           )}
         </>
+      )}
+
+      {/* Lightbox Modal for Diagrams & Visuals */}
+      {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={tx("Phóng to hình ảnh", "Image zoom")}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 999999,
+            background: 'rgba(15, 23, 42, 0.78)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            animation: 'fadeIn 0.15s ease-out',
+          }}
+          onClick={() => setLightboxImageUrl(null)}
+        >
+          <div
+            style={{
+              position: 'relative',
+              maxWidth: 'min(92vw, 1100px)',
+              maxHeight: '90vh',
+              background: '#ffffff',
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                {tx("Hình ảnh phóng to", "Enlarged Image")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLightboxImageUrl(null)}
+                title={tx("Đóng (Esc)", "Close (Esc)")}
+                aria-label={tx("Đóng", "Close")}
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  color: '#475569',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  transition: 'background 0.15s',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span>{tx("Đóng", "Close")}</span>
+              </button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+              <img
+                src={lightboxImageUrl}
+                alt="Enlarged visual"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: 'calc(90vh - 80px)',
+                  objectFit: 'contain',
+                  display: 'block',
+                  borderRadius: 6,
+                }}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

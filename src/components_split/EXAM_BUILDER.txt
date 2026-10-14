@@ -127,7 +127,7 @@
                     setExamBuilderSaveState("error");
                     alert(String(error?.message || error).includes('QUIZ_REVISION_CONFLICT') ? 'The assessment changed elsewhere. Reload before saving.' : 'Could not save this assessment.');
                 }
-                if (!saved) alert("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.");
+                if (!saved) alert(tx("Chưa thể đồng bộ đề lên máy chủ. Bản trên máy này được giữ lại để thử lại.", "Could not sync quiz to server. Local draft kept to retry."));
             };
 
             // ===== MANUSCRIPT DESIGN TOKENS (đại tu giao diện sửa đề) =====
@@ -204,7 +204,7 @@
                               {typeof handleAiRawDocxBatchUpload === 'function' && <input type="file" accept=".docx" multiple disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} onChange={handleAiRawDocxBatchUpload as any} style={{display: 'none'}} />}
                             </label>
                           </div>
-                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: "Đề thi mới", type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '0 16px', height: 36, fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap'}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
+                          <button className="ebx-primary" onClick={() => setEditingQuiz({ id: getTrueTime().toString(), title: tx("Đề thi mới", "New Exam"), type: "Reading", folder: builderFolder, timeLimit: 60, maxAttempts: 1, questions: [], active: false, audience: "ALL", targetStudentIds: [] })} style={{background: EB.accent, color: '#fff', padding: '0 16px', height: 36, fontSize: 13, borderRadius: EB.radiusSm, border: 'none', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap'}}><Ico name="plus" size={14} />{t('eb_create_new')}</button>
                         </div>
                     )}
                 </div>
@@ -246,7 +246,7 @@
                         <button className="ebx-primary" onClick={() => {
                             const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
                             setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
-                            alert("Đã đồng bộ Key!");
+                            alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
                       </div>
                     </div>
@@ -257,47 +257,47 @@
                         <div style={{ maxWidth: 1080, margin: '0 auto', padding: '34px 32px 70px' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, marginBottom: 30, flexWrap: 'wrap' }}>
                                 <div>
-                                    <div style={{ ...ebEyebrow, marginBottom: 10 }}><Ico name="shield" size={13} />Gói bài thi thật</div>
-                                    <h2 style={{ margin: 0, fontFamily: EB.fDisplay, fontSize: 34, letterSpacing: '-0.025em', lineHeight: 1.08, color: EB.ink }}>Cấu hình bài thi mô phỏng</h2>
-                                    <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.</p>
+                                    <div style={{ ...ebEyebrow, marginBottom: 10 }}><Ico name="shield" size={13} />{tx("Gói bài thi thật", "Real Exam Package")}</div>
+                                    <h2 style={{ margin: 0, fontFamily: EB.fDisplay, fontSize: 34, letterSpacing: '-0.025em', lineHeight: 1.08, color: EB.ink }}>{tx("Cấu hình bài thi mô phỏng", "Mock Exam Configuration")}</h2>
+                                    <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>{tx("Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.", "Runs in sequence: Listening, Reading, then Writing if applicable. Results are kept private and students return to the lobby after each skill.")}</p>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
-                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />Đóng</button>
+                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
                                     <button className="ebx-primary" onClick={async () => {
                                         const draft = realExamPackageEditor;
                                         const ordered = (draft.quizIds || []).filter(Boolean).map(id => quizzes.find((quiz: any) => quiz.id === id)).filter(Boolean) as Quiz[];
                                         const expectedCount = draft.mode === 'LRW' ? 3 : 2;
                                         const validOrder = ordered.length === expectedCount && ordered.map(quizSkillRank).every((rank, index) => rank === index);
-                                        if (!String(draft.title || '').trim()) { alert('Nhập tên gói bài thi.'); return; }
-                                        if (!validOrder) { alert('Chọn đúng đề theo thứ tự Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.')); return; }
-                                        if (draft.scheduledStart && draft.scheduledEnd && parseVNTime(draft.scheduledEnd) <= parseVNTime(draft.scheduledStart)) { alert('Thời điểm đóng phải sau thời điểm mở.'); return; }
+                                        if (!String(draft.title || '').trim()) { alert(tx('Nhập tên gói bài thi.', 'Please enter the exam package title.')); return; }
+                                        if (!validOrder) { alert(tx('Chọn đúng đề theo thứ tự Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.'), 'Select tests in order: Listening - Reading' + (draft.mode === 'LRW' ? ' - Writing.' : '.'))); return; }
+                                        if (draft.scheduledStart && draft.scheduledEnd && parseVNTime(draft.scheduledEnd) <= parseVNTime(draft.scheduledStart)) { alert(tx('Thời điểm đóng phải sau thời điểm mở.', 'Closing time must be after opening time.')); return; }
                                         await saveRealExamPackage({ ...draft, quizIds: ordered.map(quiz => quiz.id), maxAttempts: Math.max(1, Number(draft.maxAttempts) || 1) });
                                         setSelectedQuizzes([]);
                                         setRealExamPackageEditor(null);
-                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />Lưu gói thi</button>
+                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />{tx("Lưu gói thi", "Save package")}</button>
                                 </div>
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 340px)', gap: 22, alignItems: 'start' }}>
                                 <div style={{ display: 'grid', gap: 18 }}>
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="fileText" size={13} />Thông tin gói thi</div>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="fileText" size={13} />{tx("Thông tin gói thi", "Package Information")}</div>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 144px', gap: 14 }}>
-                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Tên hiển thị
-                                                <input value={realExamPackageEditor.title || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, title: event.target.value } : prev)} placeholder="Ví dụ: Mock test 03" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} />
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Tên hiển thị", "Display name")}
+                                                <input value={realExamPackageEditor.title || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, title: event.target.value } : prev)} placeholder={tx("Ví dụ: Mock test 03", "e.g. Mock test 03")} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} />
                                             </label>
-                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Số lượt mỗi học sinh
+                                            <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Số lượt mỗi học sinh", "Max attempts per student")}
                                                 <input type="number" min="1" value={Math.max(1, Number(realExamPackageEditor.maxAttempts) || 1)} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, maxAttempts: Math.max(1, Number(event.target.value) || 1) } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none', fontVariantNumeric: 'tabular-nums' }} />
                                             </label>
                                         </div>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginTop: 14 }}>Mật khẩu vào gói
-                                            <div style={{ position: 'relative' }}><Ico name="key" size={15} color={EB.sub} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} /><input type="text" value={realExamPackageEditor.passcode || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, passcode: event.target.value } : prev)} placeholder="Để trống nếu không cần" style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 36px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} /></div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginTop: 14 }}>{tx("Mật khẩu vào gói", "Package passcode")}
+                                            <div style={{ position: 'relative' }}><Ico name="key" size={15} color={EB.sub} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} /><input type="text" value={realExamPackageEditor.passcode || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, passcode: event.target.value } : prev)} placeholder={tx("Để trống nếu không cần", "Leave blank if not needed")} style={{ width: '100%', boxSizing: 'border-box', padding: '11px 12px 11px 36px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 14px ' + EB.fBody, outline: 'none' }} /></div>
                                         </label>
                                     </section>
 
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
-                                            <div style={ebEyebrow}><Ico name="list" size={13} />Chuỗi kỹ năng</div>
+                                            <div style={ebEyebrow}><Ico name="list" size={13} />{tx("Chuỗi kỹ năng", "Skill Sequence")}</div>
                                             <div style={{ display: 'flex', gap: 5, padding: 3, background: EB.wash, borderRadius: 8 }}>
                                                 {(['LR', 'LRW'] as const).map(mode => <button key={mode} type="button" onClick={() => setRealExamPackageEditor(prev => {
                                                     if (!prev) return prev;
@@ -320,9 +320,9 @@
                                     </section>
 
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 22 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="users" size={13} />Học sinh được làm</div>
+                                        <div style={{ ...ebEyebrow, marginBottom: 16 }}><Ico name="users" size={13} />{tx("Học sinh được làm", "Target Audience")}</div>
                                         <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
-                                            {([['ALL', 'Toàn bộ học sinh'], ['SPECIFIC', 'Chọn học sinh']] as const).map(([audience, label]) => <button type="button" key={audience} onClick={() => setRealExamPackageEditor(prev => prev ? { ...prev, audience } : prev)} style={{ padding: '8px 11px', borderRadius: 7, border: `1px solid ${realExamPackageEditor.audience === audience ? EB.accent : EB.line}`, background: realExamPackageEditor.audience === audience ? `${EB.accent}10` : EB.sheet, color: realExamPackageEditor.audience === audience ? EB.accent : EB.sub, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>{label}</button>)}
+                                            {([['ALL', tx('Toàn bộ học sinh', 'All students')], ['SPECIFIC', tx('Chọn học sinh', 'Select students')]] as const).map(([audience, label]) => <button type="button" key={audience} onClick={() => setRealExamPackageEditor(prev => prev ? { ...prev, audience } : prev)} style={{ padding: '8px 11px', borderRadius: 7, border: `1px solid ${realExamPackageEditor.audience === audience ? EB.accent : EB.line}`, background: realExamPackageEditor.audience === audience ? `${EB.accent}10` : EB.sheet, color: realExamPackageEditor.audience === audience ? EB.accent : EB.sub, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>{label}</button>)}
                                         </div>
                                         {realExamPackageEditor.audience === 'SPECIFIC' && <div style={{ maxHeight: 240, overflowY: 'auto', borderTop: `1px solid ${EB.line}` }}>{students.map((student: any) => {
                                             const checked = (realExamPackageEditor.targetStudentIds || []).includes(student.id);
@@ -333,18 +333,18 @@
 
                                 <aside style={{ display: 'grid', gap: 18 }}>
                                     <section className="ebx-card" style={{ background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: 20 }}>
-                                        <div style={{ ...ebEyebrow, marginBottom: 15 }}><Ico name="calendar" size={13} />Lịch mở gói</div>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginBottom: 13 }}>Mở từ
+                                        <div style={{ ...ebEyebrow, marginBottom: 15 }}><Ico name="calendar" size={13} />{tx("Lịch mở gói", "Package Schedule")}</div>
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub, marginBottom: 13 }}>{tx("Mở từ", "Opens from")}
                                             <input type="datetime-local" value={realExamPackageEditor.scheduledStart || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledStart: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
                                         </label>
-                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>Đóng lúc
+                                        <label style={{ display: 'grid', gap: 7, fontSize: 12, fontWeight: 700, color: EB.sub }}>{tx("Đóng lúc", "Closes at")}
                                             <input type="datetime-local" value={realExamPackageEditor.scheduledEnd || ''} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, scheduledEnd: event.target.value } : prev)} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: `1px solid ${EB.line}`, background: EB.wash, borderRadius: 8, color: EB.ink, font: '600 12px ' + EB.fBody, outline: 'none' }} />
                                         </label>
-                                        <p style={{ margin: '12px 0 0', fontSize: 11, lineHeight: 1.5, color: EB.sub }}>Để trống hai trường nếu gói có thể mở bất kỳ lúc nào.</p>
+                                        <p style={{ margin: '12px 0 0', fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{tx("Để trống hai trường nếu gói có thể mở bất kỳ lúc nào.", "Leave both blank if the package can be accessed anytime.")}</p>
                                     </section>
                                     <section style={{ border: `1px solid ${realExamPackageEditor.active ? C.succ : EB.line}`, borderRadius: EB.radius, padding: 20, background: realExamPackageEditor.active ? `${C.succ}0b` : EB.sheet }}>
-                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><Ico name={realExamPackageEditor.active ? 'check' : 'lock'} size={18} color={realExamPackageEditor.active ? C.succ : EB.sub} /><div><div style={{ fontSize: 14, fontWeight: 800, color: realExamPackageEditor.active ? C.succ : EB.ink }}>{realExamPackageEditor.active ? 'Đang mở cho học sinh' : 'Đang để bản nháp'}</div><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{realExamPackageEditor.active ? 'Học sinh đúng đối tượng có thể nhìn thấy gói trong thời gian đã cài.' : 'Gói chỉ được lưu, chưa xuất hiện ở phía học sinh.'}</div></div></div>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 15, cursor: 'pointer', fontSize: 12, fontWeight: 800, color: EB.ink }}><input type="checkbox" checked={!!realExamPackageEditor.active} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, active: event.target.checked } : prev)} />Xuất bản gói thi</label>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}><Ico name={realExamPackageEditor.active ? 'check' : 'lock'} size={18} color={realExamPackageEditor.active ? C.succ : EB.sub} /><div><div style={{ fontSize: 14, fontWeight: 800, color: realExamPackageEditor.active ? C.succ : EB.ink }}>{realExamPackageEditor.active ? tx('Đang mở cho học sinh', 'Open for students') : tx('Đang để bản nháp', 'Draft status')}</div><div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: EB.sub }}>{realExamPackageEditor.active ? tx('Học sinh đúng đối tượng có thể nhìn thấy gói trong thời gian đã cài.', 'Eligible students can access this package during the scheduled window.') : tx('Gói chỉ được lưu, chưa xuất hiện ở phía học sinh.', 'Package is saved but not visible to students.')}</div></div></div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 15, cursor: 'pointer', fontSize: 12, fontWeight: 800, color: EB.ink }}><input type="checkbox" checked={!!realExamPackageEditor.active} onChange={(event) => setRealExamPackageEditor(prev => prev ? { ...prev, active: event.target.checked } : prev)} />{tx('Xuất bản gói thi', 'Publish exam package')}</label>
                                     </section>
                                 </aside>
                             </div>
@@ -384,7 +384,7 @@
                                 )})}
                             </div>
                             <div style={{padding: 14, borderTop: `1px solid ${EB.line}`, display: isWritingQuiz(editingQuiz) ? 'none' : 'grid', gap: 8}}>
-                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: "Câu hỏi mới", options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
+                                <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "CHOICE", text: tx("Câu hỏi mới", "New question"), options: ["A", "B", "C", "D"], correctAnswer: 0}]} : prev)} style={{background: EB.sheet, color: EB.ink, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="plus" size={14} />{t('eb_add_question')}</button>
                                 <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, questions: [...(prev.questions || []), {id: getTrueTime().toString() + Math.random(), type: "BLANK", text: "", groupContext: "", correctAnswer: ""}]} : prev)} style={{background: EB.accentWash, color: EB.accent, padding: '10px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${C.accent}22`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7}}><Ico name="edit" size={13} />{t('eb_add_blank_group')}</button>
                             </div>
                         </aside>
@@ -541,7 +541,7 @@
                                                     <option value="MATCHING">{t('eb_opt_match')}</option>
                                                     <option value="BLANK">{t('eb_opt_blank')}</option>
                                                     <option value="DRAG_DROP">{t('eb_opt_drag')}</option>
-                                                    <option value="DRAG_DROP_HEADING">Matching Headings (kéo thả)</option>
+                                                    <option value="DRAG_DROP_HEADING">{tx("Matching Headings (kéo thả)", "Matching Headings (Drag & Drop)")}</option>
                                                     <option value="MAP_DRAG">Map labelling (drag onto map)</option>
                                                     <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
@@ -597,7 +597,7 @@
                                                 }} style={{...iconBtn, width: 'auto', padding: '0 13px', gap: 6, fontSize: 13, fontWeight: 600}}><Ico name="copy" size={14} />{t('eb_duplicate')}</button>
 
                                                 <button className="ebx-soft" onClick={() => {
-                                                    if (confirm("Chắc chắn xóa câu hỏi này?")) {
+                                                    if (confirm(tx("Chắc chắn xóa câu hỏi này?", "Are you sure you want to delete this question?"))) {
                                                         setEditingQuiz((prev: any) => {
                                                             if (!prev) return prev;
                                                             const nQ = (prev.questions || []).filter((_: any, i: number) => i < qIndex || i > lastIdx);
@@ -688,21 +688,21 @@
                                             <div>
                                                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:10}}>
                                                     <label style={{...ebEyebrow, display:'flex'}}><Ico name="link" size={13} />List of Headings</label>
-                                                    <button className="ebx-soft" onClick={()=>writeHeads([...heads, ''])} style={{background:EB.accentWash, color:EB.accent, border:`1px solid ${C.accent}22`, padding:'7px 13px', borderRadius:EB.radiusSm, fontWeight:600, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:6}}><Ico name="plus" size={13} />Thêm heading</button>
+                                                    <button className="ebx-soft" onClick={()=>writeHeads([...heads, ''])} style={{background:EB.accentWash, color:EB.accent, border:`1px solid ${C.accent}22`, padding:'7px 13px', borderRadius:EB.radiusSm, fontWeight:600, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:6}}><Ico name="plus" size={13} />{tx('Thêm heading', 'Add heading')}</button>
                                                 </div>
                                                 <div style={{display:'flex', flexDirection:'column', gap:8, marginBottom:24}}>
                                                     {heads.map((txt:string, hi:number) => (
                                                         <div key={hi} style={{display:'flex', alignItems:'center', gap:10, background:EB.sheet, border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, padding:'8px 12px'}}>
                                                             <span style={{fontFamily:EB.fMono, fontWeight:700, color:EB.accent, fontSize:13, minWidth:30, fontStyle:'italic'}}>{ROMAN[hi]}.</span>
-                                                            <input value={txt} onChange={(e:any)=>{ const nx=[...heads]; nx[hi]=e.target.value; writeHeads(nx); }} placeholder="Nội dung heading" style={{flex:1, padding:'8px 10px', fontSize:14, border:'none', background:EB.wash, borderRadius:8, fontWeight:500, outline:'none', color:EB.ink, boxShadow:'none'}} />
+                                                            <input value={txt} onChange={(e:any)=>{ const nx=[...heads]; nx[hi]=e.target.value; writeHeads(nx); }} placeholder={tx("Nội dung heading", "Heading text")} style={{flex:1, padding:'8px 10px', fontSize:14, border:'none', background:EB.wash, borderRadius:8, fontWeight:500, outline:'none', color:EB.ink, boxShadow:'none'}} />
                                                             <button className="ebx-icon" onClick={()=>writeHeads(heads.filter((_:any,i:number)=>i!==hi))} style={{background:'transparent', color:EB.err, border:`1px solid ${C.err}33`, width:30, height:30, borderRadius:8, cursor:'pointer', flexShrink:0}}><Ico name="trash" size={13} /></button>
                                                         </div>
                                                     ))}
-                                                    {heads.length===0 && <div style={{fontSize:13, color:EB.sub, fontStyle:'italic', padding:'4px 2px'}}>Chưa có heading. Bấm "Thêm heading".</div>}
+                                                    {heads.length===0 && <div style={{fontSize:13, color:EB.sub, fontStyle:'italic', padding:'4px 2px'}}>{tx('Chưa có heading. Bấm "Thêm heading".', 'No headings yet. Click "Add heading".')}</div>}
                                                 </div>
                                                 <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
-                                                    <div style={{...ebEyebrow, marginBottom:6, display:'flex'}}><Ico name="key" size={13} />Đáp án (đoạn → heading)</div>
-                                                    <div style={{fontSize:12, color:EB.sub, marginBottom:14}}>Mỗi đoạn (A, B, C…) là 1 câu theo thứ tự. Chọn heading đúng.</div>
+                                                    <div style={{...ebEyebrow, marginBottom:6, display:'flex'}}><Ico name="key" size={13} />{tx('Đáp án (đoạn → heading)', 'Answers (paragraph → heading)')}</div>
+                                                    <div style={{fontSize:12, color:EB.sub, marginBottom:14}}>{tx('Mỗi đoạn (A, B, C…) là 1 câu theo thứ tự. Chọn heading đúng.', 'Each paragraph (A, B, C...) corresponds to a question in sequence. Choose the correct heading.')}</div>
                                                     <div style={{display:'grid', gap:10}}>
                                                         {grp.questions.map((qItem:any, offset:number) => {
                                                             const letter = String.fromCharCode(65+offset);
@@ -711,7 +711,7 @@
                                                             <div key={qItem.id} style={{display:'flex', alignItems:'center', gap:12}}>
                                                                 <div style={{width:30, height:30, borderRadius:'50%', background:EB.accentWash, color:EB.accent, display:'grid', placeItems:'center', fontWeight:700, fontSize:13, flexShrink:0}}>{letter}</div>
                                                                 <select value={cur} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, correctAnswer:e.target.value}:qIt)} style={{flex:1, padding:'9px 12px', fontSize:14, border:`1px solid ${EB.line}`, background:EB.sheet, borderRadius:10, fontWeight:600, color:EB.ink, boxShadow:'none'}}>
-                                                                    <option value="">— chọn heading —</option>
+                                                                    <option value="">{tx("— chọn heading —", "— select heading —")}</option>
                                                                     {heads.map((txt:string, hi:number) => <option key={hi} value={ROMAN[hi]}>{ROMAN[hi]}. {txt}</option>)}
                                                                 </select>
                                                             </div>
@@ -917,6 +917,60 @@
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
+                                                {/* DIAGRAM / REFERENCE IMAGE URL (Optional for Diagram Labelling & Visuals) */}
+                                                {(() => {
+                                                    const groupImgUrl = String(q.groupImageUrl || q.diagramImageUrl || '');
+                                                    const handleGroupImageChange = (newUrl: string) => {
+                                                        updateGroup((qItem: any) => ({
+                                                            ...qItem,
+                                                            groupImageUrl: newUrl,
+                                                            diagramImageUrl: newUrl || undefined,
+                                                        }));
+                                                    };
+                                                    return (
+                                                        <div style={{ marginBottom: 16, background: EB.wash, border: `1px solid ${EB.line}`, borderRadius: EB.radius, padding: '14px 16px' }}>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                                                <label style={{ ...ebEyebrow, display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                                                                    <Ico name="image" size={13} />
+                                                                    {tx("Hình ảnh sơ đồ / Minh hoạ (Tuỳ chọn cho Diagram Labelling)", "Diagram / Reference Image URL (Optional for Diagram Labelling)")}
+                                                                </label>
+                                                                {groupImgUrl && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="ebx-soft"
+                                                                        onClick={() => handleGroupImageChange('')}
+                                                                        style={{ background: 'transparent', border: 'none', color: EB.err, fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                                                    >
+                                                                        <Ico name="trash" size={13} /> {tx("Xoá ảnh", "Remove image")}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                                                <input
+                                                                    type="text"
+                                                                    value={groupImgUrl}
+                                                                    onChange={(e: any) => handleGroupImageChange(e.target.value)}
+                                                                    placeholder="https://.../diagram.png"
+                                                                    style={{ flex: 1, padding: '9px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet, color: EB.ink, fontSize: 13 }}
+                                                                />
+                                                            </div>
+                                                            {groupImgUrl && (
+                                                                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12, padding: 8, background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: 6 }}>
+                                                                    <img
+                                                                        src={groupImgUrl}
+                                                                        alt="Diagram Preview"
+                                                                        style={{ maxHeight: 90, maxWidth: 160, objectFit: 'contain', borderRadius: 4, background: '#fff', border: `1px solid ${EB.line}` }}
+                                                                        onError={(e: any) => { e.currentTarget.style.display = 'none'; }}
+                                                                    />
+                                                                    <div style={{ fontSize: 12, color: EB.sub }}>
+                                                                        <div><strong>{tx("Xem trước sơ đồ", "Diagram Preview")}</strong></div>
+                                                                        <div>{tx("Học sinh sẽ thấy hình này ở cột trái kèm tính năng phóng to (lightbox).", "Students will see this in the left column with click-to-zoom.")}</div>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
                                                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10}}>
                                                     <label style={{...ebEyebrow, display: 'flex'}}><Ico name="edit" size={13} />{t('eb_inline_para')}</label>
                                                     <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
@@ -962,7 +1016,7 @@
                                                                 <div style={{ fontFamily: EB.fMono, fontWeight: 700, color: isMissing ? C.err : EB.accent, fontSize: 13, minWidth: 30, display: 'flex', alignItems: 'center', gap: 4 }}>
                                                                     {qNum} {isMissing && <span title={t('eb_blank_missing_title')} style={{cursor: 'help', display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="alert" size={13} color={C.warn} /></span>}
                                                                 </div>
-                                                                {showText && <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, text:e.target.value}:qIt)} placeholder="Nội dung câu (vd: Plastic was first made in ___)" style={{ flex: 2, padding: '8px 10px', fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 8, fontWeight: 500, outline: 'none', color: EB.ink, boxShadow: 'none' }} />}
+                                                                {showText && <input value={qItem.text || ''} onChange={(e:any)=>updateGroup((qIt:any,o:number)=>o===offset?{...qIt, text:e.target.value}:qIt)} placeholder={tx("Nội dung câu (vd: Plastic was first made in ___)", "Question text (e.g.: Plastic was first made in ___)")} style={{ flex: 2, padding: '8px 10px', fontSize: 14, border: `1px solid ${EB.line}`, background: EB.sheet, borderRadius: 8, fontWeight: 500, outline: 'none', color: EB.ink, boxShadow: 'none' }} />}
                                                                 <input value={qItem.correctAnswer as string} onChange={(e: any) => updateGroup((qIt: any, o: number) => o === offset ? { ...qIt, correctAnswer: e.target.value } : qIt)} placeholder={t('eb_blank_answer_ph')} style={{ flex: 1, padding: '8px 10px', fontSize: 14, border: 'none', background: EB.wash, borderRadius: 8, fontWeight: 600, outline: 'none', color: EB.ink, boxShadow: 'none' }} />
                                                             </div>
                                                         )})}
@@ -1209,7 +1263,7 @@
                                             setBuilderFolder(parentPath);
                                         }}
                                         style={{background: 'transparent', padding: '5px 8px', color: EB.ink, fontSize: 12, fontWeight: 600, border: `1px solid ${EB.line}`, borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginRight: 4}}
-                                        title="Lên 1 cấp"
+                                        title={tx("Lên 1 cấp", "Go up one level")}
                                     >
                                         <Ico name="arrowLeft" size={12} />
                                     </button>
@@ -1385,34 +1439,34 @@
                                     <div style={{display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', padding: '18px 20px 16px', flexWrap: 'wrap'}}>
                                         <div>
                                             <div style={{...ebEyebrow, marginBottom: 7}}><Ico name="file" size={13} />Batch DOCX</div>
-                                            <div style={{fontFamily: EB.fDisplay, color: EB.ink, fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em'}}>Kiểm tra trước khi thêm vào thư viện</div>
-                                            <p style={{margin: '5px 0 0', color: EB.sub, fontSize: 12.5, lineHeight: 1.55}}>Lưu vào <b style={{color: EB.ink}}>{examDocxBatch[0]?.targetFolder || 'Root'}</b>. File lỗi không chặn các file hợp lệ.</p>
+                                            <div style={{fontFamily: EB.fDisplay, color: EB.ink, fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em'}}>{tx("Kiểm tra trước khi thêm vào thư viện", "Verify before adding to library")}</div>
+                                            <p style={{margin: '5px 0 0', color: EB.sub, fontSize: 12.5, lineHeight: 1.55}}>{tx('Lưu vào', 'Save to')} <b style={{color: EB.ink}}>{examDocxBatch[0]?.targetFolder || 'Root'}</b>. {tx('File lỗi không chặn các file hợp lệ.', 'Failed files do not block valid files.')}</p>
                                         </div>
-                                        <span style={{fontFamily: EB.fMono, color: EB.sub, fontSize: 12, paddingTop: 4}}>{examDocxBatchBusy ? 'Đang phân tích…' : `${readyCount} sẵn sàng${errorCount ? ` · ${errorCount} cần bỏ` : ''}`}</span>
+                                        <span style={{fontFamily: EB.fMono, color: EB.sub, fontSize: 12, paddingTop: 4}}>{examDocxBatchBusy ? tx('Đang phân tích…', 'Analyzing…') : `${readyCount} ${tx('sẵn sàng', 'ready')}${errorCount ? ` · ${errorCount} ${tx('cần bỏ', 'rejected')}` : ''}`}</span>
                                     </div>
                                     <div style={{borderTop: `1px solid ${EB.line}`}}>
                                         {examDocxBatch.map(item => {
                                             const parsedQuiz = item.quiz;
                                             const isWriting = isWritingQuiz(parsedQuiz);
                                             const questionCount = isWriting ? normalizeWritingTasks(parsedQuiz).length : (parsedQuiz?.questions || []).length;
-                                            const unit = isWriting ? 'phần Writing' : 'câu hỏi';
+                                            const unit = isWriting ? tx('phần Writing', 'Writing tasks') : tx('câu hỏi', 'questions');
                                             const color = item.status === 'ready' ? C.succ : item.status === 'error' ? C.err : EB.sub;
-                                            const label = item.status === 'ready' ? 'Sẵn sàng' : item.status === 'error' ? 'Lỗi parse' : 'Đang phân tích';
+                                            const label = item.status === 'ready' ? tx('Sẵn sàng', 'Ready') : item.status === 'error' ? tx('Lỗi parse', 'Parse error') : tx('Đang phân tích', 'Analyzing');
                                             return <div key={item.id} style={{display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 14, alignItems: 'center', padding: '13px 20px', borderBottom: `1px solid ${EB.line}`}}>
                                                 <div style={{minWidth: 0}}>
                                                     <div style={{fontSize: 13.5, fontWeight: 700, color: EB.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.file.name}</div>
-                                                    {item.status === 'ready' && parsedQuiz ? <div style={{marginTop: 3, color: EB.sub, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{parsedQuiz.type} · {parsedQuiz.title || item.file.name.replace(/\.docx$/i, '')} · {questionCount} {unit}</div> : <div style={{marginTop: 3, color: item.status === 'error' ? C.err : EB.sub, fontSize: 12, lineHeight: 1.4}}>{item.error || 'Đang gửi file tới parser…'}</div>}
+                                                    {item.status === 'ready' && parsedQuiz ? <div style={{marginTop: 3, color: EB.sub, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{parsedQuiz.type} · {parsedQuiz.title || item.file.name.replace(/\.docx$/i, '')} · {questionCount} {unit}</div> : <div style={{marginTop: 3, color: item.status === 'error' ? C.err : EB.sub, fontSize: 12, lineHeight: 1.4}}>{item.error || tx('Đang gửi file tới parser…', 'Sending file to parser…')}</div>}
                                                 </div>
                                                 <span style={{fontSize: 11.5, fontWeight: 800, color, whiteSpace: 'nowrap'}}>{label}</span>
-                                                <button className="ebx-icon" type="button" aria-label={`Bỏ ${item.file.name}`} disabled={examDocxBatchBusy} onClick={() => removeExamDocxBatchItem(item.id)} style={{width: 30, height: 30, border: `1px solid ${EB.line}`, background: 'transparent', color: EB.sub, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}><Ico name="x" size={14} /></button>
+                                                <button className="ebx-icon" type="button" aria-label={tx(`Bỏ ${item.file.name}`, `Remove ${item.file.name}`)} disabled={examDocxBatchBusy} onClick={() => removeExamDocxBatchItem(item.id)} style={{width: 30, height: 30, border: `1px solid ${EB.line}`, background: 'transparent', color: EB.sub, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}><Ico name="x" size={14} /></button>
                                             </div>;
                                         })}
                                     </div>
                                     <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', flexWrap: 'wrap', background: retrying ? `${C.warn}0a` : EB.washSoft}}>
-                                        <div style={{fontSize: 12, color: retrying ? C.warn : EB.sub, lineHeight: 1.45}}>{retrying ? 'Đề đã được giữ an toàn trên thiết bị này. Bạn có thể thử đồng bộ lại đúng batch này.' : 'Bấm thêm để lưu toàn bộ file hợp lệ trong một lần; mặc định chúng ở trạng thái nháp.'}</div>
+                                        <div style={{fontSize: 12, color: retrying ? C.warn : EB.sub, lineHeight: 1.45}}>{retrying ? tx('Đề đã được giữ an toàn trên thiết bị này. Bạn có thể thử đồng bộ lại đúng batch này.', 'Exams are preserved safely on this device. You can retry syncing this batch.') : tx('Bấm thêm để lưu toàn bộ file hợp lệ trong một lần; mặc định chúng ở trạng thái nháp.', 'Click add to save all valid files at once; by default they are saved as drafts.')}</div>
                                         <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
-                                            <button className="ebx-soft" type="button" disabled={examDocxBatchBusy} onClick={cancelExamDocxBatch} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '8px 12px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 700, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}>{retrying ? 'Đóng review' : 'Bỏ batch'}</button>
-                                            <button className="ebx-primary" type="button" disabled={examDocxBatchBusy || readyCount === 0} onClick={confirmExamDocxBatch} style={{background: EB.accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 800, cursor: examDocxBatchBusy || readyCount === 0 ? 'wait' : 'pointer', opacity: examDocxBatchBusy || readyCount === 0 ? .6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name={examDocxBatchBusy ? 'refresh' : retrying ? 'refresh' : 'save'} size={13} />{examDocxBatchBusy ? 'Đang xử lý…' : retrying ? `Đồng bộ lại ${readyCount} đề` : `Thêm ${readyCount} đề hợp lệ`}</button>
+                                            <button className="ebx-soft" type="button" disabled={examDocxBatchBusy} onClick={cancelExamDocxBatch} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '8px 12px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 700, cursor: examDocxBatchBusy ? 'wait' : 'pointer', opacity: examDocxBatchBusy ? .55 : 1}}>{retrying ? tx('Đóng review', 'Close review') : tx('Bỏ batch', 'Discard batch')}</button>
+                                            <button className="ebx-primary" type="button" disabled={examDocxBatchBusy || readyCount === 0} onClick={confirmExamDocxBatch} style={{background: EB.accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: EB.radiusSm, fontSize: 12, fontWeight: 800, cursor: examDocxBatchBusy || readyCount === 0 ? 'wait' : 'pointer', opacity: examDocxBatchBusy || readyCount === 0 ? .6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name={examDocxBatchBusy ? 'refresh' : retrying ? 'refresh' : 'save'} size={13} />{examDocxBatchBusy ? tx('Đang xử lý…', 'Processing…') : retrying ? tx(`Đồng bộ lại ${readyCount} đề`, `Resync ${readyCount} exams`) : tx(`Thêm ${readyCount} đề hợp lệ`, `Add ${readyCount} valid exams`)}</button>
                                         </div>
                                     </div>
                                 </section>;
@@ -1478,13 +1532,13 @@
                                                         </div>
                                                     </div>
                                                     <div style={{display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0}} onClick={(e) => e.stopPropagation()}>
-                                                        <button type="button" onClick={() => setFolderModal({ mode: "RENAME", targetFolder: fullPath, inputValue: f, selectedDest: "" })} title="Đổi tên" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "RENAME", targetFolder: fullPath, inputValue: f, selectedDest: "" })} title={tx("Đổi tên", "Rename")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
                                                             <Ico name="edit" size={12} />
                                                         </button>
-                                                        <button type="button" onClick={() => setFolderModal({ mode: "MOVE_FOLDER", targetFolder: fullPath, inputValue: "", selectedDest: builderFolder })} title="Di chuyển thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
+                                                        <button type="button" onClick={() => setFolderModal({ mode: "MOVE_FOLDER", targetFolder: fullPath, inputValue: "", selectedDest: builderFolder })} title={tx("Di chuyển thư mục", "Move folder")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: EB.sub}}>
                                                             <Ico name="arrowRight" size={12} />
                                                         </button>
-                                                        <button type="button" onClick={() => handleDeleteFolder(fullPath)} title="Xóa thư mục" style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: C.err}}>
+                                                        <button type="button" onClick={() => handleDeleteFolder(fullPath)} title={tx("Xóa thư mục", "Delete folder")} style={{background: 'transparent', border: 'none', padding: '4px 5px', borderRadius: 4, cursor: 'pointer', color: C.err}}>
                                                             <Ico name="trash" size={12} />
                                                         </button>
                                                     </div>
@@ -1708,10 +1762,10 @@
                                         }}>
                                             <Ico name="file" size={26} color={EB.sub} />
                                             <div style={{fontFamily: EB.fDisplay, fontSize: 16, fontWeight: 600, color: EB.ink}}>
-                                                {builderSearch ? `Không tìm thấy đề thi phù hợp với "${builderSearch}"` : (t('eb_folder_empty') || 'Thư mục này chưa có đề thi')}
+                                                {builderSearch ? tx(`Không tìm thấy đề thi phù hợp với "${builderSearch}"`, `No exams matching "${builderSearch}"`) : (t('eb_folder_empty') || tx('Thư mục này chưa có đề thi', 'This folder is empty'))}
                                             </div>
                                             <div style={{fontSize: 12.5, color: EB.sub, maxWidth: 360, lineHeight: 1.5}}>
-                                                {builderSearch ? 'Thử tìm với từ khóa khác hoặc xóa bộ lọc để xem tất cả đề thi.' : 'Tạo đề mới hoặc kéo thả đề thi từ các thư mục khác vào đây.'}
+                                                {builderSearch ? tx('Thử tìm với từ khóa khác hoặc xóa bộ lọc để xem tất cả đề thi.', 'Try different keywords or clear filters to see all exams.') : tx('Tạo đề mới hoặc kéo thả đề thi từ các thư mục khác vào đây.', 'Create a new exam or drag and drop exams from other folders here.')}
                                             </div>
                                         </div>
                                     )}
@@ -1764,16 +1818,16 @@
                                 <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                                     <Ico name="folder" size={16} color={EB.accent} />
                                     <span style={{fontFamily: EB.fDisplay, fontWeight: 700, fontSize: 16, color: EB.ink}}>
-                                        {folderModal.mode === "CREATE" && (t('eb_new_folder') || "Tạo thư mục mới")}
-                                        {folderModal.mode === "RENAME" && "Đổi tên thư mục"}
-                                        {folderModal.mode === "MOVE_FOLDER" && "Di chuyển thư mục"}
-                                        {folderModal.mode === "MOVE_QUIZZES" && `Di chuyển ${selectedQuizzes.length} đề thi`}
+                                        {folderModal.mode === "CREATE" && (t('eb_new_folder') || tx("Tạo thư mục mới", "Create new folder"))}
+                                        {folderModal.mode === "RENAME" && tx("Đổi tên thư mục", "Rename folder")}
+                                        {folderModal.mode === "MOVE_FOLDER" && tx("Di chuyển thư mục", "Move folder")}
+                                        {folderModal.mode === "MOVE_QUIZZES" && tx(`Di chuyển ${selectedQuizzes.length} đề thi`, `Move ${selectedQuizzes.length} exams`)}
                                     </span>
                                 </div>
                                 <button
                                     type="button"
                                     onClick={() => setFolderModal(null)}
-                                    aria-label="Đóng"
+                                    aria-label={tx("Đóng", "Close")}
                                     style={{
                                         background: 'transparent',
                                         border: 'none',
@@ -1793,13 +1847,13 @@
                                 {folderModal.mode === "CREATE" && (
                                     <div>
                                         <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
-                                            Tên thư mục
+                                            {tx("Tên thư mục", "Folder name")}
                                         </label>
                                         <input
                                             autoFocus
                                             type="text"
                                             value={folderModal.inputValue}
-                                            placeholder="Nhập tên thư mục (VD: Test 1, Unit 2...)"
+                                            placeholder={tx("Nhập tên thư mục (VD: Test 1, Unit 2...)", "Enter folder name (e.g. Test 1, Unit 2...)")}
                                             onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
                                             onKeyDown={(e) => {
                                                 if (e.key === "Enter" && folderModal.inputValue.trim()) {
@@ -1821,7 +1875,7 @@
                                             }}
                                         />
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
-                                            Vị trí: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder || builderFolder}</span>
+                                            {tx('Vị trí:', 'Location:')} <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder || builderFolder}</span>
                                         </div>
                                     </div>
                                 )}
@@ -1829,13 +1883,13 @@
                                 {folderModal.mode === "RENAME" && (
                                     <div>
                                         <label style={{display: 'block', fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 8}}>
-                                            Tên mới
+                                            {tx("Tên mới", "New name")}
                                         </label>
                                         <input
                                             autoFocus
                                             type="text"
                                             value={folderModal.inputValue}
-                                            placeholder="Tên thư mục mới"
+                                            placeholder={tx("Tên thư mục mới", "New folder name")}
                                             onChange={(e) => setFolderModal({ ...folderModal, inputValue: e.target.value })}
                                             onKeyDown={(e) => {
                                                 if (e.key === "Enter" && folderModal.inputValue.trim() && folderModal.targetFolder) {
@@ -1857,7 +1911,7 @@
                                             }}
                                         />
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 8}}>
-                                            Đường dẫn hiện tại: <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder}</span>
+                                            {tx("Đường dẫn hiện tại:", "Current path:")} <span style={{color: EB.ink, fontWeight: 600}}>{folderModal.targetFolder}</span>
                                         </div>
                                     </div>
                                 )}
@@ -1865,7 +1919,7 @@
                                 {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && (
                                     <div>
                                         <div style={{fontFamily: EB.fLabel, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: EB.sub, marginBottom: 10}}>
-                                            Chọn thư mục đích
+                                            {tx("Chọn thư mục đích", "Select destination folder")}
                                         </div>
                                         <div style={{
                                             maxHeight: 260,
@@ -1893,7 +1947,7 @@
                                                     const f = normalizeFolderPath(rawF);
                                                     const depth = f === "Root" ? 0 : f.split("/").length - 1;
                                                     const isSelected = normalizeFolderPath(folderModal.selectedDest || "Root") === f;
-                                                    const folderName = f === "Root" ? "Root (Gốc)" : f.split("/").pop();
+                                                    const folderName = f === "Root" ? tx("Root (Gốc)", "Root") : f.split("/").pop();
                                                     return (
                                                         <button
                                                             key={f}
@@ -1930,7 +1984,7 @@
                                                 })}
                                         </div>
                                         <div style={{fontFamily: EB.fMono, fontSize: 11, color: EB.sub, marginTop: 10}}>
-                                            Đích đến: <span style={{color: EB.accent, fontWeight: 700}}>{folderModal.selectedDest || "Root"}</span>
+                                            {tx("Đích đến:", "Destination:")} <span style={{color: EB.accent, fontWeight: 700}}>{folderModal.selectedDest || "Root"}</span>
                                         </div>
                                     </div>
                                 )}
@@ -1959,7 +2013,7 @@
                                         cursor: 'pointer'
                                     }}
                                 >
-                                    Hủy
+                                    {tx("Hủy", "Cancel")}
                                 </button>
                                 <button
                                     type="button"
@@ -1996,9 +2050,9 @@
                                         cursor: 'pointer'
                                     }}
                                 >
-                                    {folderModal.mode === "CREATE" && "Tạo thư mục"}
-                                    {folderModal.mode === "RENAME" && "Lưu tên"}
-                                    {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && "Di chuyển"}
+                                    {folderModal.mode === "CREATE" && tx("Tạo thư mục", "Create folder")}
+                                    {folderModal.mode === "RENAME" && tx("Lưu tên", "Save name")}
+                                    {(folderModal.mode === "MOVE_FOLDER" || folderModal.mode === "MOVE_QUIZZES") && tx("Di chuyển", "Move")}
                                 </button>
                             </div>
                         </div>

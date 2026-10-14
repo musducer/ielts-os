@@ -1,4 +1,76 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-14)
+# IELTS OS — Session Handoff (cập nhật 2026-10-15)
+
+## Hỗ trợ Giải thích Đa đoạn [EXPLANATION], Sơ đồ Kèm ảnh Bên ngoài Side-by-Side & Lightbox Zoom Modal — 2026-10-15
+
+- **Issue 1: Hỗ trợ Giải thích Đa đoạn `[EXPLANATION]` (Backend Parser -> Frontend Review)**:
+  - *Nguyên nhân cũ*: `RE_MANUAL_EXPLANATION` trong `api/index.py` chỉ bắt đoạn đầu tiên chứa thẻ `[EXPLANATION]`. Các đoạn văn giải thích tiếp theo (paragraph 2, 3...) bị rớt xuống phần đọc câu hỏi kế tiếp (`current_q["text"] += f" <div>{h_line}</div>"`), làm ô nhiễm đề bài hoặc bị mất nội dung. Khi trích xuất giải thích bổ sung (supplement DOCX), `current_parts` bị nối bằng dấu cách `" "` thay vì `"\n\n"`. Ở frontend (`REVIEW_QUIZ.txt`), `rvRenderExplain` dùng regex xóa toàn bộ dấu ngắt dòng `\s{2,}` thành 1 khoảng trắng, và `rvRenderManualExplanationCopy` hiển thị toàn bộ trong 1 thẻ `<div>` duy nhất mà không tách `<p>`.
+  - *Giải pháp triệt để*:
+    - Backend `api/index.py`: Mở rộng `RE_MANUAL_EXPLANATION` hỗ trợ cả số đơn lẫn dải số (`21`, `21-24`, `21, 22`). Hàm `parse_manual_explanation_text` chuyển đổi các ngắt khối HTML (`</p>`, `<br>`, `</div>`) sang `\n`, chuẩn hóa khoảng trắng ngang và bảo toàn `\n\n` giữa các đoạn văn. Thêm `active_explanation_targets` trong `process_block`, `process_map_drag_block`, `process_flow_drag_block`, `process_diagram_label_block`, và `parse_docx_to_quiz` để tự động ghép các đoạn văn tiếp theo (continuation paragraphs) vào lời giải thích của câu hỏi hiện hành (ngăn chặn 100% việc rò rỉ vào `question.text`). `extract_docx_manual_explanations` ghép các đoạn bằng `"\n\n".join(current_parts)`.
+    - Frontend `src/App.template.tsx` & `src/components_split/REVIEW_QUIZ.txt`: `parseManualExplanation` bảo toàn ký tự ngắt dòng `\n\n`. `rvRenderExplain` chỉ thu gọn khoảng trắng ngang `[ \t]{2,}` và chuẩn hóa `\n{3,}` thành `\n\n`. `rvRenderExplanationCopy` và `rvRenderManualExplanationCopy` tách mảng đoạn theo `/\n+/` và render từng đoạn bằng `<p className="rv-explain-p">` riêng biệt với khoảng cách hợp lý.
+    - Bộ test tự động: Bổ sung 4 unit test trong `tests/test_manual_explanations.py` kiểm chứng multi-paragraph explanation từ cả file DOCX chính và supplement DOCX.
+
+- **Issue 2: Giao diện Gắn nhãn Bản đồ/Sơ đồ Kèm ảnh Bên ngoài (External Diagram Labelling Side-by-Side)**:
+  - *Nguyên nhân cũ*: Khi đề thi có sơ đồ/bản đồ nhưng các vị trí điền khuyết nằm ở bên ngoài hoặc bên cạnh ảnh (không có tọa độ `[SLOTS]` hay hộp `[BOX]`), parser trước đây có thể bỏ qua hoặc chỉ hiển thị như câu hỏi thông thường bị tách rời khỏi hình ảnh tham chiếu.
+  - *Giải pháp triệt để*:
+    - Backend `api/index.py`: Nhận diện đường dẫn ảnh nhóm `IMAGE: <url>` và `diagramImageUrl` / `groupImageUrl` trong `[DRAG]`, `[BLANK]`, `[MATCHING]`. Bổ sung fallback tự động trong `process_map_drag_block` (khi không có `[SLOTS]`) và `process_diagram_label_block` (khi không có `[BOX]`) chuyển tiếp sang `process_block(..., fallback_image_url=image_url)`. Tự động nhận diện `OPTIONS:`, bổ sung marker `[xx]` nếu tác giả quên viết trong câu drag, và ánh xạ `*Answer` chuẩn xác vào danh sách options.
+    - Frontend `ACTIVE_EXAM.txt`: Tích hợp bố cục lưới 2 cột (`.idp-external-diagram-grid`):
+      - Cột trái: Card hình ảnh dính (`sticky`) hiển thị sơ đồ/bản đồ trực quan, hỗ trợ con trỏ `zoom-in` và huy hiệu hover xem kích thước lớn.
+      - Cột phải: Các hàng câu hỏi kéo thả với dropzone nét đứt (`.idp-external-diagram-drop-target`) hoặc ô điền từ `BLANK`, theo sau ngay bên dưới là ngân hàng lựa chọn kéo thả (`.idp-external-diagram-bank-section`).
+      - Tách ảnh khỏi context text (`displaySafeContext`) để tránh hiển thị ảnh trùng lặp 2 lần.
+    - Frontend `REVIEW_QUIZ.txt`: Hiển thị ảnh sơ đồ tham chiếu dính kèm nhãn xem ảnh và nút phóng to trực quan trong phần xem lại kết quả bài thi.
+    - Frontend `EXAM_BUILDER.txt`: Bổ sung ô nhập URL ảnh sơ đồ/minh họa (`groupImageUrl`) cho các nhóm câu hỏi `BLANK`, `DRAG_DROP`, `SHORT_ANSWER` kèm ảnh xem trước và nút xóa 1-click.
+
+- **Issue 3: Modal Lightbox Phóng to Ảnh Biểu đồ Task 1 & Sơ đồ Đề thi (Click-to-Zoom Lightbox Modal)**:
+  - *Nguyên nhân cũ*: Ảnh biểu đồ Task 1 trong Writing Review/Feedback và ảnh sơ đồ trong Exam/Review bị giới hạn kích thước trong container khiến học sinh và giáo viên khó đọc chi tiết các số liệu nhỏ, nhãn trục hoặc ghi chú trên bản đồ.
+  - *Giải pháp triệt để*:
+    - `src/WritingFeedback.tsx`: Thêm hiệu ứng hover `cursor: 'zoom-in'`, huy hiệu "Bấm để phóng to" (`tx('Bấm để phóng to', 'Click to zoom')`), và modal Lightbox toàn màn hình qua `createPortal(..., document.body)` với hiệu ứng làm mờ nền (`backdropFilter: 'blur(8px)'`), nút đóng SVG, phím tắt `Escape` và sự kiện click ra ngoài để đóng nhanh.
+    - `src/App.template.tsx`, `ACTIVE_EXAM.txt`, `REVIEW_QUIZ.txt`: Tích hợp modal Lightbox tương tự qua `createPortal` cho tất cả ảnh sơ đồ, bản đồ và hình ảnh tham chiếu trong phòng thi và phòng xem lại.
+
+## Định tuyến Đánh giá IELTS Writing Sang Mô hình Suy luận/Đa phương tiện & Hiệu chuẩn Chống Giảm Điểm Oan (Anti-Band Deflation) — 2026-10-15
+
+- **Bộ định tuyến chuyên dụng `_writing_eval_chat`**:
+  - Không đi qua bộ định tuyến `_groq_chat` thông thường (vốn dùng `llama-3.1-8b-instant` / `llama-3.3-70b-versatile`).
+  - Phân tầng ưu tiên 3 cấp:
+    - **Tier 1 (Tối ưu nhất - Đa phương tiện & Suy luận cao)**: Google Gemini (`GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY`). Ưu tiên mô hình `gemini-2.5-pro` (hoặc `GEMINI_WRITING_MODEL`), sau đó fallback `gemini-2.5-flash`.
+    - **Tier 2 (Suy luận Groq 120B/70B)**: `GROQ_API_KEY` (1..4) với mô hình `openai/gpt-oss-120b` hoặc `GROQ_REASON_MODEL`, fallback `llama-3.3-70b-versatile` với `reasoning_effort="high"`. Loại trừ hoàn toàn `llama-3.1-8b-instant`.
+    - **Tier 3 (Suy luận Cerebras 120B)**: `CEREBRAS_API_KEY` với `CEREBRAS_MODEL` (`gpt-oss-120b`, `llama-3.3-70b`) với `reasoning_effort="high"`.
+- **Nâng cấp `_gemini_chat_once` cho Gemini 2.5 với `thinking_budget` & Thị giác Biểu đồ Task 1 (`image_part`)**:
+  - Cho phép native thinking trên `gemini-2.5-pro` hoặc `thinkingBudget: max(1024, thinking_budget)` khi có budget. Trên `gemini-2.5-flash`, đặt `thinkingBudget: thinking_budget` khi `thinking_budget > 0` và `thinkingBudget: 0` khi `thinking_budget == 0`.
+  - Tự động cộng bù `effective_max_tokens = max_tokens + thinking_budget` để token suy luận không chiếm đoạt độ dài tối đa dẫn đến cắt cụt JSON (`PROVIDER_TRUNCATED_OUTPUT`).
+  - Lọc bỏ candidate parts có cờ `part.get("thought") is True` khi ghép chuỗi kết quả cuối cùng.
+  - Hỗ trợ tham số `image_part`: Giải quyết tự động URL biểu đồ Task 1 (`mediaUrl` dạng Base64 data URL, asset nội bộ Firebase Storage `media_[a-f0-9]{24}`, hoặc remote URL) qua `_resolve_image_base64_part` và truyền trực tiếp vào `inlineData` của Gemini API để giám khảo AI đối chiếu chính xác số liệu, xu hướng, bản đồ hoặc quy trình biểu đồ thực tế.
+- **Hiệu chuẩn Thước đo Giám khảo IELTS May 2023 & Triệt tiêu Định kiến Giảm điểm (Anti-Deflation Guardrails)**:
+  - Khắc phục lỗi chí mạng: Prompt cũ ép AI phải tìm đủ 5-10 lỗi bắt buộc trước khi cho điểm, dẫn đến hiện tượng "bịa lỗi" (hallucinated errors) và ép một bài luận đạt chuẩn Band 8.0 xuống Band 6.0 (do schema neo sẵn con số 6.0).
+  - Khử hoàn toàn thiên kiến neo điểm (Schema Anchoring Bias): Thay thế toàn bộ số `6.0` trong template JSON của system prompt bằng `<number 1.0-9.0>`.
+  - Quy trình độc lập 2 pha: Giám khảo AI đánh giá điểm 4 tiêu chí (TA/TR, CC, LR, GRA) độc lập dựa trên năng lực thực chất, sau đó mới gắn chú thích (annotations) tương xứng với Band điểm đã xác định.
+  - Phân loại chú thích nghiêm ngặt: Phân định rạch ròi giữa `error` (lỗi sai ngữ pháp/từ vựng thực sự), `awkward` (diễn đạt tự nhiên hơn), `upgrade` (gợi ý nâng Band 8+) và `praise` (điểm sáng bài viết). Tuyệt đối không hạ điểm tiêu chí chỉ vì xuất hiện các gợi ý nâng cấp (`upgrade`).
+  - Bổ sung quy tắc làm tròn điểm IELTS chính thức `_ielts_round_band(avg)`: Phần thập phân `< 0.25` làm tròn xuống số nguyên, `>= 0.25` và `< 0.75` làm tròn thành `.5`, `>= 0.75` làm tròn lên số nguyên kế tiếp.
+
+## Toàn diện Hóa Bản địa Song ngữ (Bilingual EN / VI Localization Parity) & Triệt tiêu Rò rỉ Chuỗi Tiếng Việt — 2026-10-15
+
+- **Thiết lập Động cơ Song ngữ Tương tác tức thì `tx(vi, en)`**:
+  - Khai báo helper toàn cục `const isVi = String(i18n.language || '').toLowerCase().startsWith('vi')` và `const tx = (vi: string, en: string) => (isVi ? vi : en)` trong phạm vi `IeltsSupremeOS` (`src/App.template.tsx`) và `src/WritingFeedback.tsx`.
+  - Các hợp phần `components_split/*.txt` tự động kế thừa scope `isVi` và `tx(vi, en)` từ `App.template.tsx` sau khi gộp qua `compile_app.py`, không cần import rời rạc.
+  - Chuyển đổi ngôn ngữ tức thời (Instant Re-render) trên toàn bộ ứng dụng mà không cần tải lại trang.
+- **Bản địa hóa 100% Không gian Chấm & Review Writing (`src/WritingFeedback.tsx`)**:
+  - Giao diện chấm giáo viên & review học sinh: thanh công cụ điều hướng, trạng thái lưu nháp (`Lưu nháp` / `Save draft`), trạng thái xuất bản (`Publish cho học sinh` / `Publish to student`), chế độ xem bài viết (Bản gốc, Diff sửa trực tiếp, Bản sửa hoàn chỉnh, Bài mẫu Band 8+).
+  - Thanh đo đạc X-Ray: từ vựng, đoạn, câu, số từ/câu, radar lặp từ, kiểm tra ngưỡng từ.
+  - Khung 4 tiêu chí chấm điểm (TA/TR, CC, LR, GRA) kèm ghi chú giáo viên, 3 nút thắt cần cải thiện (Bottlenecks), nhận xét tổng quan.
+  - Floating Selection Composer & Hover Cards: các pill gán lỗi nhanh (`Chưa tự nhiên`, `Nâng Band`, `Điểm sáng`, `Lỗi ngữ pháp`), trợ lý AI Selection Critique, nút lưu sổ từ vựng Spaced Repetition 1-click.
+  - Tài liệu học thuật Vector PDF Dossier (`buildVectorPdfDossierHtml` & `buildDossierAnnotatedEssayHtml`): Tự động truyền cờ `isVi` vào bộ sinh HTML, chuyển đổi toàn bộ tiêu đề trang, bảng tiêu chí, nhãn phân loại chú thích lỗi và thông báo trạng thái sang tiếng Anh khi in ở chế độ EN.
+- **Bản địa hóa 100% Student Portal (`src/components_split/STUDENT_PORTAL.txt`)**:
+  - Thêm helper `formatCosmeticDisplayName(rawName)`: dịch động các vật phẩm gacha, danh hiệu, khung avatar hoàng kim, linh thú sống động khi hiển thị trên giao diện học viên mà không làm thay đổi khóa định danh gốc trong cơ sở dữ liệu.
+  - Cửa hàng đổi thưởng & Gacha Mystery Box: thông báo trúng thưởng, chi phí, hộp quà rỗng, cảnh báo dùng vật phẩm với giáo viên (`handleUseItem`), xác nhận mở bài thi trên thiết bị khác.
+  - Sổ cái Tổng quan: các chỉ số đo lường (`Cấp độ & EXP`, `Thời gian làm bài & học`, `Luyện thi hôm nay`, `Xem tất cả kết quả`).
+  - Sổ từ vựng Spaced Repetition & Daily Expressions: nút `+ Lưu vào sổ tay`, trạng thái `Đã trong sổ tay`, chip phát âm.
+- **Bản địa hóa 100% Exam Builder, Active Exam, Students, Live Arena & SEB Guide**:
+  - `EXAM_BUILDER.txt`: Tên đề thi mới, câu hỏi mới, cấu hình gói bài thi thật (`Toàn bộ học sinh` / `Chọn học sinh`, `Mở từ`, `Đóng lúc`, `Xuất bản gói thi`, `Tên hiển thị`, `Mật khẩu`), modal quản lý thư mục (`Tên thư mục mới`, `Hủy`).
+  - `ACTIVE_EXAM.txt`: Nút đóng cảnh báo hết giờ (`Đã hiểu` / `Dismiss`), đóng thông báo chuông (`Đóng & Đánh dấu đã đọc`).
+  - `STUDENTS.txt`: Mẫu sao chép kết quả thi IELTS CBT, nhãn/placeholder tên quà và chi tiết quà tặng, tin nhắn cảnh báo học phí SMS & cảnh báo đỏ trên màn hình học sinh.
+  - `SEB_GUIDE.txt`: Bản dịch hoàn chỉnh 4 bước hướng dẫn cài đặt Safe Exam Browser (SEB) bằng tiếng Anh khi người dùng chọn EN.
+- **Kiểm thử & Rà soát Tự động (Zero-leak Automated Verification)**:
+  - Hoàn tất quét toàn bộ codebase split components, xác nhận 0 chuỗi tiếng Việt người dùng (user-facing) bị bỏ quên.
+  - `python compile_app.py` và `npx tsc -b` đều vượt qua thành công tuyệt đối (exit code 0, không có lỗi TypeScript).
 
 ## Đại tu Giao diện Học viên (Student Portal), Sửa lỗi Unlimited Attempts, Format Coins & Xếp biểu đồ tiến độ chuẩn thời gian — 2026-10-14
 

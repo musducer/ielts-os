@@ -490,7 +490,7 @@ RE_Q_START = re.compile(r'^(?:Question|Câu)\s+\d+', re.IGNORECASE)
 RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
 RE_TFNG = re.compile(r'\btrue\b[\s\S]*\bfalse\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
 RE_YNNG = re.compile(r'\byes\b[\s\S]*\bno\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
-RE_MANUAL_EXPLANATION = re.compile(r'^\s*\[EXPLANATION\]\s*(?:(\d+)\s*[:\.\)-]\s*)?(.*)$', re.IGNORECASE)
+RE_MANUAL_EXPLANATION = re.compile(r'^\s*\[EXPLANATION\]\s*(?:(\d+(?:\s*(?:[-–—]|,)\s*\d+)*)\s*[:\.\)-]\s*)?(.*)$', re.IGNORECASE)
 RE_MANUAL_TIMESTAMP = re.compile(r'\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]')
 
 def _manual_timestamp_to_seconds(value: str) -> int:
@@ -501,9 +501,35 @@ def _manual_timestamp_to_seconds(value: str) -> int:
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
     return 0
 
+def parse_manual_explanation_target_numbers(target_str: Optional[str]) -> List[str]:
+    if not target_str:
+        return []
+    nums: List[str] = []
+    for part in re.split(r'[,;]\s*', str(target_str).strip()):
+        range_match = re.match(r'^(\d+)\s*[-–—]\s*(\d+)$', part.strip())
+        if range_match:
+            start, end = int(range_match.group(1)), int(range_match.group(2))
+            if start <= end and (end - start) < 50:
+                nums.extend(str(n) for n in range(start, end + 1))
+            else:
+                nums.append(str(start))
+        elif part.strip().isdigit():
+            nums.append(part.strip())
+    return nums
+
 def parse_manual_explanation_text(raw_text: str) -> Dict[str, Any]:
-    raw = re.sub(r'^\s*\[EXPLANATION\]\s*', '', str(raw_text or ""), flags=re.IGNORECASE).strip()
-    raw = re.sub(r'^\s*\d+\s*[:\.\)-]\s*', '', raw).strip()
+    raw = str(raw_text or "")
+    # Convert HTML block breaks to \n before stripping other HTML tags
+    raw = re.sub(r'(?i)</p>|<br\s*/?>|</div>', '\n', raw)
+    raw = re.sub(r'<[^>]+>', '', raw)
+    raw = re.sub(r'^\s*\[EXPLANATION\]\s*', '', raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r'^\s*\d+(?:\s*(?:[-–—]|,)\s*\d+)*\s*[:\.\)-]\s*', '', raw).strip()
+
+    # Normalize horizontal whitespace [ \t]+ to single space, strip empty lines, join paragraphs with "\n\n"
+    raw_lines = [re.sub(r'[ \t]+', ' ', l).strip() for l in raw.split('\n')]
+    non_empty = [l for l in raw_lines if l]
+    raw = "\n\n".join(non_empty)
+
     quotes = []
     for match in re.findall(r'"([^"]+)"', raw):
         quote = re.sub(r'\s+', ' ', match).strip()
@@ -533,6 +559,58 @@ def parse_manual_explanation_line(line: str):
     parsed = parse_manual_explanation_text(raw)
     return number, parsed if parsed["rawText"] else None
 
+def is_continuation_paragraph(text: str) -> bool:
+    t = text.strip()
+    if not t:
+        return False
+    # NOT a new tag [...]
+    if re.match(r'^\s*\[.*?\]', t):
+        return False
+    # NOT a new numbered question ^\d+[\.\)] or Question \d+ or Câu \d+
+    if RE_Q_START.match(t) or RE_Q_NUMBER.match(t):
+        return False
+    # NOT an option ^\*?[A-Z][\.\)] or ^\*
+    if t.startswith("*") or is_option(t):
+        return False
+    # NOT PASSAGE/SECTION/PART/OPTIONS:/IMAGE:
+    t_upper = t.upper()
+    for prefix in ("PASSAGE", "SECTION", "PART", "OPTIONS:", "IMAGE:", "IMAGE_MODE:", "IMAGE_BOUNDS:", "IMAGE_ASPECT_RATIO:", "IMAGE_MAX_WIDTH:", "ANSWERS", "[ANSWERS]"):
+        if t_upper.startswith(prefix):
+            return False
+    return True
+
+def match_drag_canonical_option(raw_ans: str, options: List[str]) -> str:
+    if not options:
+        return raw_ans.strip()
+    raw = str(raw_ans or "").strip()
+    if not raw:
+        return ""
+    for opt in options:
+        if raw.lower() == str(opt).strip().lower():
+            return str(opt).strip()
+    m_raw_letter = re.match(r'^([A-Za-z])(?:[\.\)]\s*|$)', raw)
+    raw_letter = m_raw_letter.group(1).upper() if m_raw_letter else None
+    raw_text = re.sub(r'^\s*[A-Za-z][\.\)]\s*', '', raw).strip().lower()
+
+    for idx, opt in enumerate(options):
+        opt_str = str(opt).strip()
+        opt_text = re.sub(r'^\s*[A-Za-z][\.\)]\s*', '', opt_str).strip().lower()
+        opt_letter = chr(65 + idx)
+        m_opt_letter = re.match(r'^([A-Za-z])(?:[\.\)]\s*|$)', opt_str)
+        if m_opt_letter:
+            opt_letter = m_opt_letter.group(1).upper()
+        if raw_letter and raw_letter == opt_letter:
+            return opt_str
+        if raw_text and raw_text == opt_text:
+            return opt_str
+
+    if len(raw) == 1 and raw.isalpha():
+        letter_idx = ord(raw.upper()) - 65
+        if 0 <= letter_idx < len(options):
+            return str(options[letter_idx]).strip()
+
+    return raw
+
 def attach_manual_explanation(target: Dict[str, Any], explanation: Optional[Dict[str, Any]]):
     if explanation and explanation.get("rawText"):
         target["manualExplanation"] = explanation
@@ -556,28 +634,30 @@ def docx_plain_text_lines(doc) -> List[str]:
 
 def extract_docx_manual_explanations(doc) -> Dict[str, Dict[str, Any]]:
     explanations: Dict[str, Dict[str, Any]] = {}
-    current_number: Optional[str] = None
+    current_numbers: List[str] = []
     current_parts: List[str] = []
 
     def flush_current():
-        nonlocal current_number, current_parts
-        if current_number:
-            parsed = parse_manual_explanation_text(" ".join(current_parts))
+        nonlocal current_numbers, current_parts
+        if current_numbers and current_parts:
+            parsed = parse_manual_explanation_text("\n\n".join(current_parts))
             if parsed.get("rawText"):
-                explanations[str(current_number)] = parsed
-        current_number = None
+                for num in current_numbers:
+                    explanations[str(num)] = parsed
+        current_numbers = []
         current_parts = []
 
     for line in docx_plain_text_lines(doc):
         match = RE_MANUAL_EXPLANATION.match(line)
         if match:
             flush_current()
-            number, raw = match.groups()
-            if number:
-                current_number = str(number)
+            number_str, raw = match.groups()
+            nums = parse_manual_explanation_target_numbers(number_str)
+            if nums:
+                current_numbers = nums
                 current_parts = [raw.strip()] if raw and raw.strip() else []
             continue
-        if current_number:
+        if current_numbers:
             if re.match(r"^\s*\[[A-Z_/]+\]", line, re.IGNORECASE):
                 flush_current()
                 continue
@@ -733,15 +813,28 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
     )
     question_re = re.compile(r'^(\d+)\s*[\.)]\s*(.*)$')
     url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
+    active_explanation_targets: List[str] = []
 
     for line in raw_lines:
         upper = line.upper()
-        explanation_number, explanation = parse_manual_explanation_line(line)
-        if RE_MANUAL_EXPLANATION.match(line):
-            key = explanation_number or current_question
-            if key and explanation:
-                explanations[str(key)] = explanation
+        exp_match = RE_MANUAL_EXPLANATION.match(line)
+        if exp_match:
+            number_str, raw = exp_match.groups()
+            nums = parse_manual_explanation_target_numbers(number_str) or ([str(current_question)] if current_question else [])
+            active_explanation_targets = nums
+            parsed = parse_manual_explanation_text(raw)
+            for k in nums:
+                explanations[str(k)] = parsed
             continue
+        if active_explanation_targets:
+            if is_continuation_paragraph(line):
+                for k in active_explanation_targets:
+                    prev = explanations.get(str(k), {}).get("rawText", "")
+                    combined = (prev + "\n\n" + line.strip()) if prev else line.strip()
+                    explanations[str(k)] = parse_manual_explanation_text(combined)
+                continue
+            else:
+                active_explanation_targets = []
         if upper == "[SLOTS]":
             in_slots, in_options = True, False
             continue
@@ -770,13 +863,15 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             continue
 
         question_match = question_re.match(line)
-        if question_match and question_match.group(1) in slots:
-            current_question = question_match.group(1)
+        if question_match:
+            q_num_matched = question_match.group(1)
+            current_question = q_num_matched
             inline_answer = question_match.group(2).strip()
             if inline_answer.startswith("*"):
                 answers[current_question] = inline_answer.lstrip("*").strip()
             in_options = False
-            continue
+            if q_num_matched in slots:
+                continue
 
         if current_question:
             if line.startswith("*"):
@@ -794,7 +889,13 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
 
     # Prefer slot order (the map is the source of truth) and retain answer-only rows.
     numbers = list(slots.keys()) or list(answers.keys())
-    if not image_url or not numbers:
+    if not image_url:
+        return
+    if not slots and (numbers or answers):
+        fallback_type = "DRAG" if options else "BLANK"
+        process_block(fallback_type, lines, target_questions, fallback_image_url=image_url)
+        return
+    if not numbers:
         return
     instruction = "<div>" + "</div><div>".join(html.escape(line) for line in instruction_lines) + "</div>" if instruction_lines else ""
     shared_slots = {key: value.copy() for key, value in slots.items()}
@@ -835,6 +936,8 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     answer_start = re.compile(r'^(\d+)\s*[\.)]\s*$')
     marker_re = re.compile(r'\[(\d+)\]')
 
+    active_explanation_targets: List[str] = []
+
     for item in lines:
         if not isinstance(item, Paragraph):
             continue
@@ -843,12 +946,24 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
         if not text_line:
             continue
         upper = text_line.upper()
-        explanation_number, explanation = parse_manual_explanation_line(text_line)
-        if RE_MANUAL_EXPLANATION.match(text_line):
-            key = explanation_number or current_answer
-            if key and explanation:
-                explanations[str(key)] = explanation
+        exp_match = RE_MANUAL_EXPLANATION.match(text_line)
+        if exp_match:
+            number_str, raw = exp_match.groups()
+            nums = parse_manual_explanation_target_numbers(number_str) or ([str(current_answer)] if current_answer else [])
+            active_explanation_targets = nums
+            parsed = parse_manual_explanation_text(raw)
+            for k in nums:
+                explanations[str(k)] = parsed
             continue
+        if active_explanation_targets:
+            if is_continuation_paragraph(text_line):
+                for k in active_explanation_targets:
+                    prev = explanations.get(str(k), {}).get("rawText", "")
+                    combined = (prev + "\n\n" + text_line.strip()) if prev else text_line.strip()
+                    explanations[str(k)] = parse_manual_explanation_text(combined)
+                continue
+            else:
+                active_explanation_targets = []
         if upper in {"[FLOW]", "[CONTEXT]"}:
             in_flow, in_options, current_answer = True, False, ""
             continue
@@ -942,6 +1057,8 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
                 out[normalized] = max(0, min(100, float(value)))
         return out
 
+    active_explanation_targets: List[str] = []
+
     for item in lines:
         if not isinstance(item, Paragraph):
             continue
@@ -949,16 +1066,28 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         if not raw:
             continue
         upper = raw.upper()
-        explanation_number, explanation = parse_manual_explanation_line(raw)
-        if RE_MANUAL_EXPLANATION.match(raw):
-            targets = [explanation_number] if explanation_number else []
+        exp_match = RE_MANUAL_EXPLANATION.match(raw)
+        if exp_match:
+            number_str, raw_exp = exp_match.groups()
+            targets = parse_manual_explanation_target_numbers(number_str)
             if not targets and current_box:
                 current_text = boxes.get(current_box, {}).get("text", "")
                 targets = re.findall(r'\[(\d+)\]', current_text) or ([current_box] if str(current_box).isdigit() else [])
+            active_explanation_targets = targets
+            parsed = parse_manual_explanation_text(raw_exp)
             for number in targets:
-                if number and explanation:
-                    explanations[str(number)] = explanation
+                if number and parsed:
+                    explanations[str(number)] = parsed
             continue
+        if active_explanation_targets:
+            if is_continuation_paragraph(raw):
+                for number in active_explanation_targets:
+                    prev = explanations.get(str(number), {}).get("rawText", "")
+                    combined = (prev + "\n\n" + raw.strip()) if prev else raw.strip()
+                    explanations[str(number)] = parse_manual_explanation_text(combined)
+                continue
+            else:
+                active_explanation_targets = []
         if upper == "[ANSWERS]":
             current_box, in_answers = "", True
             continue
@@ -1014,7 +1143,13 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         else:
             instruction_html.append(html_line)
 
-    if not image_url or not boxes:
+    if not image_url:
+        return
+    if not boxes:
+        # Fallback to external side-by-side questions
+        has_options = any(re.match(r'^\s*OPTIONS\s*:\s*$', _map_drag_plain_line(item), re.IGNORECASE) for item in lines if isinstance(item, Paragraph))
+        fallback_type = "DRAG" if has_options else "BLANK"
+        process_block(fallback_type, lines, target_questions, fallback_image_url=image_url)
         return
     instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
     if not image_mode:
@@ -1058,7 +1193,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         attach_manual_explanation(question, explanations.get(str(number)))
         target_questions.append(question)
 
-def process_block(block_type: str, lines: List[Any], target_questions: List[Dict]):
+def process_block(block_type: str, lines: List[Any], target_questions: List[Dict], fallback_image_url: str = ""):
     if block_type == "MAP_DRAG":
         process_map_drag_block(lines, target_questions)
         return
@@ -1089,22 +1224,61 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     instruction_labels = []
     explanations_by_number: Dict[str, Dict[str, Any]] = {}
     in_context = False
+    in_options = False
+    active_explanation_targets: List[str] = []
+    group_image_url = fallback_image_url
     
     for h_line, t_line in zip(html_lines, text_lines):
         t_upper = t_line.upper()
+
+        # Detect standalone IMAGE: <url> or <img src="..."> in the block
+        img_match = re.search(r'^\s*IMAGE:\s*(https?://\S+)', t_line, re.IGNORECASE)
+        if not img_match:
+            img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', h_line, re.IGNORECASE)
+        if img_match and not group_image_url:
+            group_image_url = img_match.group(1).strip()
+            if re.search(r'^\s*IMAGE:\s*', t_line, re.IGNORECASE):
+                continue
+
         if "[CONTEXT]" in t_upper:
             in_context = True
+            active_explanation_targets = []
             continue
         if "[/CONTEXT]" in t_upper:
             in_context = False
+            active_explanation_targets = []
             continue
 
-        explanation_number, explanation = parse_manual_explanation_line(t_line)
-        if RE_MANUAL_EXPLANATION.match(t_line):
-            if explanation_number and explanation:
-                explanations_by_number[str(explanation_number)] = explanation
-            elif current_q and explanation:
-                current_q["manualExplanation"] = explanation
+        exp_match = RE_MANUAL_EXPLANATION.match(t_line)
+        if exp_match:
+            number_str, raw = exp_match.groups()
+            exp_nums = parse_manual_explanation_target_numbers(number_str)
+            if not exp_nums and current_q and current_q.get("questionNumber"):
+                exp_nums = [str(current_q["questionNumber"])]
+            active_explanation_targets = exp_nums
+            parsed = parse_manual_explanation_text(raw)
+            for k in exp_nums:
+                explanations_by_number[str(k)] = parsed
+            if current_q and (not exp_nums or str(current_q.get("questionNumber")) in exp_nums):
+                current_q["manualExplanation"] = parsed
+            continue
+
+        if active_explanation_targets:
+            if is_continuation_paragraph(t_line):
+                for k in active_explanation_targets:
+                    prev = explanations_by_number.get(str(k), {}).get("rawText", "")
+                    combined = (prev + "\n\n" + t_line.strip()) if prev else t_line.strip()
+                    updated = parse_manual_explanation_text(combined)
+                    explanations_by_number[str(k)] = updated
+                    if current_q and str(current_q.get("questionNumber")) == str(k):
+                        current_q["manualExplanation"] = updated
+                continue
+            else:
+                active_explanation_targets = []
+
+        # Check for explicit OPTIONS / ANSWER BANK separator
+        if re.match(r'^\s*(?:OPTIONS|ANSWER BANK|CHOICES)\s*:\s*$', t_line, re.IGNORECASE):
+            in_options = True
             continue
 
         # Explicit, portable authoring syntax for two-column drag matching.
@@ -1113,12 +1287,15 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         right_match = re.match(r'^\s*\[RIGHT_TITLE\]\s*(.*)$', t_line, re.IGNORECASE)
         if left_match:
             left_title = left_match.group(1).strip()
+            active_explanation_targets = []
             continue
         if right_match:
             right_title = right_match.group(1).strip()
+            active_explanation_targets = []
             continue
         if re.match(r'^\s*list\s+of\b', t_line, re.IGNORECASE):
             right_title = right_title or t_line.strip()
+            active_explanation_targets = []
             continue
         
         if in_context:
@@ -1127,6 +1304,17 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
 
         is_q_start = bool(RE_Q_START.match(t_line) or RE_Q_NUMBER.match(t_line))
         
+        if in_options and not is_q_start and not re.match(r'^\s*\[', t_line):
+            opt_line = t_line.strip()
+            if opt_line:
+                if current_q:
+                    current_q["options"].append(opt_line)
+                else:
+                    pre_question_options.append(opt_line)
+            continue
+        elif in_options:
+            in_options = False
+
         if not is_q_start and not current_q:
             # Matching-section: nhãn "A\nB\nC\nD\nE\nF" bị gộp 1 đoạn -> tách thành từng option
             parts = [re.sub(r'<[^>]+>', '', p).strip() for p in re.split(r'<br\s*/?>', h_line)]
@@ -1144,6 +1332,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             continue
 
         if is_q_start:
+            active_explanation_targets = []
             if current_q: questions_in_block.append(current_q)
             content_only = re.sub(r'^(?:Question|Câu)?\s*\d+[\.\:\)]?\s*', '', t_line, flags=re.IGNORECASE).strip()
             q_number = re.search(r'(?:Question|Câu)?\s*(\d+)', t_line, flags=re.IGNORECASE)
@@ -1184,7 +1373,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     shared_options = []
     for q in questions_in_block:
         if q["options"]: shared_options = q["options"]
-        elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG"]:
+        elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG", "DRAG_DROP"]:
             q["options"] = shared_options.copy()
     
     for q in questions_in_block:
@@ -1194,7 +1383,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         elif "flow-chart" in lower_txt or "flowchart" in lower_txt: sub_t = "FLOWCHART"
         elif "summary" in lower_txt: sub_t = "SUMMARY"
         elif "note" in lower_txt: sub_t = "NOTES"
-        if q["type"] == "DRAG":
+        if q["type"] in ("DRAG", "DRAG_DROP"):
             # Summary drag has numbered placeholders embedded in a continuous
             # context. Independent numbered rows are the Listening two-column
             # matching form, even when both share the DRAG source block.
@@ -1226,10 +1415,14 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if is_tfng or is_ynng: output_type = "CHOICE"
         # SYNC FRONTEND: Short answer = điền từ -> render như Inline Blank để FE có ô nhập
         if output_type == "SHORT_ANSWER": output_type = "BLANK"
-        # WORD-BANK (tóm tắt kéo-thả từ): block [DRAG] -> DRAG_DROP, options là CÁC TỪ (bỏ tiền tố chữ cái A-K)
         if q["type"] == "DRAG":
             output_type = "DRAG_DROP"
-            q["options"] = [re.sub(r'^\s*[A-Za-z][\.\)]\s*', '', str(o)).strip() for o in (q["options"] or [])]
+
+        # If a DRAG question line does not explicitly write [21], append [21] at end of q["text"]
+        if output_type == "DRAG_DROP" and str(q.get("questionNumber", "")).isdigit():
+            q_num_str = str(q["questionNumber"]).strip()
+            if q_num_str and f"[{q_num_str}]" not in q["text"]:
+                q["text"] = f"{q['text']} [{q_num_str}]".strip()
 
         final_correct_answer = ""
         # THUẬT TOÁN ÁNH XẠ ĐÁP ÁN (SMART MAPPER)
@@ -1293,33 +1486,35 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             else:
                 final_correct_answer = ""
         elif output_type == "DRAG_DROP":
-            # Đáp án có thể là chữ cái (A-K) -> ánh xạ sang TỪ tương ứng (vì chấm điểm DRAG_DROP so khớp text);
-            # nếu đã là chữ thuần thì giữ nguyên.
+            # Match against block's options by full text, letter prefix or stripped text
             if q["correctAnswers"]:
                 raw = str(q["correctAnswers"][0]).strip()
-                if re.fullmatch(r'[A-Za-z]', raw) and q["options"]:
-                    idx = ord(raw.upper()) - 65
-                    final_correct_answer = q["options"][idx] if 0 <= idx < len(q["options"]) else raw
-                else:
-                    final_correct_answer = raw
+                final_correct_answer = match_drag_canonical_option(raw, q["options"])
             else:
                 final_correct_answer = ""
         else:
             final_correct_answer = q["correctAnswers"][0] if q["correctAnswers"] else ""
+
+        # Clean raw IMAGE: <url> out of instruction and context
+        clean_ins = re.sub(r'<div>\s*IMAGE:\s*https?://\S+\s*</div>', '', q["instruction"], flags=re.IGNORECASE)
+        clean_ctx = re.sub(r'<div>\s*IMAGE:\s*https?://\S+\s*</div>', '', q["groupContext"], flags=re.IGNORECASE)
 
         question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
             "questionNumber": int(q["questionNumber"]) if str(q.get("questionNumber", "")).isdigit() else len(target_questions) + 1,
             "type": output_type,
             "subType": sub_t, 
-            "instruction": q["instruction"], 
-            "groupContext": q["groupContext"],
+            "instruction": clean_ins, 
+            "groupContext": clean_ctx,
             "leftTitle": left_title,
             "rightTitle": right_title,
             "text": q["text"], 
             "options": q["options"] if q["options"] else [],
             "correctAnswer": final_correct_answer
         }
+        if group_image_url:
+            question["groupImageUrl"] = group_image_url
+            question["diagramImageUrl"] = group_image_url
         attach_manual_explanation(
             question,
             q.get("manualExplanation") or explanations_by_number.get(str(q.get("questionNumber", "")))
@@ -1552,14 +1747,28 @@ def parse_docx_to_quiz(doc):
                 continue
             if "[TYPE]" in text_upper: quiz_type = re.sub(r'\[TYPE\]', '', text, flags=re.IGNORECASE).strip(); continue
             if "[AUDIO]" in text_upper: audio_url = re.sub(r'\[AUDIO\]', '', text, flags=re.IGNORECASE).strip(); continue
-            if state == "PASSAGE" and RE_MANUAL_EXPLANATION.match(text):
-                explanation_number, explanation = parse_manual_explanation_line(text)
-                if explanation_number and explanation:
-                    passage_level_explanations[str(explanation_number)] = explanation
+            exp_match = RE_MANUAL_EXPLANATION.match(text)
+            if state == "PASSAGE" and exp_match:
+                number_str, raw = exp_match.groups()
+                nums = parse_manual_explanation_target_numbers(number_str)
+                active_explanation_targets = nums
+                parsed = parse_manual_explanation_text(raw)
+                for k in nums:
+                    passage_level_explanations[str(k)] = parsed
                 continue
+            if state == "PASSAGE" and active_explanation_targets:
+                if is_continuation_paragraph(text):
+                    for k in active_explanation_targets:
+                        prev = passage_level_explanations.get(str(k), {}).get("rawText", "")
+                        combined = (prev + "\n\n" + text.strip()) if prev else text.strip()
+                        passage_level_explanations[str(k)] = parse_manual_explanation_text(combined)
+                    continue
+                else:
+                    active_explanation_targets = []
             
             if "[PASSAGE]" in text_upper:
                 flush_block()
+                active_explanation_targets = []
                 if current_passage or current_questions:
                     sections.append({"passage": current_passage, "questions": current_questions})
                 current_passage, current_questions = "", []
@@ -1569,6 +1778,7 @@ def parse_docx_to_quiz(doc):
             
             if "[QUESTIONS]" in text_upper:
                 flush_block()
+                active_explanation_targets = []
                 state = "QUESTIONS"
                 block_type = None
                 continue
@@ -1580,13 +1790,26 @@ def parse_docx_to_quiz(doc):
                 match = re.search(r'\[(/?\w+)\]', text_upper)
                 if match and match.group(1) in VALID_BLOCK_TYPES:
                     flush_block()
+                    active_explanation_targets = []
                     block_type = match.group(1)
                     continue
-                if not block_type and RE_MANUAL_EXPLANATION.match(text):
-                    explanation_number, explanation = parse_manual_explanation_line(text)
-                    if explanation_number and explanation:
-                        passage_level_explanations[str(explanation_number)] = explanation
+                if not block_type and exp_match:
+                    number_str, raw = exp_match.groups()
+                    nums = parse_manual_explanation_target_numbers(number_str)
+                    active_explanation_targets = nums
+                    parsed = parse_manual_explanation_text(raw)
+                    for k in nums:
+                        passage_level_explanations[str(k)] = parsed
                     continue
+                if not block_type and active_explanation_targets:
+                    if is_continuation_paragraph(text):
+                        for k in active_explanation_targets:
+                            prev = passage_level_explanations.get(str(k), {}).get("rawText", "")
+                            combined = (prev + "\n\n" + text.strip()) if prev else text.strip()
+                            passage_level_explanations[str(k)] = parse_manual_explanation_text(combined)
+                        continue
+                    else:
+                        active_explanation_targets = []
                 
                 if block_type:
                     current_block_lines.append(para)
@@ -3080,19 +3303,39 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
         return "", f"{model} -> {str(e)}"
 
 
-def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=55, image_inputs=None):
-    """1 lần gọi Google Gemini (định dạng riêng). Tắt 'thinking' ở 2.5 để output ổn định, đỡ rỗng."""
+def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=55, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
+    """1 lần gọi Google Gemini (định dạng riêng). Hỗ trợ thinking budget trên 2.5 và multimodal image inputs."""
     import json as _json
     import urllib.request as _urlreq
     import urllib.error as _urlerr
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    gen = {"maxOutputTokens": max_tokens, "temperature": temperature}
+    effective_max_tokens = max_tokens
+    gen = {"temperature": temperature}
     if json_mode:
         gen["responseMimeType"] = "application/json"
+
     if "2.5" in model:
-        gen["thinkingConfig"] = {"thinkingBudget": 0}
+        if "2.5-pro" in model:
+            if thinking_budget > 0:
+                tb = max(1024, thinking_budget)
+                gen["thinkingConfig"] = {"thinkingBudget": tb}
+                effective_max_tokens = max_tokens + tb
+        else:
+            if thinking_budget > 0:
+                gen["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+                effective_max_tokens = max_tokens + thinking_budget
+            else:
+                gen["thinkingConfig"] = {"thinkingBudget": 0}
+
+    gen["maxOutputTokens"] = effective_max_tokens
     user_parts = [{"text": user_prompt}]
-    for image in (image_inputs or [])[:4]:
+    combined_images = []
+    if image_part and isinstance(image_part, dict):
+        combined_images.append(image_part)
+    if image_inputs and isinstance(image_inputs, list):
+        combined_images.extend(image_inputs)
+
+    for image in combined_images[:4]:
         if not isinstance(image, dict):
             continue
         mime_type = str(image.get("mime_type") or "").strip().lower()
@@ -3119,7 +3362,7 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
             if cands[0].get("finishReason") == "MAX_TOKENS":
                 return "", "PROVIDER_TRUNCATED_OUTPUT"
             parts = ((cands[0].get("content") or {}).get("parts") or [])
-            text = "".join(p.get("text", "") for p in parts).strip()
+            text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
         return (text, "") if text else ("", f"gemini {model}: rỗng")
     except _urlerr.HTTPError as e:
@@ -3296,6 +3539,175 @@ def _vocab_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 4096, json_
                       json_mode=json_mode, model=model, reasoning_effort=reasoning_effort)
 
 
+def _resolve_image_base64_part(url: str, timeout_s: float = 4.0) -> Optional[Dict[str, str]]:
+    """Quickly resolves a chart/visual image URL to {'mime_type': str, 'data': str (base64)} for multimodal LLMs."""
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return None
+
+    # 1. Already a data URL?
+    if clean_url.startswith("data:image/"):
+        try:
+            header, data = clean_url.split(",", 1)
+            mime = header.split(";")[0].replace("data:", "").strip().lower()
+            return {"mime_type": mime or "image/png", "data": data.strip()}
+        except Exception:
+            return None
+
+    # 2. Internal asset media_[a-f0-9]{24}
+    media_match = re.search(r"media_[a-f0-9]{24}", clean_url)
+    if media_match:
+        try:
+            asset_id = media_match.group(0)
+            store = _firebase_exam_generation_store()
+            asset = store.load_media(asset_id)
+            blob_name = str((asset or {}).get("blob") or "")
+            mime_type = str((asset or {}).get("mime_type") or "image/png")
+            if blob_name:
+                raw = store.download_blob(blob_name)
+                b64 = base64.b64encode(raw).decode("ascii")
+                return {"mime_type": mime_type, "data": b64}
+        except Exception:
+            pass
+
+    # 3. HTTP / HTTPS fetch with short timeout
+    target_url = clean_url
+    if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
+        target_url = f"https://ielts-os-sandy.vercel.app{clean_url if clean_url.startswith('/') else '/' + clean_url}"
+
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = resp.read(10 * 1024 * 1024)
+            ct = resp.headers.get("Content-Type", "")
+            mime = ct.split(";")[0].strip().lower() if ct else ""
+            if not mime or not mime.startswith("image/"):
+                parsed_path = urllib.parse.urlparse(target_url).path.lower()
+                if parsed_path.endswith(".png"):
+                    mime = "image/png"
+                elif parsed_path.endswith((".jpg", ".jpeg")):
+                    mime = "image/jpeg"
+                elif parsed_path.endswith(".webp"):
+                    mime = "image/webp"
+                elif parsed_path.endswith(".svg"):
+                    mime = "image/svg+xml"
+                elif parsed_path.endswith(".gif"):
+                    mime = "image/gif"
+                else:
+                    mime = "image/png"
+            b64_str = base64.b64encode(data).decode("ascii")
+            return {"mime_type": mime, "data": b64_str}
+    except Exception:
+        return None
+
+
+def _ielts_round_band(avg: float) -> float:
+    """Official IELTS overall band rounding protocol.
+    Fractional parts:
+      < 0.25 -> round down (e.g. 6.125 -> 6.0)
+      >= 0.25 and < 0.75 -> round to half band (e.g. 6.25 -> 6.5, 6.5 -> 6.5, 6.625 -> 6.5)
+      >= 0.75 -> round up to next whole band (e.g. 6.75 -> 7.0)
+    """
+    import math
+    base = math.floor(avg)
+    rem = avg - base
+    if rem < 0.24999:
+        return float(base)
+    elif rem < 0.74999:
+        return float(base + 0.5)
+    else:
+        return float(base + 1.0)
+
+
+def _writing_eval_chat(
+    sys_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 4096,
+    temperature: float = 0.15,
+    json_mode: bool = True,
+    image_part: Optional[Dict[str, str]] = None,
+) -> Tuple[str, str]:
+    """Dedicated high-intelligence router for IELTS Writing evaluation and critique.
+    Strictly prioritized:
+      Tier 1: Google Gemini Reasoning & Multimodal (GEMINI_API_KEY, GEMINI_API_KEY_2, GOOGLE_API_KEY)
+              gemini-2.5-pro / gemini-2.5-flash with thinking_budget=2048 and optional image_part.
+      Tier 2: Groq Reasoning Models (GROQ_API_KEY pool)
+              GROQ_REASON_MODEL, openai/gpt-oss-120b, llama-3.3-70b-versatile (strictly excluding 8b).
+      Tier 3: Cerebras 120B Reasoning (CEREBRAS_API_KEY pool)
+              CEREBRAS_MODEL, gpt-oss-120b, llama-3.3-70b.
+    """
+    GROQ_BASE = "https://api.groq.com/openai/v1"
+    CEREBRAS_BASE = "https://api.cerebras.ai/v1"
+
+    gemini_keys = _rotated_api_keys("gemini_writing", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    groq_keys = _rotated_api_keys("groq_writing", _api_key_pool("GROQ_API_KEY"))
+    cerebras_keys = _rotated_api_keys("cerebras_writing", _api_key_pool("CEREBRAS_API_KEY"))
+
+    last_err = ""
+
+    # Tier 1: Gemini Reasoning & Multimodal
+    writing_gemini_models = list(dict.fromkeys([
+        os.environ.get("GEMINI_WRITING_MODEL", "gemini-2.5-pro"),
+        "gemini-2.5-flash",
+    ]))
+    for key in gemini_keys:
+        for model in writing_gemini_models:
+            text, err = _gemini_chat_once(
+                key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode,
+                timeout_s=50, thinking_budget=2048, image_part=image_part
+            )
+            if text:
+                return text, ""
+            last_err = err
+            if err in ("RATE_LIMIT", "AUTH"):
+                break
+
+    # Tier 2: Groq Reasoning Models (strictly excluding 8B)
+    reason_model = os.environ.get("GROQ_REASON_MODEL", "openai/gpt-oss-120b")
+    writing_groq_models = list(dict.fromkeys([
+        reason_model,
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+    ]))
+    for key in groq_keys:
+        for gm in writing_groq_models:
+            text, err = _oai_chat_once(
+                GROQ_BASE, key, gm, sys_prompt, user_prompt, max_tokens, temperature, json_mode,
+                reasoning_effort="high", timeout_s=45
+            )
+            if text:
+                return text, ""
+            last_err = err
+            if err in ("RATE_LIMIT", "AUTH"):
+                break
+
+    # Tier 3: Cerebras 120B Reasoning
+    writing_cerebras_models = list(dict.fromkeys([
+        os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"),
+        "gpt-oss-120b",
+        "llama-3.3-70b",
+    ]))
+    for key in cerebras_keys:
+        for cm in writing_cerebras_models:
+            text, err = _oai_chat_once(
+                CEREBRAS_BASE, key, cm, sys_prompt, user_prompt, max_tokens, temperature, json_mode,
+                reasoning_effort="high", timeout_s=45
+            )
+            if text:
+                return text, ""
+            last_err = err
+            if err in ("RATE_LIMIT", "AUTH"):
+                break
+
+    return "", last_err or "Writing evaluation models currently unavailable."
+
+
 def _friendly_err(err: str, lang: str) -> str:
     if err == "RATE_LIMIT":
         return ("Rate limit reached (too many requests in a short time). Please wait a moment and try again."
@@ -3329,32 +3741,33 @@ async def ai_feedback(
                 "error": "Chưa có đoạn văn bản được chọn." if lang == "vi" else "No selected text provided."
             }
 
+        target_lang = "Vietnamese" if lang == "vi" else "English"
         sys_prompt = (
-            "You are an expert official IELTS Writing Examiner and master pedagogical coach.\n"
+            "You are an expert official IELTS Writing Examiner and master pedagogical coach adhering strictly to the Official IELTS Public Band Descriptors (May 2023 update).\n"
             f"Analyze ONLY the selected text excerpt from an IELTS Writing Task {task_num} essay in context.\n"
-            "Evaluate this specific excerpt according to official IELTS Public Band Descriptors:\n"
+            "Evaluate this specific excerpt according to the 4 official criteria:\n"
             "- Grammatical Range & Accuracy (GRA)\n"
             "- Lexical Resource (LR)\n"
             "- Coherence & Cohesion (CC)\n"
             "- Task Achievement (Task 1) / Task Response (Task 2) (TA_TR)\n\n"
-            "You must return ONLY a single valid JSON object strictly matching this schema:\n"
+            "STRICT TAXONOMY & ANTI-DEFLATION RULES:\n"
+            "1. 'criterion': MUST be strictly one of: 'GRA', 'LR', 'CC', 'TA_TR'.\n"
+            "2. 'category': MUST be strictly one of:\n"
+            "   - 'error': ONLY for objective errors (grammar, subject-verb agreement, verb tense, preposition, spelling, wrong word formation, false collocation, or false data claim).\n"
+            "   - 'awkward': grammatically acceptable and understandable, but slightly wordy, clumsy, unnatural, or non-idiomatic.\n"
+            "   - 'upgrade': the candidate's original phrasing is ALREADY CORRECT and acceptable; the rewrite is an optional stylistic elevation to Band 8.0-8.5.\n"
+            "   - 'praise': highlights high-level lexical or structural excellence.\n"
+            "3. 'replacement': concise minimal English correction preserving the student's voice and intended meaning.\n"
+            "4. 'highBandRewrite': natural Band 8.0-8.5 native academic English phrasing.\n"
+            f"5. 'comment': 1-2 concise, clear sentences in {target_lang} explaining the feedback and rule to the student.\n"
+            "6. Respond with pure JSON matching this schema:\n"
             "{\n"
             '  "criterion": "GRA" | "LR" | "CC" | "TA_TR",\n'
-            '  "category": "error" | "awkward" | "upgrade",\n'
-            '  "replacement": "concise minimal English correction that fixes grammar/collocation while keeping the student\'s exact meaning",\n'
-            '  "highBandRewrite": "natural Band 8.0+ English phrasing for this span or clause",\n'
-            '  "comment": "Ngắn gọn bằng tiếng Việt (1-2 câu): chỉ rõ lỗi hoặc điểm chưa tự nhiên và lý do sửa theo tiêu chí IELTS."\n'
-            "}\n\n"
-            "STRICT CLASSIFICATION RULES:\n"
-            "1. 'criterion': MUST be strictly one of: 'GRA', 'LR', 'CC', 'TA_TR'.\n"
-            "2. 'category':\n"
-            "   - 'error': ONLY for objective errors (grammar, subject-verb agreement, verb tense, preposition, spelling, wrong word formation, false collocations).\n"
-            "   - 'awkward': grammatically acceptable but unnatural, wordy, clumsy, repetitive, or non-native phrasing.\n"
-            "   - 'upgrade': the original is already grammatically and lexically correct, but can be elevated to Band 7.5-8.5 academic style.\n"
-            "3. 'replacement': concise minimal English correction preserving student's voice.\n"
-            "4. 'highBandRewrite': natural Band 8.0-8.5 native phrasing.\n"
-            "5. 'comment': 1-2 concise, clear sentences in Vietnamese explaining why to the student.\n"
-            "6. Respond with pure JSON."
+            '  "category": "error" | "awkward" | "upgrade" | "praise",\n'
+            '  "replacement": "...",\n'
+            '  "highBandRewrite": "...",\n'
+            '  "comment": "..."\n'
+            "}"
         )
 
         user_prompt = (
@@ -3364,7 +3777,7 @@ async def ai_feedback(
             "Return JSON."
         )
 
-        text, err = _groq_chat(sys_prompt, user_prompt, max_tokens=1024, temperature=0.2, json_mode=True)
+        text, err = _writing_eval_chat(sys_prompt, user_prompt, max_tokens=1024, temperature=0.15, json_mode=True)
         if err:
             return {"success": False, "error": _friendly_err(err, lang)}
 
@@ -3412,7 +3825,7 @@ async def ai_feedback(
         task_title = payload.get("task_title") or payload.get("taskTitle") or f"Task {task_num}"
         prompt = str(payload.get("prompt") or payload.get("taskPrompt") or "").strip()
         essay = str(payload.get("essay") or payload.get("studentEssay") or "").strip()
-        media_url = str(payload.get("media_url") or payload.get("mediaUrl") or "").strip()
+        media_url = str(payload.get("media_url") or payload.get("mediaUrl") or payload.get("chart_url") or payload.get("chartUrl") or "").strip()
 
         if not essay:
             return {
@@ -3422,50 +3835,83 @@ async def ai_feedback(
 
         task_type_label = "Task 1 (Report/Letter, minimum 150 words)" if task_num == 1 else "Task 2 (Discursive Essay, minimum 250 words)"
         c1_name = "Task Achievement (TA)" if task_num == 1 else "Task Response (TR)"
+        target_lang = "Vietnamese" if lang == "vi" else "English"
+
+        # Attempt to resolve Task 1 visual chart image if available
+        image_part = None
+        if task_num == 1 and media_url:
+            try:
+                image_part = await asyncio.to_thread(_resolve_image_base64_part, media_url, 4.0)
+            except Exception:
+                image_part = None
 
         sys_prompt = (
-            "You are an expert official IELTS Writing Examiner and master pedagogical coach.\n"
-            f"Analyze the student's IELTS Writing {task_type_label} against the official 9-band descriptors.\n"
-            "You must return ONLY a single valid JSON object, without any markdown formatting or commentary.\n\n"
-            "JSON SCHEMA REQUIREMENT:\n"
+            "You are a Senior Official IELTS Writing Examiner and master pedagogical coach adhering strictly to the Official IELTS Public Band Descriptors (May 2023 update).\n"
+            f"Analyze the student's IELTS Writing {task_type_label} with rigorous, calibrated, and fair standards.\n\n"
+            "OFFICIAL IELTS SCORING PROTOCOL (MAY 2023 PROTOCOL - CALIBRATE FIRST):\n"
+            "Evaluate each of the four criteria INDEPENDENTLY based on its true descriptor level BEFORE compiling annotations:\n"
+            "- Band 9.0: Full flexibility, precise control, natural sophisticated language, complete task fulfilment; minor slips are extremely rare and do not detract from meaning.\n"
+            "- Band 8.0:\n"
+            f"  * {c1_name}: Covers all requirements sufficiently and appropriately; presents a clear, well-developed position (Task 2) or skillful selection and comparison of key features with a clear, insightful overview (Task 1).\n"
+            "  * CC: Information and ideas logically sequenced; cohesion is well-managed; paragraphing is used sufficiently and appropriately.\n"
+            "  * LR: Wide vocabulary used fluently and flexibly to convey precise meanings; skillful use of uncommon/idiomatic items with occasional inaccuracies/slips in word choice and collocation.\n"
+            "  * GRA: Wide range of structures used with full flexibility; the MAJORITY of sentences are completely ERROR-FREE; rare minor slips.\n"
+            "- Band 7.0:\n"
+            f"  * {c1_name}: Addresses all parts of the task with a clear overview/position throughout; main ideas extended and supported.\n"
+            "  * CC: Logically organises information and ideas with clear progression; flexible use of cohesive devices, though may have slight under/over-use.\n"
+            "  * LR: Sufficient vocabulary to allow flexibility and precision; some awareness of style and collocation, producing occasional inappropriate word choices.\n"
+            "  * GRA: Uses a variety of complex structures; produces FREQUENT error-free sentences; has good grammatical control with a few errors.\n"
+            "- Band 6.0:\n"
+            f"  * Noticeable limitations: e.g. mechanical cohesion, restricted lexical precision/repetitive vocabulary, complex structures significantly less accurate than simple sentences, or ideas underdeveloped.\n\n"
+            "STRICT ANTI-DEFLATION GUARDRAILS (DO NOT ARTIFICIALLY DEFLATE HIGH-BAND ESSAYS):\n"
+            "1. Calibrate independently: If an essay displays a wide range of complex sentences with 80%+ error-free clauses and precise academic vocabulary, it is BAND 8.0 or 8.5 on GRA and LR. DO NOT deflate it to Band 6.0 out of stylistic preference!\n"
+            "2. Do NOT penalize standard discourse markers: Words like 'However', 'Furthermore', 'In conclusion', 'Overall' are natural and standard in formal academic English.\n"
+            "3. Do NOT penalize necessary domain vocabulary: In Task 1 or Task 2, repeating key technical nouns from the prompt/chart (e.g. 'renewable energy', 'car manufacturing', 'fossil fuels') is necessary for precision and is NOT an error.\n"
+            "4. STRICT TAXONOMY FOR ANNOTATIONS:\n"
+            "   - 'error' (Objective Error): ONLY true grammatical errors (subject-verb agreement, wrong tense, missing/wrong preposition, run-on sentence, fragment), wrong spelling, wrong word formation, or factually false data.\n"
+            "   - 'awkward' (Acceptable but Less Natural): Grammatically sound and understandable, but wordy, clunky, or slightly non-idiomatic.\n"
+            "   - 'upgrade' (Optional High-Band Alternative): The candidate's original phrasing is ALREADY CORRECT and acceptable. The suggested rewrite is purely an optional C1/C2 elevation. NEVER lower a candidate's band score based on 'upgrade' annotations!\n"
+            "   - 'praise' (Strength): Commend sophisticated collocations, flexible structures, or insightful analysis.\n"
+            "5. NO QUOTA OF ERRORS (Proportional Annotation Rule): For a strong essay (Band 7.5–9.0), DO NOT invent artificial errors to fill a quota! If the essay has very few objective errors, output mostly 'praise' and 'upgrade' annotations and award the high Band score (7.5, 8.0, 8.5, or 9.0) that matches the official descriptors.\n\n"
+            "JSON SCHEMA REQUIREMENT (pure valid JSON, no markdown codeblocks, no commentary):\n"
             "{\n"
             '  "criteria": {\n'
-            f'    "TA_TR": {{ "band": 6.5, "why_current": "Detailed explanation of strengths and shortcomings under {c1_name}", "limiting_feature": "Key bottleneck preventing the next whole band" }},\n'
-            '    "CC": { "band": 6.0, "why_current": "Detailed assessment of paragraphing, cohesion, linking devices, and progression", "limiting_feature": "Key bottleneck in coherence and cohesion" },\n'
-            '    "LR": { "band": 6.0, "why_current": "Detailed assessment of range, precision, collocations, and lexical errors", "limiting_feature": "Key lexical bottleneck" },\n'
-            '    "GRA": { "band": 6.0, "why_current": "Detailed assessment of sentence structures, grammatical accuracy, and error frequency", "limiting_feature": "Key grammatical bottleneck" }\n'
+            f'    "TA_TR": {{ "band": <number 1.0-9.0>, "why_current": "Detailed justification in {target_lang}", "limiting_feature": "Key bottleneck preventing the next band in {target_lang}" }},\n'
+            f'    "CC": {{ "band": <number 1.0-9.0>, "why_current": "Detailed justification in {target_lang}", "limiting_feature": "Key bottleneck in {target_lang}" }},\n'
+            f'    "LR": {{ "band": <number 1.0-9.0>, "why_current": "Detailed justification in {target_lang}", "limiting_feature": "Key bottleneck in {target_lang}" }},\n'
+            f'    "GRA": {{ "band": <number 1.0-9.0>, "why_current": "Detailed justification in {target_lang}", "limiting_feature": "Key bottleneck in {target_lang}" }}\n'
             "  },\n"
-            '  "estimated_task_band": 6.0,\n'
+            '  "estimated_task_band": <number 1.0-9.0>,\n'
             '  "bottlenecks": [\n'
-            '    "Concise actionable limitation 1 in Vietnamese",\n'
-            '    "Concise actionable limitation 2 in Vietnamese",\n'
-            '    "Concise actionable limitation 3 in Vietnamese"\n'
+            f'    "Concise actionable limitation 1 in {target_lang}",\n'
+            f'    "Concise actionable limitation 2 in {target_lang}",\n'
+            f'    "Concise actionable limitation 3 in {target_lang}"\n'
             "  ],\n"
             '  "strengths": [\n'
-            '    "Concrete strength 1 in Vietnamese",\n'
-            '    "Concrete strength 2 in Vietnamese"\n'
+            f'    "Concrete strength 1 in {target_lang}",\n'
+            f'    "Concrete strength 2 in {target_lang}"\n'
             "  ],\n"
             '  "annotations": [\n'
             "    {\n"
             '      "anchorQuote": "EXACT character-for-character substring from the student essay",\n'
-            '      "criterion": "GRA",\n'
-            '      "category": "error",\n'
+            '      "criterion": "TA_TR" | "CC" | "LR" | "GRA",\n'
+            '      "category": "error" | "awkward" | "upgrade" | "praise",\n'
             '      "replacement": "clean minimal correction in English",\n'
-            '      "highBandRewrite": "optional natural Band 8.0+ alternative in English",\n'
-            '      "comment": "Concise rule/explanation in Vietnamese explaining the fix"\n'
+            '      "highBandRewrite": "optional natural Band 8.5+ alternative in English",\n'
+            f'      "comment": "Concise rule/explanation in {target_lang} explaining the feedback"\n'
             "    }\n"
             "  ],\n"
             '  "corrected_essay": "Full clean, minimally corrected version in English preserving the student voice",\n'
-            '  "sample_essay": "A Band 8.5 model answer in English addressing the exact prompt"\n'
+            '  "sample_essay": "A Band 8.5-9.0 model answer in English addressing the exact prompt"\n'
             "}\n\n"
             "STRICT RULES:\n"
             "1. Each 'anchorQuote' in 'annotations' MUST be a VERBATIM, EXACT character-for-character substring present in the student's essay. Never change spelling or punctuation in 'anchorQuote'.\n"
             "2. 'criterion' MUST be strictly one of: 'TA_TR', 'CC', 'LR', 'GRA'.\n"
-            "3. 'category' MUST be strictly one of: 'error' (objective grammar/lexical/spelling error), 'awkward' (acceptable grammar but non-native/unnatural phrasing), 'upgrade' (correct phrasing that can reach Band 7.5-8.5).\n"
-            "4. Provide 6 to 10 high-value inline annotations targeting the most impactful areas.\n"
-            "5. 'bottlenecks' must contain exactly 3 concise, practical Vietnamese bullet points.\n"
-            "6. 'strengths' must contain 2-3 genuine Vietnamese bullet points.\n"
-            "7. Bands for each criterion must be whole or half numbers between 1.0 and 9.0 (e.g. 5.5, 6.0, 6.5, 7.0).\n"
+            "3. 'category' MUST be strictly one of: 'error', 'awkward', 'upgrade', 'praise'.\n"
+            "4. Provide 4 to 10 high-value inline annotations targeting impactful moments. If the essay is already high band, prioritize 'praise' and 'upgrade'.\n"
+            "5. 'bottlenecks' must contain exactly 3 concise, practical bullet points.\n"
+            "6. 'strengths' must contain 2-3 genuine bullet points.\n"
+            "7. Bands for each criterion must be whole or half numbers between 1.0 and 9.0 (e.g. 6.5, 7.0, 7.5, 8.0, 8.5).\n"
             "8. Respond with pure JSON."
         )
 
@@ -3473,13 +3919,15 @@ async def ai_feedback(
             f"--- TASK INFORMATION ---\n"
             f"Task: {task_title} ({task_type_label})\n"
             f"Prompt: {prompt or '(General IELTS Writing prompt)'}\n"
-            f"{('Media/Visual URL: ' + media_url) if media_url else ''}\n\n"
-            f"--- STUDENT ESSAY ---\n"
-            f"{essay}\n\n"
-            "Evaluate strictly and return JSON."
         )
+        if image_part:
+            user_prompt += "\n(Task 1 visual chart image is attached. Cross-verify candidate data and descriptions directly against the visual chart.)\n"
+        elif media_url:
+            user_prompt += f"\nMedia/Visual URL: {media_url}\n"
 
-        text, err = _groq_chat(sys_prompt, user_prompt, max_tokens=4096, temperature=0.2, json_mode=True)
+        user_prompt += f"\n--- STUDENT ESSAY ---\n{essay}\n\nEvaluate fairly according to official May 2023 Band Descriptors and return JSON."
+
+        text, err = _writing_eval_chat(sys_prompt, user_prompt, max_tokens=4096, temperature=0.15, json_mode=True, image_part=image_part)
         if err:
             return {"success": False, "error": _friendly_err(err, lang)}
 
@@ -3564,7 +4012,7 @@ async def ai_feedback(
                 pass
 
         if len(bands) == 4:
-            calc_band = round((sum(bands) / 4.0) * 2) / 2
+            calc_band = _ielts_round_band(sum(bands) / 4.0)
         else:
             calc_band = float(data.get("estimated_task_band") or 6.0)
 

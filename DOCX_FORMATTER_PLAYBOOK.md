@@ -10,11 +10,11 @@ Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up 
 - Teachers may remove or reorder Quest rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
 - Every DOCX remains independently valid under this playbook. Do not split one passage, answer bank, or question group across files.
 
-**Changelog:** 2026-09-08 — Added Writing DOCX grammar and question-less Writing validation. `/api/upload_docx_batch` accepts mixed Reading, Listening, and Writing files (maximum 20).
+**Changelog:** 2026-10-15 — Added External Diagram Labelling (side-by-side drag & blank layout, click-to-zoom modal) and multi-paragraph [EXPLANATION] support without leakage or line flattening.
 
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, Writing, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
-**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-08-31 by the commit that updates this changelog.
+**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-10-15 by the commit that updates this changelog.
 
 **Success condition:** The formatted DOCX parses into the intended sections, question types, visual layout, option bank, and answer keys without manual repair in Exam Builder.
 
@@ -578,6 +578,95 @@ Critical rules:
 - A literal marker [34] creates the question. 34 ______ does not.
 - Do not use legacy OVERLAY for new text-box diagram work.
 
+### 4.12 External Diagram Labelling (Side-by-Side Layout)
+
+When a test includes a map, plan, flowchart, or diagram where the labels or answers are placed **outside** or **beside** the image (rather than direct overlaid text boxes or slot coordinates), use external diagram labelling. The UI renders this as a responsive side-by-side 2-column layout:
+- **Left Column**: Sticky visual card displaying the diagram/map with a hover badge and click-to-zoom lightbox modal.
+- **Right Column**: Numbered question rows with dashed dropzones or text input blanks, followed directly by the option bank (if drag-and-drop).
+
+#### 4.12.1 Drag-to-Drop beside Diagram: `[DRAG]` or `[MAP_DRAG]`
+Use `[DRAG]` with `IMAGE: <url>` (or `[MAP_DRAG]` without `[SLOTS]`):
+
+~~~text
+[DRAG]
+Questions 11-15
+Label the plan below.
+Choose FIVE answers from the box and move them next to questions 11-15.
+IMAGE: https://example.com/orchard-farm.png
+OPTIONS:
+A. Administration building
+B. Apple packing shed
+C. Cafe and gift shop
+D. Children's play area
+E. Farm machinery museum
+F. Picnic tables and BBQ
+G. Strawberry picking field
+H. Visitor information booth
+11. Farm entrance
+*H
+12. Main orchard track
+*A
+13. Central picnic lawn
+*F
+14. Fresh produce outlet
+*B
+15. Adventure playground
+*D
+~~~
+
+Rules:
+- Include `IMAGE: <https-url>` on its own line after the instruction lines.
+- `OPTIONS:` introduces the available draggable cards (letter prefix optional).
+- Each question has its prompt text (e.g. `11. Farm entrance`). If `[11]` is omitted, the parser automatically appends `[11]` to form the dropzone.
+- Answer keys (e.g. `*H` or `*H. Visitor information booth` or `*Visitor information booth`) are automatically resolved to the exact matching option string.
+- If `[MAP_DRAG]` is used without `[SLOTS]`, the parser automatically falls back to this side-by-side external drag layout so no questions are lost.
+
+#### 4.12.2 Fill-in Blanks beside Diagram: `[BLANK]`
+Use `[BLANK]` with `IMAGE: <url>` (or `[DIAGRAM_LABEL]` without `[BOX]` markers):
+
+~~~text
+[BLANK]
+Questions 21-25
+Label the diagram below.
+Write NO MORE THAN TWO WORDS AND/OR A NUMBER for each answer.
+IMAGE: https://example.com/water-purifier.png
+IMAGE_MAX_WIDTH: 780
+21. Coarse gravel filter captures [21] ______ and leaves.
+*sediment
+22. Fine sand layer eliminates [22] ______ particles.
+*microscopic
+23. Activated charcoal removes chemical [23] ______.
+*contaminants
+24. UV chamber neutralizes harmful [24] ______.
+*bacteria
+25. Final storage tank capacity: [25] ______ litres.
+*500
+~~~
+
+Rules:
+- Include `IMAGE: <https-url>` on its own line.
+- Optional `IMAGE_MAX_WIDTH: <number>` specifies the maximum display width in pixels.
+- If `[DIAGRAM_LABEL]` is written without any `[BOX]` definitions, the parser gracefully falls back to this external side-by-side blank layout with all answer keys intact.
+
+---
+
+### 4.13 Multi-Paragraph Explanations: `[EXPLANATION]`
+
+Teachers and course authors often write detailed explanations with multiple paragraphs (e.g., breakdown, quoted evidence, distractor analysis).
+
+~~~text
+[EXPLANATION]
+For question 21, the author contrasts traditional water filtration with modern ceramic membranes in the third paragraph of Section B: "Unlike conventional sand beds, ceramic micro-filtration blocks particles down to 0.1 microns."
+
+This directly proves that the filter's primary function is sediment and micro-particle removal. Option B is incorrect because chemical contaminants are treated in the downstream activated carbon phase, not the initial membrane filter.
+~~~
+
+Rules:
+- An `[EXPLANATION]` tag can target a single question (`[EXPLANATION 21]`), a range (`[EXPLANATION 21-24]`), or omit the number if placed directly under question 21.
+- All subsequent plain paragraphs (until the next tag `[...]`, next numbered question `^\d+[\.\)]`, or option line) are captured into the active question's explanation.
+- Paragraph breaks (`\n\n`) are preserved throughout the parsing pipeline and rendered in the Review Quiz as separate spaced `<p>` paragraphs.
+- Never let an explanation paragraph leak into question text or get flattened into a single monolithic run.
+
 ---
 
 ## 5. Parser Hazards
@@ -586,8 +675,8 @@ Critical rules:
 2. Keep option-bank entries one per paragraph. A prose paragraph that begins with A. may be misread as an option.
 3. Preserve visible words summary, note, flow-chart, flowchart, map, plan, label, and heading; the parser uses them as layout hints.
 4. A map/diagram with no accessible IMAGE: URL produces no corresponding questions.
-5. A map drag task with no valid slots produces no map questions.
-6. A diagram with no valid boxes produces no diagram questions.
+5. A map drag task with no valid slots falls back automatically to an external side-by-side drag layout.
+6. A diagram with no valid boxes falls back automatically to an external side-by-side diagram layout.
 7. Generic answer keys require a leading asterisk. Do not put explanations after it.
 8. For matching headings, retain both passage [HEADING_SLOT] markers and Roman option prefixes, but use heading text as the new answer key.
 9. For every drag task, full option text is safer and required for [DRAG], [FLOW_DRAG], and [MAP_DRAG].
@@ -670,16 +759,16 @@ Do not silently change parser behaviour while leaving this handbook stale.
 - Firebase Admin must initialize from `FIREBASE_SERVICE_ACCOUNT_JSON` before the token is verified. A missing allow-list or Admin configuration is a server configuration failure, not a malformed DOCX.
 - The browser must surface FastAPI's `detail` value for a non-2xx response so a configuration failure is actionable instead of being shown as a generic AI error.
 - `POST /api/exam-generation/batches/{batch_id}/advance` claims exactly one ordered source row under a Firestore lease. The client may request at most two concurrent advances; duplicate/retry requests cannot process a third file or overwrite a live lease.
-- `POST /api/exam-generation/batches/{batch_id}/retry` requeues only rows whose durable diagnostic is a transient provider-generation failure. It creates a fresh job ID while retaining the source blob and bounded retry history. Parser, media, grounding and source-format reviews are never auto-retried or published.
-- A provider timeout occurs before a rendered DOCX exists: it must end as `FAILED` with `GENERATION_TIMEOUT` and `round_trip_state=NOT_RUN`. Do not label it as a parser-contract failure. The default bounded provider policy is two attempts of up to 90 seconds, which leaves room inside the Vercel 300-second function limit.
+- `POST /api/exam-generation/batches/{batch_id}/retry` requeues only an explicit teacher-requested provider/AI-contract failure (`GENERATION*`, `QUESTION_SOLVE`, or `QUESTION_REPAIR`). It creates a fresh job ID while retaining the source blob and bounded retry history. Parser, media, grounding and source-format reviews are never auto-retried or published.
+- A provider timeout occurs before a rendered DOCX exists: it must end as `FAILED` with `GENERATION_TIMEOUT` and `round_trip_state=NOT_RUN`. Do not label it as a parser-contract failure. The default bounded provider policy is two attempts of up to 90 seconds. The raw-DOCX adapter also gives its router a smaller monotonic deadline and per-request cap, so one stuck upstream call cannot survive the outer watchdog or exhaust every provider family before fallback runs.
 - Canonical JSON decoding is inside that same provider retry envelope. A malformed model response may consume the remaining bounded provider attempt, but a successfully decoded payload must still pass `CanonicalExam.from_dict`, grounding, media, rendering and parser round-trip gates. The parser may normalize a malformed *optional* `slots`/`diagram` placeholder only when that question type cannot use it; MAP_DRAG coordinates and DIAGRAM_LABEL geometry remain strict and are never guessed, repaired or silently discarded.
 - The initial `generate` call is structure-only: it must preserve all visible source/question/formatting fields, leave `correct_answers` empty and omit question explanations. Bounded `SOLVER` workers then add correct answers and source-grounded explanations per question. This split is mandatory for large raw DOCX files so an oversized all-in-one answer payload cannot be truncated before schema validation.
 - Durable raw-DOCX workers always run at least one Solver worker (bounded to four). A zero-worker setting is valid only for isolated deterministic tests that already supply answers; it must never be used for a structure-only production batch.
-- If all bounded attempts return malformed JSON, the final raw model response is retained only inside that job's private Storage result payload for diagnosis. It is never copied to the public Firestore batch row or UI; all schema/grounding/parser gates still fail closed.
+- If all bounded attempts return malformed JSON, or valid JSON then fails the canonical/Solver contract, the final raw model response is retained only inside that job's private Storage result payload for diagnosis. It is never copied to the public Firestore batch row or UI; all schema/grounding/parser gates still fail closed.
 - Source DOCX bytes, output DOCX, canonical/parser/issue payloads and extracted media are durable Firebase Storage artifacts. Firestore batch rows contain only ordered summaries, progress, diagnostics and private blob references; never put a full canonical exam or parser payload in the batch document.
 - The configured `FIREBASE_STORAGE_BUCKET` must already exist. A row marked `STORAGE_BUCKET_NOT_FOUND` is intentionally failed before generation; provision the bucket or correct its exact name, then submit a new batch. Never downgrade this to Vercel filesystem storage.
 - A worker may use a temporary local directory only while extracting, rendering and parser-verifying one leased source. It must upload output/media/JSON before setting the row to `READY_FOR_REVIEW`, `PUBLISHED`, `MANUAL_REVIEW`, or `FAILED`. No API response may reveal local paths.
-- Question progress is a heartbeat: `stage`, total/completed/failed questions and repair attempt update the lease while question workers run. A lease expiry means retry/resume, not a completed result.
+- Question progress is a heartbeat: `stage`, total/completed/failed questions and repair attempt update the lease while question workers run. Raw-DOCX defaults to two parallel Solver workers to avoid upstream burst rate limits; deployments may raise the bounded setting only after provider capacity is verified. A lease expiry means retry/resume, not a completed result.
 - For a raw DOCX containing a chart or image, configure `EXAM_GENERATION_MEDIA_BASE_URL` to the canonical HTTPS IELTS OS origin (or use a trusted configured production origin). If its managed media cannot be stored, bound, embedded and round-tripped exactly, the file remains fail-closed in manual review.
 
 Backend AI routes distribute requests across configured keys and fail over when one provider/key is rate-limited:
@@ -691,9 +780,11 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-10-15**: Added External Diagram Labelling (Section 4.12: side-by-side 2-column layout for `[DRAG]`/`[BLANK]` with `IMAGE:`, click-to-zoom lightbox modal) and multi-paragraph `[EXPLANATION]` parsing (Section 4.13: newline preservation across multiple paragraphs without leakage into question text).
 - **2026-09-09**: Documented Firebase Admin initialization and explicit manager allow-list requirements for protected AI raw-DOCX batch routes; configuration failures are surfaced as actionable API details.
 - **2026-09-10**: Raw-DOCX batches use Firestore leases and Firebase Storage artifacts instead of a Vercel filesystem. Each source is processed in ordered, independently resumable rows with two file-worker slots, question-stage heartbeat progress, authenticated DOCX download and durable managed-media delivery.
 - **2026-09-11**: The canonical pre-solver gate tolerates provider list/string placeholders only for optional map/diagram fields on ordinary questions. Format-bearing MAP_DRAG and DIAGRAM_LABEL data remains fail-closed, so this removes harmless provider-shape noise without weakening rendered-format verification.
+- **2026-09-11**: Provider routing is deadline-aware for raw DOCX jobs, Solver/repair responses use an explicit answer-plus-evidence JSON contract, and private response artifacts preserve both generation and question-contract failures for reproducible diagnosis.
 - **2026-09-10**: Added an actionable `STORAGE_BUCKET_NOT_FOUND` diagnostic for unprovisioned/misnamed Firebase Storage buckets; invalid durable infrastructure fails one row without masking it as a DOCX parse error.
 - **2026-09-09**: Added the production AI raw-DOCX transformation contract. Source DOCX media is extracted from OOXML, hash-bound to one declared canonical question/writing-task location, re-embedded into the rendered IELTS OS DOCX, and must survive direct `api.index.parse_docx_to_quiz` round-trip verification. The pipeline fails closed for unbound, duplicated, altered, or inaccessible media; it never substitutes a chart or diagram URL.
 - **2026-09-09**: Pipeline output is canonical-first: run-level bold/italic, paragraph alignment, explicit answer/explanation grounding, bounded question repair, deterministic rendering, direct parser verification, and per-file failure isolation. Generated documents are obtained through authenticated job downloads, never by exposing filesystem paths.
@@ -703,3 +794,10 @@ Backend AI routes distribute requests across configured keys and fail over when 
 - **2026-08-30**: Added optional [EXPLANATION] grammar for teacher review explanations, parsed quoted evidence, and Listening timestamps.
 - **2026-08-30**: Added backend supplement DOCX import for replacing passages/sections and explanation-only files; ordinary [MATCHING] now stores clean option text, with Matching Headings retaining Roman compatibility for legacy files.
 - **2026-08-28 / c93eee0**: Initial complete handbook. Covers metadata, passages, generic blocks, completions, MCQ, multi-selection, matching headings, two-column drag, flow drag, map drag, and free-box diagram labelling.
+
+## Managed Listening audio API — 2026-09-13
+
+- `POST /api/exam-audio/uploads` and `POST /api/exam-audio/uploads/{uploadId}/complete` are Firebase-manager-only endpoints. The browser uploads the file directly to the signed Storage `PUT`; never send a large audio multipart body through a Vercel API route.
+- Completion validates object ownership, approved filename/MIME/byte count and a small audio signature before returning the stable same-origin `/api/audio/...` URL. That URL carries an opaque token and preserves byte ranges for the native Listening player.
+- `POST /api/ai_transcribe` treats `/api/audio/...` as an internal Storage reference, not as an HTTP URL to fetch through the public proxy. It reuses the audio-key decoder, validates the `exam-audio/` path/token, downloads directly with Firebase Admin, then sends bytes into the existing transcription provider path. Small direct public external audio URLs still use the bounded HTTP download path; malformed internal tokens must fail as internal resolve errors, never as external downloads. Managed assets are chunked deterministically and offset to absolute source timestamps when they exceed Whisper's request envelope. The production cap is 45 minutes / five chunks to remain inside Vercel's 300-second execution budget.
+- `imageio-ffmpeg` is an API dependency, not a frontend dependency. Keep it available in production so the timestamp-preserving chunk route works even when the Vercel image has no system `ffmpeg`/`ffprobe` binary.

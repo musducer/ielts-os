@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useLayoutEffect, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { normalizeWritingTasks, countWritingWords, type WritingTaskDefinition } from './publicRelease';
 
 // ==========================================
@@ -120,6 +121,45 @@ const QUICK_TAGS: Record<CriterionKey, string[]> = {
   CC: ['Thiếu liên kết', 'Liên từ gượng ép', 'Lạc đề đoạn', 'Ngắt đoạn chưa hợp lý', 'Chưa rõ câu chủ đề'],
   TA_TR: ['Chưa rõ lập trường', 'Thiếu dẫn chứng', 'Chưa cover hết đề', 'Chưa có Overview (Task 1)', 'Phát triển ý sơ sài'],
 };
+
+export const QUICK_TAG_MAP: Record<string, string> = {
+  'Sai S-V': 'Subject-Verb Agreement',
+  'Sai mạo từ': 'Article Error',
+  'Sai giới từ': 'Preposition Error',
+  'Sai thì động từ': 'Verb Tense Error',
+  'Câu cụt / Run-on': 'Sentence Fragment / Run-on',
+  'Thiếu mệnh đề quan hệ': 'Missing Relative Clause',
+  'Trật tự từ': 'Word Order',
+  'Sai chính tả': 'Spelling Mistake',
+  'Lặp từ': 'Word Repetition',
+  'Sai Collocation': 'Unnatural Collocation',
+  'Dịch word-by-word': 'Literal Translation',
+  'Chưa trang trọng': 'Informal Register',
+  'Sai từ loại (Word form)': 'Incorrect Word Form',
+  'Thiếu liên kết': 'Weak Cohesion',
+  'Liên từ gượng ép': 'Forced Linkers',
+  'Lạc đề đoạn': 'Off-topic Paragraph',
+  'Ngắt đoạn chưa hợp lý': 'Poor Paragraphing',
+  'Chưa rõ câu chủ đề': 'Vague Topic Sentence',
+  'Chưa rõ lập trường': 'Unclear Position',
+  'Thiếu dẫn chứng': 'Insufficient Support',
+  'Chưa cover hết đề': 'Incomplete Task Response',
+  'Chưa có Overview (Task 1)': 'Missing Overview',
+  'Phát triển ý sơ sài': 'Underdeveloped Ideas',
+  'Sai ngữ pháp': 'Grammar error',
+  'Dùng từ sai': 'Wrong word choice',
+  'Thiếu mạo từ': 'Missing article',
+  'Sai thì': 'Wrong tense',
+  'Diễn đạt vụng': 'Awkward phrasing',
+  'Cần collocations tự nhiên': 'Collocation upgrade',
+  'Cấu trúc hay': 'Good structure',
+  'Từ vựng tốt': 'Good vocabulary',
+};
+
+export function formatTag(tag: string, isVi?: boolean): string {
+  if (isVi === true) return tag;
+  return QUICK_TAG_MAP[tag] || tag;
+}
 
 const BAND_DESCRIPTORS: Record<CriterionKey, Record<number, string>> = {
   TA_TR: {
@@ -653,10 +693,11 @@ const FloatingCardPortal: React.FC<FloatingCardPortalProps> = ({
 // ==========================================
 export function buildDossierAnnotatedEssayHtml(
   text: string,
-  accurateComments: AccurateTaskComment[]
+  accurateComments: AccurateTaskComment[],
+  isVi: boolean = true
 ): string {
   if (!text || !text.trim()) {
-    return '<div style="color: #9590A0; font-style: italic;">Thí sinh chưa nộp bài viết cho Task này.</div>';
+    return `<div style="color: #9590A0; font-style: italic;">${isVi ? "Thí sinh chưa nộp bài viết cho Task này." : "Candidate did not submit an essay for this Task."}</div>`;
   }
 
   const paragraphs = buildLosslessParagraphSegments(text, accurateComments, 'annotated');
@@ -721,7 +762,11 @@ export function buildVectorPdfDossierHtml(params: {
   comments: AccurateTaskComment[];
   correctedEssay?: string;
   sampleEssay?: string;
+  isVi?: boolean;
 }): string {
+  const isVi = params.isVi ?? true;
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
+
   const critList = [
     { key: 'TA_TR' as const, label: params.taskNumber === 1 ? 'Task Achievement (TA)' : 'Task Response (TR)', score: params.taskScores.ta },
     { key: 'CC' as const, label: 'Coherence & Cohesion (CC)', score: params.taskScores.cc },
@@ -732,7 +777,7 @@ export function buildVectorPdfDossierHtml(params: {
   const criteriaRows = critList.map(c => {
     const rawScore = c.score;
     const rounded = typeof rawScore === 'number' ? Math.round(rawScore) : Number(rawScore) || 6;
-    const desc = params.criteriaNotes?.[c.key] || BAND_DESCRIPTORS[c.key]?.[rounded] || 'Đáp ứng yêu cầu.';
+    const desc = params.criteriaNotes?.[c.key] || BAND_DESCRIPTORS[c.key]?.[rounded] || tx('Đáp ứng yêu cầu.', 'Meets criteria requirements.');
     return `
       <tr style="border-bottom: 1px solid #E4DFD3;">
         <td style="padding: 8px 10px; font-weight: 700; width: 28%;">${escapeHtml(c.label)}</td>
@@ -746,7 +791,7 @@ export function buildVectorPdfDossierHtml(params: {
     ? `
       <div class="pdf-no-break" style="padding: 10px 14px; background: #FFFBEB; border: 1px solid #FCD34D; border-left: 4px solid #B45309; border-radius: 4px; margin-bottom: 12px; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; font-weight: 900; color: #B45309; text-transform: uppercase; margin-bottom: 4px;">
-          Trọng tâm khắc phục (Priority Action Plan):
+          ${escapeHtml(tx('Trọng tâm khắc phục (Priority Action Plan):', 'Priority Action Plan:'))}
         </div>
         <ul style="margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.6; color: #1A1726;">
           ${params.bottlenecks.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
@@ -759,7 +804,7 @@ export function buildVectorPdfDossierHtml(params: {
     ? `
       <div class="pdf-no-break" style="padding: 10px 14px; background: #EEF2FF; border: 1px solid #C7D2FE; border-left: 4px solid #5B3DF5; border-radius: 4px; margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
         <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; text-transform: uppercase; margin-bottom: 4px;">
-          Nhận xét chung của giáo viên:
+          ${escapeHtml(tx('Nhận xét chung của giáo viên:', 'Teacher General Feedback:'))}
         </div>
         <div style="font-size: 12px; line-height: 1.6; color: #1A1726; white-space: pre-wrap;">
           ${escapeHtml(params.generalFeedback)}
@@ -772,7 +817,7 @@ export function buildVectorPdfDossierHtml(params: {
     const c = item.comment;
     const cat = c.category || 'error';
     const critLabel = c.criterion === 'TA_TR' ? (params.taskNumber === 1 ? 'TA' : 'TR') : (c.criterion || 'GRA');
-    const catLabel = cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa tự nhiên' : cat === 'upgrade' ? 'Nâng Band' : 'Điểm sáng';
+    const catLabel = cat === 'error' ? tx('Lỗi sai', 'Correction') : cat === 'awkward' ? tx('Chưa tự nhiên', 'Awkward') : cat === 'upgrade' ? tx('Nâng Band', 'Band Upgrade') : tx('Điểm sáng', 'Merit');
     const catColor = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
 
     return `
@@ -791,7 +836,7 @@ export function buildVectorPdfDossierHtml(params: {
         <td style="padding: 7px 8px; width: 14%;">
           <div style="font-family: Consolas, monospace; font-weight: 700; font-size: 11px; color: #1A1726;">${escapeHtml(critLabel)}</div>
           <span style="font-size: 10px; font-weight: 700; color: ${catColor};">${escapeHtml(catLabel)}</span>
-          ${c.tags && c.tags.length > 0 ? `<div style="font-size: 9.5px; color: #666175; margin-top: 2px;">${escapeHtml(c.tags.join(', '))}</div>` : ''}
+          ${c.tags && c.tags.length > 0 ? `<div style="font-size: 9.5px; color: #666175; margin-top: 2px;">${escapeHtml(c.tags.map(t => formatTag(t, isVi)).join(', '))}</div>` : ''}
         </td>
         <td style="padding: 7px 8px; color: #374151; line-height: 1.5;">
           ${escapeHtml(c.comment || '')}
@@ -801,7 +846,7 @@ export function buildVectorPdfDossierHtml(params: {
   }).join('');
 
   return `<!DOCTYPE html>
-<html lang="vi">
+<html lang="${isVi ? 'vi' : 'en'}">
 <head>
   <meta charset="utf-8" />
   <base href="${typeof window !== 'undefined' ? window.location.origin : ''}/" />
@@ -857,17 +902,17 @@ export function buildVectorPdfDossierHtml(params: {
           Writing Assessment Dossier
         </h1>
         <div style="font-size: 12px; color: #666175;">
-          Học sinh: <strong style="color: #1A1726;">${escapeHtml(params.studentName)}</strong> · Bài thi: <strong style="color: #1A1726;">${escapeHtml(params.quizTitle)}</strong>
+          ${escapeHtml(tx('Học sinh:', 'Student:'))} <strong style="color: #1A1726;">${escapeHtml(params.studentName)}</strong> · ${escapeHtml(tx('Bài thi:', 'Exam:'))} <strong style="color: #1A1726;">${escapeHtml(params.quizTitle)}</strong>
         </div>
         <div style="font-size: 11.5px; color: #666175; margin-top: 3px;">
-          Phần thi: <strong style="color: #1A1726;">${escapeHtml(params.taskTitle)}</strong> · Số từ bài viết: <strong style="color: #1A1726; font-family: Consolas, monospace;">${params.wordCount} words</strong> · Ngày chấm: <strong>${new Date().toLocaleDateString('vi-VN')}</strong>
+          ${escapeHtml(tx('Phần thi:', 'Task:'))} <strong style="color: #1A1726;">${escapeHtml(params.taskTitle)}</strong> · ${escapeHtml(tx('Số từ bài viết:', 'Word count:'))} <strong style="color: #1A1726; font-family: Consolas, monospace;">${params.wordCount} words</strong> · ${escapeHtml(tx('Ngày chấm:', 'Date:'))} <strong>${new Date().toLocaleDateString(isVi ? 'vi-VN' : 'en-US')}</strong>
         </div>
       </div>
 
       <!-- Band Score Box -->
       <div style="text-align: right; min-width: 180px;">
         <div style="font-size: 9.5px; font-weight: 900; color: #666175; text-transform: uppercase; letter-spacing: 0.5px;">
-          Điểm Overall Task ${params.taskNumber}
+          ${escapeHtml(tx('Điểm Overall Task', 'Overall Score Task'))} ${params.taskNumber}
         </div>
         <div style="font-family: Georgia, serif; font-size: 32px; font-weight: 900; color: #5B3DF5; line-height: 1; margin: 2px 0 6px;">
           Band ${params.overallBand}
@@ -896,7 +941,7 @@ export function buildVectorPdfDossierHtml(params: {
     <!-- SECTION 1: TASK PROMPT & VISUAL -->
     <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
       <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
-        1. Đề bài & Hướng dẫn (Task Prompt)
+        ${escapeHtml(tx('1. Đề bài & Hướng dẫn (Task Prompt)', '1. Task Prompt & Instructions'))}
       </h3>
       <div style="padding: 12px 16px; background: #F6F3EC; border: 1px solid #E4DFD3; border-radius: 6px; font-size: 12px; line-height: 1.6;">
         <div style="font-weight: 700; margin-bottom: 4px;">${escapeHtml(params.taskTitle)}</div>
@@ -913,14 +958,14 @@ export function buildVectorPdfDossierHtml(params: {
     <!-- SECTION 2: 4 CRITERIA MATRIX & PEDAGOGICAL NOTES -->
     <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
       <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
-        2. Đánh giá chi tiết 4 tiêu chí chấm điểm
+        ${escapeHtml(tx('2. Đánh giá chi tiết 4 tiêu chí chấm điểm', '2. Four Criteria Assessment & Pedagogical Notes'))}
       </h3>
       <table style="border: 1px solid #E4DFD3; font-size: 11.5px;">
         <thead>
           <tr style="background: #F6F3EC; border-bottom: 1px solid #E4DFD3;">
-            <th style="padding: 7px 10px; width: 28%;">Tiêu chí</th>
-            <th style="padding: 7px 10px; width: 14%;">Điểm Band</th>
-            <th style="padding: 7px 10px;">Nhận xét sư phạm</th>
+            <th style="padding: 7px 10px; width: 28%;">${escapeHtml(tx('Tiêu chí', 'Criterion'))}</th>
+            <th style="padding: 7px 10px; width: 14%;">${escapeHtml(tx('Điểm Band', 'Band Score'))}</th>
+            <th style="padding: 7px 10px;">${escapeHtml(tx('Nhận xét sư phạm', 'Pedagogical Notes'))}</th>
           </tr>
         </thead>
         <tbody>
@@ -936,10 +981,10 @@ export function buildVectorPdfDossierHtml(params: {
     <div style="margin-bottom: 22px;">
       <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
         <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0;">
-          3. Bài làm của học sinh (Student Essay · ${params.wordCount} words)
+          ${escapeHtml(tx(`3. Bài làm của học sinh (Student Essay · ${params.wordCount} words)`, `3. Student Essay (${params.wordCount} words)`))}
         </h3>
         <span style="font-size: 11px; color: #666175; font-style: italic;">
-          Ghi chú: Số [n] tương ứng với bảng sửa lỗi chi tiết bên dưới.
+          ${escapeHtml(tx('Ghi chú: Số [n] tương ứng với bảng sửa lỗi chi tiết bên dưới.', 'Note: Marker [n] corresponds to the detailed correction table below.'))}
         </span>
       </div>
       <div style="padding: 16px 20px; background: #FAF8F5; border: 1px solid #E4DFD3; border-radius: 6px;">
@@ -951,16 +996,16 @@ export function buildVectorPdfDossierHtml(params: {
     ${params.comments.length > 0 ? `
       <div style="margin-bottom: 22px;">
         <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
-          4. Bảng sửa lỗi & Gợi ý nâng cấp chi tiết (${params.comments.length} điểm chú thích)
+          ${escapeHtml(tx(`4. Bảng sửa lỗi & Gợi ý nâng cấp chi tiết (${params.comments.length} điểm chú thích)`, `4. Detailed Corrections & Band Upgrades (${params.comments.length} annotations)`))}
         </h3>
         <table style="border: 1px solid #E4DFD3; font-size: 11.5px;">
           <thead>
             <tr style="background: #F6F3EC; border-bottom: 1px solid #E4DFD3;">
               <th style="padding: 6px 8px; width: 5%;">#</th>
-              <th style="padding: 6px 8px; width: 26%;">Đoạn gốc</th>
-              <th style="padding: 6px 8px; width: 28%;">Gợi ý sửa & Nâng Band</th>
-              <th style="padding: 6px 8px; width: 14%;">Tiêu chí</th>
-              <th style="padding: 6px 8px;">Giải thích & Lời khuyên</th>
+              <th style="padding: 6px 8px; width: 26%;">${escapeHtml(tx('Đoạn gốc', 'Original'))}</th>
+              <th style="padding: 6px 8px; width: 28%;">${escapeHtml(tx('Gợi ý sửa & Nâng Band', 'Correction / Upgrade'))}</th>
+              <th style="padding: 6px 8px; width: 14%;">${escapeHtml(tx('Tiêu chí', 'Criterion'))}</th>
+              <th style="padding: 6px 8px;">${escapeHtml(tx('Giải thích & Lời khuyên', 'Explanation & Feedback'))}</th>
             </tr>
           </thead>
           <tbody>
@@ -975,7 +1020,7 @@ export function buildVectorPdfDossierHtml(params: {
       <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
           <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0; color: #15803D;">
-            5. Bài viết đã sửa hoàn chỉnh (Clean Corrected Version)
+            ${escapeHtml(tx('5. Bài viết đã sửa hoàn chỉnh (Clean Corrected Version)', '5. Clean Corrected Version'))}
           </h3>
           <span style="font-size: 11px; color: #666175; font-family: Consolas, monospace;">
             ${countWritingWords(params.correctedEssay)} words
@@ -992,7 +1037,7 @@ export function buildVectorPdfDossierHtml(params: {
       <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
           <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0; color: #5B3DF5;">
-            6. Bài mẫu tham khảo Band 8.0+ (Model Essay)
+            ${escapeHtml(tx('6. Bài mẫu tham khảo Band 8.0+ (Model Essay)', '6. Model Essay (Band 8.0+)'))}
           </h3>
           <span style="font-size: 11px; color: #666175; font-family: Consolas, monospace;">
             ${countWritingWords(params.sampleEssay)} words
@@ -1007,7 +1052,7 @@ export function buildVectorPdfDossierHtml(params: {
     <!-- Footer Signature -->
     <div style="border-top: 1px solid #E4DFD3; padding-top: 12px; margin-top: 24px; display: flex; justify-content: space-between; font-size: 11px; color: #9590A0;">
       <span>IELTS OS Educational Engine</span>
-      <span>Date: ${new Date().toLocaleDateString('vi-VN')} · Academic Assessment Dossier</span>
+      <span>Date: ${new Date().toLocaleDateString(isVi ? 'vi-VN' : 'en-US')} · Academic Assessment Dossier</span>
     </div>
   </div>
 </body>
@@ -1059,6 +1104,8 @@ const Ico: React.FC<{ name: string; size?: number; color?: string; className?: s
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
       case 'close':
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+      case 'zoomIn':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>;
       case 'copy':
         return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
       case 'radar':
@@ -1199,6 +1246,11 @@ export async function resolveChartImageForPdf(
 // MAIN COMPONENT (MANUSCRIPT EDITORIAL DESK)
 // ==========================================
 export default function WritingFeedback(props: WritingFeedbackDeskProps) {
+  const { i18n } = useTranslation();
+  const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
+  const formatTag = (tag: string, overrideVi?: boolean) => ((overrideVi ?? isVi) ? tag : (QUICK_TAG_MAP[tag] || tag));
+
   // ----------------------------------------
   // BACKWARD COMPATIBILITY: Legacy single-essay mode
   // ----------------------------------------
@@ -1229,7 +1281,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   } = props;
 
   if (!reviewQuiz || !reviewQuiz.quiz || !reviewQuiz.result) {
-    return <div style={{ padding: 32, textAlign: 'center', color: C.sub }}>Không tìm thấy dữ liệu bài thi.</div>;
+    return <div style={{ padding: 32, textAlign: 'center', color: C.sub }}>{tx('Không tìm thấy dữ liệu bài thi.', 'Exam data not found.')}</div>;
   }
 
   const isTeacher = userRole === 'TEACHER';
@@ -1372,6 +1424,16 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
   const [pulseMarkId, setPulseMarkId] = useState<string | null>(null);
   const [vocabToast, setVocabToast] = useState<string | null>(null);
+  const [isChartZoomOpen, setIsChartZoomOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isChartZoomOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsChartZoomOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isChartZoomOpen]);
 
   // Action status & message for feedback UX
   const [actionStatus, setActionStatus] = useState<'idle' | 'saving_draft' | 'publishing' | 'saved_ok' | 'published_ok' | 'error'>('idle');
@@ -1459,13 +1521,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     const rubricKeys: Array<keyof WritingCriterionScore> = ['taskAchievement', 'coherence', 'lexical', 'grammar'];
     if (publish && writingTasks.some(task => !rubricKeys.every(k => scoreIsValid(writingGrading.taskScores[task.id]?.[k])))) {
       setActionStatus('error');
-      setStatusMessage('Vui lòng chấm đủ 4 tiêu chí cho cả Task 1 và Task 2 trước khi Publish cho học sinh.');
+      setStatusMessage(tx('Vui lòng chấm đủ 4 tiêu chí cho cả Task 1 và Task 2 trước khi Publish cho học sinh.', 'Please score all 4 criteria for both Task 1 and Task 2 before publishing to student.'));
       setTimeout(() => setActionStatus('idle'), 4000);
       return;
     }
 
     setActionStatus(publish ? 'publishing' : 'saving_draft');
-    setStatusMessage(publish ? 'Đang lưu và publish bài chấm cho học sinh...' : 'Đang lưu bản nháp bài chấm...');
+    setStatusMessage(publish ? tx('Đang lưu và publish bài chấm cho học sinh...', 'Saving and publishing assessment...') : tx('Đang lưu bản nháp bài chấm...', 'Saving assessment draft...'));
 
     try {
       const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
@@ -1493,18 +1555,18 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           const saved = await syncData({ quizResults: nextResults });
           if (!saved) {
             setActionStatus('saved_ok');
-            setStatusMessage('Bản chấm đã lưu cục bộ trên thiết bị và sẽ tự động đồng bộ khi có mạng.');
+            setStatusMessage(tx('Bản chấm đã lưu cục bộ trên thiết bị và sẽ tự động đồng bộ khi có mạng.', 'Assessment saved locally and will auto-sync when online.'));
           } else {
             setActionStatus(publish ? 'published_ok' : 'saved_ok');
-            setStatusMessage(publish ? 'Đã xuất bản bài chấm cho học sinh thành công!' : 'Đã lưu bản nháp thành công!');
+            setStatusMessage(publish ? tx('Đã xuất bản bài chấm cho học sinh thành công!', 'Assessment published to student successfully!') : tx('Đã lưu bản nháp thành công!', 'Draft saved successfully!'));
           }
         } else {
           setActionStatus('saved_ok');
-          setStatusMessage('Đã lưu bản chấm trên thiết bị!');
+          setStatusMessage(tx('Đã lưu bản chấm trên thiết bị!', 'Assessment saved on device!'));
         }
       } else {
         setActionStatus('saved_ok');
-        setStatusMessage('Đã cập nhật bài chấm!');
+        setStatusMessage(tx('Đã cập nhật bài chấm!', 'Assessment updated!'));
       }
       setTimeout(() => {
         setActionStatus('idle');
@@ -1513,7 +1575,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     } catch (err: any) {
       console.error('[WritingFeedback] Save error:', err);
       setActionStatus('error');
-      setStatusMessage('Có lỗi khi lưu bài chấm: ' + (err?.message || 'Vui lòng thử lại.'));
+      setStatusMessage(tx('Có lỗi khi lưu bài chấm: ', 'Error saving assessment: ') + (err?.message || tx('Vui lòng thử lại.', 'Please try again.')));
       setTimeout(() => setActionStatus('idle'), 4000);
     }
   };
@@ -1592,11 +1654,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           essay_text: originalEssay,
           task_number: taskNumber,
           prompt: activeTask.prompt || activeTask.instructions || '',
+          media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
+          lang: isVi ? 'vi' : 'en',
         }),
       });
       if (!res.ok) throw new Error('AI critique request failed: ' + res.statusText);
       const data = await res.json();
-      if (!data.success && !data.criterion) throw new Error(data.error || 'AI không trả về kết quả hợp lệ');
+      if (!data.success && !data.criterion) throw new Error(data.error || tx('AI không trả về kết quả hợp lệ', 'AI did not return a valid result'));
 
       const nextCrit: CriterionKey = (data.criterion as CriterionKey) || selectionBox.criterion || 'GRA';
       const nextCat: CommentCategory = (data.category as CommentCategory) || 'error';
@@ -1617,7 +1681,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           replacement: nextReplacement || undefined,
           highBandRewrite: nextHighBand || undefined,
           tags: nextTags.length ? nextTags : undefined,
-          comment: nextComment || 'Nhận xét từ AI.',
+          comment: nextComment || tx('Nhận xét từ AI.', 'AI critique comment.'),
           createdAt: Date.now(),
         };
         updateWritingGrading({
@@ -1640,7 +1704,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       }
     } catch (err) {
       console.error('AI Selection Critique error:', err);
-      alert('Không thể nhận xét bằng AI: ' + (err as Error).message);
+      alert(tx('Không thể nhận xét bằng AI: ', 'Unable to generate AI critique: ') + (err as Error).message);
     } finally {
       setAiCritiqueLoading(false);
     }
@@ -1722,7 +1786,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   // Student Vocab Notebook Save
   const handleSaveToVocab = async (word: string, meaning: string, context: string) => {
     if (!findMe || !saveMyVocabNotebook) {
-      alert('Vui lòng đăng nhập tài khoản học viên để lưu vào Sổ từ vựng.');
+      alert(tx('Vui lòng đăng nhập tài khoản học viên để lưu vào Sổ từ vựng.', 'Please log in with a student account to save to Vocabulary Notebook.'));
       return;
     }
     const me = findMe();
@@ -1749,10 +1813,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     const nextNotebook = [card, ...(me.vocabNotebook || [])];
     const ok = await saveMyVocabNotebook(nextNotebook, me.vocabTombstones || []);
     if (ok) {
-      setVocabToast(`Đã lưu "${cleanWord}" vào Sổ từ vựng!`);
+      setVocabToast(tx(`Đã lưu "${cleanWord}" vào Sổ từ vựng!`, `Saved "${cleanWord}" to Vocabulary Notebook!`));
       setTimeout(() => setVocabToast(null), 3000);
     } else {
-      alert('Không thể lưu từ vào sổ từ vựng.');
+      alert(tx('Không thể lưu từ vào sổ từ vựng.', 'Unable to save word to Vocabulary Notebook.'));
     }
   };
 
@@ -1770,16 +1834,16 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           prompt: activeTask.prompt || activeTask.instructions || '',
           essay: originalEssay,
           media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
-          lang: 'vi',
+          lang: isVi ? 'vi' : 'en',
         }),
       });
       const data = await resp.json();
       if (!resp.ok || !data.success) {
-        throw new Error(data.error || 'AI không thể phân tích bài viết.');
+        throw new Error(data.error || tx('AI không thể phân tích bài viết.', 'AI could not analyze the essay.'));
       }
       setAiModal({ open: true, loading: false, error: '', data });
     } catch (err: any) {
-      setAiModal({ open: true, loading: false, error: err.message || 'Lỗi kết nối AI', data: null });
+      setAiModal({ open: true, loading: false, error: err.message || tx('Lỗi kết nối AI', 'AI connection error'), data: null });
     }
   };
 
@@ -1904,7 +1968,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         gra: writingGrading.taskScores[activeTask.id]?.grammar ?? '—',
       };
 
-      const annotatedEssayHtml = buildDossierAnnotatedEssayHtml(originalEssay, accurateActiveComments);
+      const annotatedEssayHtml = buildDossierAnnotatedEssayHtml(originalEssay, accurateActiveComments, isVi);
 
       // Bulletproof Chart Image Extraction & Base64 Embedding
       const activeTaskIndex = writingTasks.findIndex(t => t.id === activeTask.id) >= 0
@@ -1930,6 +1994,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         comments: accurateActiveComments,
         correctedEssay: writingGrading.correctedAnswers?.[activeTask.id],
         sampleEssay: writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay,
+        isVi,
       });
 
       // Create hidden iframe
@@ -1947,7 +2012,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
 
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (!doc) {
-        throw new Error('Không thể khởi tạo môi trường in (iframe document).');
+        throw new Error(tx('Không thể khởi tạo môi trường in (iframe document).', 'Cannot initialize print environment (iframe document).'));
       }
 
       doc.open();
@@ -1987,7 +2052,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       }, 60000);
     } catch (err: any) {
       console.error('Vector PDF export error:', err);
-      alert('Không thể tạo file PDF tự động: ' + (err?.message || 'Lỗi không xác định'));
+      alert(tx('Không thể tạo file PDF tự động: ', 'Cannot generate PDF automatically: ') + (err?.message || tx('Lỗi không xác định', 'Unknown error')));
     } finally {
       setIsExportingPdf(false);
     }
@@ -2137,7 +2202,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
               style={{ fontSize: 12, padding: '6px 12px' }}
             >
               <Ico name={promptDrawerOpen ? 'chevronUp' : 'chevronDown'} size={14} />
-              {promptDrawerOpen ? 'Ẩn đề bài & biểu đồ' : 'Xem đề bài & biểu đồ'}
+              {promptDrawerOpen ? tx('Ẩn đề bài & biểu đồ', 'Hide prompt & visual') : tx('Xem đề bài & biểu đồ', 'View prompt & visual')}
             </button>
           </div>
 
@@ -2171,11 +2236,11 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
               onClick={exportPdfDossier}
               disabled={isExportingPdf}
               className="wf-btn-hairline"
-              title="Xuất báo cáo chi tiết chuẩn học thuật"
+              title={tx('Xuất báo cáo chi tiết chuẩn học thuật', 'Export academic evaluation dossier PDF')}
               style={{ opacity: isExportingPdf ? 0.7 : 1, cursor: isExportingPdf ? 'wait' : 'pointer' }}
             >
               <Ico name={isExportingPdf ? "loader" : "download"} size={14} className={isExportingPdf ? "wf-spin" : undefined} />
-              {isExportingPdf ? 'Đang tạo PDF...' : 'Dossier PDF'}
+              {isExportingPdf ? tx('Đang tạo PDF...', 'Generating PDF...') : 'Dossier PDF'}
             </button>
 
             {/* Teacher Actions */}
@@ -2185,7 +2250,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   onClick={runAiCoPilot}
                   className="wf-btn-hairline"
                   style={{ color: C.accent, borderColor: C.accentLine, background: C.accentWash }}
-                  title="Chấm nháp tự động 4 tiêu chí và chỉ lỗi chi tiết bằng AI"
+                  title={tx('Chấm nháp tự động 4 tiêu chí và chỉ lỗi chi tiết bằng AI', 'Auto-grade 4 criteria and extract line-by-line annotations via AI')}
                   disabled={actionStatus === 'saving_draft' || actionStatus === 'publishing'}
                 >
                   <Ico name="sparkles" size={14} color={C.accent} /> AI Co-Pilot
@@ -2201,11 +2266,11 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 >
                   {actionStatus === 'saving_draft' ? (
                     <>
-                      <Ico name="loader" size={14} className="wf-spin" /> Đang lưu nháp...
+                      <Ico name="loader" size={14} className="wf-spin" /> {tx('Đang lưu nháp...', 'Saving draft...')}
                     </>
                   ) : (
                     <>
-                      <Ico name="save" size={14} /> Lưu nháp
+                      <Ico name="save" size={14} /> {tx('Lưu nháp', 'Save draft')}
                     </>
                   )}
                 </button>
@@ -2220,11 +2285,11 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 >
                   {actionStatus === 'publishing' ? (
                     <>
-                      <Ico name="loader" size={14} className="wf-spin" /> Đang publish...
+                      <Ico name="loader" size={14} className="wf-spin" /> {tx('Đang publish...', 'Publishing...')}
                     </>
                   ) : (
                     <>
-                      <Ico name="check" size={14} /> Publish cho học sinh
+                      <Ico name="check" size={14} /> {tx('Publish cho học sinh', 'Publish to student')}
                     </>
                   )}
                 </button>
@@ -2249,10 +2314,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="20 6 9 17 4 12"/>
                     </svg>
-                    Đã công bố kết quả
+                    {tx('Đã công bố kết quả', 'Results published')}
                   </>
                 ) : (
-                  'Đang chờ giáo viên chấm'
+                  tx('Đang chờ giáo viên chấm', 'Awaiting teacher grading')
                 )}
               </span>
             )}
@@ -2292,7 +2357,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             <button
               type="button"
               onClick={() => setActionStatus('idle')}
-              aria-label="Đóng thông báo"
+              aria-label={tx("Đóng thông báo", "Dismiss alert")}
               style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '2px 4px' }}
             >
               <Ico name="close" size={14} />
@@ -2327,7 +2392,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 onClick={() => setPromptDrawerOpen(false)}
                 style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
               >
-                <Ico name="chevronUp" size={13} /> Thu gọn đề bài
+                <Ico name="chevronUp" size={13} /> {tx('Thu gọn đề bài', 'Collapse prompt')}
               </button>
             </div>
             <h2 style={{ fontFamily: 'var(--display)', fontSize: 20, margin: '0 0 10px' }}>{activeTask.title}</h2>
@@ -2340,7 +2405,28 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             )}
           </div>
           {activeTaskChartUrl && (
-            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, background: '#fff', textAlign: 'center' }}>
+            <div
+              style={{
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: 8,
+                background: '#fff',
+                textAlign: 'center',
+                position: 'relative',
+                cursor: 'zoom-in',
+                userSelect: 'none',
+              }}
+              role="button"
+              tabIndex={0}
+              title={tx('Bấm để phóng to hình ảnh đề bài', 'Click to zoom task graphic')}
+              onClick={() => setIsChartZoomOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsChartZoomOpen(true);
+                }
+              }}
+            >
               <img
                 data-wf-chart-img="true"
                 referrerPolicy="no-referrer"
@@ -2348,7 +2434,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 alt={`Task ${activeTask.taskNumber} chart`}
                 style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', display: 'block', margin: '0 auto' }}
               />
-              <span style={{ fontSize: 11, color: C.sub, marginTop: 4, display: 'block' }}>Task visual graphic</span>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '4px 10px', borderRadius: 6, background: C.wash, border: `1px solid ${C.border}`, fontSize: 11, fontWeight: 600, color: C.sub }}>
+                <Ico name="zoomIn" size={13} />
+                <span>{tx('Bấm để phóng to', 'Click to zoom')}</span>
+              </div>
             </div>
           )}
         </div>
@@ -2368,7 +2457,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.wash, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, overflowX: 'auto', flexWrap: 'nowrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
                 <span style={{ fontSize: 10.5, fontWeight: 900, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5, marginRight: 2 }}>
-                  Chế độ:
+                  {tx('Chế độ:', 'View:')}
                 </span>
                 <button
                   type="button"
@@ -2376,7 +2465,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   className={`wf-tab-btn ${viewMode === 'annotated' ? 'active' : ''}`}
                   style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="fileText" size={12} /> Bản gốc ({activeTaskComments.length})
+                  <Ico name="fileText" size={12} /> {tx('Bản gốc', 'Original')} ({activeTaskComments.length})
                 </button>
                 <button
                   type="button"
@@ -2384,7 +2473,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   className={`wf-tab-btn ${viewMode === 'diff' ? 'active' : ''}`}
                   style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="diff" size={12} /> Sửa trực tiếp (Diff)
+                  <Ico name="diff" size={12} /> {tx('Sửa trực tiếp (Diff)', 'Track changes (Diff)')}
                 </button>
                 <button
                   type="button"
@@ -2392,7 +2481,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   className={`wf-tab-btn ${viewMode === 'clean' ? 'active' : ''}`}
                   style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="check" size={12} /> Bản sửa hoàn chỉnh
+                  <Ico name="check" size={12} /> {tx('Bản sửa hoàn chỉnh', 'Clean corrected')}
                 </button>
                 <button
                   type="button"
@@ -2400,13 +2489,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   className={`wf-tab-btn ${viewMode === 'model' ? 'active' : ''}`}
                   style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="book" size={12} /> Bài mẫu Band 8+
+                  <Ico name="book" size={12} /> {tx('Bài mẫu Band 8+', 'Band 8+ model')}
                 </button>
               </div>
 
               {isTeacher && viewMode === 'annotated' && (
                 <span style={{ fontSize: 11, color: C.sub, fontStyle: 'italic', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                  Bôi chọn để thêm nhận xét
+                  {tx('Bôi chọn để thêm nhận xét', 'Select text to add an annotation')}
                 </span>
               )}
             </div>
@@ -2433,7 +2522,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 <div>
                   {!originalEssay.trim() ? (
                     <div style={{ color: C.subLight, fontStyle: 'italic', padding: '40px 0', textAlign: 'center' }}>
-                      Thí sinh chưa nộp bài viết cho Task này.
+                      {tx('Thí sinh chưa nộp bài viết cho Task này.', 'No essay submitted for this task.')}
                     </div>
                   ) : (
                     <AnnotatedEssayRenderer
@@ -2470,7 +2559,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: C.sub }}>
-                          Soạn hoặc chỉnh sửa bài viết đã sửa hoàn chỉnh cho học sinh:
+                          {tx('Soạn hoặc chỉnh sửa bài viết đã sửa hoàn chỉnh cho học sinh:', 'Compose or edit clean corrected essay for student:')}
                         </span>
                         <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: C.subLight }}>
                           {countWritingWords(writingGrading.correctedAnswers[activeTask.id] || '')} words
@@ -2481,7 +2570,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         onChange={e => updateWritingGrading({
                           correctedAnswers: { ...writingGrading.correctedAnswers, [activeTask.id]: e.target.value }
                         })}
-                        placeholder="Nhập hoặc dán bài viết đã sửa hoàn chỉnh (hoặc dùng AI Co-Pilot để tạo tự động)..."
+                        placeholder={tx("Nhập hoặc dán bài viết đã sửa hoàn chỉnh (hoặc dùng AI Co-Pilot để tạo tự động)...", "Enter or paste clean corrected essay (or generate via AI Co-Pilot)...")}
                         rows={16}
                         style={{
                           width: '100%',
@@ -2506,7 +2595,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         </div>
                       ) : (
                         <div style={{ color: C.subLight, fontStyle: 'italic', padding: '40px 0', textAlign: 'center' }}>
-                          Giáo viên chưa đăng bản sửa hoàn chỉnh cho bài này.
+                          {tx('Giáo viên chưa đăng bản sửa hoàn chỉnh cho bài này.', 'Teacher has not published a corrected essay for this task yet.')}
                         </div>
                       )}
                     </div>
@@ -2521,7 +2610,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: C.sub }}>
-                          Bài mẫu tham khảo Band 8.0+ cho Task này:
+                          {tx('Bài mẫu tham khảo Band 8.0+ cho Task này:', 'Band 8.0+ model answer for this task:')}
                         </span>
                         <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: C.subLight }}>
                           {countWritingWords(writingGrading.sampleAnswers?.[activeTask.id] || '')} words
@@ -2532,7 +2621,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         onChange={e => updateWritingGrading({
                           sampleAnswers: { ...writingGrading.sampleAnswers, [activeTask.id]: e.target.value }
                         })}
-                        placeholder="Nhập hoặc dán bài mẫu Band 8+..."
+                        placeholder={tx("Nhập hoặc dán bài mẫu Band 8+...", "Enter or paste Band 8+ model essay...")}
                         rows={16}
                         style={{
                           width: '100%',
@@ -2557,7 +2646,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         </div>
                       ) : (
                         <div style={{ color: C.subLight, fontStyle: 'italic', padding: '40px 0', textAlign: 'center' }}>
-                          Chưa có bài mẫu tham khảo cho đề bài này.
+                          {tx('Chưa có bài mẫu tham khảo cho đề bài này.', 'No model answer provided for this task yet.')}
                         </div>
                       )}
                     </div>
@@ -2604,13 +2693,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       <line x1="12" y1="16" x2="12.01" y2="16"/>
                     </svg>
                   )}
-                  <span>{essayStats.words} / {targetWords} words</span>
+                  <span>{essayStats.words} / {targetWords} {tx('từ', 'words')}</span>
                   {essayStats.words < targetWords && ` (-${targetWords - essayStats.words}w)`}
                 </span>
 
-                <span>{essayStats.paragraphs} ¶</span>
-                <span>{essayStats.sentences} sentences</span>
-                <span>{essayStats.avgWordsPerSentence} w/s</span>
+                <span>{essayStats.paragraphs} {tx('đoạn', '¶')}</span>
+                <span>{essayStats.sentences} {tx('câu', 'sentences')}</span>
+                <span>{essayStats.avgWordsPerSentence} {tx('từ/câu', 'w/s')}</span>
               </div>
 
               {/* Repetition Radar Toggle */}
@@ -2630,10 +2719,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     alignItems: 'center',
                     gap: 5,
                   }}
-                  title="Tìm và gạch chân các từ ngữ dài xuất hiện lặp lại 3+ lần trong bài"
+                  title={tx('Tìm và gạch chân các từ ngữ dài xuất hiện lặp lại 3+ lần trong bài', 'Find and underline content words repeated 3+ times in the essay')}
                 >
                   <Ico name="radar" size={13} color={repRadarActive ? C.warn : C.sub} />
-                  Radar lặp từ {repRadarActive ? 'ON' : 'OFF'}
+                  {tx('Radar lặp từ', 'Repetition radar')} {repRadarActive ? 'ON' : 'OFF'}
                 </button>
               </div>
             </footer>
@@ -2663,7 +2752,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   gap: 6,
                 }}
               >
-                <span>4 Tiêu chí & Trọng tâm</span>
+                <span>{tx('4 Tiêu chí & Trọng tâm', '4 Criteria & Focus')}</span>
               </button>
               <button
                 onClick={() => setActiveTab('annotations')}
@@ -2683,7 +2772,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   gap: 6,
                 }}
               >
-                <span>Chú thích ({activeTaskComments.length})</span>
+                <span>{tx('Chú thích', 'Annotations')} ({activeTaskComments.length})</span>
               </button>
               <button
                 onClick={() => setActiveTab('corrected')}
@@ -2703,7 +2792,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   gap: 6,
                 }}
               >
-                <span>Bài sửa & Bài mẫu</span>
+                <span>{tx('Bài sửa & Bài mẫu', 'Rewrites & Models')}</span>
               </button>
             </div>
 
@@ -2723,26 +2812,26 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ fontSize: 11, fontWeight: 900, color: C.warn, letterSpacing: 0.7, textTransform: 'uppercase' }}>
-                        Top 3 Trọng tâm cần cải thiện (Bottlenecks)
+                        {tx('Top 3 Trọng tâm cần cải thiện (Bottlenecks)', 'Top 3 Priority Focus Areas (Bottlenecks)')}
                       </span>
                       {isTeacher && (
                         <button
                           onClick={() => {
-                            const val = prompt('Thêm trọng tâm cải thiện:');
+                            const val = prompt(tx('Thêm trọng tâm cải thiện:', 'Add priority improvement focus:'));
                             if (val && val.trim()) {
                               updateTaskBottlenecks(activeTask.id, [...currentBottlenecks, val.trim()].slice(0, 3));
                             }
                           }}
                           style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
                         >
-                          + Thêm
+                          + {tx('Thêm', 'Add')}
                         </button>
                       )}
                     </div>
 
                     {currentBottlenecks.length === 0 ? (
                       <p style={{ fontSize: 12.5, color: C.sub, margin: 0, fontStyle: 'italic' }}>
-                        {isTeacher ? 'Chưa có mục trọng tâm. Dùng AI Co-Pilot để trích xuất tự động hoặc bấm + Thêm.' : 'Chưa có ghi chú trọng tâm.'}
+                        {isTeacher ? tx('Chưa có mục trọng tâm. Dùng AI Co-Pilot để trích xuất tự động hoặc bấm + Thêm.', 'No focus areas yet. Use AI Co-Pilot to extract automatically or click + Add.') : tx('Chưa có ghi chú trọng tâm.', 'No priority notes.')}
                       </p>
                     ) : (
                       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: C.text }}>
@@ -2753,8 +2842,8 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                               <button
                                 onClick={() => updateTaskBottlenecks(activeTask.id, currentBottlenecks.filter((_, i) => i !== idx))}
                                 style={{ background: 'transparent', border: 'none', color: C.subLight, marginLeft: 6, cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle' }}
-                                title="Xóa"
-                                aria-label="Xóa mục trọng tâm"
+                                title={tx("Xóa", "Delete")}
+                                aria-label={tx("Xóa mục trọng tâm", "Delete priority focus item")}
                               >
                                 <Ico name="close" size={11} />
                               </button>
@@ -2826,7 +2915,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                               type="text"
                               value={currentNote}
                               onChange={e => updateCriteriaNote(activeTask.id, critKey, e.target.value)}
-                              placeholder={`Ghi chú cho ${critMeta.short}...`}
+                              placeholder={tx(`Ghi chú cho ${critMeta.short}...`, `Notes for ${critMeta.short}...`)}
                               style={{
                                 width: '100%',
                                 boxSizing: 'border-box',
@@ -2841,7 +2930,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                           ) : (
                             currentNote && (
                               <div style={{ fontSize: 12.5, color: C.text, lineHeight: 1.5, marginTop: 4 }}>
-                                <strong>Nhận xét:</strong> {currentNote}
+                                <strong>{tx('Nhận xét:', 'Feedback:')}</strong> {currentNote}
                               </div>
                             )
                           )}
@@ -2880,7 +2969,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
 
                   {filteredComments.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '40px 0', color: C.subLight, fontStyle: 'italic', fontSize: 13 }}>
-                      Không có chú thích nào phù hợp bộ lọc.
+                      {tx('Không có chú thích nào phù hợp bộ lọc.', 'No annotations match the filter.')}
                     </div>
                   ) : (
                     <div style={{ display: 'grid', gap: 10 }}>
@@ -2921,7 +3010,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                                   {comment.criterion || 'GRA'}
                                 </span>
                                 <span style={{ fontSize: 11, fontWeight: 700, color: catMeta.color }}>
-                                  {catMeta.label}
+                                  {isVi ? catMeta.label : catMeta.enLabel}
                                 </span>
                               </div>
 
@@ -2934,7 +3023,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                                     });
                                   }}
                                   style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 2 }}
-                                  title="Xóa nhận xét"
+                                  title={tx("Xóa nhận xét", "Delete annotation")}
                                 >
                                   <Ico name="trash" size={13} />
                                 </button>
@@ -2965,7 +3054,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
                                 {comment.tags.map((t, ti) => (
                                   <span key={ti} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: C.wash, color: C.sub, border: `1px solid ${C.borderLight}` }}>
-                                    {t}
+                                    {formatTag(t, isVi)}
                                   </span>
                                 ))}
                               </div>
@@ -2993,7 +3082,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                                     gap: 4,
                                   }}
                                 >
-                                  <Ico name="plus" size={11} color={C.accent} /> Lưu vào Sổ từ vựng
+                                  <Ico name="plus" size={11} color={C.accent} /> {tx('Lưu vào Sổ từ vựng', 'Save to Vocab')}
                                 </button>
                               </div>
                             )}
@@ -3011,13 +3100,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   {/* General Feedback Box */}
                   <div>
                     <label style={{ display: 'block', fontSize: 12, fontWeight: 800, color: C.sub, textTransform: 'uppercase', marginBottom: 6 }}>
-                      Nhận xét chung toàn bài (General Feedback)
+                      {tx('Nhận xét chung toàn bài (General Feedback)', 'Teacher General Feedback')}
                     </label>
                     {isTeacher ? (
                       <textarea
                         value={writingGrading.generalFeedback || ''}
                         onChange={e => updateWritingGrading({ generalFeedback: e.target.value })}
-                        placeholder="Nhận xét tổng quan điểm mạnh, điểm cần lưu ý và lời khuyên chung cho học sinh..."
+                        placeholder={tx("Nhận xét tổng quan điểm mạnh, điểm cần lưu ý và lời khuyên chung cho học sinh...", "Overall strengths, key weaknesses, and actionable recommendations for the student...")}
                         rows={4}
                         style={{
                           width: '100%',
@@ -3041,7 +3130,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         lineHeight: 1.6,
                         color: C.text,
                       }}>
-                        {writingGrading.generalFeedback || 'Chưa có nhận xét chung.'}
+                        {writingGrading.generalFeedback || tx('Chưa có nhận xét chung.', 'No general feedback yet.')}
                       </div>
                     )}
                   </div>
@@ -3050,13 +3139,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span style={{ fontSize: 12, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>
-                        Bản sửa hoàn chỉnh (Task {activeTask.taskNumber})
+                        {tx('Bản sửa hoàn chỉnh', 'Clean corrected')} (Task {activeTask.taskNumber})
                       </span>
                       <button
                         onClick={() => setViewMode('clean')}
                         style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
                       >
-                        Mở toàn màn hình →
+                        {tx('Mở toàn màn hình →', 'Full view →')}
                       </button>
                     </div>
                     <div style={{
@@ -3071,7 +3160,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       whiteSpace: 'pre-wrap',
                       color: C.text,
                     }}>
-                      {writingGrading.correctedAnswers[activeTask.id] || '(Chưa có bản sửa)'}
+                      {writingGrading.correctedAnswers[activeTask.id] || tx('(Chưa có bản sửa)', '(No corrected version)')}
                     </div>
                   </div>
 
@@ -3079,13 +3168,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span style={{ fontSize: 12, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>
-                        Bài mẫu Band 8+ (Task {activeTask.taskNumber})
+                        {tx('Bài mẫu Band 8+', 'Band 8+ model')} (Task {activeTask.taskNumber})
                       </span>
                       <button
                         onClick={() => setViewMode('model')}
                         style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
                       >
-                        Mở toàn màn hình →
+                        {tx('Mở toàn màn hình →', 'Full view →')}
                       </button>
                     </div>
                     <div style={{
@@ -3100,7 +3189,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       whiteSpace: 'pre-wrap',
                       color: C.text,
                     }}>
-                      {writingGrading.sampleAnswers?.[activeTask.id] || '(Chưa có bài mẫu)'}
+                      {writingGrading.sampleAnswers?.[activeTask.id] || tx('(Chưa có bài mẫu)', '(No model answer)')}
                     </div>
                   </div>
                 </div>
@@ -3158,7 +3247,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     {critLabel}
                   </span>
                   <span style={{ fontSize: 11, fontWeight: 700, color: meta.color }}>
-                    {meta.label}
+                    {isVi ? meta.label : meta.enLabel}
                   </span>
                 </div>
 
@@ -3172,7 +3261,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       setHoverAnchorRect(null);
                     }}
                     style={{ background: 'transparent', border: 'none', color: C.subLight, cursor: 'pointer', padding: 2 }}
-                    title="Xóa nhận xét"
+                    title={tx("Xóa nhận xét", "Delete annotation")}
                   >
                     <Ico name="trash" size={13} />
                   </button>
@@ -3218,7 +3307,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
                   {hoveredComment.tags.map((t, ti) => (
                     <span key={ti} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: C.wash, color: C.sub }}>
-                      {t}
+                      {formatTag(t, isVi)}
                     </span>
                   ))}
                 </div>
@@ -3244,7 +3333,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     gap: 5,
                   }}
                 >
-                  <Ico name="plus" size={12} color={C.accent} /> Lưu cụm từ vào Sổ từ vựng
+                  <Ico name="plus" size={12} color={C.accent} /> {tx('Lưu cụm từ vào Sổ từ vựng', 'Save phrase to Vocabulary Notebook')}
                 </button>
               )}
             </div>
@@ -3288,21 +3377,21 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'error', criterion: 'GRA' })}
                     style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FEF2F2', color: C.err, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
                   >
-                    Lỗi sai
+                    {tx('Lỗi sai', 'Correction')}
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'awkward', criterion: 'LR' })}
                     style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#FFFBEB', color: C.warn, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
                   >
-                    Chưa tự nhiên
+                    {tx('Chưa tự nhiên', 'Less Natural')}
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectionBox({ ...selectionBox, stage: 2, category: 'upgrade', criterion: 'LR' })}
                     style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: '#EEF2FF', color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
                   >
-                    Nâng cấp
+                    {tx('Nâng cấp', 'Upgrade')}
                   </button>
                   <div style={{ width: 1, height: 16, background: C.border, margin: '0 2px' }} />
                   <button
@@ -3310,20 +3399,20 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     disabled={aiCritiqueLoading}
                     onClick={() => runSelectionAiCritique(false)}
                     style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.accentLine}`, background: C.accentWash, color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: aiCritiqueLoading ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    title="AI phân tích lỗi, gợi ý sửa và viết giải thích"
+                    title={tx("AI phân tích lỗi, gợi ý sửa và viết giải thích", "AI analyzes error, suggests replacement, and explains")}
                   >
                     <Ico name="sparkles" size={12} color={C.accent} />
-                    {aiCritiqueLoading ? 'Đang hỏi AI...' : 'AI Sửa'}
+                    {aiCritiqueLoading ? tx('Đang hỏi AI...', 'Querying AI...') : tx('AI Sửa', 'AI Critique')}
                   </button>
                   <button
                     type="button"
                     disabled={aiCritiqueLoading}
                     onClick={() => runSelectionAiCritique(true)}
                     style={{ padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.succLine}`, background: C.succWash, color: C.succ, fontSize: 11.5, fontWeight: 700, cursor: aiCritiqueLoading ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    title="AI tự sửa và lưu nhận xét ngay"
+                    title={tx("AI tự sửa và lưu nhận xét ngay", "AI critique & auto-save annotation")}
                   >
                     <Ico name="check" size={12} color={C.succ} />
-                    Lưu ngay
+                    {tx('Lưu ngay', 'Auto-save')}
                   </button>
                   <button
                     type="button"
@@ -3338,10 +3427,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 <div style={{ display: 'grid', gap: 10 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: C.text }}>Thêm nhận xét đoạn đã chọn</span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: C.text }}>{tx('Thêm nhận xét đoạn đã chọn', 'Add annotation for selection')}</span>
                       {aiCritiqueLoading && (
                         <span style={{ fontSize: 10.5, color: C.accent, fontWeight: 700 }}>
-                          Đang phân tích...
+                          {tx('Đang phân tích...', 'Analyzing...')}
                         </span>
                       )}
                     </div>
@@ -3377,7 +3466,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       }}
                     >
                       <Ico name="sparkles" size={12} color={C.accent} />
-                      {aiCritiqueLoading ? 'AI đang phân tích...' : 'AI Phân tích lại'}
+                      {aiCritiqueLoading ? tx('AI đang phân tích...', 'Analyzing...') : tx('AI Phân tích lại', 'AI Re-analyze')}
                     </button>
                     <button
                       type="button"
@@ -3396,10 +3485,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                         fontWeight: 700,
                         cursor: aiCritiqueLoading ? 'wait' : 'pointer',
                       }}
-                      title="AI phân tích và tự động lưu vào bài chấm ngay"
+                      title={tx("AI phân tích và tự động lưu vào bài chấm ngay", "AI critique & save immediately")}
                     >
                       <Ico name="check" size={12} color={C.succ} />
-                      AI Lưu ngay
+                      {tx('AI Lưu ngay', 'AI Quick Save')}
                     </button>
                   </div>
 
@@ -3452,7 +3541,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                             cursor: 'pointer',
                           }}
                         >
-                          {cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa chuẩn' : cat === 'upgrade' ? 'Nâng band' : 'Khen'}
+                          {cat === 'error' ? tx('Lỗi sai', 'Correction') : cat === 'awkward' ? tx('Chưa tự nhiên', 'Less Natural') : cat === 'upgrade' ? tx('Nâng band', 'Upgrade') : tx('Điểm sáng', 'Praise')}
                         </button>
                       );
                     })}
@@ -3461,7 +3550,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   {/* Replacement input */}
                   <div>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
-                      Sửa thành (Suggested Replacement):
+                      {tx('Sửa thành (Suggested Replacement):', 'Suggested Replacement:')}
                     </label>
                     <input
                       type="text"
@@ -3474,12 +3563,12 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   {/* Band 8 Rewrite Toggle */}
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <label style={{ fontSize: 11, fontWeight: 700, color: C.sub }}>Gợi ý Band 8+ (tùy chọn):</label>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: C.sub }}>{tx('Gợi ý Band 8+ (tùy chọn):', 'Band 8+ phrasing (optional):')}</label>
                       <button
                         onClick={() => setSelectionBox({ ...selectionBox, showRewrite: !selectionBox.showRewrite })}
                         style={{ fontSize: 11, background: 'transparent', border: 'none', color: C.accent, fontWeight: 700, cursor: 'pointer' }}
                       >
-                        {selectionBox.showRewrite ? 'Ẩn' : '+ Thêm'}
+                        {selectionBox.showRewrite ? tx('Ẩn', 'Hide') : `+ ${tx('Thêm', 'Add')}`}
                       </button>
                     </div>
                     {selectionBox.showRewrite && (
@@ -3496,7 +3585,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   {/* Quick Tag Chips */}
                   <div>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: C.subLight, display: 'block', marginBottom: 4 }}>
-                      Gắn nhanh thẻ lỗi:
+                      {tx('Gắn nhanh thẻ lỗi:', 'Quick Tags:')}
                     </span>
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       {QUICK_TAGS[selectionBox.criterion]?.map((tag, ti) => {
@@ -3520,7 +3609,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                               cursor: 'pointer',
                             }}
                           >
-                            {tag}
+                            {formatTag(tag, isVi)}
                           </button>
                         );
                       })}
@@ -3530,7 +3619,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   {/* Explanation input */}
                   <div>
                     <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 3 }}>
-                      Giải thích / Lời khuyên:
+                      {tx('Giải thích / Lời khuyên:', 'Explanation / Advice:')}
                     </label>
                     <textarea
                       value={selectionBox.comment}
@@ -3540,7 +3629,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                           handleSaveSelectionComment();
                         }
                       }}
-                      placeholder="Giải thích ngắn vì sao cần sửa hoặc cách dùng đúng..."
+                      placeholder={tx("Giải thích ngắn vì sao cần sửa hoặc cách dùng đúng...", "Brief explanation of why to correct or proper usage...")}
                       rows={3}
                       style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}
                     />
@@ -3553,7 +3642,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       className="wf-btn-hairline"
                       style={{ padding: '6px 10px', fontSize: 12 }}
                     >
-                      Hủy
+                      {tx('Hủy', 'Cancel')}
                     </button>
                     <button
                       onClick={handleSaveSelectionComment}
@@ -3561,7 +3650,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                       className="wf-btn-accent"
                       style={{ padding: '6px 12px', fontSize: 12 }}
                     >
-                      Lưu nhận xét
+                      {tx('Lưu nhận xét', 'Save annotation')}
                     </button>
                   </div>
                 </div>
@@ -3631,14 +3720,14 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   }} />
                 </div>
                 <style>{`@keyframes wfSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Đang phân tích bài thi theo 4 tiêu chí chuẩn IELTS...</div>
-                <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>Trích xuất điểm số, lỗi ngữ pháp/từ vựng và viết bài mẫu Band 8.5</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{tx('Đang phân tích bài thi theo 4 tiêu chí chuẩn IELTS...', 'Analyzing essay across 4 IELTS criteria...')}</div>
+                <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>{tx('Trích xuất điểm số, lỗi ngữ pháp/từ vựng và viết bài mẫu Band 8.5', 'Extracting scores, grammatical/lexical annotations, and drafting Band 8.5 model')}</div>
               </div>
             ) : aiModal.error ? (
               <div style={{ padding: '20px 0' }}>
                 <div style={{ color: C.err, fontSize: 14, marginBottom: 16 }}>{aiModal.error}</div>
                 <button onClick={runAiCoPilot} className="wf-btn-hairline">
-                  <Ico name="refresh" size={14} /> Thử lại
+                  <Ico name="refresh" size={14} /> {tx('Thử lại', 'Retry')}
                 </button>
               </div>
             ) : aiModal.data ? (
@@ -3646,7 +3735,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 {/* Score Preview */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: C.wash, padding: '12px 16px', borderRadius: 10, border: `1px solid ${C.border}` }}>
                   <div>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>Ước tính Band Task {activeTask.taskNumber}</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>{tx(`Ước tính Band Task ${activeTask.taskNumber}`, `Estimated Band Task ${activeTask.taskNumber}`)}</span>
                     <div style={{ fontFamily: 'var(--display)', fontSize: 32, fontWeight: 800, color: C.accent, lineHeight: 1, marginTop: 4 }}>
                       Band {aiModal.data.estimated_task_band}
                     </div>
@@ -3662,7 +3751,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 {/* Bottlenecks Preview */}
                 {aiModal.data.bottlenecks && aiModal.data.bottlenecks.length > 0 && (
                   <div style={{ background: C.warnWash, borderLeft: `3px solid ${C.warn}`, padding: '10px 14px', borderRadius: 6 }}>
-                    <strong style={{ fontSize: 12, color: C.warn }}>3 Trọng tâm cần khắc phục:</strong>
+                    <strong style={{ fontSize: 12, color: C.warn }}>{tx('3 Trọng tâm cần khắc phục:', 'Top 3 Areas for Improvement:')}</strong>
                     <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5, color: C.text }}>
                       {aiModal.data.bottlenecks.map((b: string, i: number) => <li key={i}>{b}</li>)}
                     </ul>
@@ -3675,23 +3764,23 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                       <polyline points="20 6 9 17 4 12"/>
                     </svg>
-                    <span>Phát hiện <strong>{aiModal.data.annotations?.length || 0} chú thích lỗi/nâng cấp</strong> bám sát văn bản bài viết.</span>
+                    <span>{tx('Phát hiện', 'Detected')} <strong>{aiModal.data.annotations?.length || 0} {tx('chú thích lỗi/nâng cấp', 'annotations')}</strong> {tx('bám sát văn bản bài viết.', 'anchored to essay text.')}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                       <polyline points="20 6 9 17 4 12"/>
                     </svg>
-                    <span>Đã tạo sẵn <strong>Bản sửa hoàn chỉnh</strong> và <strong>Bài mẫu Band 8.5</strong>.</span>
+                    <span>{tx('Đã tạo sẵn', 'Generated')} <strong>{tx('Bản sửa hoàn chỉnh', 'Clean corrected essay')}</strong> {tx('và', 'and')} <strong>{tx('Bài mẫu Band 8.5', 'Band 8.5 Model Answer')}</strong>.</span>
                   </div>
                 </div>
 
                 {/* Actions */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
                   <button onClick={() => setAiModal({ ...aiModal, open: false })} className="wf-btn-hairline">
-                    Đóng
+                    {tx('Đóng', 'Close')}
                   </button>
                   <button onClick={applyAiDraft} className="wf-btn-accent">
-                    <Ico name="check" size={14} /> Áp dụng vào bài chấm
+                    <Ico name="check" size={14} /> {tx('Áp dụng vào bài chấm', 'Apply to Grading Desk')}
                   </button>
                 </div>
               </div>
@@ -3756,13 +3845,96 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           }}>
             <Ico name="loader" size={28} className="wf-spin" color={C.accent} style={{ marginBottom: 12 }} />
             <div style={{ fontFamily: 'Georgia, serif', fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 6 }}>
-              Đang chuẩn bị Vector PDF Dossier...
+              {tx('Đang chuẩn bị Vector PDF Dossier...', 'Preparing Vector PDF Dossier...')}
             </div>
             <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>
-              Hệ thống đang chuẩn bị tài liệu vector độ nét cao và gọi hộp thoại in của trình duyệt. Bạn có thể chọn <strong>Save as PDF</strong> (Lưu dưới dạng PDF).
+              {tx('Hệ thống đang chuẩn bị tài liệu vector độ nét cao và gọi hộp thoại in của trình duyệt. Bạn có thể chọn', 'Generating high-fidelity print document and launching system print dialog. You can select')} <strong>{tx('Save as PDF (Lưu dưới dạng PDF)', 'Save as PDF')}</strong>.
             </div>
           </div>
         </div>
+      )}
+
+      {/* Task 1 Chart Lightbox Modal */}
+      {isChartZoomOpen && activeTaskChartUrl && typeof document !== 'undefined' && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={tx('Phóng to hình ảnh đề bài', 'Task chart zoom')}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            background: 'rgba(15, 23, 42, 0.78)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            animation: 'fadeIn 0.15s ease-out',
+          }}
+          onClick={() => setIsChartZoomOpen(false)}
+        >
+          <div
+            style={{
+              position: 'relative',
+              maxWidth: 'min(92vw, 1100px)',
+              maxHeight: '90vh',
+              background: '#ffffff',
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Ico name="zoomIn" size={15} color="#475569" />
+                {tx(`Hình ảnh trực quan Task ${activeTask.taskNumber}`, `Task ${activeTask.taskNumber} Visual Graphic`)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsChartZoomOpen(false)}
+                title={tx('Đóng (Esc)', 'Close (Esc)')}
+                aria-label={tx('Đóng', 'Close')}
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  color: '#475569',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  transition: 'background 0.15s',
+                }}
+              >
+                <Ico name="close" size={14} />
+                <span>{tx('Đóng', 'Close')}</span>
+              </button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+              <img
+                src={normalizeChartUrl(activeTaskChartUrl)}
+                alt={`Task ${activeTask.taskNumber} chart enlarged`}
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: 'calc(90vh - 80px)',
+                  objectFit: 'contain',
+                  display: 'block',
+                  borderRadius: 6,
+                }}
+              />
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -3788,6 +3960,8 @@ const AnnotatedEssayRenderer: React.FC<AnnotatedEssayRendererProps> = ({
   onHoverEnter,
   onHoverLeave,
 }) => {
+  const { i18n } = useTranslation();
+  const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
   const losslessParas = useMemo(() => {
     return buildLosslessParagraphSegments(text, accurateComments, 'annotated');
   }, [text, accurateComments]);
@@ -3858,7 +4032,7 @@ const AnnotatedEssayRenderer: React.FC<AnnotatedEssayRendererProps> = ({
                               borderRadius: 2,
                               padding: '0 1px',
                             }}
-                            title={`Từ "${cleanW}" lặp lại ${repCount} lần trong bài`}
+                            title={isVi ? `Từ "${cleanW}" lặp lại ${repCount} lần trong bài` : `Word "${cleanW}" repeated ${repCount} times in essay`}
                           >
                             {w}
                             <sup style={{ fontSize: 9, color: '#D97706', fontWeight: 800, marginLeft: 1 }}>
@@ -3900,6 +4074,9 @@ const DiffEssayRenderer: React.FC<DiffEssayRendererProps> = ({
   onHoverEnter,
   onHoverLeave,
 }) => {
+  const { i18n } = useTranslation();
+  const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
   const diffParas = useMemo(() => {
     return buildLosslessParagraphSegments(text, accurateComments, 'diff');
   }, [text, accurateComments]);
@@ -3913,7 +4090,7 @@ const DiffEssayRenderer: React.FC<DiffEssayRendererProps> = ({
       <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.85 }}>
         {text}
         <div style={{ marginTop: 24, padding: 12, background: C.wash, borderRadius: 8, fontSize: 13, color: C.sub, fontStyle: 'italic' }}>
-          Chưa có đề xuất thay thế (replacement) nào cho bài viết này. Dùng AI Co-Pilot hoặc thêm nhận xét có ô "Sửa thành" để xem chế độ Diff.
+          {tx('Chưa có đề xuất thay thế (replacement) nào cho bài viết này. Dùng AI Co-Pilot hoặc thêm nhận xét có ô "Sửa thành" để xem chế độ Diff.', 'No replacement suggestions for this essay yet. Use AI Co-Pilot or add an annotation with a "Suggested Replacement" to see Diff mode.')}
         </div>
       </div>
     );
@@ -3990,6 +4167,9 @@ function LegacySingleEssayFeedback({
   editable: boolean;
   onChange: (comments: WritingComment[]) => void;
 }) {
+  const { i18n } = useTranslation();
+  const isVi = String(i18n?.language || '').toLowerCase().startsWith('vi');
+  const tx = (vi: string, en: string) => (isVi ? vi : en);
   const essay = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
@@ -4042,21 +4222,21 @@ function LegacySingleEssayFeedback({
           ) : (
             <span key={start}>{text.slice(start, end)}</span>
           );
-        }) : 'No response submitted.'}
+        }) : tx('Thí sinh chưa nộp bài viết.', 'No response submitted.')}
       </div>
 
       {editable && (
         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 10 }}>
           {selection && (
             <div style={{ marginBottom: 8, fontStyle: 'italic', color: C.sub }}>
-              Đoạn đã chọn: “{text.slice(selection.start, selection.end)}”
+              {tx('Đoạn đã chọn:', 'Selected text:')} “{text.slice(selection.start, selection.end)}”
             </div>
           )}
           <textarea
             ref={editor}
             value={draft}
             onChange={e => setDraft(e.target.value)}
-            placeholder="Nhận xét cho đoạn văn này..."
+            placeholder={tx("Nhận xét cho đoạn văn này...", "Feedback for this selection...")}
             rows={3}
             style={{ width: '100%', boxSizing: 'border-box', padding: 8, borderRadius: 6, border: `1px solid ${C.border}` }}
           />
@@ -4081,7 +4261,7 @@ function LegacySingleEssayFeedback({
             }}
             style={{ marginTop: 6, padding: '6px 12px', background: C.accent, color: '#fff', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}
           >
-            Thêm nhận xét
+            {tx('Thêm nhận xét', 'Add feedback')}
           </button>
         </div>
       )}
