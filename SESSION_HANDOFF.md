@@ -1,5 +1,41 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-14)
 
+## Hạ tầng đồng bộ Firestore Đa thiết bị, Triệt tiêu giật cục 2s & Bền vững Thư mục Đề thi — 2026-10-14
+
+- **Sửa dứt điểm lỗi mất trắng danh sách đề thi (`0 exams`) khi F5 / Hard Refresh**:
+  - *Nguyên nhân gốc rễ*:
+    1. Trong `applyQuizCatalogSnapshot`, lệnh `if (snap.metadata?.hasPendingWrites) return;` chặn nạp dữ liệu khi Firestore IndexedDB còn write nội bộ chưa xác nhận từ server. Khi người dùng vừa thao tác (kéo thả, sửa đề) rồi bấm F5, IndexedDB vẫn giữ cờ `hasPendingWrites`, khiến hàm return sớm và bỏ rơi kho đề thi, làm `quizzes` rỗng vĩnh viễn.
+    2. Trong `applyWorkspaceSnapshot`, khi `quizCatalogMigratedRef.current === true`, biến `fallbackQuizzes` là `[]`, dẫn đến lệnh `setQuizCatalogState(recoveredQuizzes)` ghi đè danh sách đề thi thành rỗng.
+    3. Việc lưu toàn bộ đối tượng `Quiz` khổng lồ vào `localStorage` khi di chuyển thư mục gây lỗi `QuotaExceededError` (>5MB), khiến trạng thái phục hồi bị khuyết hoặc hỏng.
+  - *Giải pháp*:
+    1. Gỡ bỏ hoàn toàn `if (snap.metadata?.hasPendingWrites) return;` trong `applyQuizCatalogSnapshot`, luôn xử lý `snap.docs` và bật cờ `quizCatalogReadyRef.current = true`.
+    2. Bảo vệ `applyWorkspaceSnapshot`: Tuyệt đối không gọi `setQuizCatalogState([])` khi catalog đã migrate. Chỉ nạp `serverQuizzes` khi catalog chưa migrate, remote catalog chưa sẵn sàng và bộ nhớ đề hiện tại rỗng.
+    3. Nâng cấp `mergeQuizCatalog`: Hợp nhất đề máy chủ và cục bộ theo ID, chọn bản ghi có `revision` cao hơn hoặc `updatedAt` mới hơn, tôn trọng mảng `deletedIds`.
+    4. Tinh giản nhật ký lưu trữ `writePendingQuizWrite`: Với kho đề lớn (>250KB hoặc >3 đề), chỉ lưu bản patch siêu nhẹ gồm `{ id, folder, title, updatedAt, revision, isPatch: true }`, có thời hạn thu hồi tự động 24h trong `readPendingQuizWrite`.
+- **Triệt tiêu hoàn toàn hiện tượng giật cục 2 giây (2-second UI revert jitter)**:
+  - *Nguyên nhân gốc rễ*:
+    1. Khi giáo viên bấm nút thao tác (thu học phí, đổi lịch học, chuyển đề), thao tác nhấp chuột hoặc đóng modal vô tình gây chu kỳ mất/nhận tiêu điểm cửa sổ (window blur/focus).
+    2. Sự kiện `handleForeground` ngay lập tức kích hoạt `refreshCloudAfterForeground()` gọi `getDocFromServer(DB_DOC_REF)`. Do giao dịch Firestore của thao tác vừa bấm vẫn đang trên đường truyền (in-flight), lệnh đọc server này tải về dữ liệu cũ trước giao dịch, ghi đè lên React state lạc quan, gây hiện tượng UI nhảy về cũ 1-2 giây rồi mới giật lại mới.
+    3. `applyWorkspaceSnapshot` chấp nhận các snapshot trung gian/chưa xác nhận từ server trong khi write cục bộ đang diễn ra.
+  - *Giải pháp*:
+    1. Chặn đứng snapshot trong `applyWorkspaceSnapshot` khi có write đang bay (`writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current`) hoặc echo chưa xác nhận (`isUnconfirmedEcho && Date.now() - lastLocalMutationAtRef.current < 2000`).
+    2. Thiết lập cửa sổ ổn định sau ghi `suppressSnapshotUntilRef.current = Date.now() + 1400` trong khối `finally` của `performSyncData`.
+    3. Khóa bảo vệ `refreshCloudAfterForeground` và `handleForeground`: Hủy ngay lập tức nếu đang có ghi dở dang hoặc vừa có thao tác cục bộ trong vòng 2500ms (`writeInFlightRef.current > 0 || Date.now() - lastLocalMutationAtRef.current < 2500`).
+- **Hợp nhất thực thể đa thiết bị & Cơ chế bia mộ (Tombstones)**:
+  - Bổ sung helper `mergeEntityArray` hợp nhất các thực thể `history`, `schedules`, `transactions`, `examFolders`, `topicAssignments`, `realExamPackages`, `sharedLinks` theo `id`, giải quyết xung đột bằng `revision` và `updatedAt`.
+  - Thiết lập danh sách bia mộ giới hạn bền vững: `deletedHistoryIds`, `deletedScheduleIds`, `deletedTransactionIds`, `examFolderTombstones`.
+  - Trong `applyWorkspaceSnapshot`, tự động lọc tất cả mảng thực thể đến qua các bia mộ này để ngăn thiết bị chạy song song hồi sinh các mục đã xóa.
+  - Bổ sung mã truyền bia mộ khi xóa lịch sử bài làm (`__deletedHistoryIds` trong `STUDENTS.txt` & `App.template.tsx`), xóa lịch học (`__deletedScheduleIds` trong `DASHBOARD.txt`), xóa giao dịch (`__deletedTransactionIds` trong `FINANCE.txt`).
+  - Đóng dấu thời gian chuẩn `updatedAt: getTrueTime()` khi thu học phí cho học sinh (`STUDENTS.txt`).
+- **Kiến trúc đường dẫn thư mục chuẩn hóa & Kéo thả bền vững**:
+  - Viết helper thuần `normalizeFolderPath(rawPath: any): string` chuẩn hóa separator `/`, cắt khoảng trắng và loại bỏ slash thừa.
+  - Áp dụng `normalizeFolderPath` xuyên suốt `src/App.template.tsx` và `src/components_split/EXAM_BUILDER.txt`.
+  - Chuẩn hóa toàn diện logic thư mục: `handleCreateFolder`, `handleMoveOrRenameFolder`, `handleRenameFolder`, `handleDeleteFolder`, `handleMoveQuizzes`, `handleDropOnFolder`. Mọi thao tác di chuyển/đổi tên đều trích xuất đề bị ảnh hưởng từ `quizzesRef.current`, cập nhật `folder`, tăng `revision`, đóng dấu `updatedAt` và đồng bộ nguyên tử qua `__quizUpserts` (batch write trực tiếp vào collection `quizzes`) cùng mảng thư mục và `__examFolderTombstones` qua `syncData`.
+  - Nâng cấp giao diện Exam Builder (`EXAM_BUILDER.txt`): Chuẩn hóa đường dẫn thư mục hiện tại (`currentPath`), hiển thị đếm số lượng đề và thư mục con đệ quy chính xác (`directAndNestedQuizCount`, `subFolderCount`), modal di chuyển thư mục và hỗ trợ kéo thả trực quan không bị rớt đề.
+- **Nhật ký đồng bộ bền bỉ (Durable Sync Journaling)**:
+  - Ghi nhận trạng thái lạc quan và theo dõi danh sách đột biến đang bay `inFlightMutationIdsRef`.
+  - Cập nhật `flushPendingWorkspaceMutations`: Bỏ qua các bản ghi đang chạy, tăng biến đếm `retryCount`, và tự động loại bỏ các bản ghi lỗi sau 3 lần retry để tránh tắc nghẽn hàng đợi đồng bộ.
+
 ## Writing Feedback Floating Popovers, Smart Auto-Flip, Spring Motion & PDF Dossier Fix — 2026-10-14
 
 - **Triệt tiêu hoàn toàn lỗi giật giật (Jitter / Flicker Loop) khi hover chú thích**:

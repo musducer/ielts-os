@@ -302,6 +302,18 @@ const parseVNTime = (dateStr: string) => {
     return new Date(vnDateStr).getTime();
 };
 
+export const normalizeFolderPath = (rawPath: any): string => {
+    if (!rawPath || typeof rawPath !== "string") return "Root";
+    const cleaned = rawPath
+        .trim()
+        .replace(/\\+/g, "/")
+        .replace(/\/+/g, "/")
+        .replace(/^\/+|\/+$/g, "");
+    if (!cleaned || cleaned.toLowerCase() === "root") return "Root";
+    if (cleaned.startsWith("Root/")) return cleaned;
+    return `Root/${cleaned}`;
+};
+
 import i18n from "i18next";
 import { initReactI18next, useTranslation } from "react-i18next";
 
@@ -4381,6 +4393,18 @@ export default function IeltsSupremeOS() {
   // CHỐNG "GIẬT" KHI XÓA DATA: số ghi của chính mình đang chạy + thời điểm hết chặn snapshot.
   const writeInFlightRef = useRef(0);
   const suppressSnapshotUntilRef = useRef(0);
+  const lastLocalMutationAtRef = useRef(0);
+  const inFlightMutationIdsRef = useRef(new Set<string>());
+  const latestOptimisticWorkspaceRef = useRef<{
+    timestamp: number;
+    students?: Student[];
+    history?: Session[];
+    schedules?: Schedule[];
+    transactions?: Transaction[];
+    examFolders?: string[];
+    topicAssignments?: TopicAssignment[];
+    realExamPackages?: RealExamPackage[];
+  }>({ timestamp: 0 });
   // A failed Firestore write must never recursively invoke syncData through error logging.
   const syncFailureLogRef = useRef(false);
   // Phones commonly freeze a background tab and leave its Firestore listener stale until
@@ -4406,11 +4430,35 @@ export default function IeltsSupremeOS() {
     try {
       const raw = localStorage.getItem(pendingQuizWriteKey());
       const parsed = raw ? JSON.parse(raw) : null;
-      return parsed && Array.isArray(parsed.quizzes) ? parsed : null;
+      if (!parsed || !Array.isArray(parsed.quizzes)) return null;
+      if (parsed.savedAt && Date.now() - parsed.savedAt > 24 * 60 * 60 * 1000) {
+        localStorage.removeItem(pendingQuizWriteKey());
+        return null;
+      }
+      return parsed;
     } catch (e) { return null; }
   };
   const writePendingQuizWrite = (quizzesToSave: any[], deletedIds: string[] = []) => {
-    try { localStorage.setItem(pendingQuizWriteKey(), JSON.stringify({ quizzes: quizzesToSave, deletedIds })); } catch (e) {}
+    try {
+      const rawQuizzes = Array.isArray(quizzesToSave) ? quizzesToSave : [];
+      const payload = { quizzes: rawQuizzes, deletedIds, savedAt: Date.now() };
+      const serialized = JSON.stringify(payload);
+      if (serialized.length > 250 * 1024 || rawQuizzes.length > 3) {
+        const lightweight = rawQuizzes.map(q => ({
+          id: q.id,
+          folder: q.folder,
+          title: q.title,
+          updatedAt: q.updatedAt,
+          revision: q.revision,
+          isPatch: true,
+        }));
+        localStorage.setItem(pendingQuizWriteKey(), JSON.stringify({ quizzes: lightweight, deletedIds, savedAt: Date.now() }));
+      } else {
+        localStorage.setItem(pendingQuizWriteKey(), serialized);
+      }
+    } catch (e) {
+      console.warn("Unable to persist pending quiz write to localStorage:", e);
+    }
   };
   const clearPendingQuizWrite = () => {
     try { localStorage.removeItem(pendingQuizWriteKey()); } catch (e) {}
@@ -4446,16 +4494,27 @@ export default function IeltsSupremeOS() {
     try { localStorage.removeItem(pendingCoinOperationKey()); } catch (e) {}
   };
   const pendingWorkspaceMutationsKey = () => `ielts_pending_workspace_mutations_${String(currentUser?.email || "user").toLowerCase()}`;
-  const readPendingWorkspaceMutations = (): { id: string; payload: any; createdAt: number }[] => {
+  const readPendingWorkspaceMutations = (): { id: string; payload: any; createdAt: number; retryCount?: number }[] => {
     try {
       const raw = localStorage.getItem(pendingWorkspaceMutationsKey());
       const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed)
-        ? parsed.filter((entry: any) => entry?.id && entry?.payload && typeof entry.payload === "object")
-        : [];
+      if (!Array.isArray(parsed)) return [];
+      const now = Date.now();
+      const valid = parsed.filter((entry: any) =>
+        entry?.id &&
+        entry?.payload &&
+        typeof entry.payload === "object" &&
+        (!entry.createdAt || now - entry.createdAt < 24 * 60 * 60 * 1000) &&
+        (entry.retryCount || 0) < 3
+      );
+      if (valid.length !== parsed.length) {
+        if (valid.length) localStorage.setItem(pendingWorkspaceMutationsKey(), JSON.stringify(valid));
+        else localStorage.removeItem(pendingWorkspaceMutationsKey());
+      }
+      return valid;
     } catch { return []; }
   };
-  const writePendingWorkspaceMutations = (entries: { id: string; payload: any; createdAt: number }[]) => {
+  const writePendingWorkspaceMutations = (entries: { id: string; payload: any; createdAt: number; retryCount?: number }[]) => {
     try {
       if (entries.length) localStorage.setItem(pendingWorkspaceMutationsKey(), JSON.stringify(entries));
       else localStorage.removeItem(pendingWorkspaceMutationsKey());
@@ -4488,9 +4547,31 @@ export default function IeltsSupremeOS() {
   };
   const mergeQuizCatalog = (serverQuizzes: any[], localQuizzes: any[], deletedIds: string[] = []) => {
     const deleted = new Set((deletedIds || []).map(String));
-    const local = (Array.isArray(localQuizzes) ? localQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)));
-    const localIds = new Set(local.map(q => String(q.id)));
-    return [...local, ...(Array.isArray(serverQuizzes) ? serverQuizzes : []).filter(q => q && q.id && !deleted.has(String(q.id)) && !localIds.has(String(q.id)))];
+    const map = new Map<string, any>();
+    (Array.isArray(serverQuizzes) ? serverQuizzes : []).forEach((q: any) => {
+      if (q && q.id && !deleted.has(String(q.id))) {
+        map.set(String(q.id), q);
+      }
+    });
+    (Array.isArray(localQuizzes) ? localQuizzes : []).forEach((q: any) => {
+      if (q && q.id && !deleted.has(String(q.id))) {
+        const existing = map.get(String(q.id));
+        if (!existing) {
+          map.set(String(q.id), q);
+        } else {
+          const localRev = Number(q.revision) || 0;
+          const serverRev = Number(existing.revision) || 0;
+          const localTime = Number(q.updatedAt) || 0;
+          const serverTime = Number(existing.updatedAt) || 0;
+          if (localRev > serverRev || (localRev === serverRev && localTime >= serverTime) || q.isPatch) {
+            map.set(String(q.id), { ...existing, ...q });
+          } else {
+            map.set(String(q.id), { ...q, ...existing });
+          }
+        }
+      }
+    });
+    return Array.from(map.values());
   };
   const setQuizCatalogState = (catalog: Quiz[]) => {
     const cleanCatalog = (Array.isArray(catalog) ? catalog : []).filter((quiz: any) => quiz && quiz.id) as Quiz[];
@@ -4524,10 +4605,11 @@ export default function IeltsSupremeOS() {
     const remoteQuizzes = snap.docs
       .map((item: any) => ({ ...item.data(), id: String(item.id) }))
       .filter((quiz: any) => quiz && quiz.id) as Quiz[];
-    if (snap.metadata?.fromCache && remoteQuizzes.length === 0) return;
-    if (snap.metadata?.hasPendingWrites) return;
+    if (snap.metadata?.fromCache && remoteQuizzes.length === 0 && quizzesRef.current.length > 0) return;
+    // Do NOT return early on snap.metadata?.hasPendingWrites — indexedDB holds pending writes
+    // on refresh, and returning early permanently leaves the catalog empty.
 
-    quizCatalogReadyRef.current = !snap.metadata?.fromCache;
+    quizCatalogReadyRef.current = remoteQuizzes.length > 0 || !snap.metadata?.fromCache;
     const hasDedicatedCatalog = quizCatalogMigratedRef.current || remoteQuizzes.length > 0;
     const baseCatalog = hasDedicatedCatalog
       ? remoteQuizzes
@@ -5311,11 +5393,11 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
 };
 
 const applyWorkspaceSnapshot = (snap: any) => {
-  // Ignore only Firestore's local/cache echoes while our mutation is in flight.
-  // A server-confirmed update from another device must still be applied immediately;
-  // otherwise a phone can look stale until a manual refresh or later heartbeat.
+  // Ignore Firestore's local/cache echoes or stale server reads while our mutation is in flight
+  // or within the post-write settling window.
   const isUnconfirmedEcho = snap.metadata?.hasPendingWrites || snap.metadata?.fromCache;
-  if (isUnconfirmedEcho && (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current)) return;
+  if (writeInFlightRef.current > 0 || Date.now() < suppressSnapshotUntilRef.current) return;
+  if (isUnconfirmedEcho && (Date.now() - lastLocalMutationAtRef.current < 2000)) return;
   if (snap.exists()) {
     const d = snap.data();
     const pendingCoinOperation = readPendingCoinOperation();
@@ -5347,9 +5429,17 @@ const applyWorkspaceSnapshot = (snap: any) => {
     } else {
       setStudents((prev: any) => mergeMyPermanents(prev, incomingStudents));
     }
-    setHistory(clean(d.history));
-    setTransactions(clean(d.transactions)); 
-    setSchedules(clean(d.schedules));
+    const historyTombstones = new Set((Array.isArray(d.deletedHistoryIds) ? d.deletedHistoryIds : []).map(String));
+    const cleanHistory = (clean(d.history) as Session[]).filter(h => h && h.id && !historyTombstones.has(String(h.id)));
+    setHistory(cleanHistory);
+
+    const transactionTombstones = new Set((Array.isArray(d.deletedTransactionIds) ? d.deletedTransactionIds : []).map(String));
+    const cleanTransactions = (clean(d.transactions) as Transaction[]).filter(t => t && t.id && !transactionTombstones.has(String(t.id)));
+    setTransactions(cleanTransactions); 
+
+    const scheduleTombstones = new Set((Array.isArray(d.deletedScheduleIds) ? d.deletedScheduleIds : []).map(String));
+    const cleanSchedules = (clean(d.schedules) as Schedule[]).filter(s => s && s.id && !scheduleTombstones.has(String(s.id)));
+    setSchedules(cleanSchedules);
     setGiftCatalog(normalizeGiftCatalog(d.giftCatalog));
     setRewardMechanisms(normalizeRewardMechanisms(d.rewardMechanisms));
     setSharedLinks(clean(d.sharedLinks)); 
@@ -5359,14 +5449,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const pendingQuizWrite = userRole === "TEACHER" ? readPendingQuizWrite() : null;
     // Until the one-time migration has completed, retain legacy exams as a read-only
     // fallback. Once the collection is confirmed, never let this old blob overwrite it.
-    const fallbackQuizzes = quizCatalogMigratedRef.current ? [] : serverQuizzes;
-    const recoveredQuizzes = pendingQuizWrite
-        ? mergeQuizCatalog(fallbackQuizzes, pendingQuizWrite.quizzes, pendingQuizWrite.deletedIds)
-        : fallbackQuizzes;
-    if (!quizCatalogReadyRef.current) {
+    if (!quizCatalogMigratedRef.current && serverQuizzes.length > 0 && !quizCatalogReadyRef.current && quizzesRef.current.length === 0) {
+      const recoveredQuizzes = pendingQuizWrite
+        ? mergeQuizCatalog(serverQuizzes, pendingQuizWrite.quizzes, pendingQuizWrite.deletedIds)
+        : serverQuizzes;
       setQuizCatalogState(recoveredQuizzes);
     }
-    if (pendingQuizWrite) {
+    if (pendingQuizWrite && !pendingQuizWrite.quizzes.some((q: any) => q.isPatch)) {
       // The prior browser session ended before Firestore acknowledged its write. Retry
       // after this snapshot has settled; syncData clears the record only on success.
       window.setTimeout(() => { void syncData({ __quizUpserts: pendingQuizWrite.quizzes, __quizDeletedIds: pendingQuizWrite.deletedIds || [] }); }, 0);
@@ -5405,7 +5494,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setTopicAssignments(incomingTopicAssignments);
     setRealExamPackages(clean(d.realExamPackages));
     if (Array.isArray(d.examFolders)) {
-      const cleanedFolders: string[] = Array.from(new Set<string>((d.examFolders as any[]).map(String).filter(Boolean)));
+      const folderTombstones = new Set(
+        (Array.isArray(d.examFolderTombstones) ? d.examFolderTombstones : [])
+          .map(normalizeFolderPath)
+      );
+      const cleanedFolders: string[] = Array.from(new Set<string>(
+        (d.examFolders as any[])
+          .map(normalizeFolderPath)
+          .filter(f => f && f !== "Root" && !folderTombstones.has(f))
+      )).sort();
       setExamFolders(cleanedFolders);
       try { localStorage.setItem("ielts_exam_folders", JSON.stringify(cleanedFolders)); } catch (_) {}
     }
@@ -5428,6 +5525,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     let disposed = false;
     const refreshCloudAfterForeground = async () => {
       if (disposed || !currentUser || !navigator.onLine || document.visibilityState === "hidden") return;
+      if (writeInFlightRef.current > 0 || Date.now() - lastLocalMutationAtRef.current < 2500) return;
       const now = Date.now();
       if (cloudRefreshInFlightRef.current || now - lastCloudRefreshAtRef.current < 650) return;
 
@@ -5454,6 +5552,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
     };
     const handleForeground = () => {
+      if (writeInFlightRef.current > 0 || Date.now() - lastLocalMutationAtRef.current < 2500) return;
       void refreshCloudAfterForeground();
       void flushOfflineQueue();
     };
@@ -6258,9 +6357,13 @@ const applyWorkspaceSnapshot = (snap: any) => {
   };
 
   const performSyncData = async (newData: any) => {
-    // CHỐNG "GIẬT" KHI XÓA: đánh dấu đang có ghi của chính mình. onSnapshot sẽ KHÔNG đè state
-    // local trong lúc transaction đang bay (snapshot CŨ còn trong đường truyền sẽ làm data xóa hiện lại).
+    // CHỐNG "GIẬT" KHI XÓA & ĐỒNG BỘ ĐA THIẾT BỊ:
+    lastLocalMutationAtRef.current = Date.now();
     const quizDeleteIds = Array.isArray(newData.__quizDeletedIds) ? newData.__quizDeletedIds.map(String) : [];
+    const deletedHistoryIds = Array.isArray(newData.__deletedHistoryIds) ? newData.__deletedHistoryIds.map(String) : [];
+    const deletedScheduleIds = Array.isArray(newData.__deletedScheduleIds) ? newData.__deletedScheduleIds.map(String) : [];
+    const deletedTransactionIds = Array.isArray(newData.__deletedTransactionIds) ? newData.__deletedTransactionIds.map(String) : [];
+    const examFolderTombstones = Array.isArray(newData.__examFolderTombstones) ? newData.__examFolderTombstones.map(normalizeFolderPath) : [];
     const coinOperation = newData.__coinOperation?.id && newData.__coinOperation?.studentId
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
@@ -6291,7 +6394,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       newData = { ...newData };
       delete newData.quizzes;
       delete newData.__quizUpserts;
-      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__vocabPending", "__coinOperation"].includes(key))
+      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__quizUpserts", "__vocabPending", "__coinOperation", "__deletedHistoryIds", "__deletedScheduleIds", "__deletedTransactionIds", "__examFolderTombstones"].includes(key))
           && !coinOperation && !pendingVocab) return true;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
@@ -6301,6 +6404,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
           delete initialData.__quizUpserts;
           delete initialData.__vocabPending;
           delete initialData.__coinOperation;
+          delete initialData.__deletedHistoryIds;
+          delete initialData.__deletedScheduleIds;
+          delete initialData.__deletedTransactionIds;
+          delete initialData.__examFolderTombstones;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
             initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
             initialData.quizTombstones = quizDeleteIds.slice(-1000);
@@ -6336,11 +6443,68 @@ const applyWorkspaceSnapshot = (snap: any) => {
           : serverCoinTransactions;
         const hasCoinLedgerFor = (studentId: string) => coinLedger.some((entry: any) => String(entry?.studentId || "") === String(studentId));
 
+        const mergedHistoryTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.deletedHistoryIds) ? serverData.deletedHistoryIds : []),
+          ...deletedHistoryIds,
+        ].map(String))).slice(-1000);
+
+        const mergedScheduleTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.deletedScheduleIds) ? serverData.deletedScheduleIds : []),
+          ...deletedScheduleIds,
+        ].map(String))).slice(-1000);
+
+        const mergedTransactionTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.deletedTransactionIds) ? serverData.deletedTransactionIds : []),
+          ...deletedTransactionIds,
+        ].map(String))).slice(-1000);
+
+        const mergedFolderTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.examFolderTombstones) ? serverData.examFolderTombstones : []),
+          ...examFolderTombstones,
+        ].map(normalizeFolderPath))).slice(-500);
+
+        if (mergedHistoryTombstones.length) finalUpdate.deletedHistoryIds = mergedHistoryTombstones;
+        if (mergedScheduleTombstones.length) finalUpdate.deletedScheduleIds = mergedScheduleTombstones;
+        if (mergedTransactionTombstones.length) finalUpdate.deletedTransactionIds = mergedTransactionTombstones;
+        if (mergedFolderTombstones.length) finalUpdate.examFolderTombstones = mergedFolderTombstones;
+
+        const mergeEntityArray = (serverArr: any[], localArr: any[], tombstoneSet: Set<string>) => {
+          const map = new Map<string, any>();
+          (Array.isArray(serverArr) ? serverArr : []).forEach(item => {
+            const id = String(item?.id ?? "");
+            if (id && !tombstoneSet.has(id)) map.set(id, item);
+          });
+          (Array.isArray(localArr) ? localArr : []).forEach(item => {
+            const id = String(item?.id ?? "");
+            if (id && !tombstoneSet.has(id)) {
+              const existing = map.get(id);
+              if (!existing) {
+                map.set(id, item);
+              } else {
+                const localRev = Number(item.revision) || 0;
+                const serverRev = Number(existing.revision) || 0;
+                const localTime = Number(item.updatedAt || item.timestamp || 0);
+                const serverTime = Number(existing.updatedAt || existing.timestamp || 0);
+                if (localRev > serverRev || (localRev === serverRev && localTime >= serverTime)) {
+                  map.set(id, { ...existing, ...item });
+                } else {
+                  map.set(id, { ...item, ...existing });
+                }
+              }
+            }
+          });
+          return Array.from(map.values());
+        };
+
         Object.keys(newData).forEach((key) => {
           if (key === "__quizDeletedIds") return;
           if (key === "__quizUpserts") return;
           if (key === "__vocabPending") return;
           if (key === "__coinOperation") return;
+          if (key === "__deletedHistoryIds") return;
+          if (key === "__deletedScheduleIds") return;
+          if (key === "__deletedTransactionIds") return;
+          if (key === "__examFolderTombstones") return;
           const localVal = newData[key];
           const serverVal = key === "students" ? serverStudents : serverData[key];
 
@@ -6384,7 +6548,25 @@ const applyWorkspaceSnapshot = (snap: any) => {
           }
 
           if (userRole === "TEACHER") {
-            if (key === "students") {
+            if (key === "history") {
+              finalUpdate.history = mergeEntityArray(serverArr, localVal, new Set(mergedHistoryTombstones));
+            } else if (key === "schedules") {
+              finalUpdate.schedules = mergeEntityArray(serverArr, localVal, new Set(mergedScheduleTombstones));
+            } else if (key === "transactions") {
+              finalUpdate.transactions = mergeEntityArray(serverArr, localVal, new Set(mergedTransactionTombstones));
+            } else if (key === "examFolders") {
+              const serverFolders = Array.isArray(serverVal) ? serverVal.map(normalizeFolderPath).filter(Boolean) : [];
+              const localFolders = Array.isArray(localVal) ? localVal.map(normalizeFolderPath).filter(Boolean) : [];
+              const tombSet = new Set(mergedFolderTombstones.map(normalizeFolderPath));
+              const union = Array.from(new Set([...serverFolders, ...localFolders])).filter(f => f && f !== "Root" && !tombSet.has(f)).sort();
+              finalUpdate.examFolders = union;
+            } else if (key === "topicAssignments") {
+              finalUpdate.topicAssignments = mergeEntityArray(serverArr, localVal, new Set());
+            } else if (key === "realExamPackages") {
+              finalUpdate.realExamPackages = mergeEntityArray(serverArr, localVal, new Set());
+            } else if (key === "sharedLinks") {
+              finalUpdate.sharedLinks = mergeEntityArray(serverArr, localVal, new Set());
+            } else if (key === "students") {
               finalUpdate[key] = localVal.map((localItem: any) => {
                 const serverItem = serverArr.find((s: any) => s.id === localItem.id);
                 if (serverItem) {
@@ -6568,7 +6750,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // tránh data vừa xóa nhấp nháy hiện lại. State local lúc này đã là nguồn đúng.
       writeInFlightRef.current = Math.max(0, writeInFlightRef.current - 1);
       if (writeInFlightRef.current === 0) {
-        suppressSnapshotUntilRef.current = Date.now() + 800;
+        suppressSnapshotUntilRef.current = Date.now() + 1400;
       }
     }
   };
@@ -9010,23 +9192,27 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   const allKnownFolders = useMemo(() => {
     const set = new Set<string>(["Root"]);
-    examFolders.forEach(f => {
-      if (!f) return;
-      const parts = f.split("/").filter(Boolean);
-      let cur = "";
-      parts.forEach((p, idx) => {
-        cur = idx === 0 ? p : `${cur}/${p}`;
-        set.add(cur);
-      });
+    (examFolders || []).forEach(f => {
+      const norm = normalizeFolderPath(f);
+      if (norm && norm !== "Root") {
+        set.add(norm);
+        let p = norm;
+        while (p.includes("/") && p !== "Root") {
+          set.add(p);
+          p = p.slice(0, p.lastIndexOf("/"));
+        }
+      }
     });
-    quizzes.forEach(q => {
-      const f = q.folder || "Root";
-      const parts = f.split("/").filter(Boolean);
-      let cur = "";
-      parts.forEach((p, idx) => {
-        cur = idx === 0 ? p : `${cur}/${p}`;
-        set.add(cur);
-      });
+    (quizzes || []).forEach(q => {
+      const norm = normalizeFolderPath(q.folder);
+      if (norm && norm !== "Root") {
+        set.add(norm);
+        let p = norm;
+        while (p.includes("/") && p !== "Root") {
+          set.add(p);
+          p = p.slice(0, p.lastIndexOf("/"));
+        }
+      }
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [examFolders, quizzes]);
@@ -9034,57 +9220,95 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleCreateFolder = async (folderName: string, parentPath = builderFolder) => {
     const trimmed = folderName.trim().replace(/^\/+|\/+$/g, "");
     if (!trimmed) return;
-    const parent = parentPath.trim().replace(/\/+$/, "") || "Root";
+    const parent = normalizeFolderPath(parentPath);
     const fullPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
-    if (allKnownFolders.includes(fullPath)) {
+    if (allKnownFolders.map(normalizeFolderPath).includes(fullPath)) {
       alert("Thư mục đã tồn tại.");
       return;
     }
-    const nextFolders = Array.from(new Set([...examFolders, fullPath])).sort();
+    const nextFolders = Array.from(new Set([...examFolders.map(normalizeFolderPath), fullPath])).filter(f => f && f !== "Root").sort();
     setExamFolders(nextFolders);
     try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
     await syncData({ examFolders: nextFolders });
   };
 
-  const handleMoveOrRenameFolder = async (oldPath: string, newPath: string) => {
-    if (oldPath === "Root" || !oldPath) return;
+  const handleMoveOrRenameFolder = async (rawOldPath: string, rawNewPath: string) => {
+    const oldPath = normalizeFolderPath(rawOldPath);
+    const newPath = normalizeFolderPath(rawNewPath);
+    if (oldPath === "Root" || !oldPath || !newPath) return;
     if (newPath === oldPath) return;
     if (newPath.startsWith(oldPath + "/")) {
       alert("Không thể chuyển thư mục vào bên trong chính nó hoặc thư mục con.");
       return;
     }
 
-    const nextFolders = Array.from(new Set(
-      examFolders.map(f => {
-        if (f === oldPath) return newPath;
-        if (f.startsWith(oldPath + "/")) return newPath + f.slice(oldPath.length);
-        return f;
-      })
-    ));
-    if (!nextFolders.includes(newPath)) nextFolders.push(newPath);
+    const allFoldersSet = new Set<string>();
+    (examFolders || []).forEach(f => allFoldersSet.add(normalizeFolderPath(f)));
+    quizzesRef.current.forEach(q => {
+      const qf = normalizeFolderPath(q.folder);
+      if (qf && qf !== "Root") allFoldersSet.add(qf);
+    });
+    allFoldersSet.add(oldPath);
 
+    const retiredFolders: string[] = [];
+    const nextFoldersSet = new Set<string>();
+
+    allFoldersSet.forEach(f => {
+      if (f === oldPath || f.startsWith(oldPath + "/")) {
+        retiredFolders.push(f);
+        const mapped = newPath + f.slice(oldPath.length);
+        nextFoldersSet.add(mapped);
+        let p = mapped;
+        while (p.includes("/") && p !== "Root") {
+          nextFoldersSet.add(p);
+          p = p.slice(0, p.lastIndexOf("/"));
+        }
+      } else if (f !== "Root") {
+        nextFoldersSet.add(f);
+      }
+    });
+    nextFoldersSet.add(newPath);
+    let p = newPath;
+    while (p.includes("/") && p !== "Root") {
+      nextFoldersSet.add(p);
+      p = p.slice(0, p.lastIndexOf("/"));
+    }
+
+    const nextFolders = Array.from(nextFoldersSet).filter(f => f && f !== "Root").sort();
+
+    const now = getTrueTime();
     const updatedQuizzes: Quiz[] = [];
-    const nextQuizzes = quizzes.map(q => {
-      const qf = q.folder || "Root";
+    const nextQuizzes = quizzesRef.current.map(q => {
+      const qf = normalizeFolderPath(q.folder);
       if (qf === oldPath || qf.startsWith(oldPath + "/")) {
         const nextFolder = qf === oldPath ? newPath : (newPath + qf.slice(oldPath.length));
-        const updated = { ...q, folder: nextFolder, updatedAt: getTrueTime() };
+        const updated = {
+          ...q,
+          folder: nextFolder,
+          updatedAt: now,
+          revision: (Number((q as any).revision) || 0) + 1,
+        };
         updatedQuizzes.push(updated);
         return updated;
       }
       return q;
     });
 
-    setQuizzes(nextQuizzes);
+    setQuizCatalogState(nextQuizzes);
     setExamFolders(nextFolders);
     try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
     if (builderFolder === oldPath || builderFolder.startsWith(oldPath + "/")) {
       setBuilderFolder(builderFolder === oldPath ? newPath : (newPath + builderFolder.slice(oldPath.length)));
     }
-    await syncData({ examFolders: nextFolders, __quizUpserts: updatedQuizzes });
+    await syncData({
+      examFolders: nextFolders,
+      __examFolderTombstones: retiredFolders,
+      __quizUpserts: updatedQuizzes,
+    });
   };
 
-  const handleRenameFolder = async (oldPath: string, newName: string) => {
+  const handleRenameFolder = async (rawOldPath: string, newName: string) => {
+    const oldPath = normalizeFolderPath(rawOldPath);
     if (oldPath === "Root") {
       alert("Không thể đổi tên thư mục Root.");
       return;
@@ -9092,25 +9316,29 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const trimmed = newName.trim().replace(/^\/+|\/+$/g, "");
     if (!trimmed) return;
     const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "Root";
-    const newPath = `${parent}/${trimmed}`;
+    const newPath = parent === "Root" ? `Root/${trimmed}` : `${parent}/${trimmed}`;
     if (newPath === oldPath) return;
-    if (allKnownFolders.includes(newPath)) {
+    if (allKnownFolders.map(normalizeFolderPath).includes(newPath)) {
       alert("Thư mục với tên này đã tồn tại ở vị trí hiện tại.");
       return;
     }
     await handleMoveOrRenameFolder(oldPath, newPath);
   };
 
-  const handleDeleteFolder = async (targetPath: string) => {
+  const handleDeleteFolder = async (rawTargetPath: string) => {
+    const targetPath = normalizeFolderPath(rawTargetPath);
     if (targetPath === "Root") {
       alert("Không thể xóa thư mục Root.");
       return;
     }
-    const containedQuizzes = quizzes.filter(q => {
-      const f = q.folder || "Root";
+    const containedQuizzes = quizzesRef.current.filter(q => {
+      const f = normalizeFolderPath(q.folder);
       return f === targetPath || f.startsWith(targetPath + "/");
     });
-    const containedSubfolders = allKnownFolders.filter(f => f.startsWith(targetPath + "/"));
+    const containedSubfolders = allKnownFolders.filter(f => {
+      const nf = normalizeFolderPath(f);
+      return nf.startsWith(targetPath + "/");
+    });
 
     const confirmMsg = containedQuizzes.length > 0 || containedSubfolders.length > 0
       ? `Thư mục "${targetPath}" chứa ${containedQuizzes.length} đề thi và ${containedSubfolders.length} thư mục con.\n\nBạn có chắc muốn xóa? Toàn bộ đề thi bên trong sẽ được chuyển về thư mục cha.`
@@ -9119,36 +9347,46 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!confirm(confirmMsg)) return;
 
     const parentPath = targetPath.includes("/") ? targetPath.slice(0, targetPath.lastIndexOf("/")) : "Root";
-    const nextFolders = examFolders.filter(f => f !== targetPath && !f.startsWith(targetPath + "/"));
+    const retiredFolders = [targetPath, ...containedSubfolders.map(normalizeFolderPath)];
+    const retiredSet = new Set(retiredFolders);
+    const nextFolders = examFolders
+      .map(normalizeFolderPath)
+      .filter(f => f && f !== "Root" && !retiredSet.has(f));
 
+    const now = getTrueTime();
     const updatedQuizzes: Quiz[] = [];
-    const nextQuizzes = quizzes.map(q => {
-      const qf = q.folder || "Root";
+    const nextQuizzes = quizzesRef.current.map(q => {
+      const qf = normalizeFolderPath(q.folder);
       if (qf === targetPath || qf.startsWith(targetPath + "/")) {
-        const updated = { ...q, folder: parentPath, updatedAt: getTrueTime() };
+        const updated = { ...q, folder: parentPath, updatedAt: now, revision: (Number((q as any).revision) || 0) + 1 };
         updatedQuizzes.push(updated);
         return updated;
       }
       return q;
     });
 
-    setQuizzes(nextQuizzes);
+    setQuizCatalogState(nextQuizzes);
     setExamFolders(nextFolders);
     try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
     if (builderFolder === targetPath || builderFolder.startsWith(targetPath + "/")) {
       setBuilderFolder(parentPath);
     }
-    await syncData({ examFolders: nextFolders, __quizUpserts: updatedQuizzes });
+    await syncData({
+      examFolders: nextFolders,
+      __examFolderTombstones: retiredFolders,
+      __quizUpserts: updatedQuizzes,
+    });
   };
 
-  const handleMoveQuizzes = async (quizIds: string[], destFolder: string) => {
+  const handleMoveQuizzes = async (quizIds: string[], rawDestFolder: string) => {
     if (!quizIds.length) return;
-    const dest = destFolder.trim() || "Root";
+    const dest = normalizeFolderPath(rawDestFolder);
+    const now = getTrueTime();
     const updatedQuizzes: Quiz[] = [];
-    const nextQuizzes = quizzes.map(q => {
+    const nextQuizzes = quizzesRef.current.map(q => {
       if (quizIds.includes(q.id)) {
-        if ((q.folder || "Root") !== dest) {
-          const updated = { ...q, folder: dest, updatedAt: getTrueTime() };
+        if (normalizeFolderPath(q.folder) !== dest) {
+          const updated = { ...q, folder: dest, updatedAt: now, revision: (Number((q as any).revision) || 0) + 1 };
           updatedQuizzes.push(updated);
           return updated;
         }
@@ -9158,14 +9396,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
     if (updatedQuizzes.length === 0) return;
 
-    let nextFolders = examFolders;
-    if (dest !== "Root" && !examFolders.includes(dest)) {
-      nextFolders = Array.from(new Set([...examFolders, dest])).sort();
+    let nextFolders = examFolders.map(normalizeFolderPath);
+    if (dest !== "Root" && !nextFolders.includes(dest)) {
+      nextFolders = Array.from(new Set([...nextFolders, dest])).filter(f => f && f !== "Root").sort();
       setExamFolders(nextFolders);
       try { localStorage.setItem("ielts_exam_folders", JSON.stringify(nextFolders)); } catch (_) {}
     }
 
-    setQuizzes(nextQuizzes);
+    setQuizCatalogState(nextQuizzes);
     setSelectedQuizzes(prev => prev.filter(id => !quizIds.includes(id)));
     await syncData({ __quizUpserts: updatedQuizzes, examFolders: nextFolders });
   };
@@ -9177,14 +9415,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
+      const normDest = normalizeFolderPath(destFolder);
       if (data.type === "QUIZ" && data.quizId) {
         const movingIds = selectedQuizzes.includes(data.quizId) ? selectedQuizzes : [data.quizId];
-        await handleMoveQuizzes(movingIds, destFolder);
+        await handleMoveQuizzes(movingIds, normDest);
       } else if (data.type === "FOLDER" && data.folderPath) {
-        const oldPath = data.folderPath;
-        if (oldPath === destFolder || destFolder.startsWith(oldPath + "/")) return;
+        const oldPath = normalizeFolderPath(data.folderPath);
+        if (oldPath === normDest || normDest.startsWith(oldPath + "/")) return;
         const fName = oldPath.split("/").pop()!;
-        const newPath = destFolder === "Root" ? `Root/${fName}` : `${destFolder}/${fName}`;
+        const newPath = normDest === "Root" ? `Root/${fName}` : `${normDest}/${fName}`;
         await handleMoveOrRenameFolder(oldPath, newPath);
       }
     } catch (_) {}
@@ -9967,7 +10206,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const handleBulkDeleteHistory = () => {
       if(!confirm(`Delete ${selectedSessions.length} selected sessions?`)) return;
       const nx = history.filter(h => !selectedSessions.includes(h.id.toString()));
-      setHistory(nx); syncData({history: nx}); setSelectedSessions([]);
+      setHistory(nx); syncData({ history: nx, __deletedHistoryIds: selectedSessions.map(String) }); setSelectedSessions([]);
   };
 
   const handleBulkDeleteResults = () => {
@@ -9983,19 +10222,37 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const syncData = async (newData: any) => {
+    const now = Date.now();
+    lastLocalMutationAtRef.current = now;
+    latestOptimisticWorkspaceRef.current = {
+      timestamp: now,
+      ...(Array.isArray(newData.students) ? { students: newData.students } : {}),
+      ...(Array.isArray(newData.history) ? { history: newData.history } : {}),
+      ...(Array.isArray(newData.schedules) ? { schedules: newData.schedules } : {}),
+      ...(Array.isArray(newData.transactions) ? { transactions: newData.transactions } : {}),
+      ...(Array.isArray(newData.examFolders) ? { examFolders: newData.examFolders } : {}),
+      ...(Array.isArray(newData.topicAssignments) ? { topicAssignments: newData.topicAssignments } : {}),
+      ...(Array.isArray(newData.realExamPackages) ? { realExamPackages: newData.realExamPackages } : {}),
+    };
     const entry = {
       id: `workspace_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       payload: newData,
       createdAt: Date.now(),
+      retryCount: 0,
     };
     writePendingWorkspaceMutations([...readPendingWorkspaceMutations(), entry]);
+    inFlightMutationIdsRef.current.add(entry.id);
 
     const run = async () => {
-      const synced = await performSyncData(newData);
-      if (synced) {
-        writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+      try {
+        const synced = await performSyncData(newData);
+        if (synced) {
+          writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+        }
+        return synced;
+      } finally {
+        inFlightMutationIdsRef.current.delete(entry.id);
       }
-      return synced;
     };
     const task = workspaceSyncChainRef.current.then(run, run) as Promise<boolean>;
     workspaceSyncChainRef.current = task.then(() => undefined, () => undefined);
@@ -10047,9 +10304,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     const run = async () => {
       const pending = readPendingWorkspaceMutations();
       for (const entry of pending) {
-        const synced = await performSyncData(entry.payload);
-        if (!synced) return;
-        writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+        if (inFlightMutationIdsRef.current.has(entry.id)) continue;
+        inFlightMutationIdsRef.current.add(entry.id);
+        try {
+          const synced = await performSyncData(entry.payload);
+          if (synced) {
+            writePendingWorkspaceMutations(readPendingWorkspaceMutations().filter(item => item.id !== entry.id));
+          } else {
+            const current = readPendingWorkspaceMutations();
+            const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
+            writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+          }
+        } catch (err) {
+          console.warn("Pending workspace mutation failed:", err);
+          const current = readPendingWorkspaceMutations();
+          const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
+          writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+        } finally {
+          inFlightMutationIdsRef.current.delete(entry.id);
+        }
       }
     };
     const task = workspaceSyncChainRef.current.then(run, run);
@@ -16683,7 +16956,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               onClick={() => {
                                 const nx = schedules.filter(x => x && x.id !== s.id);
                                 setSchedules(nx);
-                                syncData({ schedules: nx });
+                                syncData({ schedules: nx, __deletedScheduleIds: [String(s.id)] });
                               }}
                               style={{
                                 display: 'inline-flex',
@@ -16948,7 +17221,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <button onClick={() => { const nx=schedules.map(x => x.id===s.id ? {...x, status: 'PENDING' as const} : x); setSchedules(nx); syncData({schedules:nx}); }} style={{ flex: 1, background: C.card, color: C.sub, border: `1px solid ${C.border}`, fontSize: 12, padding: '7px 8px', borderRadius: 9 }}>{t('att_reschedule')}</button>
                       )}
                       <button onClick={() => copyToClipboard(`Chào bạn, nhắc nhẹ hôm nay mình có lịch học IELTS lúc ${s.time} tại ${s.location} nhé!`)} style={{ background: `${C.succ}20`, color: C.succ, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('remind_schedule')}><Ico name="bell" size={13} /></button>
-                      <button onClick={()=>{ const nx=schedules.filter(x=>x && x.id!==s.id); setSchedules(nx); syncData({schedules:nx}); }} style={{ color: C.err, background: `${C.err}10`, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('common_delete')}><Ico name="trash" size={13} /></button>
+                      <button onClick={()=>{ const nx=schedules.filter(x=>x && x.id!==s.id); setSchedules(nx); syncData({schedules:nx, __deletedScheduleIds: [String(s.id)]}); }} style={{ color: C.err, background: `${C.err}10`, fontSize: 12, padding: '7px 10px', borderRadius: 9 }} title={t('common_delete')}><Ico name="trash" size={13} /></button>
                     </div>
                   </div>
                 ))}
@@ -17053,11 +17326,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         {activeTab === "EXAM_BUILDER" && (() => {
 
             // Xử lý logic Folder Tree & Filtering
-            const currentPath = builderFolder;
+            const currentPath = normalizeFolderPath(builderFolder);
             const childFolders = new Set<string>();
 
             // Collect immediate subfolders from allKnownFolders
-            allKnownFolders.forEach(f => {
+            allKnownFolders.forEach(rawF => {
+                const f = normalizeFolderPath(rawF);
                 if (f !== currentPath && f.startsWith(currentPath + "/")) {
                     const remainder = f.substring(currentPath.length + 1);
                     const nextFolder = remainder.split("/")[0];
@@ -17075,7 +17349,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
             const childQuizzes: any[] = [];
             quizzes.forEach((q: any) => {
-                const qPath = q.folder || "Root";
+                const qPath = normalizeFolderPath(q.folder);
                 if (builderSearch) {
                     if (q.title.toLowerCase().includes(builderSearch.toLowerCase()) && matchesSkill(q)) {
                         childQuizzes.push(q);
@@ -18478,12 +18752,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     </div>
                                     <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12}}>
                                         {Array.from(childFolders).sort((a, b) => a.localeCompare(b)).map(f => {
-                                            const fullPath = builderFolder === "Root" ? `Root/${f}` : `${builderFolder}/${f}`;
+                                            const fullPath = normalizeFolderPath(builderFolder === "Root" ? `Root/${f}` : `${builderFolder}/${f}`);
                                             const directAndNestedQuizCount = quizzes.filter((q: any) => {
-                                                const qf = q.folder || "Root";
+                                                const qf = normalizeFolderPath(q.folder);
                                                 return qf === fullPath || qf.startsWith(fullPath + "/");
                                             }).length;
-                                            const subFolderCount = allKnownFolders.filter(folder => folder.startsWith(fullPath + "/") && folder.slice(fullPath.length + 1).indexOf("/") === -1).length;
+                                            const subFolderCount = allKnownFolders.filter(folder => {
+                                                const nf = normalizeFolderPath(folder);
+                                                return nf.startsWith(fullPath + "/") && nf.slice(fullPath.length + 1).indexOf("/") === -1;
+                                            }).length;
                                             const isOver = dragOverFolderTarget === fullPath;
 
                                             return (
@@ -18928,16 +19205,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         }}>
                                             {allKnownFolders
                                                 .filter((f: string) => {
+                                                    const nf = normalizeFolderPath(f);
                                                     if (folderModal.mode === "MOVE_FOLDER" && folderModal.targetFolder) {
-                                                        if (f === folderModal.targetFolder || f.startsWith(folderModal.targetFolder + "/")) {
+                                                        const targetNorm = normalizeFolderPath(folderModal.targetFolder);
+                                                        if (nf === targetNorm || nf.startsWith(targetNorm + "/")) {
                                                             return false;
                                                         }
                                                     }
                                                     return true;
                                                 })
-                                                .map((f: string) => {
+                                                .map((rawF: string) => {
+                                                    const f = normalizeFolderPath(rawF);
                                                     const depth = f === "Root" ? 0 : f.split("/").length - 1;
-                                                    const isSelected = (folderModal.selectedDest || "Root") === f;
+                                                    const isSelected = normalizeFolderPath(folderModal.selectedDest || "Root") === f;
                                                     const folderName = f === "Root" ? "Root (Gốc)" : f.split("/").pop();
                                                     return (
                                                         <button
@@ -19019,13 +19299,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             }
                                         } else if (folderModal.mode === "MOVE_FOLDER") {
                                             if (folderModal.targetFolder) {
-                                                const dest = folderModal.selectedDest || "Root";
+                                                const dest = normalizeFolderPath(folderModal.selectedDest || "Root");
                                                 const base = folderModal.targetFolder.split("/").pop() || "";
                                                 const newPath = dest === "Root" ? `Root/${base}` : `${dest}/${base}`;
                                                 handleMoveOrRenameFolder(folderModal.targetFolder, newPath);
                                             }
                                         } else if (folderModal.mode === "MOVE_QUIZZES") {
-                                            handleMoveQuizzes(selectedQuizzes, folderModal.selectedDest || "Root");
+                                            handleMoveQuizzes(selectedQuizzes, normalizeFolderPath(folderModal.selectedDest || "Root"));
                                             setSelectedQuizzes([]);
                                         }
                                         setFolderModal(null);
@@ -19782,10 +20062,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <button
                           type="button"
                           onClick={() => {
-                            const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                            const now = getTrueTime();
+                            const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true, updatedAt: now } : x);
                             const rem = nxHistory.filter(se => se.studentId === h.studentId && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
                             let nxStudents = students;
-                            if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                            if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined, updatedAt: now } : s); setStudents(nxStudents); }
                             setHistory(nxHistory as Session[]);
                             syncData({ history: nxHistory, students: nxStudents });
                           }}
@@ -19797,7 +20078,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <button
                           type="button"
                           onClick={() => {
-                            const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false } : x);
+                            const now = getTrueTime();
+                            const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false, updatedAt: now } : x);
                             setHistory(nx as Session[]);
                             syncData({ history: nx });
                           }}
@@ -19812,7 +20094,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           if (confirm("Xóa buổi học này?")) {
                             const nx = history.filter(x => x && x.id !== h.id);
                             setHistory(nx as Session[]);
-                            syncData({ history: nx });
+                            syncData({ history: nx, __deletedHistoryIds: [String(h.id)] });
                           }
                         }}
                         style={{ background: 'transparent', color: C.err, border: 'none', padding: '6px 8px', cursor: 'pointer' }}
@@ -20741,10 +21023,11 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                                          const now = getTrueTime();
+                                          const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true, updatedAt: now } : x);
                                           const rem = nxHistory.filter(se => se.studentId === profile.id && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
                                           let nxStudents = students;
-                                          if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                                          if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined, updatedAt: now } : s); setStudents(nxStudents); }
                                           setHistory(nxHistory as Session[]);
                                           syncData({ history: nxHistory, students: nxStudents });
                                         }}
@@ -20919,7 +21202,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
                     <div style={{display: "flex", alignItems: "center", gap: 12}}>
                         <span style={{color:C.succ, fontWeight:800}}>+{fmtMoney(t.amount)}</span>
-                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx, __deletedTransactionIds: [String(t.id)]}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
                     </div>
                     </div>
                 )})}
@@ -20943,7 +21226,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
                     <div style={{display: "flex", alignItems: "center", gap: 12}}>
                         <span style={{color:C.err, fontWeight:800}}>-{fmtMoney(t.amount)}</span>
-                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx, __deletedTransactionIds: [String(t.id)]}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
                     </div>
                     </div>
                 )})}

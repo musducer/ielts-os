@@ -85,6 +85,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - Hệ thống quản lý thư mục chuẩn desktop file manager: hỗ trợ thư mục trống bền vững (lưu trữ độc lập qua `examFolders` và đồng bộ Firestore mà không cần tạo quiz nháp rác).
 - Kéo thả trực quan (Drag-and-Drop): hỗ trợ kéo đề thi hoặc thư mục thả trực tiếp vào các thẻ thư mục con hoặc thả vào bất kỳ mắt xích nào trên thanh breadcrumb để di chuyển tức thì.
 - Thao tác thư mục đầy đủ qua Modal tương tác: Tạo mới, Đổi tên, Di chuyển theo cây thư mục trực quan và Xóa thư mục an toàn (tự động chuyển đề con về thư mục cha).
+- Đồng bộ Real-Time Đa thiết bị & Triệt tiêu giật cục (Zero-Jitter Sync): Tự động khử snapshot cũ khi có write in-flight, cửa sổ ổn định sau ghi 1400ms và bảo vệ focus window 2500ms; giải quyết xung đột bằng revision/updatedAt và cơ chế bia mộ (tombstones) cho lịch sử, lịch học, giao dịch và thư mục, đảm bảo không bao giờ bị mất đề (0 exams trên F5) hay nhảy giật 2 giây khi thao tác trên nhiều tab/thiết bị.
 - Thanh công cụ thao tác hàng loạt (Bulk Command Bar): chọn nhanh theo thư mục, chuyển chế độ Exam/Practice, Publish/Unpublish/Publish ready, di chuyển hàng loạt đến thư mục đích, khóa/mở khóa và xóa an toàn.
 - Bộ lọc và sắp xếp nâng cao: lọc đề theo kỹ năng (Listening, Reading, Writing, Integrated), sắp xếp theo tiêu đề (A-Z), thời gian tạo (Mới nhất) hoặc số lượng câu hỏi, kèm tìm kiếm real-time.
 - Cấu hình đề: thời gian, số lần làm, lịch thi, passcode, học sinh mục tiêu, audio, passage, transcript, hình ảnh và đáp án.

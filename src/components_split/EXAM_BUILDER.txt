@@ -1,11 +1,12 @@
         {activeTab === "EXAM_BUILDER" && (() => {
 
             // Xử lý logic Folder Tree & Filtering
-            const currentPath = builderFolder;
+            const currentPath = normalizeFolderPath(builderFolder);
             const childFolders = new Set<string>();
 
             // Collect immediate subfolders from allKnownFolders
-            allKnownFolders.forEach(f => {
+            allKnownFolders.forEach(rawF => {
+                const f = normalizeFolderPath(rawF);
                 if (f !== currentPath && f.startsWith(currentPath + "/")) {
                     const remainder = f.substring(currentPath.length + 1);
                     const nextFolder = remainder.split("/")[0];
@@ -23,7 +24,7 @@
 
             const childQuizzes: any[] = [];
             quizzes.forEach((q: any) => {
-                const qPath = q.folder || "Root";
+                const qPath = normalizeFolderPath(q.folder);
                 if (builderSearch) {
                     if (q.title.toLowerCase().includes(builderSearch.toLowerCase()) && matchesSkill(q)) {
                         childQuizzes.push(q);
@@ -1426,12 +1427,15 @@
                                     </div>
                                     <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12}}>
                                         {Array.from(childFolders).sort((a, b) => a.localeCompare(b)).map(f => {
-                                            const fullPath = builderFolder === "Root" ? `Root/${f}` : `${builderFolder}/${f}`;
+                                            const fullPath = normalizeFolderPath(builderFolder === "Root" ? `Root/${f}` : `${builderFolder}/${f}`);
                                             const directAndNestedQuizCount = quizzes.filter((q: any) => {
-                                                const qf = q.folder || "Root";
+                                                const qf = normalizeFolderPath(q.folder);
                                                 return qf === fullPath || qf.startsWith(fullPath + "/");
                                             }).length;
-                                            const subFolderCount = allKnownFolders.filter(folder => folder.startsWith(fullPath + "/") && folder.slice(fullPath.length + 1).indexOf("/") === -1).length;
+                                            const subFolderCount = allKnownFolders.filter(folder => {
+                                                const nf = normalizeFolderPath(folder);
+                                                return nf.startsWith(fullPath + "/") && nf.slice(fullPath.length + 1).indexOf("/") === -1;
+                                            }).length;
                                             const isOver = dragOverFolderTarget === fullPath;
 
                                             return (
@@ -1876,16 +1880,19 @@
                                         }}>
                                             {allKnownFolders
                                                 .filter((f: string) => {
+                                                    const nf = normalizeFolderPath(f);
                                                     if (folderModal.mode === "MOVE_FOLDER" && folderModal.targetFolder) {
-                                                        if (f === folderModal.targetFolder || f.startsWith(folderModal.targetFolder + "/")) {
+                                                        const targetNorm = normalizeFolderPath(folderModal.targetFolder);
+                                                        if (nf === targetNorm || nf.startsWith(targetNorm + "/")) {
                                                             return false;
                                                         }
                                                     }
                                                     return true;
                                                 })
-                                                .map((f: string) => {
+                                                .map((rawF: string) => {
+                                                    const f = normalizeFolderPath(rawF);
                                                     const depth = f === "Root" ? 0 : f.split("/").length - 1;
-                                                    const isSelected = (folderModal.selectedDest || "Root") === f;
+                                                    const isSelected = normalizeFolderPath(folderModal.selectedDest || "Root") === f;
                                                     const folderName = f === "Root" ? "Root (Gốc)" : f.split("/").pop();
                                                     return (
                                                         <button
@@ -1967,13 +1974,13 @@
                                             }
                                         } else if (folderModal.mode === "MOVE_FOLDER") {
                                             if (folderModal.targetFolder) {
-                                                const dest = folderModal.selectedDest || "Root";
+                                                const dest = normalizeFolderPath(folderModal.selectedDest || "Root");
                                                 const base = folderModal.targetFolder.split("/").pop() || "";
                                                 const newPath = dest === "Root" ? `Root/${base}` : `${dest}/${base}`;
                                                 handleMoveOrRenameFolder(folderModal.targetFolder, newPath);
                                             }
                                         } else if (folderModal.mode === "MOVE_QUIZZES") {
-                                            handleMoveQuizzes(selectedQuizzes, folderModal.selectedDest || "Root");
+                                            handleMoveQuizzes(selectedQuizzes, normalizeFolderPath(folderModal.selectedDest || "Root"));
                                             setSelectedQuizzes([]);
                                         }
                                         setFolderModal(null);

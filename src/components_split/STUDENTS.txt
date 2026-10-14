@@ -362,10 +362,11 @@
                         <button
                           type="button"
                           onClick={() => {
-                            const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                            const now = getTrueTime();
+                            const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true, updatedAt: now } : x);
                             const rem = nxHistory.filter(se => se.studentId === h.studentId && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
                             let nxStudents = students;
-                            if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                            if (rem <= 0) { nxStudents = students.map(s => s.id === h.studentId ? { ...s, debtMessage: undefined, updatedAt: now } : s); setStudents(nxStudents); }
                             setHistory(nxHistory as Session[]);
                             syncData({ history: nxHistory, students: nxStudents });
                           }}
@@ -377,7 +378,8 @@
                         <button
                           type="button"
                           onClick={() => {
-                            const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false } : x);
+                            const now = getTrueTime();
+                            const nx = history.map(x => x && x.id === h.id ? { ...x, isPaid: false, updatedAt: now } : x);
                             setHistory(nx as Session[]);
                             syncData({ history: nx });
                           }}
@@ -392,7 +394,7 @@
                           if (confirm("Xóa buổi học này?")) {
                             const nx = history.filter(x => x && x.id !== h.id);
                             setHistory(nx as Session[]);
-                            syncData({ history: nx });
+                            syncData({ history: nx, __deletedHistoryIds: [String(h.id)] });
                           }
                         }}
                         style={{ background: 'transparent', color: C.err, border: 'none', padding: '6px 8px', cursor: 'pointer' }}
@@ -1321,10 +1323,11 @@
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true } : x);
+                                          const now = getTrueTime();
+                                          const nxHistory = history.map(x => x && x.id === h.id ? { ...x, isPaid: true, updatedAt: now } : x);
                                           const rem = nxHistory.filter(se => se.studentId === profile.id && !se.isPaid).reduce((sum, se) => sum + (se.earnings || 0), 0);
                                           let nxStudents = students;
-                                          if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined } : s); setStudents(nxStudents); }
+                                          if (rem <= 0) { nxStudents = students.map(s => s.id === profile.id ? { ...s, debtMessage: undefined, updatedAt: now } : s); setStudents(nxStudents); }
                                           setHistory(nxHistory as Session[]);
                                           syncData({ history: nxHistory, students: nxStudents });
                                         }}

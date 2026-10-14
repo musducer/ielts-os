@@ -44,7 +44,7 @@
                     <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
                     <div style={{display: "flex", alignItems: "center", gap: 12}}>
                         <span style={{color:C.succ, fontWeight:800}}>+{fmtMoney(t.amount)}</span>
-                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx, __deletedTransactionIds: [String(t.id)]}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
                     </div>
                     </div>
                 )})}
@@ -68,7 +68,7 @@
                     <div><div style={{fontSize:13, fontWeight:700}}>{t.title}</div><div style={{fontSize:11, color: C.sub}}>{t.date}</div></div>
                     <div style={{display: "flex", alignItems: "center", gap: 12}}>
                         <span style={{color:C.err, fontWeight:800}}>-{fmtMoney(t.amount)}</span>
-                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
+                        <button onClick={()=>{ const nx=transactions.filter(x=>x && x.id!==t.id); setTransactions(nx as Transaction[]); syncData({transactions:nx, __deletedTransactionIds: [String(t.id)]}); }} style={{ color: C.err, background: "none", fontSize: 18, padding: 0 }}>×</button>
                     </div>
                     </div>
                 )})}
