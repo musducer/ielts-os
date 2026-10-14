@@ -1,5 +1,29 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-14)
 
+## Khôi phục Ảnh Biểu đồ Task 1 trên Web & Proxy Base64 Backend cho PDF Dossier — 2026-10-14
+
+- **Khôi phục hoàn toàn hiển thị ảnh biểu đồ Task 1 trên giao diện Web**:
+  - *Nguyên nhân gốc rễ*: Việc gắn `crossOrigin="anonymous"` trên thẻ `<img />` (và trong bộ nạp `new Image()`) khiến trình duyệt kích hoạt cơ chế kiểm tra CORS nghiêm ngặt (`Access-Control-Allow-Origin`). Do các máy chủ lưu trữ ảnh bên ngoài không trả về header CORS cho yêu cầu fetch/canvas, Chrome chặn hoàn toàn luồng tải ảnh — làm ảnh biểu đồ trên Web bị hỏng (icon lỗi) và kéo theo PDF bị trắng ảnh.
+  - *Giải pháp*:
+    1. Gỡ bỏ hoàn toàn thuộc tính `crossOrigin` khỏi toàn bộ các thẻ `<img />` hiển thị trên màn hình trong `src/WritingFeedback.tsx` (cả trong Task Prompt & Visual panel).
+    2. Bổ sung `referrerPolicy="no-referrer"` trên các thẻ `<img />` nhằm tránh việc máy chủ ảnh chặn request do header `Referer`.
+    3. Thêm hàm chuẩn hóa URL `normalizeChartUrl(rawUrl)` và `getApiBase()`: tự động nâng cấp `http://` lên `https://` trên môi trường web HTTPS để chống chặn Mixed Content; tự động bổ sung tiền tố backend `http://localhost:8000` cho các đường dẫn relative `/api/...` khi chạy trên localhost / dev.
+    4. Căn chỉnh hiển thị ảnh biểu đồ Task 1 sắc nét, cân đối trong khung xem đề (`maxHeight: 280, maxWidth: '100%', objectFit: 'contain'`).
+- **Bảo đảm 100% kết xuất ảnh biểu đồ trong Vector PDF Dossier qua Backend Proxy**:
+  - *Nguyên nhân*: JavaScript phía trình duyệt bị giới hạn bởi Sandbox CORS khi vẽ ảnh chéo domain lên Canvas. Tuy nhiên, Python trên máy chủ backend hoàn toàn có thể đọc và chuyển đổi ảnh thành chuỗi Base64 tự do không phụ thuộc vào CORS của trình duyệt.
+  - *Giải pháp*:
+    1. Xây dựng endpoint nhẹ `GET /api/image_base64` trong `api/index.py`:
+       - Kiểm tra hợp lệ URL đầu vào (chấp nhận `http://`, `https://`, `/api/exam-media/{asset_id}`, hoặc data URL).
+       - Nếu là asset nội bộ `media_[a-f0-9]{24}`, đọc trực tiếp từ Firebase Storage store.
+       - Tải dữ liệu ảnh bằng `urllib.request` kèm User-Agent chuẩn và timeout 10 giây, tự động nhận diện MIME type từ `Content-Type` hoặc phần mở rộng tệp.
+       - Mã hóa Base64 và trả về `{"dataUrl": "data:image/...;base64,..."}`.
+    2. Cập nhật `resolveChartImageForPdf` trong `src/WritingFeedback.tsx`:
+       - Thu thập URL biểu đồ từ tất cả các trường dữ liệu (`activeTask.mediaUrl`, `quiz.sections[i]`, HTML prompt, DOM).
+       - Gọi `GET /api/image_base64?url=...` (với timeout 6s) để lấy Data URL Base64 nhúng thẳng vào PDF.
+       - Nếu proxy thất bại, an toàn fallback về URL trực tiếp đã chuẩn hóa.
+    3. Trong template HTML của print `iframe`: render thẻ `<img id="pdf-dossier-chart-img" src="..." referrerpolicy="no-referrer" />` hoàn toàn KHÔNG có thuộc tính `crossorigin`. Động cơ in gốc của trình duyệt sẽ in tốt ảnh ngoài khi không bị ép CORS.
+    4. Cơ chế đợi nạp ảnh nghiêm ngặt trước khi in: sử dụng `Promise.all` lắng nghe sự kiện `load`/`error` trên tất cả thẻ `<img>` trong iframe (timeout 5s) và chờ 300ms layout settle delay trước khi gọi `iframeWindow.print()`.
+
 ## Hạ tầng đồng bộ Firestore Đa thiết bị, Triệt tiêu giật cục 2s & Bền vững Thư mục Đề thi — 2026-10-14
 
 - **Sửa dứt điểm lỗi mất trắng danh sách đề thi (`0 exams`) khi F5 / Hard Refresh**:

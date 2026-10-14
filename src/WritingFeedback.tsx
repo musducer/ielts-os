@@ -181,6 +181,43 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+export function getApiBase(): string {
+  if (typeof window === 'undefined') return '';
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname)
+    ? 'http://localhost:8000'
+    : '';
+}
+
+export function normalizeChartUrl(rawUrl?: string): string {
+  const url = String(rawUrl || '').trim();
+  if (!url) return '';
+  if (url.startsWith('data:') || url.startsWith('blob:')) return url;
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && url.startsWith('http://')) {
+      try {
+        const parsed = new URL(url);
+        if (!['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+          return url.replace(/^http:\/\//i, 'https://');
+        }
+      } catch {
+        return url;
+      }
+    }
+    return url;
+  }
+  if (url.startsWith('/api/')) {
+    const apiBase = getApiBase();
+    if (apiBase) return `${apiBase}${url}`;
+    if (typeof window !== 'undefined') return `${window.location.origin}${url}`;
+    return url;
+  }
+  if (url.startsWith('/')) {
+    if (typeof window !== 'undefined') return `${window.location.origin}${url}`;
+    return url;
+  }
+  return url;
+}
+
 export interface AccurateCommentSpan {
   comment: WritingComment;
   start: number;
@@ -867,7 +904,7 @@ export function buildVectorPdfDossierHtml(params: {
         ${params.taskPrompt ? `<div style="margin-top: 4px;">${params.taskPrompt}</div>` : ''}
         ${params.mediaUrl ? `
           <div class="dossier-chart-box" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #DCD6C8; text-align: center; break-inside: avoid; page-break-inside: avoid;">
-            <img id="pdf-dossier-chart-img" src="${params.mediaUrl.startsWith('data:') ? params.mediaUrl : escapeHtml(params.mediaUrl)}" alt="Task Visual Graphic" crossOrigin="anonymous" style="display: block; margin: 0 auto; max-width: 100%; max-height: 300px; width: auto; height: auto; object-fit: contain; background: #FFFFFF; padding: 10px; border: 1px solid #E4DFD3; border-radius: 6px;" />
+            <img id="pdf-dossier-chart-img" src="${params.mediaUrl.startsWith('data:') ? params.mediaUrl : escapeHtml(params.mediaUrl)}" alt="Task Visual Graphic" referrerpolicy="no-referrer" style="display: block; margin: 0 auto; max-width: 100%; max-height: 300px; width: auto; height: auto; object-fit: contain; background: #FFFFFF; padding: 10px; border: 1px solid #E4DFD3; border-radius: 6px;" />
           </div>
         ` : ''}
       </div>
@@ -1045,13 +1082,33 @@ const Ico: React.FC<{ name: string; size?: number; color?: string; className?: s
 };
 
 // ==========================================
-// IMAGE TO DATA URL (CANVAS / BLOB EMBEDDING)
+// ==========================================
+// IMAGE TO DATA URL (CANVAS / PROXY EMBEDDING)
 // ==========================================
 export async function imageToDataUrl(url: string, existingImgEl?: HTMLImageElement | null): Promise<string> {
-  if (!url) return '';
-  if (url.startsWith('data:image/')) return url;
+  const normalized = normalizeChartUrl(url);
+  if (!normalized) return '';
+  if (normalized.startsWith('data:image/')) return normalized;
 
-  // Attempt A: Direct Canvas Draw from Loaded DOM <img>
+  // Attempt A: Server-Side Base64 Image Proxy (bypasses browser CORS completely)
+  try {
+    const apiBase = getApiBase();
+    const proxyUrl = `${apiBase}/api/image_base64?url=${encodeURIComponent(normalized)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    const resp = await fetch(proxyUrl, { signal: controller.signal });
+    clearTimeout(timer);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data?.dataUrl && typeof data.dataUrl === 'string' && data.dataUrl.startsWith('data:image/')) {
+        return data.dataUrl;
+      }
+    }
+  } catch (e) {
+    console.warn('[WritingFeedback] Backend image proxy failed, checking fallback:', e);
+  }
+
+  // Attempt B: Direct Canvas Draw from Loaded DOM <img> (if same-origin or CORS-ready)
   if (existingImgEl && existingImgEl.complete && existingImgEl.naturalWidth > 0 && existingImgEl.naturalHeight > 0) {
     try {
       const canvas = document.createElement('canvas');
@@ -1065,80 +1122,13 @@ export async function imageToDataUrl(url: string, existingImgEl?: HTMLImageEleme
           return dataUrl;
         }
       }
-    } catch (e) {
-      console.warn('Canvas direct draw from existingImgEl failed (likely CORS restriction):', e);
-    }
-  }
-
-  // Attempt B: fetch + FileReader
-  try {
-    let res: Response | null = null;
-    try {
-      res = await fetch(url, { mode: 'cors', credentials: 'include' });
     } catch {
-      try {
-        res = await fetch(url, { mode: 'cors' });
-      } catch {
-        res = null;
-      }
+      // Tainted canvas ignored
     }
-    if (res && res.ok) {
-      const blob = await res.blob();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') resolve(reader.result);
-          else reject(new Error('FileReader did not yield string'));
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-      if (dataUrl && dataUrl.startsWith('data:')) {
-        return dataUrl;
-      }
-    }
-  } catch (e) {
-    console.warn('fetch + FileReader toDataURL failed:', e);
   }
 
-  // Attempt C: new Image() with crossOrigin = 'anonymous'
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth || img.width;
-          canvas.height = img.naturalHeight || img.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0);
-            resolve(canvas.toDataURL('image/png'));
-          } else {
-            reject(new Error('Canvas context not available'));
-          }
-        } catch (err) {
-          reject(err);
-        }
-      };
-      img.onerror = () => reject(new Error('Image failed to load with crossOrigin'));
-      setTimeout(() => reject(new Error('Image load timed out')), 3500);
-      img.src = url;
-    });
-    if (dataUrl && dataUrl.startsWith('data:image/')) {
-      return dataUrl;
-    }
-  } catch (e) {
-    console.warn('new Image() with crossOrigin failed:', e);
-  }
-
-  // Attempt D: Fallback to normalized absolute URL
-  try {
-    return new URL(url, window.location.origin).href;
-  } catch {
-    return url;
-  }
+  // Fallback to normalized direct URL
+  return normalized;
 }
 
 /**
@@ -1202,16 +1192,7 @@ export async function resolveChartImageForPdf(
 
   if (!rawUrl) return '';
 
-  let targetUrl = rawUrl;
-  if (!targetUrl.startsWith('data:') && !targetUrl.startsWith('blob:')) {
-    try {
-      targetUrl = new URL(targetUrl, window.location.origin).href;
-    } catch {
-      targetUrl = rawUrl;
-    }
-  }
-
-  return await imageToDataUrl(targetUrl, existingDomImg);
+  return await imageToDataUrl(rawUrl, existingDomImg);
 }
 
 // ==========================================
@@ -1341,7 +1322,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const activeTaskChartUrl = useMemo(() => {
     const taskAny = activeTask as any;
     const fromTask = taskAny.mediaUrl || taskAny.imageUrl || taskAny.chartUrl || taskAny.diagramImageUrl || taskAny.mapImageUrl;
-    if (fromTask) return String(fromTask).trim();
+    if (fromTask) return normalizeChartUrl(String(fromTask).trim());
 
     const taskIdx = writingTasks.findIndex(t => t.id === activeTask.id);
     const resolvedIdx = taskIdx >= 0 ? taskIdx : (activeTask.taskNumber ? activeTask.taskNumber - 1 : 0);
@@ -1349,21 +1330,21 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     if (quizAny) {
       const sec = quizAny.sections?.[resolvedIdx];
       const fromSec = sec?.mediaUrl || sec?.imageUrl || sec?.images?.[0] || sec?.image;
-      if (fromSec) return String(fromSec).trim();
+      if (fromSec) return normalizeChartUrl(String(fromSec).trim());
 
       const q = quizAny.questions?.[resolvedIdx] || (resolvedIdx === 0 ? quizAny.questions?.[0] : undefined);
       const fromQ = q?.imageUrl || q?.mediaUrl || q?.image;
-      if (fromQ) return String(fromQ).trim();
+      if (fromQ) return normalizeChartUrl(String(fromQ).trim());
 
       if (resolvedIdx === 0 && (quizAny.mediaUrl || quizAny.imageUrl)) {
-        return String(quizAny.mediaUrl || quizAny.imageUrl).trim();
+        return normalizeChartUrl(String(quizAny.mediaUrl || quizAny.imageUrl).trim());
       }
 
       const htmlSources = [activeTask.prompt, activeTask.instructions, sec?.passage, quizAny.passage, q?.groupContext];
       for (const src of htmlSources) {
         if (typeof src === 'string') {
           const match = src.match(/<img[^>]+src=["']([^"']+)["']/i);
-          if (match && match[1]) return match[1].trim();
+          if (match && match[1]) return normalizeChartUrl(match[1].trim());
         }
       }
     }
@@ -1973,35 +1954,30 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       doc.write(html);
       doc.close();
 
-      // Wait for all images inside iframe to load and decode
-      const images = Array.from(doc.querySelectorAll('img'));
+      // Strictly wait for all images inside iframe to load before printing
+      const imgs = Array.from(doc.querySelectorAll('img'));
       await Promise.all(
-        images.map(async img => {
-          if (img.complete && img.naturalWidth > 0) return true;
-          try {
-            if (typeof img.decode === 'function') {
-              await img.decode();
-            }
-          } catch {
-            // decode failure ignored
-          }
-          if (img.complete && img.naturalWidth > 0) return true;
-          return new Promise(resolve => {
-            img.onload = () => resolve(true);
-            img.onerror = () => {
-              console.warn('PDF dossier image failed to load:', img.src);
-              resolve(false);
-            };
-            setTimeout(() => resolve(false), 3000);
-          });
-        })
+        imgs.map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              if (img.complete && img.naturalWidth > 0) {
+                resolve();
+                return;
+              }
+              const timer = window.setTimeout(resolve, 5000);
+              img.addEventListener('load', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+              img.addEventListener('error', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+            })
+        )
       );
 
-      // Give 250ms for fonts & layout settling
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise((r) => window.setTimeout(r, 300));
 
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
+      const iframeWindow = iframe.contentWindow;
+      if (iframeWindow) {
+        iframeWindow.focus();
+        iframeWindow.print();
+      }
 
       // Clean up iframe after 60s
       setTimeout(() => {
@@ -2367,10 +2343,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, background: '#fff', textAlign: 'center' }}>
               <img
                 data-wf-chart-img="true"
-                crossOrigin="anonymous"
-                src={activeTaskChartUrl}
+                referrerPolicy="no-referrer"
+                src={normalizeChartUrl(activeTaskChartUrl)}
                 alt={`Task ${activeTask.taskNumber} chart`}
-                style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto' }}
+                style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', display: 'block', margin: '0 auto' }}
               />
               <span style={{ fontSize: 11, color: C.sub, marginTop: 4, display: 'block' }}>Task visual graphic</span>
             </div>

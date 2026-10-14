@@ -5777,6 +5777,85 @@ async def hosted_exam_media(asset_id: str):
     })
 
 
+@app.get("/api/image_base64")
+async def proxy_image_to_base64(url: str):
+    """Proxy and convert chart/visual images to base64 Data URLs, bypassing browser CORS restrictions for PDF generation."""
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A valid 'url' query parameter is required.")
+
+    # If it is already a data URL, return immediately
+    if clean_url.startswith("data:image/"):
+        return {"dataUrl": clean_url}
+
+    is_http = clean_url.startswith("http://") or clean_url.startswith("https://")
+    is_media_path = clean_url.startswith("/api/exam-media/") or "/api/exam-media/" in clean_url
+    if not is_http and not is_media_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="URL must start with http://, https://, or /api/exam-media/.",
+        )
+
+    # If it is an internal /api/exam-media/{asset_id} path, read directly from storage store
+    media_match = re.search(r"media_[a-f0-9]{24}", clean_url)
+    if media_match:
+        asset_id = media_match.group(0)
+        try:
+            store = _firebase_exam_generation_store()
+            asset = await asyncio.to_thread(store.load_media, asset_id)
+            blob_name = str((asset or {}).get("blob") or "")
+            mime_type = str((asset or {}).get("mime_type") or "image/png")
+            if blob_name:
+                raw = await asyncio.to_thread(store.download_blob, blob_name)
+                b64 = base64.b64encode(raw).decode("ascii")
+                return {"dataUrl": f"data:{mime_type};base64,{b64}"}
+        except Exception as exc:
+            print(f"[image_base64] Direct store read for {asset_id} failed: {exc}")
+
+    # Fallback target URL for external HTTP/HTTPS or relative path
+    target_url = clean_url
+    if not is_http:
+        target_url = f"https://ielts-os-sandy.vercel.app{clean_url if clean_url.startswith('/') else '/' + clean_url}"
+
+    def _fetch_image(u: str) -> tuple[bytes, str]:
+        req = urllib.request.Request(
+            u,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read(25 * 1024 * 1024)
+            ct = resp.headers.get("Content-Type", "")
+            mime = ct.split(";")[0].strip().lower() if ct else ""
+            if not mime or not mime.startswith("image/"):
+                parsed_path = urllib.parse.urlparse(u).path.lower()
+                if parsed_path.endswith(".png"):
+                    mime = "image/png"
+                elif parsed_path.endswith((".jpg", ".jpeg")):
+                    mime = "image/jpeg"
+                elif parsed_path.endswith(".webp"):
+                    mime = "image/webp"
+                elif parsed_path.endswith(".svg"):
+                    mime = "image/svg+xml"
+                elif parsed_path.endswith(".gif"):
+                    mime = "image/gif"
+                else:
+                    mime = "image/png"
+            return data, mime
+
+    try:
+        raw_bytes, detected_mime = await asyncio.to_thread(_fetch_image, target_url)
+        b64_str = base64.b64encode(raw_bytes).decode("ascii")
+        return {"dataUrl": f"data:{detected_mime};base64,{b64_str}"}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch image: {str(exc)}",
+        ) from exc
+
+
 @app.post("/api/exams/bulk/mode")
 async def bulk_exam_mode(request: Request, payload: Dict[str, Any] = Body(...)):
     actor = _require_exam_manager(request)

@@ -167,7 +167,7 @@ export const normalizeWritingTasks = (quiz: any): WritingTaskDefinition[] => {
           taskNumber: index + 1,
           prompt: section?.passage || "",
           instructions: section?.instruction || "",
-          mediaUrl: section?.images?.[0],
+          mediaUrl: section?.mediaUrl || section?.imageUrl || section?.images?.[0] || section?.image,
         }))
       : []);
   return defaults.map((fallback, index) => {
@@ -180,7 +180,7 @@ export const normalizeWritingTasks = (quiz: any): WritingTaskDefinition[] => {
       title: String(task?.title || fallback.title),
       instructions: String(task?.instructions || fallback.instructions),
       prompt: String(task?.prompt || ""),
-      mediaUrl: String(task?.mediaUrl || "").trim() || undefined,
+      mediaUrl: String(task?.mediaUrl || task?.imageUrl || task?.chartUrl || "").trim() || undefined,
       minimumWords: positiveInteger(task?.minimumWords, fallback.minimumWords),
       recommendedMinutes: positiveInteger(task?.recommendedMinutes, fallback.recommendedMinutes),
       order: positiveInteger(task?.order, fallback.order),
