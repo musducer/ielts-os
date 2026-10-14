@@ -3521,6 +3521,15 @@ async def ai_feedback(
                 idx = lower_essay.find(lower_quote)
                 if idx != -1:
                     quote = essay[idx:idx + len(quote)]
+                else:
+                    # Whitespace-tolerant regex match
+                    tokens = [re.escape(t) for t in quote.split() if t]
+                    if tokens:
+                        pattern = re.compile(r'\s+'.join(tokens), re.IGNORECASE)
+                        m = pattern.search(essay)
+                        if m:
+                            idx = m.start()
+                            quote = essay[m.start():m.end()]
             if idx != -1:
                 start_offset = idx
                 end_offset = idx + len(quote)

@@ -166,6 +166,283 @@ const STOPWORDS = new Set([
 ]);
 
 // ==========================================
+// LOSSLESS ESSAY TEXT SEGMENTATION & ESCAPE HELPERS
+// ==========================================
+function escapeRegExp(str: string): string {
+  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtml(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+export interface AccurateCommentSpan {
+  comment: WritingComment;
+  start: number;
+  end: number;
+  quote: string;
+  displayIndex: number;
+}
+export type AccurateTaskComment = AccurateCommentSpan;
+
+export function resolveAccurateCommentSpan(
+  essayText: string,
+  comment: WritingComment
+): { start: number; end: number; quote: string } | null {
+  const rawQuote = String(comment.anchorQuote || '').trim();
+  if (!rawQuote || !essayText) return null;
+
+  const targetOffset = typeof comment.startOffset === 'number' ? comment.startOffset : 0;
+
+  // 1. Exact match across all occurrences in essayText
+  const exactIndices: number[] = [];
+  let pos = 0;
+  while ((pos = essayText.indexOf(rawQuote, pos)) !== -1) {
+    exactIndices.push(pos);
+    pos += 1;
+  }
+
+  if (exactIndices.length > 0) {
+    let best = exactIndices[0];
+    let minDiff = Math.abs(best - targetOffset);
+    for (let i = 1; i < exactIndices.length; i++) {
+      const diff = Math.abs(exactIndices[i] - targetOffset);
+      if (diff < minDiff) {
+        minDiff = diff;
+        best = exactIndices[i];
+      }
+    }
+    return {
+      start: best,
+      end: best + rawQuote.length,
+      quote: rawQuote,
+    };
+  }
+
+  // 2. Whitespace-tolerant match (handles multiple spaces, line breaks inside quote)
+  try {
+    const tokens = rawQuote.split(/\s+/).filter(Boolean).map(escapeRegExp);
+    if (tokens.length > 0) {
+      const pattern = new RegExp(tokens.join('\\s+'), 'g');
+      let match: RegExpExecArray | null;
+      let bestMatch: { start: number; end: number; quote: string } | null = null;
+      let minDiff = Infinity;
+
+      while ((match = pattern.exec(essayText)) !== null) {
+        const start = match.index;
+        const end = start + match[0].length;
+        const diff = Math.abs(start - targetOffset);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestMatch = { start, end, quote: match[0] };
+        }
+      }
+
+      if (bestMatch) {
+        return bestMatch;
+      }
+    }
+  } catch (e) {
+    // regex fallback
+  }
+
+  // 3. Case-insensitive exact match
+  const lowerEssay = essayText.toLowerCase();
+  const lowerQuote = rawQuote.toLowerCase();
+  const lowerIndices: number[] = [];
+  pos = 0;
+  while ((pos = lowerEssay.indexOf(lowerQuote, pos)) !== -1) {
+    lowerIndices.push(pos);
+    pos += 1;
+  }
+
+  if (lowerIndices.length > 0) {
+    let best = lowerIndices[0];
+    let minDiff = Math.abs(best - targetOffset);
+    for (let i = 1; i < lowerIndices.length; i++) {
+      const diff = Math.abs(lowerIndices[i] - targetOffset);
+      if (diff < minDiff) {
+        minDiff = diff;
+        best = lowerIndices[i];
+      }
+    }
+    const matchedQuote = essayText.slice(best, best + rawQuote.length);
+    return {
+      start: best,
+      end: best + rawQuote.length,
+      quote: matchedQuote,
+    };
+  }
+
+  return null;
+}
+
+export function resolveAndSortActiveTaskComments(
+  essayText: string,
+  comments: WritingComment[]
+): AccurateCommentSpan[] {
+  const resolved: Array<{ comment: WritingComment; start: number; end: number; quote: string }> = [];
+
+  for (const c of comments) {
+    const span = resolveAccurateCommentSpan(essayText, c);
+    if (span) {
+      resolved.push({
+        comment: c,
+        start: span.start,
+        end: span.end,
+        quote: span.quote,
+      });
+    }
+  }
+
+  // Sort by start offset ascending, then longer span first
+  resolved.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return (b.end - b.start) - (a.end - a.start);
+  });
+
+  return resolved.map((item, idx) => ({
+    ...item,
+    displayIndex: idx + 1,
+  }));
+}
+
+export interface TextSegment {
+  text: string;
+  isHighlight: boolean;
+  annotations: AccurateCommentSpan[];
+  diffType?: 'none' | 'replace';
+}
+
+export interface LosslessParagraph {
+  pIndex: number;
+  rawText: string;
+  pStart: number;
+  pEnd: number;
+  segments: TextSegment[];
+}
+
+export function parseParagraphsWithOffsets(
+  text: string
+): Array<{ pIndex: number; text: string; start: number; end: number }> {
+  if (!text) return [];
+  const paras: Array<{ pIndex: number; text: string; start: number; end: number }> = [];
+
+  const regex = /([^\r\n]+)/g;
+  let match: RegExpExecArray | null;
+  let pIdx = 0;
+  while ((match = regex.exec(text)) !== null) {
+    const pText = match[1];
+    const start = match.index;
+    const end = start + pText.length;
+    paras.push({
+      pIndex: pIdx++,
+      text: pText,
+      start,
+      end,
+    });
+  }
+  if (paras.length === 0 && text.length > 0) {
+    paras.push({ pIndex: 0, text, start: 0, end: text.length });
+  }
+  return paras;
+}
+
+export function buildLosslessParagraphSegments(
+  essayText: string,
+  accurateComments: AccurateCommentSpan[],
+  mode: 'annotated' | 'diff' = 'annotated'
+): LosslessParagraph[] {
+  const paragraphs = parseParagraphsWithOffsets(essayText);
+
+  return paragraphs.map(para => {
+    const { pIndex, text: rawText, start: pStart, end: pEnd } = para;
+
+    // Filter annotations that intersect this paragraph [pStart, pEnd]
+    const intersecting = accurateComments.filter(a => a.start < pEnd && a.end > pStart);
+
+    const segments: TextSegment[] = [];
+    let cursor = pStart;
+
+    for (const ann of intersecting) {
+      const segStart = Math.max(ann.start, pStart);
+      const segEnd = Math.min(ann.end, pEnd);
+
+      if (segEnd <= cursor) {
+        // Enclosed inside already-emitted segment
+        if (segments.length > 0) {
+          const lastSeg = segments[segments.length - 1];
+          if (lastSeg.isHighlight && !lastSeg.annotations.some(a => a.comment.id === ann.comment.id)) {
+            lastSeg.annotations.push(ann);
+          }
+        }
+        continue;
+      }
+
+      const effectiveStart = Math.max(segStart, cursor);
+      if (effectiveStart > cursor) {
+        const plainPiece = essayText.slice(cursor, effectiveStart);
+        if (plainPiece) {
+          segments.push({
+            text: plainPiece,
+            isHighlight: false,
+            annotations: [],
+          });
+        }
+      }
+
+      const highlightPiece = essayText.slice(effectiveStart, segEnd);
+      if (highlightPiece) {
+        segments.push({
+          text: highlightPiece,
+          isHighlight: true,
+          annotations: [ann],
+          diffType: mode === 'diff' && ann.comment.replacement ? 'replace' : 'none',
+        });
+        cursor = segEnd;
+      }
+    }
+
+    if (cursor < pEnd) {
+      const trailingPiece = essayText.slice(cursor, pEnd);
+      if (trailingPiece) {
+        segments.push({
+          text: trailingPiece,
+          isHighlight: false,
+          annotations: [],
+        });
+      }
+    }
+
+    // HARD SAFETY INVARIANT: joined text MUST equal rawText 100% character-for-character
+    const reconstructed = segments.map(s => s.text).join('');
+    if (reconstructed !== rawText) {
+      console.warn(`[WritingFeedback] Segment text mismatch in ¶${pIndex + 1}! Falling back to unclipped raw text.`);
+      return {
+        pIndex,
+        rawText,
+        pStart,
+        pEnd,
+        segments: [{ text: rawText, isHighlight: false, annotations: [] }],
+      };
+    }
+
+    return {
+      pIndex,
+      rawText,
+      pStart,
+      pEnd,
+      segments,
+    };
+  });
+}
+
+// ==========================================
 // MULTI-LINE RECT HELPER FOR HIGHLIGHTED SPANS
 // ==========================================
 function getTargetClientLineRect(target: HTMLElement, clientX?: number, clientY?: number): DOMRect {
@@ -335,142 +612,433 @@ const FloatingCardPortal: React.FC<FloatingCardPortalProps> = ({
 };
 
 // ==========================================
-// PRINT DOSSIER ANNOTATED ESSAY RENDERER
+// VECTOR PRINT DOSSIER HTML BUILDERS
 // ==========================================
-function renderDossierAnnotatedEssay(text: string, comments: WritingComment[]) {
+export function buildDossierAnnotatedEssayHtml(
+  text: string,
+  accurateComments: AccurateTaskComment[]
+): string {
   if (!text || !text.trim()) {
-    return <div style={{ color: '#9590A0', fontStyle: 'italic' }}>Thí sinh chưa nộp bài viết cho Task này.</div>;
+    return '<div style="color: #9590A0; font-style: italic;">Thí sinh chưa nộp bài viết cho Task này.</div>';
   }
 
-  // 1-based indexed comments matching table row #
-  const indexed = comments.map((c, i) => ({ ...c, indexNum: i + 1 }));
+  const paragraphs = buildLosslessParagraphSegments(text, accurateComments, 'annotated');
 
-  const commentRanges = indexed.flatMap(c => {
-    const q = c.anchorQuote || '';
-    if (!q) return [];
-    let start = (c.startOffset !== undefined && text.slice(c.startOffset, c.endOffset) === q)
-      ? c.startOffset
-      : text.indexOf(q);
-    if (start < 0) return [];
-    return [{ start, end: start + q.length, comment: c, indexNum: c.indexNum }];
-  });
+  return paragraphs
+    .map(para => {
+      const segHtml = para.segments
+        .map(seg => {
+          if (seg.isHighlight && seg.annotations.length > 0) {
+            const top = seg.annotations[0];
+            const cat = top.comment.category || 'error';
+            const color =
+              cat === 'error'
+                ? '#C93B3B'
+                : cat === 'awkward'
+                ? '#B45309'
+                : cat === 'upgrade'
+                ? '#4F46E5'
+                : '#15803D';
+            const bg =
+              cat === 'error'
+                ? '#FEF2F2'
+                : cat === 'awkward'
+                ? '#FFFBEB'
+                : cat === 'upgrade'
+                ? '#EEF2FF'
+                : '#F0FDF4';
 
-  const paragraphs = text.split(/\n+/);
-  let currentOffset = 0;
+            return `<mark style="display: inline; background: ${bg}; border-bottom: 2px solid ${color}; padding: 1px 3px; border-radius: 2px; color: inherit;">${escapeHtml(
+              seg.text
+            )}<sup style="display: inline; font-size: 10px; font-weight: 800; color: ${color}; margin-left: 2px; font-family: Consolas, monospace;">[${top.displayIndex}]</sup></mark>`;
+          }
+          return escapeHtml(seg.text);
+        })
+        .join('');
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {paragraphs.map((para, pIdx) => {
-        const paraStart = currentOffset;
-        const paraEnd = paraStart + para.length;
-        currentOffset = paraEnd + 1; // +1 for newline
+      return `<div style="font-size: 13px; line-height: 1.85; color: #1A1726; margin-bottom: 12px;"><span style="font-size: 10px; color: #9590A0; font-family: Consolas, monospace; margin-right: 8px; user-select: none;">¶${para.pIndex + 1}</span>${segHtml}</div>`;
+    })
+    .join('');
+}
 
-        const paraComments = commentRanges.filter(r => r.start < paraEnd && r.end > paraStart);
-        const cutPoints = Array.from(new Set([
-          paraStart,
-          paraEnd,
-          ...paraComments.flatMap(r => [
-            Math.max(paraStart, Math.min(paraEnd, r.start)),
-            Math.max(paraStart, Math.min(paraEnd, r.end)),
-          ])
-        ])).sort((a, b) => a - b);
+export function buildVectorPdfDossierHtml(params: {
+  studentName: string;
+  quizTitle: string;
+  taskTitle: string;
+  taskNumber: number;
+  wordCount: number;
+  overallBand: string | number;
+  taskScores: {
+    ta: string | number;
+    cc: string | number;
+    lr: string | number;
+    gra: string | number;
+  };
+  criteriaNotes?: Record<string, string>;
+  taskInstructions?: string;
+  taskPrompt?: string;
+  mediaUrl?: string;
+  bottlenecks?: string[];
+  generalFeedback?: string;
+  annotatedEssayHtml: string;
+  comments: AccurateTaskComment[];
+  correctedEssay?: string;
+  sampleEssay?: string;
+}): string {
+  const critList = [
+    { key: 'TA_TR' as const, label: params.taskNumber === 1 ? 'Task Achievement (TA)' : 'Task Response (TR)', score: params.taskScores.ta },
+    { key: 'CC' as const, label: 'Coherence & Cohesion (CC)', score: params.taskScores.cc },
+    { key: 'LR' as const, label: 'Lexical Resource (LR)', score: params.taskScores.lr },
+    { key: 'GRA' as const, label: 'Grammar Range & Accuracy (GRA)', score: params.taskScores.gra },
+  ];
 
-        return (
-          <div key={pIdx} style={{ fontSize: 13, lineHeight: 1.85, color: '#1A1726' }}>
-            <span style={{ fontSize: 10, color: '#9590A0', fontFamily: 'Consolas, monospace', marginRight: 8, userSelect: 'none' }}>
-              ¶{pIdx + 1}
-            </span>
-            {cutPoints.slice(0, -1).map((start, sIdx) => {
-              const end = cutPoints[sIdx + 1];
-              const sliceText = text.slice(start, end);
-              const matching = paraComments.filter(r => r.start <= start && r.end >= end);
+  const criteriaRows = critList.map(c => {
+    const rawScore = c.score;
+    const rounded = typeof rawScore === 'number' ? Math.round(rawScore) : Number(rawScore) || 6;
+    const desc = params.criteriaNotes?.[c.key] || BAND_DESCRIPTORS[c.key]?.[rounded] || 'Đáp ứng yêu cầu.';
+    return `
+      <tr style="border-bottom: 1px solid #E4DFD3;">
+        <td style="padding: 8px 10px; font-weight: 700; width: 28%;">${escapeHtml(c.label)}</td>
+        <td style="padding: 8px 10px; font-family: Consolas, monospace; font-weight: 800; color: #5B3DF5; width: 14%;">Band ${rawScore ?? '—'}</td>
+        <td style="padding: 8px 10px; color: #4B5563; line-height: 1.5;">${escapeHtml(desc)}</td>
+      </tr>
+    `;
+  }).join('');
 
-              if (matching.length > 0) {
-                const top = matching[0];
-                const cat = top.comment.category || 'error';
-                const color = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
-                const bg = cat === 'error' ? '#FEF2F2' : cat === 'awkward' ? '#FFFBEB' : cat === 'upgrade' ? '#EEF2FF' : '#F0FDF4';
+  const bottlenecksHtml = (params.bottlenecks && params.bottlenecks.length > 0)
+    ? `
+      <div class="pdf-no-break" style="padding: 10px 14px; background: #FFFBEB; border: 1px solid #FCD34D; border-left: 4px solid #B45309; border-radius: 4px; margin-bottom: 12px; page-break-inside: avoid; break-inside: avoid;">
+        <div style="font-size: 11px; font-weight: 900; color: #B45309; text-transform: uppercase; margin-bottom: 4px;">
+          Trọng tâm khắc phục (Priority Action Plan):
+        </div>
+        <ul style="margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.6; color: #1A1726;">
+          ${params.bottlenecks.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
+        </ul>
+      </div>
+    `
+    : '';
 
-                return (
-                  <span
-                    key={start}
-                    style={{
-                      background: bg,
-                      borderBottom: `2px solid ${color}`,
-                      padding: '1px 3px',
-                      borderRadius: 2,
-                    }}
-                  >
-                    {sliceText}
-                    <sup style={{ fontSize: 10, fontWeight: 800, color, marginLeft: 2, fontFamily: 'Consolas, monospace' }}>
-                      [{top.indexNum}]
-                    </sup>
-                  </span>
-                );
-              }
-              return <span key={start}>{sliceText}</span>;
-            })}
+  const generalFeedbackHtml = (params.generalFeedback && params.generalFeedback.trim())
+    ? `
+      <div class="pdf-no-break" style="padding: 10px 14px; background: #EEF2FF; border: 1px solid #C7D2FE; border-left: 4px solid #5B3DF5; border-radius: 4px; margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid;">
+        <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; text-transform: uppercase; margin-bottom: 4px;">
+          Nhận xét chung của giáo viên:
+        </div>
+        <div style="font-size: 12px; line-height: 1.6; color: #1A1726; white-space: pre-wrap;">
+          ${escapeHtml(params.generalFeedback)}
+        </div>
+      </div>
+    `
+    : '';
+
+  const tableRows = params.comments.map(item => {
+    const c = item.comment;
+    const cat = c.category || 'error';
+    const critLabel = c.criterion === 'TA_TR' ? (params.taskNumber === 1 ? 'TA' : 'TR') : (c.criterion || 'GRA');
+    const catLabel = cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa tự nhiên' : cat === 'upgrade' ? 'Nâng Band' : 'Điểm sáng';
+    const catColor = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
+
+    return `
+      <tr class="pdf-no-break" style="border-bottom: 1px solid #E4DFD3; page-break-inside: avoid; break-inside: avoid;">
+        <td style="padding: 7px 8px; font-family: Consolas, monospace; font-weight: 800; color: #5B3DF5; width: 5%;">
+          [${item.displayIndex}]
+        </td>
+        <td style="padding: 7px 8px; color: #C93B3B; text-decoration: ${c.replacement ? 'line-through' : 'none'}; width: 26%;">
+          ${escapeHtml(item.quote || c.anchorQuote || '—')}
+        </td>
+        <td style="padding: 7px 8px; width: 28%;">
+          ${c.replacement ? `<div style="color: #15803D; font-weight: 700;">${escapeHtml(c.replacement)}</div>` : ''}
+          ${c.highBandRewrite ? `<div style="font-size: 11px; color: #4F46E5; margin-top: 3px;"><strong>Band 8+:</strong> ${escapeHtml(c.highBandRewrite)}</div>` : ''}
+          ${!c.replacement && !c.highBandRewrite ? '<span style="color: #9590A0;">—</span>' : ''}
+        </td>
+        <td style="padding: 7px 8px; width: 14%;">
+          <div style="font-family: Consolas, monospace; font-weight: 700; font-size: 11px; color: #1A1726;">${escapeHtml(critLabel)}</div>
+          <span style="font-size: 10px; font-weight: 700; color: ${catColor};">${escapeHtml(catLabel)}</span>
+          ${c.tags && c.tags.length > 0 ? `<div style="font-size: 9.5px; color: #666175; margin-top: 2px;">${escapeHtml(c.tags.join(', '))}</div>` : ''}
+        </td>
+        <td style="padding: 7px 8px; color: #374151; line-height: 1.5;">
+          ${escapeHtml(c.comment || '')}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>IELTS Writing Assessment Dossier - ${escapeHtml(params.studentName)}</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 14mm 15mm 14mm 15mm;
+    }
+    @media print {
+      body {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      .pdf-no-break {
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #1A1726;
+      background: #FFFFFF;
+      margin: 0;
+      padding: 0;
+      line-height: 1.5;
+      font-size: 12px;
+    }
+    h1, h2, h3 {
+      font-family: Georgia, "Times New Roman", serif;
+      color: #1A1726;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+    }
+  </style>
+</head>
+<body>
+  <div style="width: 100%; max-width: 800px; margin: 0 auto; padding: 10px 0;">
+    <!-- Header Banner -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #5B3DF5; padding-bottom: 16px; margin-bottom: 20px;">
+      <div>
+        <div style="font-size: 10px; font-weight: 900; color: #5B3DF5; letter-spacing: 1.2px; text-transform: uppercase; font-family: Consolas, monospace;">
+          IELTS OS — ACADEMIC WRITING ASSESSMENT DOSSIER
+        </div>
+        <h1 style="font-size: 24px; margin: 4px 0 6px; line-height: 1.2;">
+          Writing Assessment Dossier
+        </h1>
+        <div style="font-size: 12px; color: #666175;">
+          Học sinh: <strong style="color: #1A1726;">${escapeHtml(params.studentName)}</strong> · Bài thi: <strong style="color: #1A1726;">${escapeHtml(params.quizTitle)}</strong>
+        </div>
+        <div style="font-size: 11.5px; color: #666175; margin-top: 3px;">
+          Phần thi: <strong style="color: #1A1726;">${escapeHtml(params.taskTitle)}</strong> · Số từ bài viết: <strong style="color: #1A1726; font-family: Consolas, monospace;">${params.wordCount} words</strong> · Ngày chấm: <strong>${new Date().toLocaleDateString('vi-VN')}</strong>
+        </div>
+      </div>
+
+      <!-- Band Score Box -->
+      <div style="text-align: right; min-width: 180px;">
+        <div style="font-size: 9.5px; font-weight: 900; color: #666175; text-transform: uppercase; letter-spacing: 0.5px;">
+          Điểm Overall Task ${params.taskNumber}
+        </div>
+        <div style="font-family: Georgia, serif; font-size: 32px; font-weight: 900; color: #5B3DF5; line-height: 1; margin: 2px 0 6px;">
+          Band ${params.overallBand}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: #F6F3EC; border: 1px solid #E4DFD3; border-radius: 4px; padding: 4px 6px; text-align: center;">
+          <div>
+            <div style="font-size: 9px; font-weight: 800; color: #666175;">${params.taskNumber === 1 ? 'TA' : 'TR'}</div>
+            <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; font-family: Consolas, monospace;">${params.taskScores.ta ?? '—'}</div>
           </div>
-        );
-      })}
+          <div>
+            <div style="font-size: 9px; font-weight: 800; color: #666175;">CC</div>
+            <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; font-family: Consolas, monospace;">${params.taskScores.cc ?? '—'}</div>
+          </div>
+          <div>
+            <div style="font-size: 9px; font-weight: 800; color: #666175;">LR</div>
+            <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; font-family: Consolas, monospace;">${params.taskScores.lr ?? '—'}</div>
+          </div>
+          <div>
+            <div style="font-size: 9px; font-weight: 800; color: #666175;">GRA</div>
+            <div style="font-size: 11px; font-weight: 900; color: #5B3DF5; font-family: Consolas, monospace;">${params.taskScores.gra ?? '—'}</div>
+          </div>
+        </div>
+      </div>
     </div>
-  );
+
+    <!-- SECTION 1: TASK PROMPT & VISUAL -->
+    <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
+      <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
+        1. Đề bài & Hướng dẫn (Task Prompt)
+      </h3>
+      <div style="padding: 12px 16px; background: #F6F3EC; border: 1px solid #E4DFD3; border-radius: 6px; font-size: 12px; line-height: 1.6;">
+        <div style="font-weight: 700; margin-bottom: 4px;">${escapeHtml(params.taskTitle)}</div>
+        ${params.taskInstructions ? `<div style="margin-bottom: 6px; color: #4B5563;">${escapeHtml(params.taskInstructions)}</div>` : ''}
+        ${params.taskPrompt ? `<div style="margin-top: 4px;">${params.taskPrompt}</div>` : ''}
+        ${params.mediaUrl ? `
+          <div style="margin-top: 10px; text-align: center;">
+            <img src="${escapeHtml(params.mediaUrl)}" alt="Visual Graphic" crossOrigin="anonymous" style="max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid #E4DFD3; border-radius: 4px; background: #FFFFFF;" />
+          </div>
+        ` : ''}
+      </div>
+    </div>
+
+    <!-- SECTION 2: 4 CRITERIA MATRIX & PEDAGOGICAL NOTES -->
+    <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
+      <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
+        2. Đánh giá chi tiết 4 tiêu chí chấm điểm
+      </h3>
+      <table style="border: 1px solid #E4DFD3; font-size: 11.5px;">
+        <thead>
+          <tr style="background: #F6F3EC; border-bottom: 1px solid #E4DFD3;">
+            <th style="padding: 7px 10px; width: 28%;">Tiêu chí</th>
+            <th style="padding: 7px 10px; width: 14%;">Điểm Band</th>
+            <th style="padding: 7px 10px;">Nhận xét sư phạm</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${criteriaRows}
+        </tbody>
+      </table>
+    </div>
+
+    ${bottlenecksHtml}
+    ${generalFeedbackHtml}
+
+    <!-- SECTION 3: ANNOTATED STUDENT ESSAY -->
+    <div style="margin-bottom: 22px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+        <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0;">
+          3. Bài làm của học sinh (Student Essay · ${params.wordCount} words)
+        </h3>
+        <span style="font-size: 11px; color: #666175; font-style: italic;">
+          Ghi chú: Số [n] tương ứng với bảng sửa lỗi chi tiết bên dưới.
+        </span>
+      </div>
+      <div style="padding: 16px 20px; background: #FAF8F5; border: 1px solid #E4DFD3; border-radius: 6px;">
+        ${params.annotatedEssayHtml}
+      </div>
+    </div>
+
+    <!-- SECTION 4: DETAILED CORRECTIONS TABLE -->
+    ${params.comments.length > 0 ? `
+      <div style="margin-bottom: 22px;">
+        <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px;">
+          4. Bảng sửa lỗi & Gợi ý nâng cấp chi tiết (${params.comments.length} điểm chú thích)
+        </h3>
+        <table style="border: 1px solid #E4DFD3; font-size: 11.5px;">
+          <thead>
+            <tr style="background: #F6F3EC; border-bottom: 1px solid #E4DFD3;">
+              <th style="padding: 6px 8px; width: 5%;">#</th>
+              <th style="padding: 6px 8px; width: 26%;">Đoạn gốc</th>
+              <th style="padding: 6px 8px; width: 28%;">Gợi ý sửa & Nâng Band</th>
+              <th style="padding: 6px 8px; width: 14%;">Tiêu chí</th>
+              <th style="padding: 6px 8px;">Giải thích & Lời khuyên</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>
+    ` : ''}
+
+    <!-- SECTION 5: CLEAN CORRECTED ESSAY -->
+    ${params.correctedEssay ? `
+      <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+          <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0; color: #15803D;">
+            5. Bài viết đã sửa hoàn chỉnh (Clean Corrected Version)
+          </h3>
+          <span style="font-size: 11px; color: #666175; font-family: Consolas, monospace;">
+            ${countWritingWords(params.correctedEssay)} words
+          </span>
+        </div>
+        <div style="font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; color: #1A1726; padding: 14px 18px; background: #F0FDF4; border: 1px solid #86EFAC; border-left: 4px solid #15803D; border-radius: 6px;">
+          ${escapeHtml(params.correctedEssay)}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- SECTION 6: BAND 8.0+ MODEL ESSAY -->
+    ${params.sampleEssay ? `
+      <div class="pdf-no-break" style="margin-bottom: 20px; page-break-inside: avoid; break-inside: avoid;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+          <h3 style="font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin: 0; color: #5B3DF5;">
+            6. Bài mẫu tham khảo Band 8.0+ (Model Essay)
+          </h3>
+          <span style="font-size: 11px; color: #666175; font-family: Consolas, monospace;">
+            ${countWritingWords(params.sampleEssay)} words
+          </span>
+        </div>
+        <div style="font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; color: #1A1726; padding: 14px 18px; background: #FAF8F5; border: 1px solid #E4DFD3; border-left: 4px solid #5B3DF5; border-radius: 6px;">
+          ${escapeHtml(params.sampleEssay)}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Footer Signature -->
+    <div style="border-top: 1px solid #E4DFD3; padding-top: 12px; margin-top: 24px; display: flex; justify-content: space-between; font-size: 11px; color: #9590A0;">
+      <span>IELTS OS Educational Engine</span>
+      <span>Date: ${new Date().toLocaleDateString('vi-VN')} · Academic Assessment Dossier</span>
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 // ==========================================
 // SELF-CONTAINED SVG ICONS (<Ico>)
 // ==========================================
-const Ico: React.FC<{ name: string; size?: number; color?: string; style?: React.CSSProperties }> = ({
+const Ico: React.FC<{ name: string; size?: number; color?: string; className?: string; style?: React.CSSProperties }> = ({
   name,
   size = 16,
   color = 'currentColor',
+  className,
   style,
 }) => {
-  const s = { width: size, height: size, display: 'inline-block', verticalAlign: 'middle', flexShrink: 0, ...style };
-  switch (name) {
-    case 'arrowLeft':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
-    case 'sparkles':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>;
-    case 'check':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
-    case 'save':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
-    case 'download':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
-    case 'edit':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>;
-    case 'trash':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>;
-    case 'plus':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
-    case 'chevronDown':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
-    case 'chevronUp':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>;
-    case 'eye':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
-    case 'fileText':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>;
-    case 'book':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>;
-    case 'layers':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>;
-    case 'alert':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
-    case 'close':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
-    case 'copy':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
-    case 'radar':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="m12 12 5-5"/></svg>;
-    case 'diff':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><path d="M16 8h4"/><path d="M4 16h4"/><path d="M6 14v4"/></svg>;
-    case 'loader':
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
-    default:
-      return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/></svg>;
-  }
+  const s = { width: size, height: size, display: 'inline-block', verticalAlign: 'middle', flexShrink: 0 };
+  const renderSvg = () => {
+    switch (name) {
+      case 'arrowLeft':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
+      case 'sparkles':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>;
+      case 'check':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+      case 'save':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
+      case 'download':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+      case 'edit':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>;
+      case 'trash':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>;
+      case 'plus':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+      case 'chevronDown':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
+      case 'chevronUp':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>;
+      case 'eye':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+      case 'fileText':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>;
+      case 'book':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>;
+      case 'layers':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>;
+      case 'alert':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
+      case 'close':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+      case 'copy':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
+      case 'radar':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="m12 12 5-5"/></svg>;
+      case 'diff':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><path d="M16 8h4"/><path d="M4 16h4"/><path d="M6 14v4"/></svg>;
+      case 'loader':
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
+      default:
+        return <svg style={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/></svg>;
+    }
+  };
+
+  return (
+    <span className={className} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', verticalAlign: 'middle', flexShrink: 0, ...style }}>
+      {renderSvg()}
+    </span>
+  );
 };
 
 // ==========================================
@@ -575,6 +1143,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     return writingGrading.comments.filter(c => c.taskId === activeTask.id);
   }, [writingGrading.comments, activeTask.id]);
 
+  const accurateActiveComments = useMemo(() => {
+    return resolveAndSortActiveTaskComments(originalEssay, activeTaskComments);
+  }, [originalEssay, activeTaskComments]);
+
   // UI States
   const [promptDrawerOpen, setPromptDrawerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'annotated' | 'diff' | 'clean' | 'model'>('annotated');
@@ -584,6 +1156,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
   const [pulseMarkId, setPulseMarkId] = useState<string | null>(null);
   const [vocabToast, setVocabToast] = useState<string | null>(null);
+
+  // Action status & message for feedback UX
+  const [actionStatus, setActionStatus] = useState<'idle' | 'saving_draft' | 'publishing' | 'saved_ok' | 'published_ok' | 'error'>('idle');
+  const [statusMessage, setStatusMessage] = useState<string>('');
 
   // Hover Popover State (with smart auto-flip & 60ms open intent / 150ms grace period bridge)
   const [hoveredComment, setHoveredComment] = useState<WritingComment | null>(null);
@@ -666,35 +1242,63 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const saveWritingGrade = async (publish: boolean) => {
     const rubricKeys: Array<keyof WritingCriterionScore> = ['taskAchievement', 'coherence', 'lexical', 'grammar'];
     if (publish && writingTasks.some(task => !rubricKeys.every(k => scoreIsValid(writingGrading.taskScores[task.id]?.[k])))) {
-      alert('Vui lòng chấm đủ 4 tiêu chí cho cả Task 1 và Task 2 trước khi Publish cho học sinh.');
+      setActionStatus('error');
+      setStatusMessage('Vui lòng chấm đủ 4 tiêu chí cho cả Task 1 và Task 2 trước khi Publish cho học sinh.');
+      setTimeout(() => setActionStatus('idle'), 4000);
       return;
     }
-    const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
-    const now = Date.now();
-    const nextGrading: WritingGrading = {
-      ...writingGrading,
-      status: publish ? 'published' : 'draft',
-      finalBand,
-      updatedAt: now,
-      ...(publish ? { publishedAt: now, publishedBy: currentUser?.email || '' } : {}),
-    };
-    const nextResult = {
-      ...reviewQuiz.result,
-      band: publish && finalBand !== undefined ? finalBand : reviewQuiz.result.band,
-      writingScores: publish ? Object.fromEntries(writingTasks.map((task, idx) => [`task${idx + 1}`, taskBand(task.id) ?? ''])) : reviewQuiz.result.writingScores,
-      writingGrading: nextGrading,
-    };
-    if (setReviewQuiz) setReviewQuiz((prev: any) => prev ? { ...prev, result: nextResult } : prev);
-    if (setQuizResults && quizResults) {
-      const nextResults = quizResults.some(r => r.id === nextResult.id)
-        ? quizResults.map(r => r.id === nextResult.id ? nextResult : r)
-        : [...quizResults, nextResult];
-      setQuizResults(nextResults);
-      if (syncData) {
-        const saved = await syncData({ quizResults: nextResults });
-        if (!saved) alert('Bản chấm đã lưu cục bộ trên thiết bị và sẽ tự động đồng bộ khi có mạng.');
-        else alert(publish ? '✅ Đã publish bài chấm cho học sinh thành công!' : 'Đã lưu bản nháp.');
+
+    setActionStatus(publish ? 'publishing' : 'saving_draft');
+    setStatusMessage(publish ? 'Đang lưu và publish bài chấm cho học sinh...' : 'Đang lưu bản nháp bài chấm...');
+
+    try {
+      const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
+      const now = Date.now();
+      const nextGrading: WritingGrading = {
+        ...writingGrading,
+        status: publish ? 'published' : 'draft',
+        finalBand,
+        updatedAt: now,
+        ...(publish ? { publishedAt: now, publishedBy: currentUser?.email || '' } : {}),
+      };
+      const nextResult = {
+        ...reviewQuiz.result,
+        band: publish && finalBand !== undefined ? finalBand : reviewQuiz.result.band,
+        writingScores: publish ? Object.fromEntries(writingTasks.map((task, idx) => [`task${idx + 1}`, taskBand(task.id) ?? ''])) : reviewQuiz.result.writingScores,
+        writingGrading: nextGrading,
+      };
+      if (setReviewQuiz) setReviewQuiz((prev: any) => prev ? { ...prev, result: nextResult } : prev);
+      if (setQuizResults && quizResults) {
+        const nextResults = quizResults.some(r => r.id === nextResult.id)
+          ? quizResults.map(r => r.id === nextResult.id ? nextResult : r)
+          : [...quizResults, nextResult];
+        setQuizResults(nextResults);
+        if (syncData) {
+          const saved = await syncData({ quizResults: nextResults });
+          if (!saved) {
+            setActionStatus('saved_ok');
+            setStatusMessage('Bản chấm đã lưu cục bộ trên thiết bị và sẽ tự động đồng bộ khi có mạng.');
+          } else {
+            setActionStatus(publish ? 'published_ok' : 'saved_ok');
+            setStatusMessage(publish ? '🎉 Đã publish bài chấm cho học sinh thành công!' : '✅ Đã lưu bản nháp thành công!');
+          }
+        } else {
+          setActionStatus('saved_ok');
+          setStatusMessage('✅ Đã lưu bản chấm trên thiết bị!');
+        }
+      } else {
+        setActionStatus('saved_ok');
+        setStatusMessage('✅ Đã cập nhật bài chấm!');
       }
+      setTimeout(() => {
+        setActionStatus('idle');
+        setStatusMessage('');
+      }, 3500);
+    } catch (err: any) {
+      console.error('[WritingFeedback] Save error:', err);
+      setActionStatus('error');
+      setStatusMessage('Có lỗi khi lưu bài chấm: ' + (err?.message || 'Vui lòng thử lại.'));
+      setTimeout(() => setActionStatus('idle'), 4000);
     }
   };
 
@@ -1063,31 +1667,70 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     return repMap;
   }, [originalEssay, repRadarActive]);
 
-  // PDF Dossier Export
+  // Vector PDF Dossier Export via hidden iframe
   const exportPdfDossier = async () => {
     if (isExportingPdf) return;
     setIsExportingPdf(true);
     try {
-      // 1. Give React a tick + rAF to mount the full dossier DOM tree into the document
-      await new Promise(r => setTimeout(r, 150));
-      await new Promise(r => requestAnimationFrame(r));
+      const studentName = (reviewQuiz?.result?.studentName || 'Student').trim();
+      const quizTitle = (reviewQuiz?.quiz?.title || 'IELTS Mock Test').trim();
+      const taskTitle = (activeTask?.title || `Task ${taskNumber}`).trim();
+      const wordCount = countWritingWords(originalEssay);
+      const overallBand = taskBand(activeTask.id) ?? calculatedFinalBand ?? writingGrading.finalBand ?? '—';
 
-      const element = document.getElementById('writing-pdf-dossier-root');
-      if (!element) {
-        throw new Error('Không tìm thấy vùng kết xuất tài liệu PDF (writing-pdf-dossier-root).');
+      const taskScores = {
+        ta: writingGrading.taskScores[activeTask.id]?.taskAchievement ?? '—',
+        cc: writingGrading.taskScores[activeTask.id]?.coherence ?? '—',
+        lr: writingGrading.taskScores[activeTask.id]?.lexical ?? '—',
+        gra: writingGrading.taskScores[activeTask.id]?.grammar ?? '—',
+      };
+
+      const annotatedEssayHtml = buildDossierAnnotatedEssayHtml(originalEssay, accurateActiveComments);
+
+      const html = buildVectorPdfDossierHtml({
+        studentName,
+        quizTitle,
+        taskTitle,
+        taskNumber,
+        wordCount,
+        overallBand,
+        taskScores,
+        criteriaNotes: writingGrading.criteriaNotes?.[activeTask.id],
+        taskInstructions: activeTask.instructions,
+        taskPrompt: activeTask.prompt,
+        mediaUrl: activeTask.mediaUrl,
+        bottlenecks: currentBottlenecks,
+        generalFeedback: writingGrading.generalFeedback,
+        annotatedEssayHtml,
+        comments: accurateActiveComments,
+        correctedEssay: writingGrading.correctedAnswers?.[activeTask.id],
+        sampleEssay: writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay,
+      });
+
+      // Create hidden iframe
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = 'none';
+      iframe.style.opacity = '0';
+      iframe.style.pointerEvents = 'none';
+      iframe.style.zIndex = '-9999';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc) {
+        throw new Error('Không thể khởi tạo môi trường in (iframe document).');
       }
 
-      if (element.innerText.trim().length === 0 || element.offsetHeight < 100) {
-        console.warn('Dossier element appears empty or unrendered, waiting additional tick...');
-        await new Promise(r => setTimeout(r, 200));
-      }
+      doc.open();
+      doc.write(html);
+      doc.close();
 
-      if (element.innerText.trim().length === 0 || element.offsetHeight < 100) {
-        throw new Error('Nội dung bản điểm rỗng hoặc chưa hiển thị đầy đủ trên màn hình.');
-      }
-
-      // 2. Wait for any Task 1 chart images to load or fail gracefully
-      const images = Array.from(element.querySelectorAll('img'));
+      // Wait for all images inside iframe to load
+      const images = Array.from(doc.querySelectorAll('img'));
       await Promise.all(
         images.map(img => {
           if (img.complete && img.naturalHeight !== 0) return Promise.resolve(true);
@@ -1097,40 +1740,26 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
               img.style.display = 'none';
               resolve(false);
             };
-            setTimeout(() => resolve(false), 1500); // 1.5s timeout safety
+            setTimeout(() => resolve(false), 2500);
           });
         })
       );
 
-      // 3. Dynamically import html2pdf.js
-      const mod: any = await import('html2pdf.js');
-      const html2pdf = mod.default || mod;
+      // Give 250ms for fonts & layout settling
+      await new Promise(r => setTimeout(r, 250));
 
-      const safeStudent = (reviewQuiz?.result?.studentName || 'Student').trim().replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/g, '_');
-      const safeTitle = (activeTask?.title || `Task_${activeTask?.taskNumber || 1}`).trim().replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/g, '_');
-      const safeFileName = `IELTS_Writing_Dossier_${safeStudent}_${safeTitle}.pdf`;
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
 
-      const opt = {
-        margin: [10, 10, 10, 10],
-        filename: safeFileName,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-          backgroundColor: '#FFFFFF',
-          scrollX: 0,
-          scrollY: 0,
-          windowWidth: 820,
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: ['css', 'legacy'], avoid: ['.pdf-no-break', 'tr', 'blockquote'] },
-      };
-
-      await html2pdf().set(opt).from(element).save();
-    } catch (err) {
-      console.error('PDF export error:', err);
-      alert('Không thể tạo file PDF tự động: ' + (err as Error).message + '. Bạn có thể sử dụng Ctrl+P để in trang.');
+      // Clean up iframe after 60s
+      setTimeout(() => {
+        if (iframe.parentNode) {
+          iframe.parentNode.removeChild(iframe);
+        }
+      }, 60000);
+    } catch (err: any) {
+      console.error('Vector PDF export error:', err);
+      alert('Không thể tạo file PDF tự động: ' + (err?.message || 'Lỗi không xác định'));
     } finally {
       setIsExportingPdf(false);
     }
@@ -1138,12 +1767,13 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
 
   // Filtered comments for Tab 2
   const filteredComments = useMemo(() => {
-    return activeTaskComments.filter(c => {
+    return accurateActiveComments.filter(item => {
+      const c = item.comment;
       if (filterCriterion !== 'ALL' && c.criterion !== filterCriterion) return false;
       if (filterCategory !== 'ALL' && c.category !== filterCategory) return false;
       return true;
     });
-  }, [activeTaskComments, filterCriterion, filterCategory]);
+  }, [accurateActiveComments, filterCriterion, filterCategory]);
 
   // Current task bottlenecks
   const currentBottlenecks = writingGrading.taskBottlenecks?.[activeTask.id] || [];
@@ -1169,6 +1799,24 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         .wf-gutter-num { display: inline-block; width: 28px; color: ${C.subLight}; font-family: var(--mono); font-size: 11px; user-select: none; }
         .wf-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .wf-scrollbar::-webkit-scrollbar-thumb { background: #D5D0C6; border-radius: 4px; }
+
+        @keyframes wfSpin { 100% { transform: rotate(360deg); } }
+        .wf-spin { animation: wfSpin 0.9s linear infinite; }
+        @keyframes wfSyncProgress {
+          0% { transform: translateX(-100%); }
+          50% { transform: translateX(0%); }
+          100% { transform: translateX(100%); }
+        }
+        .wf-sync-progress-line {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 3px;
+          background: linear-gradient(90deg, #5B3DF5, #10B981, #5B3DF5);
+          animation: wfSyncProgress 1.4s ease-in-out infinite;
+          z-index: 1000;
+        }
 
         @keyframes wfFloatInBottom {
           from {
@@ -1209,6 +1857,9 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       {/* 1. TOP HEADER & TASK SWITCHER BAR          */}
       {/* ========================================== */}
       <header style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '14px 24px', position: 'sticky', top: 0, zIndex: 100 }}>
+        {(actionStatus === 'saving_draft' || actionStatus === 'publishing') && (
+          <div className="wf-sync-progress-line" />
+        )}
         <div style={{ maxWidth: 1440, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           {/* Left: Task Switcher + Prompt Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -1285,7 +1936,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
               title="Xuất báo cáo chi tiết chuẩn học thuật"
               style={{ opacity: isExportingPdf ? 0.7 : 1, cursor: isExportingPdf ? 'wait' : 'pointer' }}
             >
-              <Ico name={isExportingPdf ? "loader" : "download"} size={14} />
+              <Ico name={isExportingPdf ? "loader" : "download"} size={14} className={isExportingPdf ? "wf-spin" : undefined} />
               {isExportingPdf ? 'Đang tạo PDF...' : 'Dossier PDF'}
             </button>
 
@@ -1297,18 +1948,47 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   className="wf-btn-hairline"
                   style={{ color: C.accent, borderColor: C.accentLine, background: C.accentWash }}
                   title="Chấm nháp tự động 4 tiêu chí và chỉ lỗi chi tiết bằng AI"
+                  disabled={actionStatus === 'saving_draft' || actionStatus === 'publishing'}
                 >
                   <Ico name="sparkles" size={14} color={C.accent} /> AI Co-Pilot
                 </button>
-                <button onClick={() => saveWritingGrade(false)} className="wf-btn-hairline">
-                  <Ico name="save" size={14} /> Lưu nháp
+                <button
+                  onClick={() => saveWritingGrade(false)}
+                  className="wf-btn-hairline"
+                  disabled={actionStatus === 'saving_draft' || actionStatus === 'publishing'}
+                  style={{
+                    opacity: (actionStatus === 'saving_draft' || actionStatus === 'publishing') ? 0.6 : 1,
+                    cursor: (actionStatus === 'saving_draft' || actionStatus === 'publishing') ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {actionStatus === 'saving_draft' ? (
+                    <>
+                      <Ico name="loader" size={14} className="wf-spin" /> Đang lưu nháp...
+                    </>
+                  ) : (
+                    <>
+                      <Ico name="save" size={14} /> Lưu nháp
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={() => saveWritingGrade(true)}
-                  disabled={calculatedFinalBand === undefined}
+                  disabled={calculatedFinalBand === undefined || actionStatus === 'saving_draft' || actionStatus === 'publishing'}
                   className="wf-btn-accent"
+                  style={{
+                    opacity: (calculatedFinalBand === undefined || actionStatus === 'saving_draft' || actionStatus === 'publishing') ? 0.6 : 1,
+                    cursor: (calculatedFinalBand === undefined || actionStatus === 'saving_draft' || actionStatus === 'publishing') ? 'not-allowed' : 'pointer',
+                  }}
                 >
-                  <Ico name="check" size={14} /> Publish cho học sinh
+                  {actionStatus === 'publishing' ? (
+                    <>
+                      <Ico name="loader" size={14} className="wf-spin" /> Đang publish...
+                    </>
+                  ) : (
+                    <>
+                      <Ico name="check" size={14} /> Publish cho học sinh
+                    </>
+                  )}
                 </button>
               </>
             )}
@@ -1330,6 +2010,40 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         </div>
       </header>
 
+      {/* Top Action Status Banner */}
+      {actionStatus !== 'idle' && (
+        <div style={{
+          background: actionStatus === 'error' ? '#FEF2F2' : (actionStatus === 'saved_ok' || actionStatus === 'published_ok') ? '#F0FDF4' : '#EEF2FF',
+          borderBottom: `1px solid ${actionStatus === 'error' ? '#FCA5A5' : (actionStatus === 'saved_ok' || actionStatus === 'published_ok') ? '#86EFAC' : '#C7D2FE'}`,
+          color: actionStatus === 'error' ? '#991B1B' : (actionStatus === 'saved_ok' || actionStatus === 'published_ok') ? '#166534' : '#3730A3',
+          padding: '8px 24px',
+          fontSize: 12.5,
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          position: 'sticky',
+          top: 57,
+          zIndex: 99,
+          boxShadow: '0 2px 6px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 1440, margin: '0 auto', width: '100%' }}>
+            {(actionStatus === 'saving_draft' || actionStatus === 'publishing') && (
+              <Ico name="loader" size={15} className="wf-spin" />
+            )}
+            <span>{statusMessage}</span>
+            <button
+              type="button"
+              onClick={() => setActionStatus('idle')}
+              style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ========================================== */}
       {/* 2. COLLAPSIBLE PROMPT & VISUAL DRAWER      */}
       {/* ========================================== */}
@@ -1337,8 +2051,17 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         <section style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: '18px 24px' }}>
           <div style={{ maxWidth: 1440, margin: '0 auto', display: 'grid', gridTemplateColumns: activeTask.mediaUrl ? '1fr 340px' : '1fr', gap: 24, alignItems: 'start' }}>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 }}>
-                Task {activeTask.taskNumber} Instructions & Prompt
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                  Task {activeTask.taskNumber} Instructions & Prompt
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPromptDrawerOpen(false)}
+                  style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                >
+                  <Ico name="chevronUp" size={13} /> Thu gọn đề bài
+                </button>
               </div>
               <h2 style={{ fontFamily: 'var(--display)', fontSize: 20, margin: '0 0 10px' }}>{activeTask.title}</h2>
               {activeTask.instructions && <p style={{ fontSize: 13, color: C.sub, lineHeight: 1.6, margin: '0 0 10px' }}>{activeTask.instructions}</p>}
@@ -1374,8 +2097,8 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           {/* ---------------------------------------- */}
           <div className="wf-card-panel" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {/* View Mode Bar */}
-            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.wash, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, overflowX: 'auto' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
+            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${C.border}`, background: C.wash, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, overflowX: 'auto', flexWrap: 'nowrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap', flexWrap: 'nowrap' }}>
                 <span style={{ fontSize: 10.5, fontWeight: 900, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5, marginRight: 2 }}>
                   Chế độ:
                 </span>
@@ -1383,15 +2106,15 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   type="button"
                   onClick={() => setViewMode('annotated')}
                   className={`wf-tab-btn ${viewMode === 'annotated' ? 'active' : ''}`}
-                  style={{ padding: '4px 8px', fontSize: 11.5 }}
+                  style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="fileText" size={12} /> Chú thích
+                  <Ico name="fileText" size={12} /> Bản gốc ({activeTaskComments.length})
                 </button>
                 <button
                   type="button"
                   onClick={() => setViewMode('diff')}
                   className={`wf-tab-btn ${viewMode === 'diff' ? 'active' : ''}`}
-                  style={{ padding: '4px 8px', fontSize: 11.5 }}
+                  style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
                   <Ico name="diff" size={12} /> Sửa trực tiếp (Diff)
                 </button>
@@ -1399,15 +2122,15 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   type="button"
                   onClick={() => setViewMode('clean')}
                   className={`wf-tab-btn ${viewMode === 'clean' ? 'active' : ''}`}
-                  style={{ padding: '4px 8px', fontSize: 11.5 }}
+                  style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
-                  <Ico name="check" size={12} /> Bản hoàn chỉnh
+                  <Ico name="check" size={12} /> Bản sửa hoàn chỉnh
                 </button>
                 <button
                   type="button"
                   onClick={() => setViewMode('model')}
                   className={`wf-tab-btn ${viewMode === 'model' ? 'active' : ''}`}
-                  style={{ padding: '4px 8px', fontSize: 11.5 }}
+                  style={{ padding: '4px 8px', fontSize: 11.5, whiteSpace: 'nowrap' }}
                 >
                   <Ico name="book" size={12} /> Bài mẫu Band 8+
                 </button>
@@ -1447,7 +2170,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   ) : (
                     <AnnotatedEssayRenderer
                       text={originalEssay}
-                      comments={activeTaskComments}
+                      accurateComments={accurateActiveComments}
                       hoveredCommentId={hoveredComment?.id || null}
                       pulseMarkId={pulseMarkId}
                       repRadarActive={repRadarActive}
@@ -1464,7 +2187,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                 <div>
                   <DiffEssayRenderer
                     text={originalEssay}
-                    comments={activeTaskComments}
+                    accurateComments={accurateActiveComments}
                     hoveredCommentId={hoveredComment?.id || null}
                     onHoverEnter={triggerHoverEnter}
                     onHoverLeave={triggerHoverLeave}
@@ -1881,7 +2604,8 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     </div>
                   ) : (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {filteredComments.map((comment, index) => {
+                      {filteredComments.map((item) => {
+                        const comment = item.comment;
                         const catMeta = CATEGORY_META[comment.category || 'error'];
                         return (
                           <div
@@ -1902,8 +2626,8 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 800, color: C.sub }}>
-                                  #{index + 1}
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 800, color: C.accent }}>
+                                  [{item.displayIndex}]
                                 </span>
                                 <span style={{
                                   padding: '2px 6px',
@@ -2709,307 +3433,38 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
       )}
 
       {/* ========================================== */}
-      {/* 8. PRINT-GRADE PDF ASSESSMENT DOSSIER       */}
+      {/* 8. PRINT-GRADE VECTOR PDF DOSSIER MODAL    */}
       {/* ========================================== */}
       {isExportingPdf && (
         <div
-          id="writing-pdf-export-overlay"
           style={{
             position: 'fixed',
             inset: 0,
             zIndex: 99999,
-            background: 'rgba(250, 248, 245, 0.96)',
+            background: 'rgba(250, 248, 245, 0.94)',
+            backdropFilter: 'blur(3px)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            justifyContent: 'flex-start',
-            overflowY: 'auto',
-            padding: '40px 16px',
+            justifyContent: 'center',
+            gap: 14,
           }}
         >
-          {/* Top Status Banner */}
-          <div style={{ marginBottom: 20, textAlign: 'center' }}>
-            <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 18, fontWeight: 700, color: '#1A1726', marginBottom: 4 }}>
-              Đang kết xuất IELTS Writing Assessment Dossier...
+          <div style={{
+            background: '#FFFFFF',
+            border: `1px solid ${C.border}`,
+            borderRadius: 12,
+            padding: '24px 32px',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.12)',
+            textAlign: 'center',
+            maxWidth: 420,
+          }}>
+            <Ico name="loader" size={28} className="wf-spin" color={C.accent} style={{ marginBottom: 12 }} />
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 6 }}>
+              Đang chuẩn bị Vector PDF Dossier...
             </div>
-            <div style={{ fontSize: 12, color: '#666175', fontFamily: "'Segoe UI', Inter, Arial, sans-serif" }}>
-              Hệ thống đang chuẩn bị bản in độ nét cao (Scale 2x). Quá trình này mất khoảng 1-2 giây.
-            </div>
-          </div>
-
-          {/* Actual Dossier Print Tree */}
-          <div
-            id="writing-pdf-dossier-root"
-            style={{
-              width: 750,
-              maxWidth: 750,
-              background: '#FFFFFF',
-              color: '#1A1726',
-              boxShadow: '0 10px 40px rgba(0,0,0,0.08)',
-              borderRadius: 4,
-              padding: '36px 32px',
-              boxSizing: 'border-box',
-              fontFamily: "'Segoe UI', Inter, Arial, sans-serif",
-            }}
-          >
-            {/* Header Banner */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #5B3DF5', paddingBottom: 16, marginBottom: 20 }}>
-              <div>
-                <div style={{ fontSize: 10, fontWeight: 900, color: '#5B3DF5', letterSpacing: 1.2, textTransform: 'uppercase', fontFamily: 'Consolas, monospace' }}>
-                  IELTS OS — ACADEMIC WRITING ASSESSMENT DOSSIER
-                </div>
-                <h1 style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 24, margin: '4px 0 6px', color: '#1A1726', lineHeight: 1.2 }}>
-                  Writing Assessment Dossier
-                </h1>
-                <div style={{ fontSize: 12, color: '#666175' }}>
-                  Học sinh: <strong style={{ color: '#1A1726' }}>{reviewQuiz?.result?.studentName || 'Student'}</strong> · Bài thi: <strong style={{ color: '#1A1726' }}>{reviewQuiz?.quiz?.title || 'IELTS Mock Test'}</strong>
-                </div>
-                <div style={{ fontSize: 11.5, color: '#666175', marginTop: 3 }}>
-                  Phần thi: <strong style={{ color: '#1A1726' }}>{activeTask.title || `Task ${taskNumber}`}</strong> · Số từ bài viết: <strong style={{ color: '#1A1726', fontFamily: 'Consolas, monospace' }}>{countWritingWords(originalEssay)} words</strong> · Ngày chấm: <strong>{new Date().toLocaleDateString('vi-VN')}</strong>
-                </div>
-              </div>
-
-              {/* Band Score Box */}
-              <div style={{ textAlign: 'right', minWidth: 160 }}>
-                <div style={{ fontSize: 9.5, fontWeight: 900, color: '#666175', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Điểm Overall Task {taskNumber}
-                </div>
-                <div style={{ fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 32, fontWeight: 900, color: '#5B3DF5', lineHeight: 1, margin: '2px 0 6px' }}>
-                  Band {taskBand(activeTask.id) ?? calculatedFinalBand ?? writingGrading.finalBand ?? '—'}
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, background: '#F6F3EC', border: '1px solid #E4DFD3', borderRadius: 4, padding: '4px 6px', textAlign: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>{taskNumber === 1 ? 'TA' : 'TR'}</div>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.taskAchievement ?? '—'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>CC</div>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.coherence ?? '—'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>LR</div>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.lexical ?? '—'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 9, fontWeight: 800, color: '#666175' }}>GRA</div>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', fontFamily: 'Consolas, monospace' }}>{writingGrading.taskScores[activeTask.id]?.grammar ?? '—'}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 1: TASK PROMPT & VISUAL */}
-            <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-              <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
-                1. Đề bài & Hướng dẫn (Task Prompt)
-              </h3>
-              <div style={{ padding: '12px 16px', background: '#F6F3EC', border: '1px solid #E4DFD3', borderRadius: 6, fontSize: 12.5, lineHeight: 1.6, color: '#1A1726' }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>{activeTask.title}</div>
-                {activeTask.instructions && <div style={{ marginBottom: 6, color: '#4B5563' }}>{activeTask.instructions}</div>}
-                {activeTask.prompt && (
-                  <div
-                    dangerouslySetInnerHTML={{ __html: activeTask.prompt }}
-                    style={{ marginTop: 4, color: '#1A1726' }}
-                  />
-                )}
-                {activeTask.mediaUrl && (
-                  <div style={{ marginTop: 10, textAlign: 'center' }}>
-                    <img
-                      src={activeTask.mediaUrl}
-                      alt={`Visual Task ${taskNumber}`}
-                      crossOrigin="anonymous"
-                      style={{ maxWidth: '100%', maxHeight: 220, objectFit: 'contain', border: '1px solid #E4DFD3', borderRadius: 4, background: '#FFFFFF' }}
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* SECTION 2: 4 CRITERIA MATRIX & PEDAGOGICAL NOTES */}
-            <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-              <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
-                2. Đánh giá chi tiết 4 tiêu chí chấm điểm
-              </h3>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, border: '1px solid #E4DFD3' }}>
-                <thead>
-                  <tr style={{ background: '#F6F3EC', borderBottom: '1px solid #E4DFD3', textAlign: 'left' }}>
-                    <th style={{ padding: '7px 10px', width: '26%' }}>Tiêu chí</th>
-                    <th style={{ padding: '7px 10px', width: '14%' }}>Điểm Band</th>
-                    <th style={{ padding: '7px 10px' }}>Nhận xét sư phạm</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(['TA_TR', 'CC', 'LR', 'GRA'] as const).map(crit => {
-                    const meta = CRITERION_LABELS[crit];
-                    const s = writingGrading.taskScores[activeTask.id]?.[meta.scoreKey];
-                    const note = writingGrading.criteriaNotes?.[activeTask.id]?.[crit];
-                    return (
-                      <tr key={crit} style={{ borderBottom: '1px solid #E4DFD3' }}>
-                        <td style={{ padding: '7px 10px', fontWeight: 700 }}>
-                          {taskNumber === 1 ? meta.t1Name : meta.t2Name}
-                        </td>
-                        <td style={{ padding: '7px 10px', fontFamily: 'Consolas, monospace', fontWeight: 800, color: '#5B3DF5' }}>
-                          Band {s ?? '—'}
-                        </td>
-                        <td style={{ padding: '7px 10px', color: '#4B5563', lineHeight: 1.5 }}>
-                          {note || BAND_DESCRIPTORS[crit][Math.round(Number(s || 6))] || 'Đáp ứng yêu cầu.'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Priority Action Plan (Bottlenecks) & General Feedback */}
-            {(currentBottlenecks.length > 0 || writingGrading.generalFeedback) && (
-              <div className="pdf-no-break" style={{ marginBottom: 20, display: 'grid', gap: 10, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-                {currentBottlenecks.length > 0 && (
-                  <div style={{ padding: '10px 14px', background: '#FFFBEB', border: '1px solid #FCD34D', borderLeft: '4px solid #B45309', borderRadius: 4 }}>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#B45309', textTransform: 'uppercase', marginBottom: 4 }}>
-                      Trọng tâm khắc phục (Priority Action Plan):
-                    </div>
-                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6, color: '#1A1726' }}>
-                      {currentBottlenecks.map((b, i) => <li key={i}>{b}</li>)}
-                    </ul>
-                  </div>
-                )}
-                {writingGrading.generalFeedback && (
-                  <div style={{ padding: '10px 14px', background: '#EEF2FF', border: '1px solid #C7D2FE', borderLeft: '4px solid #5B3DF5', borderRadius: 4 }}>
-                    <div style={{ fontSize: 11, fontWeight: 900, color: '#5B3DF5', textTransform: 'uppercase', marginBottom: 4 }}>
-                      Nhận xét chung của giáo viên:
-                    </div>
-                    <div style={{ fontSize: 12, lineHeight: 1.6, color: '#1A1726', whiteSpace: 'pre-wrap' }}>
-                      {writingGrading.generalFeedback}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* SECTION 3: ANNOTATED STUDENT ESSAY WITH NUMBERED MARKERS */}
-            <div style={{ marginBottom: 22 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-                <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#1A1726' }}>
-                  3. Bài làm của học sinh (Student Essay · {countWritingWords(originalEssay)} words)
-                </h3>
-                <span style={{ fontSize: 11, color: '#666175', fontStyle: 'italic' }}>
-                  Ghi chú: Số [n] gạch chân tương ứng với mục sửa lỗi trong bảng bên dưới.
-                </span>
-              </div>
-              <div style={{ fontSize: 13, lineHeight: 1.85, padding: '16px 20px', background: '#FAF8F5', border: '1px solid #E4DFD3', borderRadius: 6, color: '#1A1726' }}>
-                {renderDossierAnnotatedEssay(originalEssay, activeTaskComments)}
-              </div>
-            </div>
-
-            {/* SECTION 4: DETAILED CORRECTIONS & COACHING TABLE */}
-            {activeTaskComments.length > 0 && (
-              <div style={{ marginBottom: 22 }}>
-                <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8, color: '#1A1726' }}>
-                  4. Bảng sửa lỗi & Gợi ý nâng cấp chi tiết ({activeTaskComments.length} điểm chú thích)
-                </h3>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, border: '1px solid #E4DFD3' }}>
-                  <thead>
-                    <tr style={{ background: '#F6F3EC', borderBottom: '1px solid #E4DFD3', textAlign: 'left' }}>
-                      <th style={{ padding: '6px 8px', width: '5%' }}>#</th>
-                      <th style={{ padding: '6px 8px', width: '26%' }}>Đoạn gốc</th>
-                      <th style={{ padding: '6px 8px', width: '28%' }}>Gợi ý sửa & Nâng Band</th>
-                      <th style={{ padding: '6px 8px', width: '13%' }}>Tiêu chí</th>
-                      <th style={{ padding: '6px 8px' }}>Giải thích & Lời khuyên</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeTaskComments.map((c, i) => {
-                      const cat = c.category || 'error';
-                      const critLabel = c.criterion === 'TA_TR' ? (taskNumber === 1 ? 'TA' : 'TR') : (c.criterion || 'GRA');
-                      const catLabel = cat === 'error' ? 'Lỗi sai' : cat === 'awkward' ? 'Chưa tự nhiên' : cat === 'upgrade' ? 'Nâng Band' : 'Điểm sáng';
-                      const catColor = cat === 'error' ? '#C93B3B' : cat === 'awkward' ? '#B45309' : cat === 'upgrade' ? '#4F46E5' : '#15803D';
-                      return (
-                        <tr key={c.id} className="pdf-no-break" style={{ borderBottom: '1px solid #E4DFD3', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-                          <td style={{ padding: '7px 8px', fontFamily: 'Consolas, monospace', fontWeight: 800, color: '#5B3DF5' }}>
-                            [{i + 1}]
-                          </td>
-                          <td style={{ padding: '7px 8px', color: '#C93B3B', textDecoration: c.replacement ? 'line-through' : 'none' }}>
-                            {c.anchorQuote || '—'}
-                          </td>
-                          <td style={{ padding: '7px 8px' }}>
-                            {c.replacement && (
-                              <div style={{ color: '#15803D', fontWeight: 700 }}>
-                                {c.replacement}
-                              </div>
-                            )}
-                            {c.highBandRewrite && (
-                              <div style={{ fontSize: 11, color: '#4F46E5', marginTop: 3 }}>
-                                <strong>Band 8+:</strong> {c.highBandRewrite}
-                              </div>
-                            )}
-                            {!c.replacement && !c.highBandRewrite && <span style={{ color: '#9590A0' }}>—</span>}
-                          </td>
-                          <td style={{ padding: '7px 8px' }}>
-                            <div style={{ fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 11, color: '#1A1726' }}>
-                              {critLabel}
-                            </div>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: catColor }}>
-                              {catLabel}
-                            </span>
-                            {c.tags && c.tags.length > 0 && (
-                              <div style={{ fontSize: 9.5, color: '#666175', marginTop: 2 }}>
-                                {c.tags.join(', ')}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: '7px 8px', color: '#374151', lineHeight: 1.5 }}>
-                            {c.comment}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* SECTION 5: CLEAN CORRECTED ESSAY */}
-            {writingGrading.correctedAnswers[activeTask.id] && (
-              <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                  <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#15803D' }}>
-                    5. Bài viết đã sửa hoàn chỉnh (Clean Corrected Version)
-                  </h3>
-                  <span style={{ fontSize: 11, color: '#666175', fontFamily: 'Consolas, monospace' }}>
-                    {countWritingWords(writingGrading.correctedAnswers[activeTask.id])} words
-                  </span>
-                </div>
-                <div style={{ fontSize: 12.5, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: '#1A1726', padding: '14px 18px', background: '#F0FDF4', border: '1px solid #86EFAC', borderLeft: '4px solid #15803D', borderRadius: 6 }}>
-                  {writingGrading.correctedAnswers[activeTask.id]}
-                </div>
-              </div>
-            )}
-
-            {/* SECTION 6: BAND 8.0+ MODEL ESSAY */}
-            {(writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay) && (
-              <div className="pdf-no-break" style={{ marginBottom: 20, pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                  <h3 style={{ fontSize: 13, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, margin: 0, color: '#5B3DF5' }}>
-                    6. Bài mẫu tham khảo Band 8.0+ (Model Essay)
-                  </h3>
-                  <span style={{ fontSize: 11, color: '#666175', fontFamily: 'Consolas, monospace' }}>
-                    {countWritingWords(writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay || '')} words
-                  </span>
-                </div>
-                <div style={{ fontSize: 12.5, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: '#1A1726', padding: '14px 18px', background: '#FAF8F5', border: '1px solid #E4DFD3', borderLeft: '4px solid #5B3DF5', borderRadius: 6 }}>
-                  {writingGrading.sampleAnswers?.[activeTask.id] || writingGrading.sampleEssay}
-                </div>
-              </div>
-            )}
-
-            {/* Footer Signature */}
-            <div style={{ borderTop: '1px solid #E4DFD3', paddingTop: 12, marginTop: 24, display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9590A0' }}>
-              <span>IELTS OS Educational Engine</span>
-              <span>Date: {new Date().toLocaleDateString('vi-VN')} · Academic Assessment Dossier</span>
+            <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>
+              Hệ thống đang chuẩn bị tài liệu vector độ nét cao và gọi hộp thoại in của trình duyệt. Bạn có thể chọn <strong>Save as PDF</strong> (Lưu dưới dạng PDF).
             </div>
           </div>
         </div>
@@ -3017,13 +3472,9 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     </div>
   );
 }
-
-// ==========================================
-// SUB-COMPONENT: ANNOTATED ESSAY RENDERER
-// ==========================================
 interface AnnotatedEssayRendererProps {
   text: string;
-  comments: WritingComment[];
+  accurateComments: AccurateTaskComment[];
   hoveredCommentId: string | null;
   pulseMarkId: string | null;
   repRadarActive: boolean;
@@ -3034,7 +3485,7 @@ interface AnnotatedEssayRendererProps {
 
 const AnnotatedEssayRenderer: React.FC<AnnotatedEssayRendererProps> = ({
   text,
-  comments,
+  accurateComments,
   hoveredCommentId,
   pulseMarkId,
   repRadarActive,
@@ -3042,117 +3493,96 @@ const AnnotatedEssayRenderer: React.FC<AnnotatedEssayRendererProps> = ({
   onHoverEnter,
   onHoverLeave,
 }) => {
-  // Split paragraphs to show paragraph numbers in left gutter
-  const paragraphs = useMemo(() => text.split(/\n+/), [text]);
-
-  // Compute comment ranges relative to full text
-  const commentRanges = useMemo(() => {
-    return comments.flatMap(c => {
-      const q = c.anchorQuote || '';
-      if (!q) return [];
-      let start = (c.startOffset !== undefined && text.slice(c.startOffset, c.endOffset) === q)
-        ? c.startOffset
-        : text.indexOf(q);
-      if (start < 0) return [];
-      return [{ start, end: start + q.length, comment: c }];
-    });
-  }, [text, comments]);
-
-  // Render paragraph by paragraph with cumulative offset
-  let currentOffset = 0;
+  const losslessParas = useMemo(() => {
+    return buildLosslessParagraphSegments(text, accurateComments, 'annotated');
+  }, [text, accurateComments]);
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      {paragraphs.map((para, pIdx) => {
-        const paraStart = currentOffset;
-        const paraEnd = paraStart + para.length;
-        currentOffset = paraEnd + 1; // +1 for the newline
+      {losslessParas.map(para => (
+        <div key={para.pIndex} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <span className="wf-gutter-num">¶{para.pIndex + 1}</span>
+          <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.85 }}>
+            {para.segments.map((seg, sIdx) => {
+              if (seg.isHighlight && seg.annotations.length > 0) {
+                const top = seg.annotations[0];
+                const topComment = top.comment;
+                const catMeta = CATEGORY_META[topComment.category || 'error'];
+                const isHovered = seg.annotations.some(m => m.comment.id === hoveredCommentId);
+                const isPulse = seg.annotations.some(m => m.comment.id === pulseMarkId);
 
-        // Slice points for this paragraph
-        const paraComments = commentRanges.filter(r => r.start < paraEnd && r.end > paraStart);
-        const cutPoints = Array.from(new Set([
-          paraStart,
-          paraEnd,
-          ...paraComments.flatMap(r => [
-            Math.max(paraStart, Math.min(paraEnd, r.start)),
-            Math.max(paraStart, Math.min(paraEnd, r.end)),
-          ])
-        ])).sort((a, b) => a - b);
-
-        return (
-          <div key={pIdx} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-            <span className="wf-gutter-num">¶{pIdx + 1}</span>
-            <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {cutPoints.slice(0, -1).map((start, sIdx) => {
-                const end = cutPoints[sIdx + 1];
-                const sliceText = text.slice(start, end);
-                const matching = paraComments.filter(r => r.start <= start && r.end >= end);
-
-                if (matching.length > 0) {
-                  const topComment = matching[0].comment;
-                  const catMeta = CATEGORY_META[topComment.category || 'error'];
-                  const isHovered = matching.some(m => m.comment.id === hoveredCommentId);
-                  const isPulse = matching.some(m => m.comment.id === pulseMarkId);
-
-                  return (
-                    <mark
-                      key={start}
-                      className={`wf-mark ${isHovered ? 'is-hovered' : ''} ${isPulse ? 'pulse-highlight' : ''}`}
-                      onMouseEnter={(e) => onHoverEnter(topComment, e)}
-                      onMouseLeave={onHoverLeave}
+                return (
+                  <mark
+                    key={sIdx}
+                    className={`wf-mark ${isHovered ? 'is-hovered' : ''} ${isPulse ? 'pulse-highlight' : ''}`}
+                    onMouseEnter={(e) => onHoverEnter(topComment, e)}
+                    onMouseLeave={onHoverLeave}
+                    style={{
+                      display: 'inline',
+                      background: catMeta.bg,
+                      color: 'inherit',
+                      borderBottom: `2px solid ${catMeta.color}`,
+                      borderTop: 'none',
+                      borderLeft: 'none',
+                      borderRight: 'none',
+                    }}
+                  >
+                    {seg.text}
+                    <sup
                       style={{
-                        background: catMeta.bg,
-                        color: 'inherit',
-                        borderBottom: `2px solid ${catMeta.color}`,
-                        borderTop: 'none',
-                        borderLeft: 'none',
-                        borderRight: 'none',
+                        display: 'inline',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        color: catMeta.color,
+                        marginLeft: 2,
+                        fontFamily: 'Consolas, monospace',
+                        userSelect: 'none',
                       }}
                     >
-                      {sliceText}
-                    </mark>
-                  );
-                }
+                      [{top.displayIndex}]
+                    </sup>
+                  </mark>
+                );
+              }
 
-                // If repetition radar is active, highlight repeated content words
-                if (repRadarActive && repeatedWordsMap.size > 0) {
-                  const words = sliceText.split(/(\s+|[.,!?;:"'()]+)/);
-                  return (
-                    <span key={start}>
-                      {words.map((w, wi) => {
-                        const cleanW = w.toLowerCase();
-                        const repCount = repeatedWordsMap.get(cleanW);
-                        if (repCount && repCount >= 3) {
-                          return (
-                            <span
-                              key={wi}
-                              style={{
-                                borderBottom: '1.5px dotted #D97706',
-                                background: 'rgba(217, 119, 6, 0.08)',
-                                borderRadius: 2,
-                                padding: '0 1px',
-                              }}
-                              title={`Từ "${cleanW}" lặp lại ${repCount} lần trong bài`}
-                            >
-                              {w}
-                              <sup style={{ fontSize: 9, color: '#D97706', fontWeight: 800, marginLeft: 1 }}>
-                                {repCount}x
-                              </sup>
-                            </span>
-                          );
-                        }
-                        return <span key={wi}>{w}</span>;
-                      })}
-                    </span>
-                  );
-                }
+              // If repetition radar is active, highlight repeated content words
+              if (repRadarActive && repeatedWordsMap.size > 0) {
+                const words = seg.text.split(/(\s+|[.,!?;:"'()]+)/);
+                return (
+                  <span key={sIdx}>
+                    {words.map((w, wi) => {
+                      const cleanW = w.toLowerCase();
+                      const repCount = repeatedWordsMap.get(cleanW);
+                      if (repCount && repCount >= 3) {
+                        return (
+                          <span
+                            key={wi}
+                            style={{
+                              borderBottom: '1.5px dotted #D97706',
+                              background: 'rgba(217, 119, 6, 0.08)',
+                              borderRadius: 2,
+                              padding: '0 1px',
+                            }}
+                            title={`Từ "${cleanW}" lặp lại ${repCount} lần trong bài`}
+                          >
+                            {w}
+                            <sup style={{ fontSize: 9, color: '#D97706', fontWeight: 800, marginLeft: 1 }}>
+                              {repCount}x
+                            </sup>
+                          </span>
+                        );
+                      }
+                      return <span key={wi}>{w}</span>;
+                    })}
+                  </span>
+                );
+              }
 
-                return <span key={start}>{sliceText}</span>;
-              })}
-            </div>
+              return <span key={sIdx}>{seg.text}</span>;
+            })}
           </div>
-        );
-      })}
+        </div>
+      ))}
     </div>
   );
 };
@@ -3162,7 +3592,7 @@ const AnnotatedEssayRenderer: React.FC<AnnotatedEssayRendererProps> = ({
 // ==========================================
 interface DiffEssayRendererProps {
   text: string;
-  comments: WritingComment[];
+  accurateComments: AccurateTaskComment[];
   hoveredCommentId: string | null;
   onHoverEnter: (comment: WritingComment, e: React.MouseEvent) => void;
   onHoverLeave: () => void;
@@ -3170,26 +3600,20 @@ interface DiffEssayRendererProps {
 
 const DiffEssayRenderer: React.FC<DiffEssayRendererProps> = ({
   text,
-  comments,
+  accurateComments,
   hoveredCommentId,
   onHoverEnter,
   onHoverLeave,
 }) => {
-  // Sort comments with valid quotes by startOffset
-  const validComments = useMemo(() => {
-    return comments
-      .filter(c => c.anchorQuote && c.replacement)
-      .map(c => {
-        let start = (c.startOffset !== undefined && text.slice(c.startOffset, c.endOffset) === c.anchorQuote)
-          ? c.startOffset
-          : text.indexOf(c.anchorQuote!);
-        return { start, end: start + (c.anchorQuote?.length || 0), comment: c };
-      })
-      .filter(c => c.start >= 0)
-      .sort((a, b) => a.start - b.start);
-  }, [text, comments]);
+  const diffParas = useMemo(() => {
+    return buildLosslessParagraphSegments(text, accurateComments, 'diff');
+  }, [text, accurateComments]);
 
-  if (validComments.length === 0) {
+  const hasReplacements = useMemo(() => {
+    return accurateComments.some(c => Boolean(c.comment.replacement));
+  }, [accurateComments]);
+
+  if (!hasReplacements) {
     return (
       <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.85 }}>
         {text}
@@ -3200,56 +3624,57 @@ const DiffEssayRenderer: React.FC<DiffEssayRendererProps> = ({
     );
   }
 
-  // Build sequential diff stream
-  const elements: React.ReactNode[] = [];
-  let lastIndex = 0;
-
-  validComments.forEach((item, idx) => {
-    if (item.start > lastIndex) {
-      elements.push(<span key={`text_${lastIndex}`}>{text.slice(lastIndex, item.start)}</span>);
-    }
-
-    if (item.start >= lastIndex) {
-      const c = item.comment;
-      elements.push(
-        <span
-          key={`diff_${c.id}_${idx}`}
-          onMouseEnter={(e) => onHoverEnter(c, e)}
-          onMouseLeave={onHoverLeave}
-          style={{
-            cursor: 'pointer',
-            padding: '2px 4px',
-            borderRadius: 4,
-            background: c.id === hoveredCommentId ? 'rgba(91, 61, 245, 0.12)' : 'transparent',
-          }}
-        >
-          <del style={{ textDecoration: 'line-through', opacity: 0.6, color: '#DC2626', marginRight: 4 }}>
-            {c.anchorQuote}
-          </del>
-          <ins style={{
-            textDecoration: 'none',
-            fontWeight: 800,
-            color: '#15803D',
-            background: '#DCFCE7',
-            padding: '1px 6px',
-            borderRadius: 4,
-            fontSize: 13.5,
-          }}>
-            {c.replacement}
-          </ins>
-        </span>
-      );
-      lastIndex = item.end;
-    }
-  });
-
-  if (lastIndex < text.length) {
-    elements.push(<span key={`text_end`}>{text.slice(lastIndex)}</span>);
-  }
-
   return (
-    <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.85, fontSize: 15 }}>
-      {elements}
+    <div style={{ display: 'grid', gap: 18 }}>
+      {diffParas.map(para => (
+        <div key={para.pIndex} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <span className="wf-gutter-num">¶{para.pIndex + 1}</span>
+          <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.85, fontSize: 15 }}>
+            {para.segments.map((seg, sIdx) => {
+              if (seg.isHighlight && seg.annotations.length > 0) {
+                const top = seg.annotations[0];
+                const topComment = top.comment;
+                const isHovered = seg.annotations.some(m => m.comment.id === hoveredCommentId);
+                const replacement = topComment.replacement;
+
+                if (replacement) {
+                  return (
+                    <span
+                      key={sIdx}
+                      onMouseEnter={(e) => onHoverEnter(topComment, e)}
+                      onMouseLeave={onHoverLeave}
+                      style={{
+                        display: 'inline',
+                        cursor: 'pointer',
+                        padding: '1px 3px',
+                        borderRadius: 4,
+                        background: isHovered ? 'rgba(91, 61, 245, 0.12)' : 'transparent',
+                        transition: 'background 0.15s ease',
+                      }}
+                    >
+                      <del style={{ textDecoration: 'line-through', opacity: 0.65, color: '#DC2626', marginRight: 4 }}>
+                        {seg.text}
+                      </del>
+                      <ins style={{
+                        textDecoration: 'none',
+                        fontWeight: 700,
+                        color: '#15803D',
+                        background: '#DCFCE7',
+                        padding: '1px 5px',
+                        borderRadius: 4,
+                        fontSize: 14,
+                      }}>
+                        {replacement}
+                      </ins>
+                    </span>
+                  );
+                }
+              }
+              return <span key={sIdx}>{seg.text}</span>;
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 };

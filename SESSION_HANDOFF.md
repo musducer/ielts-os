@@ -14,13 +14,31 @@
     7. Cầu nối chống rung chuột (`Debounced Hover-Intent Bridge`): Trì hoãn mở 60ms để tránh giật khi lướt chuột qua nhiều từ; duy trì mở 150ms khi rời chuột để người dùng kịp di chuột vào card bấm nút "Lưu vào Sổ từ vựng" hoặc xem Band 8+ rewrite; chuyển card tức thì (0ms) nếu đã có một card đang mở.
     8. Lắng nghe sự kiện cuộn/đổi kích thước màn hình (`scroll` capture phase & `resize`) và phím `Escape` để đóng popover mượt mà, không bị trôi lơ lửng ngoài màn hình.
   - *Chuyển động mượt mà (Editorial Spring Motion)*: Thêm CSS keyframes `@keyframes wfFloatInBottom` và `@keyframes wfFloatInTop` với đường cong gia tốc `cubic-bezier(0.16, 1, 0.3, 1)` và đổ bóng biên tập tinh tế (`box-shadow: 0 16px 38px -6px rgba(26, 23, 38, 0.18)`).
-- **Sửa dứt điểm lỗi xuất PDF trang trắng (`Blank White PDF Export Bug`)**:
-  - *Nguyên nhân gốc rễ*: Trước đó vùng in ẩn được đặt ẩn hoặc offscreen (`display: none`), khiến `html2canvas` render canvas 0×0 pixel trống rỗng.
+- **Sửa dứt điểm lỗi cắt chữ ("past" -> "pas", "millions" -> "millio") & mất mệnh đề (`Lossless Segmentation Engine`)**:
+  - *Nguyên nhân gốc rễ*: Trước đây, `parseParagraphsWithOffsets` và các hàm chia đoạn tính offset bằng `currentOffset = paraEnd + 1`. Trong các bài viết có hai dấu ngắt dòng `\n\n` giữa các đoạn, offset bị trôi 1-2 ký tự sau mỗi đoạn khiến các ký tự cuối của quote bị cắt cụt (VD: `"past"` thành `"pas"`, `"millions"` thành `"millio"`). Đồng thời, việc gom các điểm cắt thành `Set<number>` và duyệt từng lát cắt làm rơi rụng các đoạn văn bản xen kẽ giữa các chú thích chồng lấn.
   - *Giải pháp*:
-    1. Quản lý trạng thái xuất PDF qua `isExportingPdf`: khi xuất, React mount một overlay toàn màn hình nhìn thấy được (`position: fixed; inset: 0; z-index: 99999; background: #FAF8F5`) hiển thị thanh chuẩn bị hồ sơ 1 giây.
-    2. Xác thực điều kiện tiên quyết trước khi in: Kiểm tra phần tử `#writing-pdf-dossier-root` có `offsetHeight > 100px` và nội dung văn bản đầy đủ; preload và đợi toàn bộ ảnh biểu đồ Task 1 tải xong với cờ CORS và fallback ẩn ảnh nếu lỗi.
-    3. Thiết lập thông số `html2canvas`: Ép `scrollX: 0, scrollY: 0`, `windowWidth: 820`, `scale: 2`, `backgroundColor: '#FFFFFF'`.
-    4. Trình bày đầy đủ 6 cấu phần học thuật: Header & Hộp điểm tổng quan, Đề bài & Biểu đồ, Bảng điểm 4 tiêu chí & Kế hoạch hành động, Bản bài làm học sinh đánh số chú thích `[1]`, `[2]`, Bảng đối chiếu sửa lỗi chi tiết (với `.pdf-no-break`), và Bản bài viết đã sửa hoàn chỉnh cùng Bài mẫu Band 8.0+.
+    1. Chuẩn hóa `parseParagraphsWithOffsets` dùng regex `([^\r\n]+)` để đo đạc chính xác tuyệt đối tọa độ `startOffset` và `endOffset` của từng đoạn theo đúng chuỗi gốc.
+    2. Hàm `resolveAccurateCommentSpan`: Khôi phục chính xác vị trí quote thực tế trong văn bản (`end - start === quote.length`) với cơ chế dò chuỗi không phân biệt hoa thường và regex chịu dung sai khoảng trắng, loại bỏ hoàn toàn hiện tượng lệch độ dài.
+    3. Bộ phân đoạn bảo toàn 100% (`buildLosslessParagraphSegments`): Chia đoạn thành các phân đoạn `PlainSegment` và `HighlightSegment` liền mạch, có kiểm tra nghiệm thu bất biến (invariant assertion) `reconstructed === rawText`. Nếu phát hiện bất kỳ ký tự nào bị mất, hệ thống tự động fallback về văn bản gốc nguyên vẹn.
+    4. Toàn bộ các thẻ `<mark>` highlight và chỉ số chú thích `[1]`, `[2]` được ép kiểu `display: inline` (thay vì `inline-block`), cho phép trình duyệt ngắt dòng tự nhiên theo từ ngữ mà không bao giờ bị cắt xén biên ký tự.
+- **Thay thế PDF ảnh mờ bằng Động cơ In Vector PDF (`Vector Print-to-PDF Engine`)**:
+  - *Nguyên nhân gốc rễ*: `html2canvas` / `html2pdf.js` chụp màn hình thành ảnh bitmap/canvas rồi nén vào PDF, dẫn đến dung lượng nặng, chữ bị mờ nhòe khi phóng to, không bôi chọn sao chép văn bản được, và thường xuyên bị cắt ngang dòng chữ khi ngắt trang A4.
+  - *Giải pháp*:
+    1. Thay thế hoàn toàn bằng động cơ in vector qua hidden `iframe` (`exportPdfDossier` & `buildVectorPdfDossierHtml`).
+    2. Tự động sinh tài liệu HTML vector độc lập với định dạng chuẩn `@page { size: A4 portrait; margin: 14mm 15mm; }`, hỗ trợ đầy đủ font Fraunces, Space Grotesk, Space Mono, và Inter.
+    3. Hỗ trợ hiển thị ảnh biểu đồ Task 1 sắc nét (tự động preload và kiểm tra hoàn tất trước khi in).
+    4. Trình bày 4 cột điểm tiêu chí nằm ngang cân đối kèm dải mô tả chuẩn IELTS.
+    5. Bản bài viết học sinh hiển thị highlight inline kèm số thứ tự đồng bộ `[1]`, `[2]`, liên kết chuẩn xác với Bảng đối chiếu sửa lỗi chi tiết có gắn class `.pdf-no-break` để ngăn ngắt trang giữa hàng.
+    6. Tự động gọi `iframe.contentWindow.print()` sau khi phông chữ và ảnh đã sẵn sàng, xuất ra file PDF vector chữ nét tuyệt đối ở mọi độ phân giải.
+- **Xóa bỏ hoàn toàn "Silent Wait" khi Publish và Lưu nháp (Save Draft)**:
+  - Bổ sung trạng thái `actionStatus: 'idle' | 'saving_draft' | 'publishing' | 'saved_ok' | 'published_ok' | 'error'` và `statusMessage`.
+  - Hiển thị dải tiến trình hairline động `.wf-sync-progress-line` trên cùng màn hình khi đang lưu hoặc xuất bản.
+  - Các nút thao tác chuyển sang trạng thái disabled và hiển thị icon xoay mượt mà (`<Ico name="loader" className="wf-spin" />`).
+  - Thay thế hộp thoại chặn `alert()` của trình duyệt bằng thanh thông báo trạng thái nổi tinh gọn, tự động ẩn sau 4 giây.
+- **Tối ưu thanh công cụ chế độ xem (View Toolbar) & Tiêu chí**:
+  - Ép `flexWrap: 'nowrap'` cho thanh công cụ chế độ xem (`Bản gốc`, `Sửa trực tiếp (Diff)`, `Bản sửa hoàn chỉnh`, `Bài mẫu Band 8+`), không bị rớt dòng trên màn hình laptop tiêu chuẩn.
+  - Hiển thị nhãn tiêu chí chuẩn `TA / TR` thay cho mã enum kỹ thuật `TA_TR`.
+  - Tích hợp nút "Thu gọn đề bài" tinh gọn trên ngăn kéo đề bài & biểu đồ (`Prompt & Visual Drawer`).
 - **Tích hợp tính năng AI Nhận xét & Sửa đoạn chọn trực tiếp (`Inline AI Selection Critique`)**:
   - Bổ sung mode `selection_critique` trong backend `/api/ai_feedback` (`api/index.py`), hỗ trợ giáo viên highlight bất kỳ cụm từ/câu nào để AI tự động phân loại tiêu chí, gợi ý sửa ngắn gọn, viết gợi ý nâng Band 8+, và soạn lời giải thích sư phạm bằng tiếng Việt.
   - Hỗ trợ 2 chế độ: "AI Sửa" (điền vào form để giáo viên duyệt lại) và "AI Lưu ngay" (tự phân tích và thêm ngay vào bài chấm).

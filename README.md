@@ -15,7 +15,8 @@ Trong không gian chấm và review Writing (Manuscript Editorial Desk):
 - Hệ thống thẻ trôi thông minh (`FloatingCardPortal`): Toàn bộ thẻ chú thích (Hover Card) và bảng soạn thảo (Selection Pill & Composer) được gắn vào `document.body` với định vị thích ứng tự động lật (`Smart Vertical Auto-Flip`), mũi tên định hướng và kẹp biên an toàn, triệt tiêu hoàn toàn hiện tượng rung giật giao diện (jitter loop).
 - Cầu nối chống rung chuột (`Debounced Hover-Intent Bridge` 60ms/150ms) kết hợp thuật toán bắt đúng dòng văn bản bị ngắt (`getTargetClientLineRect`), cho phép học sinh rê chuột xem giải thích lỗi, xem gợi ý Band 8+ và lưu từ vựng 1-click vào Sổ từ vựng (`vocabNotebook`).
 - Trợ lý AI Selection Critique: Giáo viên bôi chọn bất kỳ đoạn văn bản nào để AI tự động phân tích lỗi, đề xuất phương án sửa tối thiểu, gợi ý viết lại Band 8+ và soạn lời khuyên sư phạm.
-- Xuất tài liệu học thuật PDF (Academic Assessment Dossier): Đầy đủ 6 phần (Bảng điểm tổng quan, đề thi, ma trận tiêu chí, bài viết học sinh đánh số chú thích, bảng đối chiếu sửa lỗi chi tiết, bản sửa hoàn chỉnh và bài mẫu Band 8+).
+- Xuất tài liệu học thuật PDF vector (Academic Assessment Dossier): Động cơ in vector chuẩn in ấn (Print-to-PDF) qua hidden iframe, tài liệu sắc nét ở mọi độ phân giải, hỗ trợ biểu đồ Task 1, 4 cột tiêu chí nằm ngang, đánh số chú thích `[1]`, `[2]` đồng bộ với bảng đối chiếu sửa lỗi chi tiết (.pdf-no-break), bản sửa hoàn chỉnh và bài mẫu Band 8+.
+- Công nghệ phân đoạn văn bản bảo toàn 100% (Lossless Segmentation Engine): Khắc phục triệt để hiện tượng cắt cụt chữ hoặc rớt mệnh đề khi highlight/diff trên cả giao diện Web và PDF.
 
 Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
 
