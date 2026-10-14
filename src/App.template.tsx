@@ -302,6 +302,37 @@ const parseVNTime = (dateStr: string) => {
     return new Date(vnDateStr).getTime();
 };
 
+// CHUẨN HÓA MỐC THỜI GIAN KẾT QUẢ THI: Sắp xếp theo đúng thứ tự thời gian thực (Chronological sorting)
+export const parseQuizResultDateMs = (rawDate: any, fallbackTimestamp?: any): number => {
+    if (typeof fallbackTimestamp === 'number' && Number.isFinite(fallbackTimestamp) && fallbackTimestamp > 0) {
+        return fallbackTimestamp;
+    }
+    if (typeof rawDate === 'number' && Number.isFinite(rawDate) && rawDate > 0) {
+        return rawDate;
+    }
+    const str = String(rawDate || '').trim();
+    if (str) {
+        // Định dạng phổ biến: "21:37:19 3/7/2026", "3/7/2026", "03/07/2026 21:37:19", "3/7/2026, 21:37:19"
+        const dateMatch = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (dateMatch) {
+            const day = parseInt(dateMatch[1], 10);
+            const month = parseInt(dateMatch[2], 10) - 1;
+            const year = parseInt(dateMatch[3], 10);
+            const timeMatch = str.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+            const hours = timeMatch ? parseInt(timeMatch[1], 10) : 0;
+            const minutes = timeMatch ? parseInt(timeMatch[2], 10) : 0;
+            const seconds = timeMatch && timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+            const dt = new Date(year, month, day, hours, minutes, seconds);
+            const t = dt.getTime();
+            if (!isNaN(t)) return t;
+        }
+        const parsed = Date.parse(str);
+        if (!isNaN(parsed)) return parsed;
+    }
+    const fbNum = Number(fallbackTimestamp);
+    return Number.isFinite(fbNum) && fbNum > 0 ? fbNum : 0;
+};
+
 export const normalizeFolderPath = (rawPath: any): string => {
     if (!rawPath || typeof rawPath !== "string") return "Root";
     const cleaned = rawPath
@@ -4336,6 +4367,9 @@ export default function IeltsSupremeOS() {
   const [expandedResultId, setExpandedResultId] = useState<string|number|null>(null);
   const [expandedSessionId, setExpandedSessionId] = useState<string|number|null>(null);
   const [useCodeObj, setUseCodeObj] = useState<{name: string, code: string}|null>(null);
+  const [dismissedPmId, setDismissedPmId] = useState<string | null>(null);
+  const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|"Listening"|"Reading"|"Writing">("All");
+  const [dailyExpSavedFeedback, setDailyExpSavedFeedback] = useState(false);
 
   const [unlockKey, setUnlockKey] = useState("");
   const [showDebtWarning, setShowDebtWarning] = useState(false);
@@ -6851,7 +6885,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // Tiện ích cho biểu đồ band: rút gọn ngày + tạo chuỗi điểm theo thời gian (sắp theo id = mốc thời gian)
   const shortDate = (s: string) => { const m = String(s || "").match(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/); return m ? m[0] : ""; };
   const bandSeries = (results: QuizResult[]) => [...(results || [])]
-    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0))
+    .sort((a, b) => parseQuizResultDateMs(a.date, a.submittedAt || a.id) - parseQuizResultDateMs(b.date, b.submittedAt || b.id))
     .map(r => ({
       label: shortDate(r.date),
       band: Number(r.band),

@@ -1,5 +1,28 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-14)
 
+## Đại tu Giao diện Học viên (Student Portal), Sửa lỗi Unlimited Attempts, Format Coins & Xếp biểu đồ tiến độ chuẩn thời gian — 2026-10-14
+
+- **Đại tu toàn diện Student Portal theo hệ thống thiết kế Manuscript Editorial**:
+  - Mở rộng container chính `<main>` lên `maxWidth: 1120px` (tránh lãng phí 50% không gian màn hình desktop).
+  - Tích hợp 6 tab điều hướng desktop (`Overview`, `Test Room`, `Quests`, `Vocabulary`, `Progress`, `Rewards`) vào ngay thanh navbar dính (`sticky <nav>`) với mẫu Segmented Pill Bar gọn gàng, thanh lịch; giữ nguyên thanh tabbar dính đáy trên mobile.
+  - Lời nhắc giáo viên (`me.privateMessage`): Thay thế khung đỏ báo động bằng Manuscript Callout có viền trái màu accent (`borderLeft: 3px solid C.accent`), có nút tắt (dismiss) ghi nhớ trạng thái theo từng tin nhắn trong `localStorage`.
+  - Student Masthead: Định dạng số dư OS Coins thông minh qua `formatCoins` (phân tách hàng nghìn, rút gọn `1.2M`, `30.0B` kèm tooltip số dư đầy đủ); hiển thị huy hiệu cấp độ mono `Lv.X` kèm tỷ lệ phần trăm EXP tiến độ.
+  - Tab Tổng quan (`home`): Cấu trúc lại thành Sổ cái Manuscript 4 cột (`Điểm trung bình`, `Bài thi đã hoàn thành`, `Tổng thời lượng học`, `Cấp độ & EXP`) và layout "Bàn học hôm nay" 2 cột (Cột trái: Lịch học kế tiếp / Luyện thi nhanh + Mục tiêu Band; Cột phải: Bàn ôn tập từ vựng Spaced Repetition + Kết quả bài thi gần nhất).
+  - Tab Phòng thi (`exams`):
+    - Gỡ bỏ viền cam báo động `2px solid C.warn`, mở rộng ô tìm kiếm đề thi.
+    - Căn chỉnh thanh lọc kỹ năng `Listening`, `Reading`, `Writing` rộng rãi với pill đếm mono (`Listening 2`, `Reading 44`, không còn bị dính chữ).
+    - **Sửa dứt điểm lỗi `Attempts: 1/9007199254740991` và khóa đề luyện tập**: Nhận diện đề thi thử / luyện tập (`isPracticeQuiz` hoặc `practiceMode` hoặc `maxAttempts >= 99`), hiển thị rõ ràng `Số lần đã làm: X (Không giới hạn)` / `Attempts: X (Unlimited)`, và tuyệt đối không bao giờ khóa truy cập phòng thi của đề luyện tập.
+  - Tab Chuyên đề (`quests`): Chuyển trạng thái `closed` sang tông xám đá `#64748B` thay vì màu đỏ báo động; căn chỉnh milestone reward tags bọc linh hoạt (`flex-wrap`).
+  - Tab Từ vựng (`vocab`):
+    - Thay thế idiom tĩnh "do/work wonders" bằng bộ 16 Thành ngữ & Cụm từ học thuật IELTS Band 7.5+ (`DAILY_EXPRESSIONS`) luân phiên theo ngày, hỗ trợ phát âm chuẩn và nút `+ Lưu vào sổ tay` trực tiếp vào `vocabNotebook` với cơ chế đồng bộ chống mất dữ liệu.
+    - Chuyển đổi các ký tự text symbol `●/○` trong Leitner boxes thành các thẻ CSS dot sắc nét.
+  - Tab Tiến độ (`progress`):
+    - Bổ sung bộ lọc kỹ năng (`All`, `Listening`, `Reading`, `Writing`) cho biểu đồ tiến độ `BandTrendChart`.
+    - Triệt tiêu lỗi nhảy ngày lộn xộn trong biểu đồ (`1/8/2026 -> 21/6/2026 -> 3/7/2026`) bằng helper `parseQuizResultDateMs` phân tích cú pháp thời gian thực (hỗ trợ `hh:mm:ss dd/mm/yyyy`, `dd/mm/yyyy`, ISO timestamps) và sắp xếp biểu đồ tăng dần theo thời gian thực (Chronological order).
+    - Danh sách kết quả thi được sắp xếp chuẩn xác từ mới nhất đến cũ nhất.
+  - Tab Phần thưởng (`rewards`): Thay thế nút xoay neon nổi chói mắt bằng Manuscript Gacha Mystery Box banner sang trọng.
+  - Tuân thủ nghiêm ngặt tiêu chuẩn **Zero Text Emojis**: Toàn bộ icon được chuẩn hóa sang inline SVG thông qua component `<Ico />`, loại bỏ toàn bộ ký tự text emoji `✓`, `★`, `♥`, `●`, `○`.
+
 ## Khôi phục Ảnh Biểu đồ Task 1 trên Web & Proxy Base64 Backend cho PDF Dossier — 2026-10-14
 
 - **Khôi phục hoàn toàn hiển thị ảnh biểu đồ Task 1 trên giao diện Web**:

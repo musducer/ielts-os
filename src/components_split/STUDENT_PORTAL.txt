@@ -303,13 +303,62 @@
     const currentExp = me.exp || 0;
     const expForNextLevel = ((Math.floor(currentExp / 500) + 1) * 500);
     const progressPct = (currentExp % 500) / 500 * 100;
-    const recentScores = [...myQuizResults].sort((a,b) => (b.date || "").localeCompare(a.date || "")).slice(0, 5).reverse();
+    const sortedQuizResultsAsc = [...myQuizResults].sort((a, b) => parseQuizResultDateMs(a.date, a.submittedAt || a.id) - parseQuizResultDateMs(b.date, b.submittedAt || b.id));
+    const sortedQuizResultsDesc = [...sortedQuizResultsAsc].reverse();
+    const recentScores = sortedQuizResultsDesc.slice(0, 5).reverse();
     const validBandScores = recentScores.filter(r => !isNaN(Number(r.band)));
     const avgBand = validBandScores.length > 0 ? (validBandScores.reduce((acc, curr) => acc + Number(curr.band), 0) / validBandScores.length).toFixed(1) : "N/A";
     const trendIcon = recentScores.length >= 2 ? (Number(recentScores[recentScores.length - 1].band) >= Number(recentScores[recentScores.length - 2].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="trendingDown" size={14} color={C.err} />) : null;
     const targetGap = me.target && avgBand !== "N/A" ? (Number(me.target) - Number(avgBand)) : 0;
     const motivationMsg = isNaN(targetGap) ? "" : (targetGap > 0 ? t('motivation_need', { gap: targetGap.toFixed(1) }) : t('motivation_reached'));
     const gachaSpinCost = configuredRewardCoins("GACHA_SPIN_COST", 500);
+
+    const formatCoins = (coins: number) => {
+      const n = Math.max(0, Number(coins) || 0);
+      if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      return n.toLocaleString('en-US');
+    };
+
+    const DAILY_EXPRESSIONS = [
+      { word: "bear testimony to", phonetic: "/beə ˈtestɪməni tuː/", pos: "idiom", meaning: "chứng minh rõ ràng / là minh chứng hùng hồn cho...", example: "The sharp rise in test scores bears testimony to her persistent dedication." },
+      { word: "pave the way for", phonetic: "/peɪv ðə weɪ fɔː/", pos: "idiom", meaning: "mở đường cho / tạo tiền đề thuận lợi cho...", example: "Groundbreaking clean-energy research paved the way for widespread electric vehicle adoption." },
+      { word: "exercise caution", phonetic: "/ˈeksəsaɪz ˈkɔːʃən/", pos: "collocation", meaning: "thận trọng / đề phòng cẩn mật", example: "Governments should exercise extreme caution when introducing sweeping tariff reforms." },
+      { word: "strike a delicate balance", phonetic: "/straɪk ə ˈdelɪkət ˈbæləns/", pos: "collocation", meaning: "đạt được sự cân bằng khéo léo/tinh tế", example: "Urban planners must strike a delicate balance between rapid economic growth and green conservation." },
+      { word: "fall short of expectations", phonetic: "/fɔːl ʃɔːt əv ˌekspekˈteɪʃənz/", pos: "collocation", meaning: "không đạt được kỳ vọng / chưa đáp ứng mong đợi", example: "Despite lavish promotional campaigns, initial retail revenues fell short of expectations." },
+      { word: "give rise to", phonetic: "/ɡɪv raɪz tuː/", pos: "collocation", meaning: "gây ra / làm nảy sinh...", example: "Unchecked rapid urbanization often gives rise to acute infrastructural bottlenecks." },
+      { word: "hold paramount importance", phonetic: "/həʊld ˈpærəmaʊnt ɪmˈpɔːtəns/", pos: "collocation", meaning: "đóng vai trò tối quan trọng", example: "Early childhood literacy holds paramount importance in long-term academic attainment." },
+      { word: "exert a profound influence on", phonetic: "/ɪɡˈzɜːt ə prəˈfaʊnd ˈɪnfluəns ɒn/", pos: "collocation", meaning: "tác động sâu sắc lên...", example: "Early parental guidance exerts a profound influence on a student's cognitive resilience." },
+      { word: "wreak havoc on", phonetic: "/riːk ˈhævək ɒn/", pos: "collocation", meaning: "tàn phá nặng nề / gây hỗn loạn cho...", example: "Prolonged seasonal droughts continue to wreak havoc on vulnerable agricultural communities." },
+      { word: "shed light on", phonetic: "/ʃed laɪt ɒn/", pos: "idiom", meaning: "làm sáng tỏ / soi rọi...", example: "Contemporary linguistic analyses shed light on how multilingual speakers structure cognitive ideas." },
+      { word: "a double-edged sword", phonetic: "/ə ˈdʌbəl edʒd sɔːd/", pos: "idiom", meaning: "con dao hai lưỡi (vừa có lợi vừa có hại)", example: "Automation in manufacturing serves as a double-edged sword: slashing costs while displacing labor." },
+      { word: "reap substantial benefits", phonetic: "/riːp səbˈstænʃəl ˈbenɪfɪts/", pos: "collocation", meaning: "thu được lợi ích to lớn", example: "Enterprises investing early in automation reap substantial long-term benefits." },
+      { word: "a catalyst for change", phonetic: "/ə ˈkætəlɪst fɔː tʃeɪndʒ/", pos: "collocation", meaning: "chất xúc tác cho sự thay đổi", example: "Accessible tertiary education acts as an indispensable catalyst for socioeconomic mobility." },
+      { word: "cast doubt on", phonetic: "/kɑːst daʊt ɒn/", pos: "collocation", meaning: "gieo rắc hoài nghi / đặt dấu hỏi về...", example: "Empirical evidence casts serious doubt on the efficacy of rote memorization." },
+      { word: "stem from", phonetic: "/stem frɒm/", pos: "collocation", meaning: "bắt nguồn từ / xuất phát từ...", example: "The surge in youth anxiety largely stems from ceaseless comparison on social platforms." },
+      { word: "tip the scales in favor of", phonetic: "/tɪp ðə skeɪlz ɪn ˈfeɪvər əv/", pos: "idiom", meaning: "nghiêng cán cân có lợi cho...", example: "Having formal IELTS certification tipped the scales in favor of her scholarship application." }
+    ];
+    const dayNumber = Math.floor(getTrueTime() / (1000 * 60 * 60 * 24));
+    const dailyExp = DAILY_EXPRESSIONS[Math.abs(dayNumber) % DAILY_EXPRESSIONS.length];
+    const isDailyExpSaved = vocabCards.some(c => (c.word || '').trim().toLowerCase() === dailyExp.word.toLowerCase());
+    const handleSaveDailyExp = async () => {
+      if (isDailyExpSaved || dailyExpSavedFeedback) return;
+      const newCard: VocabCard = {
+        id: 'exp_' + Date.now(),
+        word: dailyExp.word,
+        phonetic: dailyExp.phonetic,
+        pos: dailyExp.pos,
+        meaning: dailyExp.meaning,
+        example: dailyExp.example,
+        category: (dailyExp.pos === 'idiom' ? 'idiom' : 'collocation') as any,
+        box: 1,
+        due: getTrueTime(),
+        createdAt: getTrueTime()
+      };
+      const nx = [newCard, ...vocabCards];
+      await saveMyVocabNotebook(nx, me.vocabTombstones || []);
+      setDailyExpSavedFeedback(true);
+    };
 
     const handleReviewQuiz = (r: QuizResult) => {
         if (r.topicAssignmentId && r.questPassed !== true) {
@@ -529,7 +578,7 @@
                 onClick={(e) => {
                     const box = e.currentTarget as HTMLElement; const svg = box.querySelector('svg');
                     if (svg) { svg.classList.remove('petPop'); void (svg as any).getBBox; svg.classList.add('petPop'); setTimeout(() => svg.classList.remove('petPop'), 660); }
-                    for (let i = 0; i < 6; i++) { const s = document.createElement('span'); s.className = 'petHeart'; s.textContent = i % 2 ? '★' : '♥'; s.style.left = (6 + Math.random() * 46) + 'px'; s.style.color = i % 2 ? '#FBBF24' : '#FB7185'; s.style.animationDelay = (i * 0.05) + 's'; box.appendChild(s); setTimeout(() => s.remove(), 1050); }
+                    for (let i = 0; i < 6; i++) { const s = document.createElement('span'); s.className = 'petHeart'; s.style.width = '8px'; s.style.height = '8px'; s.style.borderRadius = '50%'; s.style.background = i % 2 ? '#FBBF24' : '#FB7185'; s.style.boxShadow = `0 0 6px ${i % 2 ? '#FBBF24' : '#FB7185'}`; s.style.left = (6 + Math.random() * 46) + 'px'; s.style.animationDelay = (i * 0.05) + 's'; box.appendChild(s); setTimeout(() => s.remove(), 1050); }
                 }}
                 style={{ position: 'fixed', right: isMobile ? 12 : 20, bottom: isMobile ? 104 : 20, zIndex: 500, cursor: 'pointer', animation: 'petBob 3.2s ease-in-out infinite', filter: 'drop-shadow(0 9px 11px rgba(0,0,0,0.22))', ['--pex' as any]: '0px', ['--pey' as any]: '0px' }}>
                 {renderPetArt(me.inventory?.equippedPet || '', 64, 'live')}
@@ -561,7 +610,7 @@
         {showCelebration && (
             <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999, pointerEvents: 'none', display: 'flex', justifyContent: 'space-around'}}>
                 {Array.from({length: 30}).map((_, i) => (
-                    <div key={i} style={{fontSize: 40, animation: `fall 3s linear infinite`, animationDelay: `${Math.random() * 2}s`}}>{['★','✦','✳','◆','✶'][i%5]}</div>
+                    <div key={i} style={{width: 10 + (i % 8), height: 10 + (i % 8), borderRadius: i % 2 === 0 ? '50%' : '2px', background: ['#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899'][i % 5], animation: 'fall 3s linear infinite', animationDelay: `${Math.random() * 2}s`}} />
                 ))}
             </div>
         )}
@@ -575,37 +624,70 @@
             </div>
         )}
 
-        <nav style={{ background: C.card, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <BrandLogo size={38} />
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 8 }}><BrandWordmark size={20} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 12, fontWeight: 800, padding: '2px 7px', borderRadius: 6 }}>STUDENT</span></h1>
+        <nav style={{ background: C.card, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, padding: isMobile ? "12px 16px" : "12px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+            <BrandLogo size={36} />
+            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 8 }}><BrandWordmark size={18} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 6 }}>STUDENT</span></h1>
           </div>
-          <div style={{display: 'flex', gap: 12, alignItems: 'center'}}>
+
+          {/* 6 DESKTOP TABS IN STICKY NAVBAR */}
+          {!isMobile && (
+            <div style={{ display: 'flex', gap: 4, background: C.bg, padding: '3px 4px', borderRadius: 10, border: `1px solid ${C.border}` }}>
+              {([
+                { k: 'home', icon: 'home', label: t('ptab_home') },
+                { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+                { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
+                { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
+                { k: 'progress', icon: 'trending', label: t('ptab_progress') },
+                { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
+              ] as const).map(tb => {
+                const on = portalTab === tb.k;
+                return (
+                  <button key={tb.k} onClick={() => setPortalTab(tb.k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 700, background: on ? C.card : 'transparent', color: on ? C.text : C.sub, boxShadow: on ? '0 1px 3px rgba(0,0,0,0.08)' : 'none', transition: 'all .15s ease' }}>
+                    <Ico name={tb.icon} size={15} color={on ? C.accent : C.sub} />
+                    <span>{tb.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0}}>
              <div style={{fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, background: isTimeSynced ? `${C.succ}15` : `${C.warn}15`, color: isTimeSynced ? C.succ : C.warn, display: window.innerWidth > 600 ? 'block' : 'none'}} title={t('tip_sync_server')}>
                   {isTimeSynced ? t('time_synced') : t('time_syncing')}
              </div>
-             {lastLoginTime && <div style={{fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 15, display: window.innerWidth > 600 ? 'block' : 'none'}}>{t('last_login')} {lastLoginTime}</div>}
+             {lastLoginTime && <div style={{fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 8, display: window.innerWidth > 768 ? 'block' : 'none'}}>{t('last_login')} {lastLoginTime}</div>}
              <LanguageToggle role="STUDENT" />
-             <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", padding: "4px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5 }} title={t('contrast_mode')}><Ico name="eye" size={19} /></button>
-             <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, padding: "8px 16px", fontSize: 13, fontWeight: 700, marginLeft: 8 }}>{t('logout')}</button>
+             <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", border: 'none', cursor: 'pointer', padding: "4px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5 }} title={t('contrast_mode')}><Ico name="eye" size={18} /></button>
+             <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, border: 'none', borderRadius: 8, cursor: 'pointer', padding: "8px 14px", fontSize: 12.5, fontWeight: 700, marginLeft: 4 }}>{t('logout')}</button>
           </div>
         </nav>
 
-        <main style={{ maxWidth: 800, margin: "0 auto", padding: isMobile ? "16px 14px 92px" : "32px 20px" }}>
+        <main style={{ maxWidth: 1120, margin: "0 auto", padding: isMobile ? "14px 12px 92px" : "28px 24px" }}>
           
-          {me.privateMessage && (
-              <div style={{background: `${C.err}15`, border: `2px solid ${C.err}`, color: C.err, padding: 20, borderRadius: 12, marginBottom: 24}}>
-                  <h3 style={{marginTop: 0, marginBottom: 5, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="bell" size={18} color={C.err} /> {t('private_msg_title')}</h3>
-                  <div style={{fontWeight: 700}}>{me.privateMessage}</div>
+          {me.privateMessage && dismissedPmId !== (me.id + '_' + me.privateMessage) && (
+              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '14px 18px', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ background: `${C.accent}15`, color: C.accent, width: 34, height: 34, borderRadius: 8, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                          <Ico name="bell" size={17} color={C.accent} />
+                      </div>
+                      <div>
+                          <div style={{ fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, color: C.accent, marginBottom: 3 }}>{t('private_msg_title')}</div>
+                          <div style={{ fontSize: 13.5, color: C.text, lineHeight: 1.5, fontWeight: 600 }}>{me.privateMessage}</div>
+                      </div>
+                  </div>
+                  <button onClick={() => setDismissedPmId(me.id + '_' + me.privateMessage)} style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 4 }} title={t('close') || 'Đóng'}>
+                      <Ico name="x" size={16} />
+                  </button>
               </div>
           )}
 
-          {/* STUDENT MOBILE HEADER COMPACT */}
-          <div style={{ background: C.card, border: `1px solid ${C.border}80`, borderRadius: isMobile ? 16 : 20, padding: isMobile ? '14px 16px' : '22px 26px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: isMobile ? 10 : 16, flexWrap: 'wrap', marginBottom: isMobile ? 14 : 20, position: 'relative', overflow: 'hidden' }}>
+          {/* STUDENT MASTHEAD */}
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: isMobile ? 14 : 18, padding: isMobile ? '14px 16px' : '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: isMobile ? 10 : 16, flexWrap: 'wrap', marginBottom: isMobile ? 16 : 22, position: 'relative', overflow: 'hidden' }}>
             <div style={{display: 'flex', gap: isMobile ? 12 : 18, alignItems: 'center', zIndex: 1}}>
               {(() => {
                   const _eqFr = me.inventory?.equippedFrame || '';
-                  if (!FRAME_META[_eqFr]) return <div style={{boxShadow: `0 0 0 4px ${C.bg}, 0 0 0 6px ${C.border}`}}>{getAvatar(me.name || "HV")}</div>;
+                  if (!FRAME_META[_eqFr]) return <div style={{boxShadow: `0 0 0 3px ${C.bg}, 0 0 0 5px ${C.border}`}}>{getAvatar(me.name || "HV")}</div>;
                   return (
                     <div style={{ position: 'relative', width: 40, height: 40, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         <div style={{ position: 'absolute', inset: -12 }}>{renderFrameArt(_eqFr, 64, 'hdr')}</div>
@@ -614,20 +696,24 @@
                   );
               })()}
               <div>
-                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 4 : 6}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || "bạn"}</span></h2>
-                {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 6, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
-                <p style={{color: C.sub, margin: 0, fontSize: 13.5}}>{t('ready_conquer')}</p>
+                <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || "bạn"}</span></h2>
+                {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 5, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
+                <p style={{color: C.sub, margin: 0, fontSize: 13}}>{t('ready_conquer')}</p>
               </div>
             </div>
-            <div style={{display: 'flex', gap: 10, zIndex: 1}}>
-                <div style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 14}}>
-                   <div style={{marginBottom: 4, display: 'flex', justifyContent: 'center', color: C.warn}}><Ico name="coins" size={20} /></div>
-                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>{me.coins || 0} <span style={{color: C.sub, fontSize: 11, fontWeight: 600}}>{t('coins_label')}</span></div>
+            <div style={{display: 'flex', gap: 10, zIndex: 1, alignItems: 'center', flexWrap: 'wrap'}}>
+                <div title={`${(me.coins || 0).toLocaleString('en-US')} OS Coins`} style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 12, border: `1px solid ${C.border}`}}>
+                   <div style={{marginBottom: 3, display: 'flex', justifyContent: 'center', color: C.warn}}><Ico name="coins" size={18} /></div>
+                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>{formatCoins(me.coins || 0)} <span style={{color: C.sub, fontSize: 11, fontWeight: 600}}>{t('coins_label')}</span></div>
                 </div>
-                <div style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 14}}>
-                   <div style={{fontSize: 20, marginBottom: 4}}>{getGamificationBadge(me.level || 1).split(" ")[0]}</div>
-                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>Lv.{me.level || 1}</div>
+                <div style={{textAlign: 'center', background: C.bg, padding: isMobile ? '8px 12px' : '10px 18px', borderRadius: 12, border: `1px solid ${C.border}`}}>
+                   <div style={{marginBottom: 3, display: 'flex', justifyContent: 'center', color: C.accent}}><Ico name="trophy" size={18} /></div>
+                   <div style={{fontWeight: 800, fontSize: 13, color: C.text}}>Lv.{me.level || 1} <span style={{color: C.sub, fontSize: 11, fontWeight: 600}}>({progressPct.toFixed(0)}%)</span></div>
                 </div>
+                <button onClick={() => setShowInventory(true)} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: isMobile ? '9px 12px' : '11px 16px', color: C.text, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Ico name="bag" size={16} color={C.accent} />
+                  <span>{t('my_inventory_btn')}</span>
+                </button>
             </div>
           </div>
 
@@ -688,7 +774,7 @@
             <div style={{fontWeight: 900, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{safeName}</div>
         </div>
         <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
-            <button onClick={() => handleEquipItem(safeName)} style={{background: isEquipped ? C.succ : C.bg, color: isEquipped ? '#fff' : C.text, border: `1px solid ${C.border}`, padding: '8px 16px', fontWeight: 700}}>{isEquipped ? '✓ Đang dùng' : t('equip_btn')}</button>
+            <button onClick={() => handleEquipItem(safeName)} style={{background: isEquipped ? C.succ : C.bg, color: isEquipped ? '#fff' : C.text, border: `1px solid ${C.border}`, padding: '8px 16px', fontWeight: 700}}>{isEquipped ? <span style={{display:'inline-flex',alignItems:'center',gap:4}}><Ico name="check" size={13} /> {i18n.language === 'vi' ? 'Đang dùng' : 'Equipped'}</span> : t('equip_btn')}</button>
         </div>
     </div>
 )})}
@@ -697,66 +783,251 @@
                   </div>
               </div>
           )}
-          {/* THANH TAB ĐIỀU HƯỚNG — chia portal thành các trang nhỏ để hết cuộn dài */}
-          <div style={{ display: isMobile ? 'none' : 'flex', gap: 6, marginBottom: 24, padding: 5, background: C.card, border: `1px solid ${C.border}80`, borderRadius: 14, overflowX: 'auto' }}>
-            {([
-              { k: 'home', icon: 'home', label: t('ptab_home') },
-              { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-              { k: 'quests', icon: 'target', label: i18n.language === 'vi' ? 'Chuyên đề' : 'Quests' },
-              { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
-              { k: 'progress', icon: 'trending', label: t('ptab_progress') },
-              { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
-            ] as const).map(tb => {
-              const on = portalTab === tb.k;
-              return (
-                <button key={tb.k} onClick={() => setPortalTab(tb.k)} style={{ flex: '1 0 auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 16px', borderRadius: 10, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 13.5, fontWeight: 700, background: on ? C.accent : 'transparent', color: on ? '#fff' : C.sub, transition: 'background .15s' }}>
-                  <Ico name={tb.icon} size={16} color={on ? '#fff' : C.sub} /> {tb.label}
-                </button>
-              );
-            })}
-          </div>
+
 
           {/* ===== TAB: TỔNG QUAN ===== */}
           {portalTab === "home" && (<>
-          <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 800 ? "repeat(3, 1fr)" : "1fr", gap: 16, marginBottom: 24 }}>
-            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
-                  <div style={{background: C.bg, color: C.text, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="clock" size={17} color={C.sub} /></div>
-                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_hours')}</span>
+          {/* 4-COLUMN MANUSCRIPT LEDGER */}
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 14, marginBottom: 22 }}>
+            <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
+                  <div style={{ background: `${C.succ}15`, color: C.succ, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="trending" size={15} color={C.succ} /></div>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('avg_band')}</span>
               </div>
-              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.text, letterSpacing: -0.5 }}>{(myHistory.reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}<span style={{fontSize: 18, fontStyle: 'italic', color: C.sub}}>h</span></div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.succ, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {avgBand} <span style={{ fontSize: 16 }}>{trendIcon}</span>
+              </div>
+              <div style={{ fontSize: 11, color: C.sub }}>{validBandScores.length} bài thi gần nhất</div>
             </div>
-            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
-                  <div style={{background: `${C.succ}15`, color: C.succ, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="trending" size={17} color={C.succ} /></div>
-                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('avg_band')}</span>
+
+            <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
+                  <div style={{ background: `${C.warn}15`, color: C.warn, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="fileText" size={15} color={C.warn} /></div>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_quizzes')}</span>
               </div>
-              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.succ, letterSpacing: -0.5 }}>{avgBand} <span style={{fontSize: 18}}>{trendIcon}</span></div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.warn, letterSpacing: -0.5 }}>
+                {myQuizResults.length}
+              </div>
+              <div style={{ fontSize: 11, color: C.sub }}>Listening · Reading · Writing</div>
             </div>
-            <div className="card" style={{padding: "20px", display: 'flex', flexDirection: 'column', gap: 8}}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.sub }}>
-                  <div style={{background: `${C.warn}15`, color: C.warn, width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center'}}><Ico name="pin" size={17} color={C.warn} /></div>
-                  <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_quizzes')}</span>
+
+            <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
+                  <div style={{ background: C.bg, color: C.text, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="clock" size={15} color={C.sub} /></div>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('total_hours')}</span>
               </div>
-              <div style={{ fontFamily: 'var(--display)', fontSize: 34, fontWeight: 500, color: C.warn, letterSpacing: -0.5 }}>{myQuizResults.length}</div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.text, letterSpacing: -0.5 }}>
+                {(myHistory.reduce((s,h)=>s+((h && h.duration)||0),0)/3600).toFixed(1)}<span style={{ fontSize: 16, fontStyle: 'italic', color: C.sub }}>h</span>
+              </div>
+              <div style={{ fontSize: 11, color: C.sub }}>Thời gian làm bài & học</div>
+            </div>
+
+            <div className="card" style={{ padding: "16px 18px", display: 'flex', flexDirection: 'column', gap: 6, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.sub }}>
+                  <div style={{ background: `${C.accent}15`, color: C.accent, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center' }}><Ico name="trophy" size={15} color={C.accent} /></div>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>Cấp độ & EXP</span>
+              </div>
+              <div style={{ fontFamily: 'var(--display)', fontSize: 30, fontWeight: 500, color: C.accent, letterSpacing: -0.5 }}>
+                Lv.{me.level || 1}
+              </div>
+              <div style={{ fontSize: 11, color: C.sub }}>{currentExp} / {expForNextLevel} EXP</div>
+              <div style={{ height: 4, background: C.border, borderRadius: 10, overflow: 'hidden', marginTop: 2 }}>
+                <div style={{ width: `${progressPct}%`, height: '100%', background: C.accent, borderRadius: 10 }} />
+              </div>
             </div>
           </div>
 
+          {/* 2-COLUMN STUDY DESK */}
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18, marginBottom: 24, alignItems: 'start' }}>
+            {/* LEFT COLUMN: UPCOMING CLASS / PRACTICE DESK + TARGET GOAL */}
+            <div style={{ display: 'grid', gap: 16 }}>
+              {nextClass ? (
+                <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.warn}`, borderRadius: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: C.warn, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <Ico name="calendar" size={13} color={C.warn} />
+                    <span>{t('upcoming_class')}</span>
+                  </div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>
+                    {nextClass.date} <span style={{ background: C.warn, color: '#fff', padding: '2px 7px', borderRadius: 4, fontSize: 12, marginLeft: 6 }}>{nextClass.time}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.sub, marginTop: 6 }}>
+                    <b>{t('instructor')}:</b> {nextClass.teacher} • <b>{t('location')}:</b> {
+                      (nextClass.location || "").split(/(https?:\/\/[^\s]+)/g).map((part, i) => 
+                        /(https?:\/\/[^\s]+)/.test(part) ? 
+                          <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, textDecoration: 'underline', fontWeight: 700 }}>{part}</a> 
+                          : <span key={i}>{part}</span>
+                      )
+                    }
+                  </div>
+                  {nextClass.lessonContent && <div style={{ fontSize: 12.5, lineHeight: 1.5, color: C.text, marginTop: 10, padding: '10px 12px', background: C.bg, borderRadius: 8, border: `1px solid ${C.border}`, whiteSpace: 'pre-wrap' }}>{nextClass.lessonContent}</div>}
+                  {!!nextClass.materials?.length && <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>{nextClass.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, fontSize: 12, fontWeight: 800, overflowWrap: 'anywhere', display: 'inline-flex', alignItems: 'center', gap: 5 }}><Ico name="link" size={12} /> {material.label || material.url}</a>)}</div>}
+                </div>
+              ) : (
+                <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Ico name="monitor" size={13} color={C.accent} />
+                    <span>Luyện thi hôm nay</span>
+                  </div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
+                    Sẵn sàng thử sức với bài thi mới để cải thiện điểm số?
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.sub }}>
+                    Hệ thống có sẵn các bài luyện Listening, Reading và Writing bám sát cấu trúc đề thi thật.
+                  </div>
+                  <button onClick={() => setPortalTab('exams')} style={{ alignSelf: 'flex-start', background: C.accent, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                    <Ico name="play" size={13} />
+                    <span>Vào phòng thi ngay</span>
+                  </button>
+                </div>
+              )}
+
+              {/* CEFR & TARGET GOAL */}
+              <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub }}>{t('current_progress')}</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: C.accent }}>CEFR {me.cefr || "N/A"}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <div>
+                    <span style={{ fontSize: 12, color: C.sub }}>Mục tiêu IELTS: </span>
+                    <span style={{ fontSize: 18, fontWeight: 900, color: C.accent }}>Band {me.target || "N/A"}</span>
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: targetGap > 0 ? C.warn : C.succ }}>
+                    {motivationMsg}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN: VOCAB DESK & RECENT RESULTS */}
+            <div style={{ display: 'grid', gap: 16 }}>
+              {/* VOCAB REVIEW DESK */}
+              <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Ico name="book" size={13} color={C.accent} />
+                    <span>{t('vocab_notebook')}</span>
+                  </div>
+                  <span style={{ fontSize: 11, color: C.sub, fontWeight: 700 }}>{vocabCards.length} từ trong sổ</span>
+                </div>
+                {dueCount > 0 ? (
+                  <>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
+                      Bạn có <span style={{ color: C.warn, fontWeight: 900 }}>{dueCount} từ</span> cần ôn tập hôm nay
+                    </div>
+                    <div style={{ fontSize: 12.5, color: C.sub }}>
+                      Thuật toán lặp lại ngắt quãng (Spaced Repetition) sẽ giúp bạn ghi nhớ sâu và lâu hơn.
+                    </div>
+                    <button onClick={() => { setPortalTab('vocab'); setVocabView('study'); setStudyFlipped(false); }} style={{ alignSelf: 'flex-start', background: `linear-gradient(135deg, ${C.accent}, #4f46e5)`, color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                      <Ico name="cards" size={14} />
+                      <span>Ôn tập ngay ({dueCount})</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: C.succ, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Ico name="check" size={16} color={C.succ} />
+                      <span>Đã hoàn thành ôn tập hôm nay!</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: C.sub }}>
+                      Không có từ nào đến hạn cần ôn. Bạn có thể duyệt danh sách hoặc học thêm từ mới.
+                    </div>
+                    <button onClick={() => setPortalTab('vocab')} style={{ alignSelf: 'flex-start', background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                      <Ico name="book" size={14} />
+                      <span>Xem toàn bộ sổ từ vựng</span>
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* RECENT TEST RESULTS MINI-LEDGER */}
+              <div className="card" style={{ padding: "18px 20px", border: `1px solid ${C.border}`, borderRadius: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: C.sub, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Ico name="trending" size={13} color={C.sub} />
+                    <span>Kết quả bài thi gần nhất</span>
+                  </div>
+                  {sortedQuizResultsDesc.length > 3 && (
+                    <button onClick={() => setPortalTab('progress')} style={{ background: 'transparent', border: 'none', color: C.accent, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', padding: 0 }}>
+                      Xem tất cả
+                    </button>
+                  )}
+                </div>
+                {sortedQuizResultsDesc.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: C.sub, padding: '12px 0', textAlign: 'center' }}>Chưa có kết quả bài thi nào.</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {sortedQuizResultsDesc.slice(0, 3).map(r => (
+                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.quizTitle}</div>
+                          <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{r.date}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: 13, fontWeight: 900, color: C.accent }}>Band {r.band}</span>
+                            <div style={{ fontSize: 10, color: C.sub }}>{r.score}/{r.total}</div>
+                          </div>
+                          <button onClick={() => handleReviewQuiz(r)} style={{ fontSize: 11, fontWeight: 700, background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: '5px 9px', borderRadius: 6, cursor: 'pointer' }}>
+                            {t('view_review')}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
           </>)}
 
           {/* ===== TAB: PHẦN THƯỞNG ===== */}
           {portalTab === "rewards" && (<>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
-              <button 
-                  onClick={handleRollGacha} 
-                  style={{ background: `linear-gradient(135deg, #FF9500, #FFD60A)`, color: '#000', padding: '16px 40px', borderRadius: 30, fontSize: 18, fontWeight: 900, boxShadow: `0 12px 30px rgba(255, 149, 0, 0.4)`, border: `3px solid #fff`, display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer', transition: 'transform 0.2s ease', outline: 'none' }}
+          {/* MANUSCRIPT GACHA MYSTERY BOX BANNER */}
+          <div className="card" style={{ marginBottom: 24, padding: '22px 26px', background: `linear-gradient(135deg, ${C.card}, ${C.bg})`, border: `1px solid ${C.border}`, borderRadius: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 18 }}>
+            <div style={{ maxWidth: 540 }}>
+              <div style={{ fontSize: 11, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.9, color: C.warn, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <Ico name="sparkles" size={14} color={C.warn} />
+                <span>GACHA MYSTERY BOX</span>
+              </div>
+              <h3 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 22, fontWeight: 600, color: C.text }}>
+                {t('gacha_spin')}
+              </h3>
+              <p style={{ margin: '6px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.5 }}>
+                {i18n.language === 'vi' ? 'Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.' : 'Roll for random themes, golden avatar frames, living companions, or gifts.'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>{i18n.language === 'vi' ? 'Chi phí' : 'Cost'}</div>
+                <div style={{ fontSize: 17, fontWeight: 900, color: C.warn, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                  <Ico name="coins" size={16} color={C.warn} />
+                  <span>{gachaSpinCost.toLocaleString('en-US')}</span>
+                </div>
+              </div>
+              <button
+                onClick={handleRollGacha}
+                disabled={(me.coins || 0) < gachaSpinCost}
+                style={{
+                  background: (me.coins || 0) < gachaSpinCost ? C.border : `linear-gradient(135deg, #F59E0B, #D97706)`,
+                  color: '#fff',
+                  padding: '11px 22px',
+                  borderRadius: 10,
+                  fontSize: 13.5,
+                  fontWeight: 800,
+                  border: 'none',
+                  cursor: (me.coins || 0) < gachaSpinCost ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  boxShadow: (me.coins || 0) < gachaSpinCost ? 'none' : '0 4px 14px rgba(245, 158, 11, 0.35)',
+                  transition: 'transform 0.15s ease'
+                }}
               >
-                  <Ico name="sparkles" size={30} color={C.accent} />
-                  <div style={{ textAlign: 'left', lineHeight: 1.2 }}>
-                      <div>{t('gacha_spin')}</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, opacity: 0.8 }}>{gachaSpinCost} OS Coins</div>
-                  </div>
+                <Ico name="sparkles" size={15} />
+                <span>{i18n.language === 'vi' ? 'Quay ngay' : 'Roll Now'}</span>
               </button>
+            </div>
           </div>
 
           {/* CỬA HÀNG ĐỔI THƯỞNG DÀN NGANG MÀN HÌNH */}
@@ -932,7 +1203,11 @@
                                                   <span style={{fontSize: 9.5, fontWeight: 800, background: `${m.color}18`, color: m.color, padding: '1px 7px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 4}}><Ico name={m.icon} size={11} /> {t('vocab_cat_' + (c.category || 'word'))}</span>
                                                   {c.phonetic && <span style={{fontSize: 11, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 4}}><span>{c.phonetic}</span>{renderPronounceButton(c, true)}</span>}
                                                   {c.cefr && <span style={{fontSize: 10, fontWeight: 800, background: `${C.accent}15`, color: C.accent, padding: '1px 6px', borderRadius: 4}}>{c.cefr}</span>}
-                                                  <span style={{fontSize: 9, color: C.succ, letterSpacing: 1}} title={`Box ${c.box || 1}/5`}>{'●'.repeat(c.box || 1)}{'○'.repeat(Math.max(0, 5 - (c.box || 1)))}</span>
+                                                  <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }} title={`Box ${c.box || 1}/5`}>
+                                                    {Array.from({ length: 5 }).map((_, idx) => (
+                                                      <span key={idx} style={{ width: 6, height: 6, borderRadius: '50%', background: idx < (c.box || 1) ? C.succ : `${C.sub}40`, display: 'inline-block' }} />
+                                                    ))}
+                                                  </span>
                                               </div>
                                               <div style={{fontSize: 12.5, color: C.text, marginTop: 3}}>{c.meaning}</div>
                                               {c.example && <div style={{fontSize: 11.5, color: C.sub, fontStyle: 'italic', marginTop: 2}}>"{c.example}"</div>}
@@ -949,69 +1224,108 @@
               )}
           </div>
 
-          <div className="card" style={{padding: "20px 24px", background: `linear-gradient(135deg, ${C.card}, ${C.accent}15)`, marginBottom: 24}}>
-              <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, marginBottom: 5 }}><Ico name="sparkles" size={14} /> IDIOM OF THE MONTH (B1+)</div>
-              <div style={{ fontSize: 18, fontWeight: 900, marginTop: 10 }}>"do/work wonders"</div>
-              <div style={{ fontSize: 13, color: C.sub, marginTop: 5, fontStyle: 'italic' }}>to help or improve something greatly (According to Merriam-Webster Dictionary).</div>
-              <div style={{ fontSize: 12, marginTop: 10, background: C.bg, padding: 10, borderRadius: 6, border: `1px solid ${C.border}` }}>
-                  <b>Example:</b> Only making endless efforts may <i>work wonders</i> to help you reach your goal.
+          {/* ROTATING DAILY ACADEMIC EXPRESSION (BAND 7.5+) */}
+          <div className="card" style={{ padding: "20px 24px", background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.accent}`, borderRadius: 12, marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 900, color: C.accent, letterSpacing: 0.8, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <Ico name="sparkles" size={14} color={C.accent} />
+                  <span>ACADEMIC EXPRESSION OF THE DAY (BAND 7.5+)</span>
+                </div>
+                <div style={{ fontSize: 19, fontWeight: 800, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>"{dailyExp.word}"</span>
+                  {dailyExp.phonetic && <span style={{ fontSize: 13, color: C.sub, fontWeight: 600 }}>{dailyExp.phonetic}</span>}
+                </div>
+                <div style={{ fontSize: 13.5, color: C.sub, marginTop: 4, fontWeight: 600 }}>
+                  {dailyExp.meaning}
+                </div>
               </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => pronounceVocab(dailyExp.word)}
+                  title={t('vocab_pronounce') || 'Phát âm'}
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.accent, cursor: 'pointer' }}
+                >
+                  <Ico name="volume2" size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveDailyExp}
+                  disabled={isDailyExpSaved || dailyExpSavedFeedback}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: `1px solid ${(isDailyExpSaved || dailyExpSavedFeedback) ? C.succ : C.accent}`,
+                    background: (isDailyExpSaved || dailyExpSavedFeedback) ? `${C.succ}15` : `${C.accent}15`,
+                    color: (isDailyExpSaved || dailyExpSavedFeedback) ? C.succ : C.accent,
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: (isDailyExpSaved || dailyExpSavedFeedback) ? 'default' : 'pointer'
+                  }}
+                >
+                  <Ico name={(isDailyExpSaved || dailyExpSavedFeedback) ? "check" : "book"} size={14} />
+                  <span>{(isDailyExpSaved || dailyExpSavedFeedback) ? (i18n.language === 'vi' ? 'Đã trong sổ tay' : 'Added to notebook') : (i18n.language === 'vi' ? '+ Lưu vào sổ tay' : '+ Add to notebook')}</span>
+                </button>
+              </div>
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 12, background: C.bg, padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5, color: C.text }}>
+              <b style={{ color: C.accent }}>Example:</b> {dailyExp.example}
+            </div>
           </div>
           </>)}
 
           {/* ===== TAB: TIẾN ĐỘ ===== */}
           {portalTab === "progress" && (<>
-          {recentScores.length > 0 && (
-            <div className="card" style={{ marginBottom: 24 }}>
-                <h3 style={{marginTop: 0, fontSize: 14, color: C.sub, textTransform: 'uppercase'}}><Ico name="trending" size={14} style={{verticalAlign:'-2px',margin:'0 6px 0 0',display:'inline-block'}} />{t('chart_my_progress')}</h3>
-                <div style={{marginTop: 12}}>
-                    <BandTrendChart data={bandSeries(myQuizResults)} color={C.accent} height={190} />
+          {myQuizResults.length > 0 && (() => {
+            const filteredForProgress = progressSkillFilter === 'All' 
+              ? myQuizResults 
+              : myQuizResults.filter(r => quizSkill(quizzes.find(q => q.id === r.quizId)) === progressSkillFilter);
+            return (
+              <div className="card" style={{ marginBottom: 24, border: `1px solid ${C.border}`, borderRadius: 14, padding: '20px 24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+                  <h3 style={{ margin: 0, fontSize: 14, color: C.sub, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Ico name="trending" size={15} color={C.accent} />
+                    <span>{t('chart_my_progress')}</span>
+                  </h3>
+                  {/* SKILL FILTER PILLS */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {(['All', 'Listening', 'Reading', 'Writing'] as const).map(sk => {
+                      const active = progressSkillFilter === sk;
+                      return (
+                        <button
+                          key={sk}
+                          onClick={() => setProgressSkillFilter(sk)}
+                          style={{
+                            padding: '5px 12px',
+                            borderRadius: 18,
+                            border: `1px solid ${active ? C.accent : C.border}`,
+                            background: active ? C.accent : C.card,
+                            color: active ? '#fff' : C.sub,
+                            fontSize: 11.5,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            transition: 'all .15s ease'
+                          }}
+                        >
+                          {sk === 'All' ? (i18n.language === 'vi' ? 'Tất cả kỹ năng' : 'All Skills') : sk}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-            </div>
-          )}
-          </>)}
-
-          {/* ===== TAB: TỔNG QUAN (tiếp) — lịch học & tiến độ EXP ===== */}
-          {portalTab === "home" && (<>
-          {nextClass && (
-            <div className="card" style={{ marginBottom: 24, background: `${C.warn}10`, border: `1px solid ${C.warn}40` }}>
-              <div style={{ fontSize: 11, fontWeight: 900, color: C.warn, marginBottom: 5 }}><Ico name="calendar" size={13} color={C.warn} /> {t('upcoming_class')}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                 <div>
-                    <div style={{fontSize: 18, fontWeight: 900}}>{nextClass!.date} <span style={{background: C.warn, color: '#fff', padding: '2px 6px', borderRadius: 4, fontSize: 12, marginLeft: 8}}>{nextClass!.time}</span></div>
-                    <div style={{fontSize: 13, color: C.sub, marginTop: 5, wordBreak: 'break-word'}}>
-                        {t('instructor')}: {nextClass!.teacher} • {t('location')}: {
-                            (nextClass!.location || "").split(/(https?:\/\/[^\s]+)/g).map((part, i) => 
-                                /(https?:\/\/[^\s]+)/.test(part) ? 
-                                    <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{color: C.accent, textDecoration: 'underline', fontWeight: 700}}>{part}</a> 
-                                    : <span key={i}>{part}</span>
-                            )
-                        }
-                    </div>
-                    {nextClass!.lessonContent && <div style={{ fontSize: 13, lineHeight: 1.55, color: C.text, marginTop: 10, whiteSpace: 'pre-wrap' }}>{nextClass!.lessonContent}</div>}
-                    {!!nextClass!.materials?.length && <div style={{ display: 'grid', gap: 5, marginTop: 10 }}>{nextClass!.materials.map(material => <a key={material.id} href={material.url} target="_blank" rel="noopener noreferrer" style={{ color: C.accent, fontSize: 12, fontWeight: 800, overflowWrap: 'anywhere' }}>{material.label || material.url}</a>)}</div>}
-                 </div>
+                <div style={{ marginTop: 12 }}>
+                  <BandTrendChart data={bandSeries(filteredForProgress)} color={C.accent} height={190} />
+                </div>
               </div>
-            </div>
-          )}
-
-          <div className="card" style={{ marginBottom: 24, padding: "20px 24px" }}>
-            <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: 10}}>
-              <span style={{fontSize: 12, fontWeight: 800, color: C.sub}}>{t('current_progress')}</span>
-              <span style={{fontSize: 12, fontWeight: 800, color: C.accent}}>{currentExp} / {expForNextLevel} EXP ({progressPct}%)</span>
-            </div>
-            <div style={{height: 8, background: C.border, borderRadius: 10, overflow: 'hidden'}}>
-               <div style={{width: `${progressPct}%`, height: '100%', background: C.accent, transition: 'width 1s ease-in-out', borderRadius: 10}}></div>
-            </div>
-            <div style={{display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 11, fontWeight: 700, color: C.sub}}>
-              <span>{t('current_cefr')}: {me.cefr || "N/A"}</span>
-              <span style={{textAlign: 'right'}}>
-                  {t('target_band')}: IELTS {me.target || "N/A"}<br/>
-                  <span style={{fontSize: 10, color: targetGap > 0 ? C.warn : C.succ}}>{motivationMsg}</span>
-              </span>
-            </div>
-          </div>
+            );
+          })()}
           </>)}
+
+
 
           {/* ===== TAB: BÀI TẬP CHUYÊN ĐỀ ===== */}
           {portalTab === "quests" && (<>
@@ -1037,7 +1351,7 @@
                 retry: { label: questTx('Làm lại', 'Retry'), color: C.warn, icon: 'refresh' },
                 locked: { label: questTx('Đang khóa', 'Locked'), color: C.sub, icon: 'lock' },
                 scheduled: { label: questTx('Chưa mở', 'Scheduled'), color: C.warn, icon: 'clock' },
-                closed: { label: questTx('Đã đóng', 'Closed'), color: C.err, icon: 'xcircle' },
+                closed: { label: questTx('Đã đóng', 'Closed'), color: '#64748B', icon: 'xcircle' },
               };
               const questNow = getRealTime();
               const selectedCandidate = selectedQuestNode?.assignmentId === assignment.id
@@ -1158,11 +1472,11 @@
 
           {/* ===== TAB: PHÒNG THI ===== */}
           {portalTab === "exams" && (<>
-          <div className="card" style={{ marginBottom: 24, border: `2px solid ${C.warn}` }}>
+          <div className="card" style={{ marginBottom: 24, border: `1px solid ${C.border}`, borderRadius: 14 }}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10}}>
-                <h3 style={{marginTop: 0, color: C.warn, margin: 0}}>{t('test_room_title')}</h3>
+                <h3 style={{marginTop: 0, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="monitor" size={18} color={C.accent} /> {t('test_room_title')}</h3>
                 {examRoomTab === "available" && (
-                  <input placeholder={t('filter_quizzes')} value={stQuizSearch} onChange={(e: any)=>setStQuizSearch(e.target.value)} style={{width: 150, padding: '4px 8px', fontSize: 12}} />
+                  <input placeholder={t('filter_quizzes')} value={stQuizSearch} onChange={(e: any)=>setStQuizSearch(e.target.value)} style={{minWidth: 180, padding: '6px 12px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text}} />
                 )}
             </div>
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
@@ -1179,8 +1493,21 @@
                 );
               })}
             </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 12, paddingBottom: 2, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
-              {(["Listening", "Reading", "Writing"] as const).map(skill => { const active = studentExamSkillTab === skill; const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length; const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length; return <button key={skill} onClick={() => setStudentExamSkillTab(skill)} style={{ background: 'transparent', color: active ? C.accent : C.sub, borderRadius: 0, borderBottom: `2px solid ${active ? C.accent : 'transparent'}`, padding: '8px 11px', fontSize: 12, fontWeight: 900, whiteSpace: 'nowrap' }}>{skill} <span style={{ fontWeight: 700, opacity: .75 }}>{examRoomTab === 'available' ? availableCount : resultCount}</span></button>; })}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingBottom: 2, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
+              {(["Listening", "Reading", "Writing"] as const).map(skill => {
+                const active = studentExamSkillTab === skill;
+                const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length;
+                const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length;
+                const count = examRoomTab === 'available' ? availableCount : resultCount;
+                return (
+                  <button key={skill} onClick={() => setStudentExamSkillTab(skill)} style={{ background: 'transparent', color: active ? C.accent : C.sub, borderRadius: 0, borderBottom: `2px solid ${active ? C.accent : 'transparent'}`, borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '9px 14px', fontSize: 12.5, fontWeight: 800, whiteSpace: 'nowrap', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>{skill}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: active ? `${C.accent}20` : C.border, color: active ? C.accent : C.sub }}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
             {examRoomTab === "available" && myRealExamPackages.length > 0 && (
               <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
@@ -1206,6 +1533,10 @@
                   const now = getRealTime();
                   const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
                   const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
+                  const isPractice = isPracticeQuiz(q) || (q.practiceMode === true) || Number(q.maxAttempts) >= 99 || Number(q.maxAttempts) === Number.MAX_SAFE_INTEGER;
+                  const attemptDisplay = isPractice
+                    ? `${t('previous_attempts')}: ${attemptCount} (${i18n.language === 'vi' ? 'Không giới hạn' : 'Unlimited'})`
+                    : `${t('previous_attempts')}: ${attemptCount}/${q.maxAttempts || 1}`;
                   let statusText = "";
                   let isAvailable = false;
                   let badgeText = "";
@@ -1219,7 +1550,7 @@
                       statusText = t('status_closed'); 
                       badgeText = t('status_closed'); 
                   } 
-                  else if (attemptCount >= (q.maxAttempts || 1)) { 
+                  else if (!isPractice && attemptCount >= (q.maxAttempts || 1)) { 
                       statusText = t('status_no_attempts'); 
                       badgeText = t('status_no_attempts'); 
                   } 
@@ -1241,7 +1572,7 @@
                                   {q.isSEBRequired && <span title={t('tip_seb_required')} style={{marginLeft: 5}}><Ico name="shield" size={13} color={C.accent} /></span>}
                                   <span style={{fontSize: 10, background: C.card, padding: '2px 6px', borderRadius: 4, marginLeft: 5}}>{q.type}</span>
                               </div>
-                              <div style={{fontSize: 12, color: C.sub, marginTop: 4}}>{q.timeLimit} {t('time_limit')} • {(q.questions || []).length} {t('questions_count')} • {t('previous_attempts')}: {attemptCount}/{q.maxAttempts || 1}</div>
+                              <div style={{fontSize: 12, color: C.sub, marginTop: 4}}>{q.timeLimit} {t('time_limit')} • {(q.questions || []).length} {t('questions_count')} • {attemptDisplay}</div>
                               <div style={{fontSize: 11, color: isLockedByOtherDevice ? C.warn : (isAvailable ? C.succ : C.err), marginTop: 4, fontWeight: 700}}>
                                   <Ico name="clock" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{isLockedByOtherDevice ? t('locked_other_device') : statusText}
                               </div>
@@ -1283,7 +1614,7 @@
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
                     {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>Chưa có kết quả {studentExamSkillTab}.</div>}
-                    {resultsForSkill.map(r => {
+                    {[...resultsForSkill].filter(Boolean).sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)).map(r => {
                         if (!r) return null;
                         return (
                         <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>
