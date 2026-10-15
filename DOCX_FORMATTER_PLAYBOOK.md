@@ -10,7 +10,7 @@ Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up 
 - Teachers may remove or reorder Quest rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
 - Every DOCX remains independently valid under this playbook. Do not split one passage, answer bank, or question group across files.
 
-**Changelog:** 2026-10-15 — Added External Diagram Labelling (side-by-side drag & blank layout, click-to-zoom modal) and multi-paragraph [EXPLANATION] support without leakage or line flattening.
+**Changelog:** 2026-10-15 — Official IELTS External Diagram Labelling layout (clean diagram without zoom, clean label rows, inline dashed dropzones with empty question numbers, filled blue option pills, inline flag, flex-wrap option bank) and Firebase Storage image URL unescaping (`&amp;` fix). Added multi-paragraph [EXPLANATION] support.
 
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, Writing, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
@@ -580,9 +580,13 @@ Critical rules:
 
 ### 4.12 External Diagram Labelling (Side-by-Side Layout)
 
-When a test includes a map, plan, flowchart, or diagram where the labels or answers are placed **outside** or **beside** the image (rather than direct overlaid text boxes or slot coordinates), use external diagram labelling. The UI renders this as a responsive side-by-side 2-column layout:
-- **Left Column**: Sticky visual card displaying the diagram/map with a hover badge and click-to-zoom lightbox modal.
-- **Right Column**: Numbered question rows with dashed dropzones or text input blanks, followed directly by the option bank (if drag-and-drop).
+When a test includes a map, plan, flowchart, or diagram where the labels or answers are placed **outside** or **beside** the image (rather than direct overlaid text boxes or slot coordinates), use external diagram labelling. The UI renders this matching the official computer-delivered IELTS interface:
+- **Left Column**: Clean diagram/map `<img>` with `object-fit: contain;` without any artificial zoom button or container card (zoom lightbox is strictly reserved for Writing Task 1 visual review).
+- **Right Column**:
+  - Question rows rendered cleanly without outer card borders or backgrounds. Leading numbers and literal `[xx]` markers are stripped from the label text so only the clean label appears (e.g. `Cooling Tower`).
+  - **Inline Dashed Dropzone**: Placed directly to the right of the label text (`min-width: 165px; min-height: 34px; border: 1.5px dashed #334155; border-radius: 5px;`). When empty, it displays the bold question number inside (`21`, `22`). When filled, it displays the selected option pill (e.g. `F. old air is removed`, border `1.5px solid #2563eb`, background `#eff6ff`).
+  - **Inline Bookmark/Flag**: Directly to the right of each dropzone.
+  - **Draggable Option Bank**: Clean flex-wrap layout (`gap: 8px; margin-top: 18px;`) placed directly beneath the questions. Draggable option pills include letter prefixes (`A. ...`, `B. ...`), with NO grey container box and NO redundant heading/label.
 
 #### 4.12.1 Drag-to-Drop beside Diagram: `[DRAG]` or `[MAP_DRAG]`
 Use `[DRAG]` with `IMAGE: <url>` (or `[MAP_DRAG]` without `[SLOTS]`):
@@ -615,7 +619,7 @@ H. Visitor information booth
 ~~~
 
 Rules:
-- Include `IMAGE: <https-url>` on its own line after the instruction lines.
+- Include `IMAGE: <https-url>` on its own line after the instruction lines. Firebase Storage URLs with query parameters (`?alt=media&token=...`) are automatically unescaped (fixing `&amp;` double-escaping) and preserved cleanly.
 - `OPTIONS:` introduces the available draggable cards (letter prefix optional).
 - Each question has its prompt text (e.g. `11. Farm entrance`). If `[11]` is omitted, the parser automatically appends `[11]` to form the dropzone.
 - Answer keys (e.g. `*H` or `*H. Visitor information booth` or `*Visitor information booth`) are automatically resolved to the exact matching option string.

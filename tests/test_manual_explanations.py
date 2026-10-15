@@ -268,6 +268,26 @@ class ManualExplanationTests(unittest.TestCase):
         self.assertEqual(ts[1]["endTime"], 138)
         self.assertEqual(ts[1]["label"], "02:14 - 02:18")
 
+    def test_firebase_storage_image_url_unescaped(self):
+        document = docx.Document()
+        document.add_paragraph("[TITLE] Firebase Image Unescape Test")
+        document.add_paragraph("[TYPE] Listening")
+        document.add_paragraph("[PASSAGE]")
+        document.add_paragraph("Listen to audio.")
+        document.add_paragraph("[QUESTIONS]")
+        document.add_paragraph("[DRAG]")
+        document.add_paragraph("IMAGE: https://firebasestorage.googleapis.com/v0/b/app.appspot.com/o/diagram.png?alt=media&token=abc-123")
+        document.add_paragraph("OPTIONS:")
+        document.add_paragraph("A. turbine")
+        document.add_paragraph("21. Generator")
+        document.add_paragraph("*A")
+
+        quiz = parse_docx_to_quiz(document)
+        self.assertEqual(len(quiz["questions"]), 1)
+        q = quiz["questions"][0]
+        self.assertNotIn("&amp;", q["groupImageUrl"])
+        self.assertEqual(q["groupImageUrl"], "https://firebasestorage.googleapis.com/v0/b/app.appspot.com/o/diagram.png?alt=media&token=abc-123")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -229,7 +229,7 @@ export function getApiBase(): string {
 }
 
 export function normalizeChartUrl(rawUrl?: string): string {
-  const url = String(rawUrl || '').trim();
+  const url = String(rawUrl || '').replace(/&amp;/gi, '&').trim();
   if (!url) return '';
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
   if (url.startsWith('http://') || url.startsWith('https://')) {

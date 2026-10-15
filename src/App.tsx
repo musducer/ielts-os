@@ -10993,6 +10993,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               globalStyles={globalStyles}
           />;
       }
+      const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -11818,13 +11819,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
                               <img
                                   key={idx}
-                                  src={imgUrl}
+                                  src={cleanMediaUrl(imgUrl)}
                                   alt="Reading passage illustration"
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => setLightboxImageUrl(imgUrl)}
-                                  title={tx("Bấm để phóng to", "Click to zoom")}
-                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15, cursor: 'zoom-in' }}
+                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15 }}
                               />
                           ))}
                           {hasSlots ? (() => {
@@ -12244,7 +12241,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               const options = optionCells.map(option => option.value);
                               const infoGrid = optionCells.every(option => option.infoGrid);
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
-                              const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
+                              const mapImage = (formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '').replace(/&amp;/gi, '&');
                               const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
                               const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
@@ -12402,22 +12399,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               const renderTextBox = (box:DiagramTextBox) => textOnly(box.text || "").split(/(\[\d+\])/g).map((part:string,index:number)=>{const marker=part.match(/^\[(\d+)\]$/);return marker?renderResultGap(marker[1],`${box.id}-gap-${index}`):<span key={`${box.id}-text-${index}`}>{part}</span>;});
                               return <section key={`diagram-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  {imageUrl && (
-                                      <div style={{ marginBottom: 10 }}>
-                                          <button
-                                              type="button"
-                                              onClick={() => setLightboxImageUrl(imageUrl)}
-                                              title={tx("Bấm để phóng to sơ đồ", "Click to zoom diagram")}
-                                              style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: C.text, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                                          >
-                                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                              <span>{tx("Phóng to sơ đồ", "Zoom diagram")}</span>
-                                          </button>
-                                      </div>
-                                  )}
                                   <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
                                       <div style={{position:'relative',minWidth:760,aspectRatio:diagramAspectRatio,background:'#fff'}}>
-                                          {imageUrl && <img src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
+                                          {imageUrl && <img src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
                                           {!isOverlayDiagram && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:DiagramTextBox)=>{if(!Number.isFinite(Number(box.targetX))||!Number.isFinite(Number(box.targetY))) return null;const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||26)/2;const y1=box.anchor==='center'?Number(box.y):Number(box.y)+(Number(box.height)||16)/2;return <line key={`diagram-review-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke"/>;})}</svg>}
                                           {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
                                       </div>
@@ -12452,15 +12436,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
                                           {mapUrl ? (
-                                              <div
-                                                  role="button"
-                                                  tabIndex={0}
-                                                  onClick={() => setLightboxImageUrl(mapUrl)}
-                                                  title={tx("Bấm để phóng to hình ảnh bản đồ", "Click to zoom map")}
-                                                  style={{ cursor: 'zoom-in', display: 'inline-block' }}
-                                              >
-                                                  <img src={mapUrl} alt="Map labelling diagram" />
-                                              </div>
+                                              <img src={cleanMediaUrl(mapUrl)} alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
                                           ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
@@ -12524,33 +12500,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className="group-context">
                                       <div dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />
                                       {Boolean((q as any).groupImageUrl || (q as any).diagramImageUrl) && (
-                                          <div
-                                              style={{
-                                                  marginTop: 10,
-                                                  marginBottom: 10,
-                                                  textAlign: 'center',
-                                                  cursor: 'zoom-in',
-                                                  background: '#fff',
-                                                  border: `1px solid ${C.border}`,
-                                                  borderRadius: 8,
-                                                  padding: 8,
-                                                  display: 'inline-block',
-                                                  maxWidth: '100%',
-                                              }}
-                                              role="button"
-                                              tabIndex={0}
-                                              onClick={() => setLightboxImageUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
-                                              title={tx("Bấm để phóng to hình ảnh sơ đồ", "Click to zoom diagram")}
-                                          >
+                                          <div style={{ marginTop: 10, marginBottom: 10 }}>
                                               <img
-                                                  src={(q as any).groupImageUrl || (q as any).diagramImageUrl}
+                                                  src={cleanMediaUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
                                                   alt="Diagram reference"
-                                                  style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 4 }}
+                                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block', borderRadius: 4 }}
                                               />
-                                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 11, color: C.sub, fontWeight: 600 }}>
-                                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                                  <span>{tx("Bấm để phóng to", "Click to zoom")}</span>
-                                              </div>
                                           </div>
                                       )}
                                   </div>
@@ -12596,88 +12551,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       )})}
                   </div>
               </div>
-          {/* Lightbox Modal for Diagrams & Visuals */}
-          {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
-              <div
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label={tx("Phóng to hình ảnh", "Image zoom")}
-                  style={{
-                      position: 'fixed',
-                      inset: 0,
-                      zIndex: 999999,
-                      background: 'rgba(15, 23, 42, 0.78)',
-                      backdropFilter: 'blur(6px)',
-                      WebkitBackdropFilter: 'blur(6px)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 24,
-                      animation: 'fadeIn 0.15s ease-out',
-                  }}
-                  onClick={() => setLightboxImageUrl(null)}
-              >
-                  <div
-                      style={{
-                          position: 'relative',
-                          maxWidth: 'min(92vw, 1100px)',
-                          maxHeight: '90vh',
-                          background: '#ffffff',
-                          borderRadius: 12,
-                          padding: 16,
-                          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                  >
-                      <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                              {tx("Hình ảnh sơ đồ phóng to", "Enlarged Diagram")}
-                          </span>
-                          <button
-                              type="button"
-                              onClick={() => setLightboxImageUrl(null)}
-                              title={tx("Đóng (Esc)", "Close (Esc)")}
-                              aria-label={tx("Đóng", "Close")}
-                              style={{
-                                  background: '#f1f5f9',
-                                  border: 'none',
-                                  borderRadius: 6,
-                                  padding: '5px 8px',
-                                  cursor: 'pointer',
-                                  color: '#475569',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  transition: 'background 0.15s',
-                              }}
-                          >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                              <span>{tx("Đóng", "Close")}</span>
-                          </button>
-                      </div>
-                      <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                          <img
-                              src={lightboxImageUrl}
-                              alt="Enlarged diagram visual"
-                              style={{
-                                  maxWidth: '100%',
-                                  maxHeight: 'calc(90vh - 80px)',
-                                  objectFit: 'contain',
-                                  display: 'block',
-                                  borderRadius: 6,
-                              }}
-                          />
-                      </div>
-                  </div>
-              </div>,
-              document.body
-          )}
           </div>
       );
   }
@@ -12801,6 +12674,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
+          const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
           const formatExamRemaining = (seconds: number) => {
               const safe = Math.max(0, Math.floor(seconds || 0));
               const mins = Math.floor(safe / 60);
@@ -13845,19 +13719,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .mh-heading-option.is-used { opacity:.4; cursor:default; background:var(--epanel); }
                       .mh-heading-option.selected { outline:2px solid var(--eblue); outline-offset:1px; }
 
-                      /* External Diagram Labelling (Side-by-side: Left diagram with zoom, Right questions/bank) */
+                      /* External Diagram Labelling (Official IELTS Layout) */
                       .idp-external-diagram-split { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.15fr); gap: 24px; align-items: start; margin: 12px 0 20px; }
                       .idp-external-diagram-col-visual { position: sticky; top: 16px; display: flex; flex-direction: column; align-items: center; }
-                      .idp-external-diagram-card { position: relative; width: 100%; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06); cursor: zoom-in; transition: transform 0.15s, box-shadow 0.15s; text-align: center; user-select: none; }
-                      .idp-external-diagram-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12); }
-                      .idp-external-diagram-card img { display: block; max-width: 100%; max-height: 480px; height: auto; object-fit: contain; margin: 0 auto; border-radius: 4px; }
-                      .idp-diagram-zoom-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 10px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; font-weight: 600; color: #475569; }
+                      .idp-external-diagram-col-visual img { display: block; max-width: 100%; height: auto; object-fit: contain; margin: 0 auto; border-radius: 4px; }
                       .idp-external-diagram-col-content { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
                       .idp-external-diagram-drag-list { display: flex; flex-direction: column; gap: 12px; }
-                      .idp-external-diagram-drag-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; }
-                      .idp-external-diagram-drag-row .idp-dropzone { min-width: 120px; max-width: 220px; height: 32px; min-height: 32px; display: flex; align-items: center; justify-content: center; }
-                      .idp-external-diagram-bank { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; }
-                      .idp-external-diagram-bank-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 8px; }
+                      .idp-external-diagram-drag-row { display: flex; align-items: center; gap: 12px; padding: 0; background: transparent; border: none; }
+                      .idp-external-diagram-drop-target { min-width: 165px; min-height: 34px; border: 1.5px dashed #334155; border-radius: 5px; background: #fff; display: inline-flex; align-items: center; justify-content: center; padding: 4px 10px; box-sizing: border-box; cursor: pointer; text-align: center; font-weight: 700; color: #111827; font-size: 14px; user-select: none; transition: all 0.15s ease; }
+                      .idp-external-diagram-drop-target.filled { border: 1.5px solid #2563eb; background: #eff6ff; font-weight: 600; color: #1e40af; }
+                      .idp-external-diagram-bank { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; background: transparent; border: none; padding: 0; }
                       .idp-external-diagram-bank-items { display: flex; flex-wrap: wrap; gap: 8px; }
                       @media (max-width: 860px) {
                         .idp-external-diagram-split { grid-template-columns: 1fr; gap: 16px; }
@@ -14186,7 +14057,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       onMouseUp={() => setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter(false)}>
                       <div className="writing-test-prompt exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 280, overflowY: 'auto', padding: '30px 18px', boxSizing: 'border-box', lineHeight: 1.55, fontSize: 15, color: '#111', background: '#fff' }}>
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
-                          {task?.mediaUrl && <img src={task.mediaUrl} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
+                          {task?.mediaUrl && <img src={cleanMediaUrl(task.mediaUrl)} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
                       <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'ew-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center', touchAction: 'none' }}>
                           <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
@@ -14580,7 +14451,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const imageTags = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
                        if (imageTags.length) return sanitizeRichHtml(imageTags.join(""));
                        const url = String(mapPlanSource || "").match(/https?:\/\/[^\s<>"']+/i)?.[0];
-                       return url ? `<img src="${url.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" alt="Map or plan" />` : "";
+                       return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" alt="Map or plan" />` : "";
                    })();
                    const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
                    showInstruction = !isHtmlEmpty(displayInstruction);
@@ -14588,10 +14459,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const externalDiagramImageUrl = (() => {
                        for (const q of group.questions) {
                            const u = String((q as any).groupImageUrl || (q as any).diagramImageUrl || (q as any).imageUrl || (q as any).mapImageUrl || '').trim();
-                           if (u) return u;
+                           if (u) return cleanMediaUrl(u);
                        }
                        const match = (group.context || '').match(/<img[^>]+src=["']([^"']+)["']/i) || (group.instruction || '').match(/<img[^>]+src=["']([^"']+)["']/i);
-                       return match?.[1] ? match[1].trim() : '';
+                       return match?.[1] ? cleanMediaUrl(match[1]) : '';
                    })();
                    const isExternalDiagramGroup = Boolean(
                        externalDiagramImageUrl &&
@@ -14833,7 +14704,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            <div className="idp-map-drag-layout" style={{ "--idp-map-bank-w": `${mapBankWidth}px` } as React.CSSProperties}>
                                <div className="idp-map-drag-canvas" aria-label="Interactive map">
                                    {mapImageUrl ? <div className="idp-map-drag-stage">
-                                   <img src={mapImageUrl} alt="Map labelling diagram" draggable={false} />
+                                   <img src={cleanMediaUrl(mapImageUrl)} alt="Map labelling diagram" draggable={false} />
                                    {group.questions.map((question: any, index: number) => {
                                        const slot = getSlot(question, index);
                                        const answer = String(examAnswers[question.id] || "");
@@ -14911,7 +14782,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
@@ -14921,31 +14792,54 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         const isDrag = isDragDropGroup && dragOptions.length > 0;
                         const reuseTags = group.questions.length > dragOptions.length;
                         const usedWords = group.questions.map((q: any) => examAnswers[q.id] as string).filter(Boolean);
-                        const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
+
+                        const getOptionWithPrefix = (opt: string, index: number) => {
+                            const trimmed = String(opt || "").trim();
+                            if (/^[A-Za-z][\.\)]\s*/.test(trimmed)) {
+                                return trimmed;
+                            }
+                            return `${String.fromCharCode(65 + index)}. ${trimmed}`;
+                        };
+
+                        const getDisplayAnswerText = (val: string) => {
+                            if (!val) return "";
+                            const trimmed = String(val).trim();
+                            if (/^[A-Za-z][\.\)]\s*/.test(trimmed)) return trimmed;
+                            const idx = dragOptions.findIndex((opt: string) => cleanOptionAnswerText(opt).toLowerCase() === cleanOptionAnswerText(trimmed).toLowerCase());
+                            if (idx >= 0) {
+                                return getOptionWithPrefix(dragOptions[idx], idx);
+                            }
+                            return trimmed;
+                        };
+
+                        const isOptionUsed = (opt: string, index: number) => {
+                            const pill = getOptionWithPrefix(opt, index);
+                            const cleanOpt = cleanOptionAnswerText(opt).toLowerCase();
+                            return usedWords.some((used: string) => {
+                                if (!used) return false;
+                                if (used === opt || used === pill) return true;
+                                return cleanOptionAnswerText(used).toLowerCase() === cleanOpt;
+                            });
+                        };
+
+                        const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string, idx: number) => !isOptionUsed(opt, idx));
 
                         return (
                             <div className="idp-external-diagram-split">
-                                {/* LEFT COLUMN: DIAGRAM CARD */}
+                                {/* LEFT COLUMN: DIAGRAM VISUAL */}
                                 <div className="idp-external-diagram-col-visual">
-                                    <div
-                                        className="idp-external-diagram-card"
-                                        role="button"
-                                        tabIndex={0}
-                                        title={tx("Bấm để phóng to hình ảnh sơ đồ", "Click to zoom diagram")}
-                                        onClick={() => setLightboxImageUrl(externalDiagramImageUrl)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter' || e.key === ' ') {
-                                                e.preventDefault();
-                                                setLightboxImageUrl(externalDiagramImageUrl);
-                                            }
+                                    <img
+                                        src={cleanMediaUrl(externalDiagramImageUrl)}
+                                        alt="Diagram visual"
+                                        draggable={false}
+                                        style={{
+                                            display: 'block',
+                                            maxWidth: '100%',
+                                            height: 'auto',
+                                            objectFit: 'contain',
+                                            borderRadius: 4
                                         }}
-                                    >
-                                        <img src={externalDiagramImageUrl} alt="Diagram or map reference" />
-                                        <div className="idp-diagram-zoom-badge">
-                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                            <span>{tx("Bấm để phóng to", "Click to zoom")}</span>
-                                        </div>
-                                    </div>
+                                    />
                                 </div>
 
                                 {/* RIGHT COLUMN: QUESTIONS + DRAG BANK */}
@@ -14955,50 +14849,99 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <div className="idp-external-diagram-drag-list">
                                                 {group.questions.map((q: any) => {
                                                     const gi = groupQuestionNumbers[group.questions.indexOf(q)] || group.questions.indexOf(q) + 1;
-                                                    const val = examAnswers[q.id] as string;
+                                                    const rawVal = examAnswers[q.id] as string;
+                                                    const displayVal = getDisplayAnswerText(rawVal);
+                                                    const isFilled = Boolean(displayVal);
+                                                    const isFlagged = Boolean(flaggedQuestions?.includes(q.id));
+
+                                                    // Strip [21] marker from label text so only the label (Cooling Tower) shows, no 21. prefix
+                                                    const cleanLabelText = (() => {
+                                                        let t = String(q.text || "");
+                                                        t = t.replace(/<[^>]+>/g, " ");
+                                                        t = t.replace(/\[\s*\d+\s*\]/g, " ");
+                                                        t = t.replace(/^\s*(?:question|câu)?\s*\d+[\.\:\)]?\s*/i, " ");
+                                                        return t.replace(/\s+/g, " ").trim();
+                                                    })();
+
                                                     return (
                                                         <div key={q.id} id={`question-${q.id}`} className="idp-external-diagram-drag-row">
-                                                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
-                                                                <span style={{ fontWeight: 800, color: '#334155' }}>{gi}.</span>
-                                                                <StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text || '')} />
-                                                            </div>
+                                                            <span style={{ fontWeight: 500, color: 'var(--etext, #111827)', fontSize: 15 }}>
+                                                                {cleanLabelText}
+                                                            </span>
                                                             <span
-                                                                className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                                className={`idp-dropzone idp-external-diagram-drop-target ${isFilled ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                                 data-qid={q.id}
-                                                                draggable={!!val}
-                                                                onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                                draggable={!!rawVal}
+                                                                onDragStart={(event: any) => { if (rawVal) beginAnswerDrag(event, rawVal, rawVal, q.id); }}
                                                                 onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
                                                                 onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
-                                                                onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                                onClick={(event: any) => { event.stopPropagation(); if (rawVal) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(rawVal); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
                                                                 onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
-                                                                title={val ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                                                title={rawVal ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
                                                             >
-                                                                {val || gi}
+                                                                {displayVal || gi}
                                                             </span>
+                                                            <button
+                                                                type="button"
+                                                                className={`idp-row-flag-btn ${isFlagged ? 'flagged' : ''}`}
+                                                                onClick={(e) => { e.stopPropagation(); _toggleFlag(q.id); }}
+                                                                title={isFlagged ? tx("Bỏ đánh dấu câu này", "Remove bookmark") : tx("Đánh dấu câu này để xem lại", "Bookmark this question")}
+                                                                aria-label={isFlagged ? "Remove bookmark" : "Bookmark this question"}
+                                                                style={{
+                                                                    background: 'transparent',
+                                                                    border: 'none',
+                                                                    padding: 4,
+                                                                    cursor: 'pointer',
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    justifyContent: 'center',
+                                                                    color: isFlagged ? '#d97706' : '#94a3b8',
+                                                                    borderRadius: 4,
+                                                                    flexShrink: 0,
+                                                                    transition: 'color 0.15s ease'
+                                                                }}
+                                                            >
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill={isFlagged ? "#d97706" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                                    <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+                                                                    <line x1="4" y1="22" x2="4" y2="15" />
+                                                                </svg>
+                                                            </button>
                                                         </div>
                                                     );
                                                 })}
                                             </div>
 
-                                            {/* OPTION BANK DIRECTLY BELOW ROWS */}
-                                            <div className="idp-external-diagram-bank"
+                                            {/* DRAGGABLE OPTION PILLS DIRECTLY BELOW QUESTIONS */}
+                                            <div
+                                                className="idp-external-diagram-bank"
                                                 onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-                                                onDrop={(event: any) => { event.preventDefault(); const sourceQid = readDraggedSource(event); if (sourceQid) { handleAnswerChange(sourceQid, '', 'DRAG_DROP'); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); } }}>
-                                                <div className="idp-external-diagram-bank-title">{dragBankLabel || tx("Danh sách đáp án", "Options")}</div>
-                                                <div className="idp-external-diagram-bank-items">
-                                                    {bankWords.map((opt: string, idx: number) => (
+                                                onDrop={(event: any) => {
+                                                    event.preventDefault();
+                                                    const sourceQid = readDraggedSource(event);
+                                                    if (sourceQid) {
+                                                        handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                                                        dragSourceQuestionRef.current = '';
+                                                        setSelectedDragAnswer('');
+                                                    }
+                                                }}
+                                            >
+                                                {bankWords.map((opt: string) => {
+                                                    const origIdx = dragOptions.indexOf(opt);
+                                                    const displayPill = getOptionWithPrefix(opt, origIdx >= 0 ? origIdx : 0);
+                                                    const isSelected = selectedDragAnswer === String(opt) || selectedDragAnswer === displayPill;
+                                                    return (
                                                         <div
-                                                            key={idx}
-                                                            className={`idp-wordbank-item ${selectedDragAnswer === String(opt) ? 'selected' : ''}`}
+                                                            key={opt}
+                                                            className={`idp-wordbank-item ${isSelected ? 'selected' : ''}`}
                                                             draggable
                                                             onClick={() => selectBankAnswer(String(opt))}
                                                             onDragStart={(e: any) => beginAnswerDrag(e, opt, opt)}
                                                         >
-                                                            <span>{opt}</span>
+                                                            <span>{displayPill}</span>
                                                         </div>
-                                                    ))}
-                                                    {bankWords.length === 0 && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>—</span>}
-                                                </div>
+                                                    );
+                                                })}
+                                                {bankWords.length === 0 && <span style={{ color: '#94a3b8', fontSize: 13, fontStyle: 'italic' }}>—</span>}
                                             </div>
                                         </>
                                     ) : (
@@ -15565,88 +15508,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                              </div>
                          )}
 
-                  {/* Lightbox Modal for External Diagrams & Visuals */}
-                  {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
-                      <div
-                          role="dialog"
-                          aria-modal="true"
-                          aria-label={tx("Phóng to hình ảnh", "Image zoom")}
-                          style={{
-                              position: 'fixed',
-                              inset: 0,
-                              zIndex: 999999,
-                              background: 'rgba(15, 23, 42, 0.78)',
-                              backdropFilter: 'blur(6px)',
-                              WebkitBackdropFilter: 'blur(6px)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: 24,
-                              animation: 'fadeIn 0.15s ease-out',
-                          }}
-                          onClick={() => setLightboxImageUrl(null)}
-                      >
-                          <div
-                              style={{
-                                  position: 'relative',
-                                  maxWidth: 'min(92vw, 1100px)',
-                                  maxHeight: '90vh',
-                                  background: '#ffffff',
-                                  borderRadius: 12,
-                                  padding: 16,
-                                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
-                                  display: 'flex',
-                                  flexDirection: 'column',
-                                  alignItems: 'center',
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                          >
-                              <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
-                                  <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                      {tx("Hình ảnh sơ đồ phóng to", "Enlarged Diagram")}
-                                  </span>
-                                  <button
-                                      type="button"
-                                      onClick={() => setLightboxImageUrl(null)}
-                                      title={tx("Đóng (Esc)", "Close (Esc)")}
-                                      aria-label={tx("Đóng", "Close")}
-                                      style={{
-                                          background: '#f1f5f9',
-                                          border: 'none',
-                                          borderRadius: 6,
-                                          padding: '5px 8px',
-                                          cursor: 'pointer',
-                                          color: '#475569',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: 4,
-                                          fontSize: 12,
-                                          fontWeight: 600,
-                                          transition: 'background 0.15s',
-                                      }}
-                                  >
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                      <span>{tx("Đóng", "Close")}</span>
-                                  </button>
-                              </div>
-                              <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                                  <img
-                                      src={lightboxImageUrl}
-                                      alt="Enlarged diagram visual"
-                                      style={{
-                                          maxWidth: '100%',
-                                          maxHeight: 'calc(90vh - 80px)',
-                                          objectFit: 'contain',
-                                          display: 'block',
-                                          borderRadius: 6,
-                                      }}
-                                  />
-                              </div>
-                          </div>
-                      </div>,
-                      document.body
-                  )}
                   </div>
               );
           }

@@ -1,5 +1,32 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-15)
 
+## Sửa lỗi URL Firebase Storage (`&amp;token=`), Giao diện Gắn nhãn Sơ đồ Chuẩn IELTS CBT & Thu hẹp Lightbox Zoom — 2026-10-15
+
+- **Issue 1: Sửa triệt để lỗi ảnh Firebase Storage bị hỏng URL (`&amp;token=` -> HTTP 403 Forbidden)**:
+  - *Nguyên nhân*: Trong `api/index.py` tại `process_block`, hàm `paragraph_to_html` chuyển đổi ký tự `&` thành `&amp;`. Khi bóc tách `text_lines`, regex `<[^>]+>` chỉ xóa thẻ HTML mà không gọi `html.unescape`, khiến query string của Firebase Storage như `?alt=media&token=...` bị lưu trữ dưới dạng `&amp;token=...` vào Firestore. Khi React render `<img src={url} />`, trình duyệt lại tiếp tục escape thành `&amp;amp;token=...`, khiến Firebase Storage từ chối truy cập và báo lỗi 403 Forbidden làm hỏng hình ảnh.
+  - *Giải pháp triệt để*:
+    - Backend `api/index.py`: Thêm `html.unescape` vào toàn bộ các luồng bóc tách URL ảnh (`text_lines.append(html.unescape(re.sub(r'<[^>]+>', '', h)).strip())`, `group_image_url`, `fallback_image_url`, `process_map_drag_block`, `process_diagram_label_block`, `parse_docx_writing_tasks`, và `ai_feedback`).
+    - Frontend (`ACTIVE_EXAM.txt`, `REVIEW_QUIZ.txt`, `WritingFeedback.tsx`): Khai báo helper chuẩn hóa `cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim()` và bọc toàn bộ các thuộc tính `src` của ảnh sơ đồ, bản đồ và biểu đồ. Nhờ đó, ngay cả các đề thi cũ đã import và lưu sẵn trong Firestore với `&amp;` cũng tự động hiển thị mượt mà ngay lập tức mà không cần import lại DOCX.
+    - Unit test tự động: Bổ sung `test_firebase_storage_image_url_unescaped` trong `tests/test_manual_explanations.py`.
+
+- **Issue 2: Loại bỏ Zoom khỏi Sơ đồ Reading/Listening — Giữ Zoom Lightbox DUY NHẤT ở Writing Task 1**:
+  - *Quy chuẩn*: Tính năng click-to-zoom phóng to toàn màn hình CHỈ được áp dụng cho biểu đồ Writing Task 1 (tại màn hình chấm giáo viên `src/WritingFeedback.tsx` và màn hình xem lại của học sinh `src/components_split/REVIEW_QUIZ.txt`).
+  - *Thay đổi*: Gỡ bỏ nút "Bấm để phóng to" / "Click to zoom", hiệu ứng `cursor: zoom-in`, viền khung xám placeholder và state phóng to modal khỏi toàn bộ các sơ đồ/bản đồ Reading/Listening trong `src/components_split/ACTIVE_EXAM.txt` và `src/components_split/REVIEW_QUIZ.txt`. Sơ đồ trong phòng thi và review kết quả được hiển thị trực tiếp, sắc nét với `max-width: 100%; height: auto; object-fit: contain;`.
+
+- **Issue 3: Chuẩn hóa Giao diện Kéo Thả Sơ đồ Kèm ảnh (External Diagram Drag) theo IELTS Máy tính Chính thức**:
+  - *Cột trái (Minh họa trực quan)*: Hiển thị trực tiếp hình ảnh sơ đồ/bản đồ sạch (`<img>`), không bọc khung placeholder giả lập, không nút zoom.
+  - *Cột phải (Các hàng câu hỏi 21–26)*:
+    - Loại bỏ viền thẻ bao quanh (`border: none; background: transparent; padding: 0;`).
+    - Loại bỏ số thứ tự câu hỏi ở đầu hàng và xóa bỏ marker `[21]` thừa khỏi văn bản nhãn, chỉ hiển thị đúng nhãn nội dung gốc (ví dụ: `Cooling Tower`, `Weather Station`).
+    - Đặt ô thả nét đứt inline ngay bên phải nhãn câu hỏi (`min-width: 165px; min-height: 34px; border: 1.5px dashed #334155; border-radius: 5px; background: #ffffff;`).
+    - Khi chưa điền: Hiển thị số thứ tự câu hỏi in đậm (`21`, `22`...) nằm ở giữa bên trong ô nét đứt.
+    - Khi đã thả đáp án: Hiển thị pill lựa chọn màu xanh viền đậm (`border: 1.5px solid #2563eb; background: #eff6ff; color: #1e3a8a;`) kèm tiền tố chữ cái (`F. old air is removed`).
+    - Đặt nút gắn cờ/đánh dấu (bookmark/flag) nằm inline trực tiếp ngay bên phải mỗi ô thả.
+  - *Ngân hàng Lựa chọn Kéo thả (Draggable Option Bank)*:
+    - Loại bỏ hoàn toàn tiêu đề thừa (không in `"LABEL THE DIAGRAM BELOW."` hay `rightTitle`) và không bọc khung xám bao quanh.
+    - Đặt ngay bên dưới danh sách câu hỏi theo bố cục flex-wrap gọn gàng (`display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px;`).
+    - Các thẻ lựa chọn kéo thả giữ nguyên tiền tố chữ cái (`A. ...`, `B. ...`).
+
 ## Hỗ trợ Giải thích Đa đoạn [EXPLANATION], Sơ đồ Kèm ảnh Bên ngoài Side-by-Side & Lightbox Zoom Modal — 2026-10-15
 
 - **Issue 1: Hỗ trợ Giải thích Đa đoạn `[EXPLANATION]` (Backend Parser -> Frontend Review)**:

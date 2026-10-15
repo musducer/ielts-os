@@ -883,7 +883,7 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
 
         url_match = url_re.search(line)
         if url_match and not image_url:
-            image_url = url_match.group(0)
+            image_url = html.unescape(url_match.group(0)).replace("&amp;", "&").strip()
             continue
         if in_options:
             options.append(re.sub(r'^\s*[A-Za-z][\.)]\s*', '', line).strip())
@@ -1119,7 +1119,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         if raw.upper().startswith("IMAGE:"):
             found = url_re.search(raw)
             if found:
-                image_url = found.group(0)
+                image_url = html.unescape(found.group(0)).replace("&amp;", "&").strip()
             continue
         if raw.upper().startswith("IMAGE_MODE:"):
             requested_mode = raw.split(":", 1)[1].strip().upper().replace("-", "_")
@@ -1212,7 +1212,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             h = paragraph_to_html(item)
             if not h: continue
             html_lines.append(h)
-            text_lines.append(re.sub(r'<[^>]+>', '', h).strip())
+            text_lines.append(html.unescape(re.sub(r'<[^>]+>', '', h)).strip())
         elif isinstance(item, Table):
             html_lines.append(table_to_html(item))
             text_lines.append("[TABLE]")
@@ -1229,7 +1229,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     in_context = False
     in_options = False
     active_explanation_targets: List[str] = []
-    group_image_url = fallback_image_url
+    group_image_url = html.unescape(fallback_image_url).replace("&amp;", "&").strip() if fallback_image_url else None
     
     for h_line, t_line in zip(html_lines, text_lines):
         t_upper = t_line.upper()
@@ -1239,7 +1239,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if not img_match:
             img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', h_line, re.IGNORECASE)
         if img_match and not group_image_url:
-            group_image_url = img_match.group(1).strip()
+            group_image_url = html.unescape(img_match.group(1)).replace("&amp;", "&").strip()
             if re.search(r'^\s*IMAGE:\s*', t_line, re.IGNORECASE):
                 continue
 
@@ -1651,10 +1651,11 @@ def parse_writing_docx_to_quiz(doc):
                     else:
                         task["recommendedMinutes"] = int(digits)
                 else:
-                    parsed_url = urllib.parse.urlparse(value)
-                    if not value or parsed_url.scheme != "https" or not parsed_url.netloc:
+                    clean_val = html.unescape(value).replace("&amp;", "&").strip()
+                    parsed_url = urllib.parse.urlparse(clean_val)
+                    if not clean_val or parsed_url.scheme != "https" or not parsed_url.netloc:
                         raise DocxImportValidationError("Writing DOCX: [MEDIA] must contain one public HTTPS URL.")
-                    task["mediaUrl"] = value
+                    task["mediaUrl"] = clean_val
                 continue
 
             if in_prompt:
@@ -3828,7 +3829,7 @@ async def ai_feedback(
         task_title = payload.get("task_title") or payload.get("taskTitle") or f"Task {task_num}"
         prompt = str(payload.get("prompt") or payload.get("taskPrompt") or "").strip()
         essay = str(payload.get("essay") or payload.get("studentEssay") or "").strip()
-        media_url = str(payload.get("media_url") or payload.get("mediaUrl") or payload.get("chart_url") or payload.get("chartUrl") or "").strip()
+        media_url = html.unescape(str(payload.get("media_url") or payload.get("mediaUrl") or payload.get("chart_url") or payload.get("chartUrl") or "")).replace("&amp;", "&").strip()
 
         if not essay:
             return {

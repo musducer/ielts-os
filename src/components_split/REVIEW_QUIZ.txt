@@ -13,6 +13,7 @@
               globalStyles={globalStyles}
           />;
       }
+      const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -838,13 +839,9 @@
                           {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
                               <img
                                   key={idx}
-                                  src={imgUrl}
+                                  src={cleanMediaUrl(imgUrl)}
                                   alt="Reading passage illustration"
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => setLightboxImageUrl(imgUrl)}
-                                  title={tx("Bấm để phóng to", "Click to zoom")}
-                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15, cursor: 'zoom-in' }}
+                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15 }}
                               />
                           ))}
                           {hasSlots ? (() => {
@@ -1264,7 +1261,7 @@
                               const options = optionCells.map(option => option.value);
                               const infoGrid = optionCells.every(option => option.infoGrid);
                               const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
-                              const mapImage = formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '';
+                              const mapImage = (formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '').replace(/&amp;/gi, '&');
                               const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
                               const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
                                   || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
@@ -1422,22 +1419,9 @@
                               const renderTextBox = (box:DiagramTextBox) => textOnly(box.text || "").split(/(\[\d+\])/g).map((part:string,index:number)=>{const marker=part.match(/^\[(\d+)\]$/);return marker?renderResultGap(marker[1],`${box.id}-gap-${index}`):<span key={`${box.id}-text-${index}`}>{part}</span>;});
                               return <section key={`diagram-review-${q.id}`} className="rv-completion-review">
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  {imageUrl && (
-                                      <div style={{ marginBottom: 10 }}>
-                                          <button
-                                              type="button"
-                                              onClick={() => setLightboxImageUrl(imageUrl)}
-                                              title={tx("Bấm để phóng to sơ đồ", "Click to zoom diagram")}
-                                              style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: C.text, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                                          >
-                                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                              <span>{tx("Phóng to sơ đồ", "Zoom diagram")}</span>
-                                          </button>
-                                      </div>
-                                  )}
                                   <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
                                       <div style={{position:'relative',minWidth:760,aspectRatio:diagramAspectRatio,background:'#fff'}}>
-                                          {imageUrl && <img src={imageUrl} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
+                                          {imageUrl && <img src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
                                           {!isOverlayDiagram && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:DiagramTextBox)=>{if(!Number.isFinite(Number(box.targetX))||!Number.isFinite(Number(box.targetY))) return null;const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||26)/2;const y1=box.anchor==='center'?Number(box.y):Number(box.y)+(Number(box.height)||16)/2;return <line key={`diagram-review-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke"/>;})}</svg>}
                                           {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
                                       </div>
@@ -1472,15 +1456,7 @@
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
                                           {mapUrl ? (
-                                              <div
-                                                  role="button"
-                                                  tabIndex={0}
-                                                  onClick={() => setLightboxImageUrl(mapUrl)}
-                                                  title={tx("Bấm để phóng to hình ảnh bản đồ", "Click to zoom map")}
-                                                  style={{ cursor: 'zoom-in', display: 'inline-block' }}
-                                              >
-                                                  <img src={mapUrl} alt="Map labelling diagram" />
-                                              </div>
+                                              <img src={cleanMediaUrl(mapUrl)} alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
                                           ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
@@ -1544,33 +1520,12 @@
                                   <div className="group-context">
                                       <div dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />
                                       {Boolean((q as any).groupImageUrl || (q as any).diagramImageUrl) && (
-                                          <div
-                                              style={{
-                                                  marginTop: 10,
-                                                  marginBottom: 10,
-                                                  textAlign: 'center',
-                                                  cursor: 'zoom-in',
-                                                  background: '#fff',
-                                                  border: `1px solid ${C.border}`,
-                                                  borderRadius: 8,
-                                                  padding: 8,
-                                                  display: 'inline-block',
-                                                  maxWidth: '100%',
-                                              }}
-                                              role="button"
-                                              tabIndex={0}
-                                              onClick={() => setLightboxImageUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
-                                              title={tx("Bấm để phóng to hình ảnh sơ đồ", "Click to zoom diagram")}
-                                          >
+                                          <div style={{ marginTop: 10, marginBottom: 10 }}>
                                               <img
-                                                  src={(q as any).groupImageUrl || (q as any).diagramImageUrl}
+                                                  src={cleanMediaUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
                                                   alt="Diagram reference"
-                                                  style={{ maxWidth: '100%', maxHeight: 260, objectFit: 'contain', display: 'block', margin: '0 auto', borderRadius: 4 }}
+                                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block', borderRadius: 4 }}
                                               />
-                                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, fontSize: 11, color: C.sub, fontWeight: 600 }}>
-                                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                                                  <span>{tx("Bấm để phóng to", "Click to zoom")}</span>
-                                              </div>
                                           </div>
                                       )}
                                   </div>
@@ -1616,88 +1571,6 @@
                       )})}
                   </div>
               </div>
-          {/* Lightbox Modal for Diagrams & Visuals */}
-          {lightboxImageUrl && typeof document !== 'undefined' && createPortal(
-              <div
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label={tx("Phóng to hình ảnh", "Image zoom")}
-                  style={{
-                      position: 'fixed',
-                      inset: 0,
-                      zIndex: 999999,
-                      background: 'rgba(15, 23, 42, 0.78)',
-                      backdropFilter: 'blur(6px)',
-                      WebkitBackdropFilter: 'blur(6px)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 24,
-                      animation: 'fadeIn 0.15s ease-out',
-                  }}
-                  onClick={() => setLightboxImageUrl(null)}
-              >
-                  <div
-                      style={{
-                          position: 'relative',
-                          maxWidth: 'min(92vw, 1100px)',
-                          maxHeight: '90vh',
-                          background: '#ffffff',
-                          borderRadius: 12,
-                          padding: 16,
-                          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                  >
-                      <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                              {tx("Hình ảnh sơ đồ phóng to", "Enlarged Diagram")}
-                          </span>
-                          <button
-                              type="button"
-                              onClick={() => setLightboxImageUrl(null)}
-                              title={tx("Đóng (Esc)", "Close (Esc)")}
-                              aria-label={tx("Đóng", "Close")}
-                              style={{
-                                  background: '#f1f5f9',
-                                  border: 'none',
-                                  borderRadius: 6,
-                                  padding: '5px 8px',
-                                  cursor: 'pointer',
-                                  color: '#475569',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  transition: 'background 0.15s',
-                              }}
-                          >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                              <span>{tx("Đóng", "Close")}</span>
-                          </button>
-                      </div>
-                      <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
-                          <img
-                              src={lightboxImageUrl}
-                              alt="Enlarged diagram visual"
-                              style={{
-                                  maxWidth: '100%',
-                                  maxHeight: 'calc(90vh - 80px)',
-                                  objectFit: 'contain',
-                                  display: 'block',
-                                  borderRadius: 6,
-                              }}
-                          />
-                      </div>
-                  </div>
-              </div>,
-              document.body
-          )}
           </div>
       );
   }

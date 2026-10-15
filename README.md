@@ -22,7 +22,7 @@ Trong không gian chấm và review Writing (Manuscript Editorial Desk):
 
 Writing uses a dedicated two-part IELTS workspace. Part 1 and Part 2 share one timer and one attempt, while each answer is autosaved independently. The test room uses the same renderer for Preview and student runtime, supports the existing highlight/note tools on prompts, and renders optional Part 1 media beneath its prompt.
 
-Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase Storage SVG links with `?alt=media&token=...` query strings. Remote SVG is rendered through normal `<img>` tags, not injected as inline SVG.
+Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase Storage links with `?alt=media&token=...` query strings. URLs are automatically unescaped across backend parser and frontend image components to eliminate `&amp;token=` 403 Forbidden errors. Remote SVG is rendered through normal `<img>` tags, not injected as inline SVG.
 
 ## Public release additions
 
@@ -34,8 +34,8 @@ Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase St
 - Batch DOCX import accepts up to 20 Reading, Listening, Writing, or Integrated files. Exam Builder reviews every file and adds only the teacher-confirmed valid subset in one catalog write; Quest keeps its ordered-chain confirmation flow.
 - Complete Bilingual (EN / VI) Localization Parity: Reactive `tx(vi, en)` engine throughout all teacher and student surfaces (Writing Feedback desk, selection composer, X-Ray telemetry bar, criteria scores, Academic Assessment PDF Dossier, Student Portal, Exam Builder, Live Arena, and Active Exam room). Eliminates hardcoded Vietnamese text leaks when switched to English mode.
 - Multi-Paragraph `[EXPLANATION]` Support: Preservation of `\n\n` paragraph breaks across question-level explanations and supplement DOCX files without line flattening or leakage into question text. Review quiz renders distinct, beautifully spaced `<p>` paragraphs.
-- External Diagram Labelling (Side-by-Side 2-Column Layout): Map, plan, and diagram questions with external blanks or drag cards render as a responsive side-by-side layout (sticky diagram card on the left, question dropzone/blank rows and option bank on the right). Includes graceful parser fallback for `[MAP_DRAG]` without slots and `[DIAGRAM_LABEL]` without boxes.
-- Click-to-Zoom Lightbox Modal: Full-screen centered modal via `createPortal` with backdrop blur, SVG close button, and Esc listener for Writing Task 1 charts, test room diagrams, and review visuals.
+- External Diagram Labelling (Official Computer-Delivered IELTS Layout): Map, plan, and diagram questions with external blanks or drag cards render as a responsive side-by-side layout: clean diagram on the left without zoom/placeholder container; clean question labels without bracketed markers on the right; inline dashed dropzones displaying bold question numbers when empty and styled blue option pills when filled; inline bookmark button; and a bottom flex-wrap draggable option bank with letter prefixes and no container box. Includes graceful parser fallback for `[MAP_DRAG]` without slots and `[DIAGRAM_LABEL]` without boxes.
+- Click-to-Zoom Lightbox Modal (Writing Task 1 Exclusive): Full-screen centered modal via `createPortal` with backdrop blur, SVG close button, and Esc listener strictly for Writing Task 1 charts in teacher evaluation and student review.
 - Listening Range Timestamps & Interactive Transcript Navigation: Full support for both single timestamps (`[mm:ss]`) and range timestamps (`[mm:ss - mm:ss]`) with Word dash tolerances (`-`, `–`, `—`, `−`, `~`, `to`). Interactive inline badges in teacher explanations and Why modal footer seek audio to start seconds and locate evidence in transcript via multi-node TreeWalker with paragraph-level fallback.
 
 ### Retention cron
