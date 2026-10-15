@@ -26,6 +26,15 @@
     - `src/WritingFeedback.tsx`: Thêm hiệu ứng hover `cursor: 'zoom-in'`, huy hiệu "Bấm để phóng to" (`tx('Bấm để phóng to', 'Click to zoom')`), và modal Lightbox toàn màn hình qua `createPortal(..., document.body)` với hiệu ứng làm mờ nền (`backdropFilter: 'blur(8px)'`), nút đóng SVG, phím tắt `Escape` và sự kiện click ra ngoài để đóng nhanh.
     - `src/App.template.tsx`, `ACTIVE_EXAM.txt`, `REVIEW_QUIZ.txt`: Tích hợp modal Lightbox tương tự qua `createPortal` cho tất cả ảnh sơ đồ, bản đồ và hình ảnh tham chiếu trong phòng thi và phòng xem lại.
 
+- **Hỗ trợ Mốc thời gian Dải `[mm:ss - mm:ss]` & Điều hướng Transcript Listening Đa năng**:
+  - *Regex & Chuẩn hóa Parser*: Mở rộng `RE_MANUAL_TIMESTAMP` và `TIMESTAMP_TOKEN_RE` nhận diện cả mốc đơn `[mm:ss]` và mốc dải `[mm:ss - mm:ss]` với mọi biến thể gạch nối (Word en-dash `–`, em-dash `—`, minus `−`, `~`, `to`) và định dạng giờ `hh:mm:ss`. Lưu trữ cả `startTime` và `endTime` trong `ManualExplanationTimestamp`.
+  - *Bảo toàn Dữ liệu Firestore*: `parseManualExplanation` gộp các mốc có sẵn từ `value.parsedTimestamps` với mốc bóc tách mới, chống mất mốc thời gian của bài thi cũ.
+  - *Giao diện Review Listening*:
+    - Hỗ trợ transcript từ cả `quiz.transcript` và DOCX `[PASSAGE]` (`passageHtml`).
+    - Bóc tách block transcript hỗ trợ tiêu đề mốc thời gian dạng `[mm:ss - mm:ss]` hoặc `(mm:ss - mm:ss)`, lưu `data-rv-transcript-start` và `data-rv-transcript-end`. Nếu transcript là hội thoại thông thường không có header mốc, tách theo đoạn văn `\n+` để tính năng locate quote hoạt động mượt mà.
+    - `rvJumpToTranscript` hỗ trợ dải mốc, ưu tiên tìm theo quote (độ dài >= 4), sau đó tìm block khớp hoặc bao phủ dải mốc, dùng TreeWalker highlight chính xác cụm quote xuyên qua các thẻ con `<strong>`, và cuộn êm vào giữa màn hình.
+    - Trong lời giải thích của giáo viên (`rvRenderManualExplanationCopy` và modal Why), render mốc thời gian thành các huy hiệu inline badge (`.rv-review-action-time`) cho phép click tua audio trực tiếp.
+
 ## Định tuyến Đánh giá IELTS Writing Sang Mô hình Suy luận/Đa phương tiện & Hiệu chuẩn Chống Giảm Điểm Oan (Anti-Band Deflation) — 2026-10-15
 
 - **Bộ định tuyến chuyên dụng `_writing_eval_chat`**:

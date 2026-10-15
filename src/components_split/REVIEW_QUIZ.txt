@@ -44,12 +44,29 @@
       const rvIsListeningPart = (idx: number) => rvIsListeningExam || (rvIsIntegrated && idx === 0);
       const rvActiveIsListening = rvIsListeningPart(rvActiveIdx);
       const rvUsePartLabels = rvIsListeningExam || rvIsIntegrated;
-      // Timestamp trong giải thích AI -> nút bấm tua audio review tới đúng mốc bắt đầu.
+      const rvTimestampSeconds = (value: string) => {
+          const units = String(value || '').match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(':').map(Number) || [];
+          return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : -1;
+      };
+      const rvTimestampRangeSeconds = (value: string | ManualExplanationTimestamp | any): { start: number; end?: number } => {
+          if (!value) return { start: -1 };
+          if (typeof value === 'object' && typeof value.startTime === 'number') {
+              return {
+                  start: value.startTime,
+                  end: typeof value.endTime === 'number' ? value.endTime : undefined,
+              };
+          }
+          const str = String(value || '').trim();
+          const match = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?/i);
+          if (!match) return { start: -1 };
+          const start = rvTimestampSeconds(match[1]);
+          const end = match[2] ? rvTimestampSeconds(match[2]) : undefined;
+          return { start, ...(end !== undefined && end >= 0 ? { end } : {}) };
+      };
+      // Timestamp trong giải thích AI/thầy cô -> nút bấm tua audio review tới đúng mốc bắt đầu.
       const rvSeek = (tstr: string) => {
-          const time = String(tstr).match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0];
-          if (!time) return;
-          const p = time.split(':').map(Number);
-          const secs = p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
+          const { start: secs } = rvTimestampRangeSeconds(tstr);
+          if (!Number.isFinite(secs) || secs < 0) return;
           const el = document.getElementById('review-audio') as HTMLAudioElement | null;
           if (!el) return;
           // Chặn mốc vượt độ dài file (mốc rác) — không tua bậy
@@ -58,34 +75,97 @@
           setRvAudioCur(secs);
           void requestReviewAudioPlayback();
       };
-      const rvTimestampSeconds = (value: string) => {
-          const units = String(value || '').match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(':').map(Number) || [];
-          return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : -1;
-      };
       const rvJumpToTranscript = (timestamp: string, quote = '') => {
-          const requested = rvTimestampSeconds(timestamp);
-          if (requested < 0) return;
-          const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-rv-transcript-start]'));
-          const target = blocks.find(block => Number(block.dataset.rvTranscriptStart) === requested)
-              || blocks.filter(block => Number(block.dataset.rvTranscriptStart) <= requested).pop()
-              || blocks[0];
+          const { start: requestedStart, end: requestedEnd } = rvTimestampRangeSeconds(timestamp);
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>('.rv-transcript-block'));
+          if (!blocks.length) return;
+
+          let target: HTMLElement | null = null;
+          const trimmedQuote = String(quote || '').replace(/\s+/g, ' ').trim();
+          const normalizedQuote = rvNormalizeEvidenceText(trimmedQuote);
+
+          // 1. If quote is provided (length >= 4), try finding the block whose normalized text contains it
+          if (normalizedQuote.length >= 4) {
+              target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote)) || null;
+          }
+
+          // 2. Otherwise, find by timestamp: exact match, overlap with [requestedStart, requestedEnd], or closest preceding block
+          if (!target && requestedStart >= 0) {
+              const timedBlocks = blocks.filter(b => b.hasAttribute('data-rv-transcript-start'));
+              const reqEnd = requestedEnd !== undefined && requestedEnd >= requestedStart ? requestedEnd : requestedStart;
+
+              // Exact match on start
+              target = timedBlocks.find(b => Number(b.dataset.rvTranscriptStart) === requestedStart) || null;
+
+              // Overlapping range
+              if (!target) {
+                  target = timedBlocks.find(b => {
+                      const bStart = Number(b.dataset.rvTranscriptStart);
+                      const bEnd = Number(b.dataset.rvTranscriptEnd ?? bStart);
+                      return Math.max(requestedStart, bStart) <= Math.min(reqEnd, bEnd);
+                  }) || null;
+              }
+
+              // Closest preceding block (start <= requestedStart)
+              if (!target) {
+                  target = timedBlocks.filter(b => Number(b.dataset.rvTranscriptStart) <= requestedStart).pop() || null;
+              }
+
+              // Fallback to first timed block
+              if (!target && timedBlocks.length) {
+                  target = timedBlocks[0];
+              }
+          }
+
+          // Fallback to first block
+          if (!target) {
+              target = blocks[0];
+          }
           if (!target) return;
+
           blocks.forEach(block => block.classList.remove('rv-transcript-evidence'));
-          document.querySelectorAll('.rv-transcript-quote').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
+          document.querySelectorAll('.rv-transcript-quote').forEach(mark => {
+              const parent = mark.parentNode;
+              if (parent) {
+                  parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+                  parent.normalize();
+              }
+          });
           target.classList.add('rv-transcript-evidence');
-          if (quote) {
-              target.setAttribute('data-evidence-quote', quote);
-              const copy = target.querySelector('.rv-transcript-copy');
-              const textNode = copy?.firstChild;
-              const normalizedQuote = String(quote).replace(/\s+/g, ' ').trim();
-              const at = String(copy?.textContent || '').toLocaleLowerCase().indexOf(normalizedQuote.toLocaleLowerCase());
-              if (textNode && at >= 0) {
-                  const range = document.createRange();
-                  range.setStart(textNode, at);
-                  range.setEnd(textNode, at + normalizedQuote.length);
-                  const mark = document.createElement('mark');
-                  mark.className = 'rv-transcript-quote';
-                  try { range.surroundContents(mark); } catch { /* Whole-block highlight is the safe fallback. */ }
+
+          if (trimmedQuote && trimmedQuote.length >= 4) {
+              target.setAttribute('data-evidence-quote', trimmedQuote);
+              const copy = target.querySelector('.rv-transcript-copy') || target;
+              const escaped = trimmedQuote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+              const matcher = new RegExp(escaped, 'i');
+              const copyText = copy.textContent || '';
+              const match = copyText.match(matcher);
+              if (match && match.index !== undefined) {
+                  const walker = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
+                  const nodes: Array<{ node: Text; start: number; end: number }> = [];
+                  let cursor = 0;
+                  for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
+                      const length = textNode.data.length;
+                      nodes.push({ node: textNode, start: cursor, end: cursor + length });
+                      cursor += length;
+                  }
+                  const start = match.index;
+                  const end = start + match[0].length;
+                  nodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+                      const from = Math.max(start, nodeStart);
+                      const to = Math.min(end, nodeEnd);
+                      if (from >= to || !node.parentNode) return;
+                      const fragment = document.createDocumentFragment();
+                      const localStart = from - nodeStart;
+                      const localEnd = to - nodeStart;
+                      if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
+                      const mark = document.createElement('mark');
+                      mark.className = 'rv-transcript-quote';
+                      mark.textContent = node.data.slice(localStart, localEnd);
+                      fragment.appendChild(mark);
+                      if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
+                      node.parentNode.replaceChild(fragment, node);
+                  });
               }
           }
           target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -234,13 +314,14 @@
           return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
       };
       const rvJumpToTranscriptQuote = (quotes: string[]) => {
-          const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-rv-transcript-start]'));
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>('.rv-transcript-block'));
           const targetQuote = quotes.map(quote => String(quote || '').replace(/\s+/g, ' ').trim()).find(quote => quote.length >= 4);
           if (!blocks.length || !targetQuote) return false;
           const normalizedQuote = rvNormalizeEvidenceText(targetQuote);
           const target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote));
           if (!target) return false;
-          rvJumpToTranscript(rvSecondsToLabel(Number(target.dataset.rvTranscriptStart) || 0), targetQuote);
+          const startSecs = target.dataset.rvTranscriptStart ? Number(target.dataset.rvTranscriptStart) : -1;
+          rvJumpToTranscript(startSecs >= 0 ? rvSecondsToLabel(startSecs) : '', targetQuote);
           return true;
       };
       const rvJumpToManualEvidence = (question: any) => {
@@ -256,8 +337,8 @@
           rvJumpToEvidence(primaryQuote);
       };
       const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
-          const secs = Number(ts?.startTime);
-          if (!Number.isFinite(secs)) return;
+          const { start: secs } = rvTimestampRangeSeconds(ts);
+          if (!Number.isFinite(secs) || secs < 0) return;
           const el = document.getElementById('review-audio') as HTMLAudioElement | null;
           if (!el) return;
           if (el.duration && isFinite(el.duration) && secs > el.duration) return;
@@ -267,15 +348,46 @@
           if (ts.label) rvJumpToTranscript(ts.label, quote);
           void requestReviewAudioPlayback();
       };
-      const rvRenderManualExplanationCopy = (manual: ManualExplanation) => {
+      const rvRenderManualExplanationCopy = (manual: ManualExplanation, question?: any) => {
           const raw = String(manual.rawText || '').trim();
           const paras = raw.split(/\n+/).map(p => p.trim()).filter(Boolean);
+          const TOKEN_SPLIT_RE = /("[^"]+"|(?:\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?\]))/gi;
           return <div className="rv-manual-copy">
               {paras.map((para, pIdx) => {
-                  const parts = para.split(/("[^"]+")/g).filter(part => part.length > 0);
+                  const parts = para.split(TOKEN_SPLIT_RE).filter(part => part.length > 0);
                   return (
                       <p key={pIdx} className="rv-explain-p" style={{ marginBottom: pIdx < paras.length - 1 ? 8 : 0 }}>
-                          {parts.map((part, index) => part.startsWith('"') && part.endsWith('"') ? <span key={index} className="rv-manual-quote">{part}</span> : <React.Fragment key={index}>{part}</React.Fragment>)}
+                          {parts.map((part, index) => {
+                              if (part.startsWith('"') && part.endsWith('"')) {
+                                  return <span key={index} className="rv-manual-quote">{part}</span>;
+                              }
+                              if (/^\[\d{1,2}:\d{2}/i.test(part) && part.endsWith(']')) {
+                                  const cleanLabel = part.slice(1, -1).trim();
+                                  const { start, end } = rvTimestampRangeSeconds(cleanLabel);
+                                  const tsObj: ManualExplanationTimestamp = {
+                                      startTime: start,
+                                      endTime: end,
+                                      label: cleanLabel
+                                  };
+                                  return (
+                                      <button
+                                          key={index}
+                                          type="button"
+                                          className="rv-review-action rv-review-action-time"
+                                          style={{ display: 'inline-flex', padding: '2px 7px', margin: '0 4px', fontSize: 11, verticalAlign: 'baseline', minHeight: 22 }}
+                                          onClick={() => {
+                                              if (question) rvSeekManualTimestamp(tsObj, question);
+                                              else rvSeek(cleanLabel);
+                                          }}
+                                          title={`Play audio from ${cleanLabel}`}
+                                      >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                                          {cleanLabel}
+                                      </button>
+                                  );
+                              }
+                              return <React.Fragment key={index}>{part}</React.Fragment>;
+                          })}
                       </p>
                   );
               })}
@@ -605,13 +717,21 @@
                                   </button>
                               </div>
                               <div className="rv-manual-body">
-                                  {rvRenderManualExplanationCopy(manual)}
-                                  {!!manual.parsedQuotes.length && (
-                                      <div className="rv-manual-evidence-list">
-                                          <button type="button" className="rv-manual-evidence-pill" onClick={() => { rvJumpToManualEvidence(manualExplanationQuestion); setManualExplanationQuestion(null); }}>
-                                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-                                              Locate evidence
-                                          </button>
+                                  {rvRenderManualExplanationCopy(manual, manualExplanationQuestion)}
+                                  {((manual.parsedQuotes && manual.parsedQuotes.length > 0) || (rvActiveIsListening && manual.parsedTimestamps && manual.parsedTimestamps.length > 0)) && (
+                                      <div className="rv-manual-evidence-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                                          {!!manual.parsedQuotes.length && (
+                                              <button type="button" className="rv-manual-evidence-pill" onClick={() => { rvJumpToManualEvidence(manualExplanationQuestion); setManualExplanationQuestion(null); }}>
+                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                                                  Locate evidence
+                                              </button>
+                                          )}
+                                          {rvActiveIsListening && (manual.parsedTimestamps || []).map((ts: ManualExplanationTimestamp, index: number) => (
+                                              <button key={`${ts.label}-${index}`} type="button" className="rv-review-action rv-review-action-time" onClick={() => { rvSeekManualTimestamp(ts, manualExplanationQuestion); }} title={`Play audio from ${ts.label}`}>
+                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                                                  {ts.label}
+                                              </button>
+                                          ))}
                                       </div>
                                   )}
                               </div>
@@ -764,9 +884,10 @@
                       </div>
                       );
                   })()}
-                  {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
+                    {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
                   {rvActiveIsListening && (() => {
-                      const transcriptRaw = reviewQuiz.quiz.transcript || "";
+                      const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
+                      const transcriptRaw = reviewQuiz.quiz.transcript || passageHtml || "";
                       const transcriptText = String(transcriptRaw)
                           .replace(/<(?:br)\s*\/?\s*>/gi, '\n')
                           .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
@@ -774,16 +895,41 @@
                           .replace(/&nbsp;/gi, ' ')
                           .replace(/\r/g, '')
                           .trim();
-                      const transcriptBlocks = transcriptText
-                          .split(/(?=\(\d{1,2}:\d{2}(?::\d{2})?\s*-\s*\d{1,2}:\d{2}(?::\d{2})?\))/)
-                          .map(block => block.trim())
-                          .filter(Boolean)
-                          .map((block, index) => {
-                              const match = block.match(/^\((\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?)\)\s*\n?([\s\S]*)$/);
-                              return match
-                                  ? { key: `${match[1]}-${index}`, start: match[1], label: `${match[1]} - ${match[2]}`, text: match[3].trim() }
-                                  : { key: `plain-${index}`, start: '', label: '', text: block };
-                          });
+                      const hasTimestampHeaders = /[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/.test(transcriptText);
+                      const transcriptBlocks = hasTimestampHeaders
+                          ? transcriptText
+                              .split(/(?=[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])])/)
+                              .map(block => block.trim())
+                              .filter(Boolean)
+                              .map((block, index) => {
+                                  const match = block.match(/^[\[(](\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?[\])]\s*\n?([\s\S]*)$/i);
+                                  if (match) {
+                                      const startStr = match[1];
+                                      const endStr = match[2];
+                                      const label = endStr ? `${startStr} - ${endStr}` : startStr;
+                                      const startSecs = rvTimestampSeconds(startStr);
+                                      const endSecs = endStr ? rvTimestampSeconds(endStr) : undefined;
+                                      return {
+                                          key: `${startStr}-${index}`,
+                                          startSecs,
+                                          endSecs,
+                                          label,
+                                          text: match[3].trim()
+                                      };
+                                  }
+                                  return { key: `plain-${index}`, startSecs: undefined, endSecs: undefined, label: '', text: block };
+                              })
+                          : transcriptText
+                              .split(/\n+/)
+                              .map(line => line.trim())
+                              .filter(Boolean)
+                              .map((line, index) => ({
+                                  key: `para-${index}`,
+                                  startSecs: undefined,
+                                  endSecs: undefined,
+                                  label: '',
+                                  text: line
+                              }));
                       const downloadTranscript = () => {
                           const body = /<[a-z][\s\S]*>/i.test(transcriptRaw) ? transcriptRaw : transcriptText.split(/\n+/).map(line => `<p>${line.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`).join('');
                           const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'><head><meta charset='utf-8'><title>Transcript</title></head><body>${body}</body></html>`;
@@ -798,7 +944,18 @@
                                   <div><div style={{ fontSize: 16, fontWeight: 900, color: C.accent }}>TRANSCRIPT</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Listening evidence, ordered by the original audio timeline</div></div>
                                   {transcriptText ? <button onClick={downloadTranscript} title="Download transcript" style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 10px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Transcript (.doc)</button> : null}
                               </div>
-                              {transcriptBlocks.length ? transcriptBlocks.map(block => <article key={block.key} id={block.start ? `rv-transcript-${rvTimestampSeconds(block.start)}` : undefined} data-rv-transcript-start={block.start ? rvTimestampSeconds(block.start) : undefined} className="rv-transcript-block">{block.label && <div className="rv-transcript-time">{block.label}</div>}<p className="rv-transcript-copy">{block.text}</p></article>) : <div style={{ padding: '34px 8px', color: C.sub, fontSize: 14, lineHeight: 1.6 }}>Transcript is not available for this test.</div>}
+                              {transcriptBlocks.length ? transcriptBlocks.map(block => (
+                                  <article
+                                      key={block.key}
+                                      id={block.startSecs !== undefined ? `rv-transcript-${block.startSecs}` : undefined}
+                                      data-rv-transcript-start={block.startSecs !== undefined ? block.startSecs : undefined}
+                                      data-rv-transcript-end={block.startSecs !== undefined ? (block.endSecs ?? block.startSecs) : undefined}
+                                      className="rv-transcript-block"
+                                  >
+                                      {block.label && <div className="rv-transcript-time">{block.label}</div>}
+                                      <p className="rv-transcript-copy">{block.text}</p>
+                                  </article>
+                              )) : <div style={{ padding: '34px 8px', color: C.sub, fontSize: 14, lineHeight: 1.6 }}>Transcript is not available for this test.</div>}
                           </div>
                       );
 

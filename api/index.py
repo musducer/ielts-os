@@ -491,7 +491,10 @@ RE_Q_NUMBER = re.compile(r'^\d+[\.\)\:]')
 RE_TFNG = re.compile(r'\btrue\b[\s\S]*\bfalse\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
 RE_YNNG = re.compile(r'\byes\b[\s\S]*\bno\b[\s\S]*\bnot\s+given\b', re.IGNORECASE)
 RE_MANUAL_EXPLANATION = re.compile(r'^\s*\[EXPLANATION\]\s*(?:(\d+(?:\s*(?:[-–—]|,)\s*\d+)*)\s*[:\.\)-]\s*)?(.*)$', re.IGNORECASE)
-RE_MANUAL_TIMESTAMP = re.compile(r'\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]')
+RE_MANUAL_TIMESTAMP = re.compile(
+    r'\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]',
+    re.IGNORECASE
+)
 
 def _manual_timestamp_to_seconds(value: str) -> int:
     parts = [int(part) for part in str(value or "").split(":") if part.isdigit()]

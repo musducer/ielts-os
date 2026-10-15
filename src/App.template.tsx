@@ -1682,6 +1682,8 @@ const manualTimestampToSeconds = (value: any) => {
   return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : 0;
 };
 
+const TIMESTAMP_TOKEN_RE = /\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?\]/gi;
+
 const parseManualExplanation = (value: any): ManualExplanation | undefined => {
   const rawSource = typeof value === "object" && value ? value.rawText : value;
   const rawClean = String(rawSource || "")
@@ -1698,14 +1700,26 @@ const parseManualExplanation = (value: any): ManualExplanation | undefined => {
   const parsedQuotes = Array.from(new Set(Array.from(rawText.matchAll(/"([^"]+)"/g))
     .map(match => match[1].replace(/\s+/g, " ").trim())
     .filter(Boolean)));
-  const parsedTimestamps = Array.from(rawText.matchAll(/\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]/g))
+  const freshTimestamps: ManualExplanationTimestamp[] = Array.from(rawText.matchAll(TIMESTAMP_TOKEN_RE))
     .map(match => {
       const startTime = manualTimestampToSeconds(match[1]);
       const endTime = match[2] ? manualTimestampToSeconds(match[2]) : undefined;
       const label = match[2] ? `${match[1]} - ${match[2]}` : match[1];
       return endTime === undefined ? { startTime, label } : { startTime, endTime, label };
-    })
-    .filter((item, index, all) => all.findIndex(other => other.startTime === item.startTime && other.endTime === item.endTime && other.label === item.label) === index);
+    });
+  const existingTimestamps: ManualExplanationTimestamp[] = (typeof value === "object" && value && Array.isArray(value.parsedTimestamps))
+    ? value.parsedTimestamps
+        .filter((ts: any) => ts && typeof ts.startTime === "number" && !isNaN(ts.startTime))
+        .map((ts: any) => ({
+          startTime: ts.startTime,
+          ...(ts.endTime !== undefined && !isNaN(ts.endTime) ? { endTime: ts.endTime } : {}),
+          label: String(ts.label || (ts.endTime !== undefined ? `${ts.startTime} - ${ts.endTime}` : `${ts.startTime}`)),
+        }))
+    : [];
+  const combined = [...freshTimestamps, ...existingTimestamps];
+  const parsedTimestamps = combined.filter((item, index, all) =>
+    all.findIndex(other => other.startTime === item.startTime && other.endTime === item.endTime) === index
+  );
   return { rawText, parsedQuotes, parsedTimestamps };
 };
 

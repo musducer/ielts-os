@@ -199,6 +199,75 @@ class ManualExplanationTests(unittest.TestCase):
         self.assertEqual(q["type"], "DRAG_DROP")
         self.assertEqual(q["correctAnswer"], "A. inverter")
 
+    def test_single_timestamp_parsing(self):
+        document = docx.Document()
+        document.add_paragraph("[TITLE] Single Timestamp Test")
+        document.add_paragraph("[TYPE] Listening")
+        document.add_paragraph("[PASSAGE]")
+        document.add_paragraph("Listen to audio.")
+        document.add_paragraph("[QUESTIONS]")
+        document.add_paragraph("[BLANK]")
+        document.add_paragraph("1. Test question")
+        document.add_paragraph("*answer")
+        document.add_paragraph('[EXPLANATION] 1: Mentioned at [01:24] in the conversation.')
+
+        quiz = parse_docx_to_quiz(document)
+        q = quiz["questions"][0]
+        timestamps = q["manualExplanation"]["parsedTimestamps"]
+        self.assertEqual(len(timestamps), 1)
+        self.assertEqual(timestamps[0]["startTime"], 84)
+        self.assertIsNone(timestamps[0].get("endTime"))
+        self.assertEqual(timestamps[0]["label"], "01:24")
+
+    def test_range_timestamp_parsing_ascii_hyphen(self):
+        document = docx.Document()
+        document.add_paragraph("[TITLE] Range Timestamp Hyphen Test")
+        document.add_paragraph("[TYPE] Listening")
+        document.add_paragraph("[PASSAGE]")
+        document.add_paragraph("Listen to audio.")
+        document.add_paragraph("[QUESTIONS]")
+        document.add_paragraph("[BLANK]")
+        document.add_paragraph("1. Test question")
+        document.add_paragraph("*answer")
+        document.add_paragraph('[EXPLANATION] 1: Discussed between [02:14 - 02:18].')
+
+        quiz = parse_docx_to_quiz(document)
+        q = quiz["questions"][0]
+        timestamps = q["manualExplanation"]["parsedTimestamps"]
+        self.assertEqual(len(timestamps), 1)
+        self.assertEqual(timestamps[0]["startTime"], 134)
+        self.assertEqual(timestamps[0]["endTime"], 138)
+        self.assertEqual(timestamps[0]["label"], "02:14 - 02:18")
+
+    def test_range_timestamp_parsing_word_dashes(self):
+        # Test en-dash (–)
+        res_endash = parse_manual_explanation_text('Discussed between [02:14 \u2013 02:18].')
+        ts_endash = res_endash["parsedTimestamps"]
+        self.assertEqual(len(ts_endash), 1)
+        self.assertEqual(ts_endash[0]["startTime"], 134)
+        self.assertEqual(ts_endash[0]["endTime"], 138)
+        self.assertEqual(ts_endash[0]["label"], "02:14 - 02:18")
+
+        # Test em-dash (—)
+        res_emdash = parse_manual_explanation_text('Discussed between [02:14 \u2014 02:18].')
+        ts_emdash = res_emdash["parsedTimestamps"]
+        self.assertEqual(len(ts_emdash), 1)
+        self.assertEqual(ts_emdash[0]["startTime"], 134)
+        self.assertEqual(ts_emdash[0]["endTime"], 138)
+        self.assertEqual(ts_emdash[0]["label"], "02:14 - 02:18")
+
+    def test_multiple_timestamps_in_same_explanation(self):
+        res = parse_manual_explanation_text('Intro at [01:24], then details follow at [02:14 - 02:18].')
+        ts = res["parsedTimestamps"]
+        self.assertEqual(len(ts), 2)
+        self.assertEqual(ts[0]["startTime"], 84)
+        self.assertIsNone(ts[0].get("endTime"))
+        self.assertEqual(ts[0]["label"], "01:24")
+
+        self.assertEqual(ts[1]["startTime"], 134)
+        self.assertEqual(ts[1]["endTime"], 138)
+        self.assertEqual(ts[1]["label"], "02:14 - 02:18")
+
 
 if __name__ == "__main__":
     unittest.main()

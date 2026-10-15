@@ -36,6 +36,7 @@ Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase St
 - Multi-Paragraph `[EXPLANATION]` Support: Preservation of `\n\n` paragraph breaks across question-level explanations and supplement DOCX files without line flattening or leakage into question text. Review quiz renders distinct, beautifully spaced `<p>` paragraphs.
 - External Diagram Labelling (Side-by-Side 2-Column Layout): Map, plan, and diagram questions with external blanks or drag cards render as a responsive side-by-side layout (sticky diagram card on the left, question dropzone/blank rows and option bank on the right). Includes graceful parser fallback for `[MAP_DRAG]` without slots and `[DIAGRAM_LABEL]` without boxes.
 - Click-to-Zoom Lightbox Modal: Full-screen centered modal via `createPortal` with backdrop blur, SVG close button, and Esc listener for Writing Task 1 charts, test room diagrams, and review visuals.
+- Listening Range Timestamps & Interactive Transcript Navigation: Full support for both single timestamps (`[mm:ss]`) and range timestamps (`[mm:ss - mm:ss]`) with Word dash tolerances (`-`, `–`, `—`, `−`, `~`, `to`). Interactive inline badges in teacher explanations and Why modal footer seek audio to start seconds and locate evidence in transcript via multi-node TreeWalker with paragraph-level fallback.
 
 ### Retention cron
 

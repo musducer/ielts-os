@@ -666,6 +666,7 @@ Rules:
 - All subsequent plain paragraphs (until the next tag `[...]`, next numbered question `^\d+[\.\)]`, or option line) are captured into the active question's explanation.
 - Paragraph breaks (`\n\n`) are preserved throughout the parsing pipeline and rendered in the Review Quiz as separate spaced `<p>` paragraphs.
 - Never let an explanation paragraph leak into question text or get flattened into a single monolithic run.
+- Explanations for Listening questions can include single timestamps (`[01:24]`) or range timestamps (`[02:14 - 02:18]`, `[02:14 – 02:18]`, `[02:14 — 02:18]`). The parser tolerates hyphen, en-dash, em-dash, minus, `~`, or `to`, and optional hours (`hh:mm:ss`). In Review Quiz, both single and range timestamps render as clickable inline badges that seek audio to the start seconds and jump to the matching transcript block.
 
 ---
 
