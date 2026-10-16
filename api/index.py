@@ -84,16 +84,16 @@ MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES = max(
 # A Vercel Python function is capped at 300 seconds. Five 9-minute chunks with
 # two workers leave time for one Storage read and retries; a 3-hour recording
 # would not. Larger source files must be split explicitly instead of timing out.
-MAX_AUDIO_TRANSCRIPTION_CHUNKS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_CHUNKS", 5, 1, 5)
+MAX_AUDIO_TRANSCRIPTION_CHUNKS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_CHUNKS", 8, 1, 12)
 WHISPER_CHUNK_SECONDS = _bounded_env_int("WHISPER_CHUNK_SECONDS", 540, 30, 600)
 MAX_AUDIO_TRANSCRIPTION_SECONDS = _bounded_env_int(
     "MAX_AUDIO_TRANSCRIPTION_SECONDS",
-    45 * 60,
+    60 * 60,
     60,
-    min(50 * 60, MAX_AUDIO_TRANSCRIPTION_CHUNKS * WHISPER_CHUNK_SECONDS),
+    7200,
 )
-MAX_AUDIO_TRANSCRIPTION_WORKERS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_WORKERS", 2, 1, 2)
-EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS = _bounded_env_int("EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS", 45, 5, 90)
+MAX_AUDIO_TRANSCRIPTION_WORKERS = _bounded_env_int("MAX_AUDIO_TRANSCRIPTION_WORKERS", 2, 1, 4)
+EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS = _bounded_env_int("EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS", 90, 5, 180)
 AUDIO_UPLOAD_TTL_SECONDS = _bounded_env_int("AUDIO_UPLOAD_TTL_SECONDS", 1800, 300, 3600)
 _AUDIO_UPLOAD_CONTENT_TYPES = {
     ".mp3": "audio/mpeg",
@@ -173,6 +173,77 @@ def _firebase_admin_app():
             except ValueError:
                 _FIREBASE_ADMIN_APP = firebase_admin.initialize_app(firebase_credentials.Certificate(service_account))
     return _FIREBASE_ADMIN_APP
+
+
+_GCP_AUTH_LOCK = threading.Lock()
+_GCP_CREDENTIALS = None
+_GCP_PROJECT_ID = None
+_GCP_TOKEN_CACHE: Dict[str, Any] = {"token": None, "expiry": 0.0}
+_GCP_DAILY_COUNTER: Dict[str, Any] = {"date": "", "count": 0}
+
+
+def _check_and_increment_gcp_quota() -> bool:
+    """Return True if under daily cap and increment counter; otherwise return False.
+    Enforces strict anti-billing-spike guardrail and Scale-to-Zero safety.
+    """
+    global _GCP_DAILY_COUNTER
+    today = datetime_module.datetime.now(datetime_module.timezone.utc).strftime("%Y-%m-%d")
+    with _GCP_AUTH_LOCK:
+        if _GCP_DAILY_COUNTER.get("date") != today:
+            _GCP_DAILY_COUNTER = {"date": today, "count": 0}
+        cap = int(os.environ.get("GCP_DAILY_REQUEST_CAP", "800"))
+        if _GCP_DAILY_COUNTER["count"] >= cap:
+            print(f"[GCP Circuit Breaker] Daily request cap ({cap}) reached for {today}. Falling back to free API key pool.")
+            return False
+        _GCP_DAILY_COUNTER["count"] += 1
+        return True
+
+
+def _reset_gcp_daily_counter_for_test(date: str = "", count: int = 0):
+    """Test helper to control the daily circuit breaker counter."""
+    global _GCP_DAILY_COUNTER, _GCP_CREDENTIALS, _GCP_PROJECT_ID, _GCP_TOKEN_CACHE
+    with _GCP_AUTH_LOCK:
+        _GCP_DAILY_COUNTER = {"date": date, "count": count}
+        _GCP_TOKEN_CACHE = {"token": None, "expiry": 0.0}
+        _GCP_CREDENTIALS = None
+        _GCP_PROJECT_ID = None
+
+
+def _get_gcp_access_token_and_project() -> Tuple[Optional[str], Optional[str]]:
+    """Return (access_token, project_id) using FIREBASE_SERVICE_ACCOUNT_JSON with in-memory caching and cost guardrails."""
+    flag = os.environ.get("ENABLE_GCP_VERTEX", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return None, None
+
+    raw_credentials = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw_credentials:
+        return None, None
+
+    global _GCP_CREDENTIALS, _GCP_PROJECT_ID, _GCP_TOKEN_CACHE
+    now = time.time()
+    with _GCP_AUTH_LOCK:
+        if _GCP_TOKEN_CACHE.get("token") and now < (_GCP_TOKEN_CACHE.get("expiry", 0) - 300):
+            return _GCP_TOKEN_CACHE["token"], _GCP_PROJECT_ID
+        try:
+            from google.oauth2 import service_account as _sa
+            from google.auth.transport.requests import Request as _GoogleAuthRequest
+
+            if _GCP_CREDENTIALS is None:
+                sa_info = json.loads(raw_credentials)
+                _GCP_PROJECT_ID = sa_info.get("project_id") or os.environ.get("GCP_PROJECT_ID")
+                _GCP_CREDENTIALS = _sa.Credentials.from_service_account_info(
+                    sa_info,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+            req = _GoogleAuthRequest()
+            _GCP_CREDENTIALS.refresh(req)
+            token = _GCP_CREDENTIALS.token
+            expiry = _GCP_CREDENTIALS.expiry.timestamp() if getattr(_GCP_CREDENTIALS, "expiry", None) else (now + 3600)
+            _GCP_TOKEN_CACHE = {"token": token, "expiry": expiry}
+            return token, _GCP_PROJECT_ID
+        except Exception as exc:
+            print(f"[GCP Auth] Could not mint token from service account: {exc}")
+            return None, None
 
 
 def _firebase_admin_firestore_client():
@@ -1975,6 +2046,194 @@ async def upload_docx_supplement(
         return {"success": False, "error": "Không thể xử lý file DOCX bổ sung này. Hãy kiểm tra lại định dạng file và thử lại."}
 
 
+def _cloud_vision_document_ocr(image_bytes: bytes, timeout_s: float = 30.0) -> Tuple[str, str]:
+    """Call Google Cloud Vision REST API (DOCUMENT_TEXT_DETECTION) using the GCP service account token."""
+    flag = os.environ.get("ENABLE_GCP_VERTEX", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return "", "GCP_DISABLED"
+    token, _ = _get_gcp_access_token_and_project()
+    if not token:
+        return "", "GCP_UNCONFIGURED"
+    if not _check_and_increment_gcp_quota():
+        return "", "GCP_DAILY_CAP_REACHED"
+
+    b64_content = base64.b64encode(image_bytes).decode("ascii")
+    url = "https://vision.googleapis.com/v1/images:annotate"
+    body = {
+        "requests": [
+            {
+                "image": {"content": b64_content},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+            }
+        ]
+    }
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        responses = data.get("responses") or []
+        if not responses:
+            return "", "VISION_EMPTY"
+        first = responses[0]
+        full_text = ((first.get("fullTextAnnotation") or {}).get("text") or "").strip()
+        return (full_text, "") if full_text else ("", "NO_TEXT_DETECTED")
+    except Exception as exc:
+        return "", f"VISION_ERROR: {str(exc)}"
+
+
+@app.post("/api/scan_exam_page")
+async def scan_exam_page(
+    files: List[UploadFile] = File(...),
+):
+    """Scan 1-5 printed/scanned IELTS exam pages (PNG, JPG, WEBP, or PDF) using Cloud Vision OCR
+    and Vertex AI Gemini 2.5 Pro (with fallback to free Gemini API) to generate sections & questions.
+    """
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vui lòng tải lên ít nhất 1 file.")
+    if len(files) > 5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tối đa 5 file mỗi lần quét.")
+
+    ocr_texts: List[str] = []
+    inline_parts: List[Dict[str, Any]] = []
+
+    for file in files:
+        raw_bytes = await file.read()
+        if not raw_bytes:
+            continue
+        filename = str(file.filename or "").lower()
+        content_type = str(file.content_type or "").lower()
+
+        # Determine MIME
+        if filename.endswith(".pdf") or "pdf" in content_type:
+            mime = "application/pdf"
+        elif filename.endswith(".png") or "png" in content_type:
+            mime = "image/png"
+        elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type or "jpg" in content_type:
+            mime = "image/jpeg"
+        elif filename.endswith(".webp") or "webp" in content_type:
+            mime = "image/webp"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Định dạng file không hỗ trợ: {file.filename}. Vui lòng chọn ảnh (PNG, JPG, WEBP) hoặc PDF."
+            )
+
+        # If image, attempt Cloud Vision DOCUMENT_TEXT_DETECTION for high-precision OCR layout
+        if mime.startswith("image/"):
+            ocr_text, _ = await asyncio.to_thread(_cloud_vision_document_ocr, raw_bytes)
+            if ocr_text:
+                ocr_texts.append(ocr_text)
+
+        b64 = base64.b64encode(raw_bytes).decode("ascii")
+        inline_parts.append({
+            "inlineData": {
+                "mimeType": mime,
+                "data": b64
+            }
+        })
+
+    if not inline_parts and not ocr_texts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Không đọc được dữ liệu từ các file đã tải lên.")
+
+    ocr_context = "\n--- OCR DETECTED TEXT ---\n" + "\n\n".join(ocr_texts) if ocr_texts else ""
+    sys_prompt = (
+        "You are an expert IELTS Exam Architect and DOCX Formatter. "
+        "Your task is to convert the scanned IELTS test page(s) into valid IELTS OS parser format "
+        "strictly following the DOCX Formatter Playbook:\n\n"
+        "Document Structure:\n"
+        "[TITLE] Scanned IELTS Practice Test\n"
+        "[TIME] 20\n"
+        "[TYPE] Reading\n\n"
+        "[PASSAGE]\n"
+        "Passage Title\n"
+        "Passage paragraphs verbatim...\n\n"
+        "[QUESTIONS]\n"
+        "Use appropriate question block tags:\n"
+        "- [BLANK] for summary, sentence, table, flowchart completion with [xx] ______ and *answer lines\n"
+        "- [CHOICE] for multiple choice questions with A. B. C. D. options and *Answer key lines\n"
+        "- [DRAG] or [MAP_DRAG] for drag-and-drop or map labelling with OPTIONS: and *Answer key lines\n"
+        "- [MATCHING] for matching headings/features/information with *Answer key lines\n\n"
+        "CRITICAL RULES:\n"
+        "1. Never skip any question visible on the page. Preserve original question numbers (e.g. 21 to 26).\n"
+        "2. Include accurate answer keys prefixed with asterisk (*) based on the text or markings on the test.\n"
+        "3. Output ONLY the plain text playbook format without markdown code blocks, backticks, or conversational preamble."
+    )
+
+    user_parts: List[Dict[str, Any]] = [{"text": f"Please transcribe and format this IELTS test page into IELTS OS playbook format.\n{ocr_context}"}]
+    user_parts.extend(inline_parts)
+    contents = [{"role": "user", "parts": user_parts}]
+
+    # Step 2: Attempt Vertex AI Gemini 2.5 Pro first
+    formatted_text = ""
+    vertex_model = os.environ.get("VERTEX_SCAN_MODEL", "gemini-2.5-pro")
+    text, err = await asyncio.to_thread(
+        _vertex_gemini_generate,
+        contents,
+        system_instruction=sys_prompt,
+        model=vertex_model,
+        temperature=0.1,
+        max_output_tokens=8192,
+        thinking_budget=2048,
+        timeout_s=90.0,
+    )
+    if text:
+        formatted_text = text
+    else:
+        # Fallback to free Gemini API Studio keys
+        gemini_keys = _rotated_api_keys("gemini_scan", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+        for g_key in gemini_keys:
+            image_inputs = []
+            for ip in inline_parts:
+                idata = ip.get("inlineData") or {}
+                if idata.get("mimeType", "").startswith("image/"):
+                    image_inputs.append({"mime_type": idata["mimeType"], "data": idata["data"]})
+            g_text, g_err = await asyncio.to_thread(
+                _gemini_chat_once,
+                g_key,
+                "gemini-2.5-flash",
+                sys_prompt,
+                user_parts[0]["text"],
+                8192,
+                0.1,
+                False,
+                75.0,
+                image_inputs,
+            )
+            if g_text:
+                formatted_text = g_text
+                break
+
+    if not formatted_text:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Không thể bóc tách đề thi từ ảnh/PDF ({err or 'AI models unavailable'}). Vui lòng thử lại.",
+        )
+
+    # Clean any accidental markdown code fences
+    cleaned = re.sub(r"^```[a-zA-Z]*\n", "", formatted_text.strip())
+    cleaned = re.sub(r"\n```$", "", cleaned.strip())
+
+    # Parse into quiz via python-docx
+    doc = docx.Document()
+    for line in cleaned.splitlines():
+        doc.add_paragraph(line)
+
+    quiz = parse_docx_to_quiz(doc)
+    return {
+        "success": True,
+        "quiz": quiz,
+        "rawText": cleaned,
+    }
+
+
 def _pipeline_quiz_for_catalog(result: Dict[str, Any], delivery_mode: str, publication_policy: str, actor: Dict[str, Any]) -> Dict[str, Any]:
     quiz = dict(result.get("parser_quiz") or {})
     if not quiz:
@@ -3131,6 +3390,7 @@ async def complete_exam_audio_upload(upload_id: str, request: Request, payload: 
         })
         blob.metadata = next_metadata
         blob.content_type = verified["content_type"]
+        blob.cache_control = "public, max-age=31536000, s-maxage=31536000, immutable"
         await asyncio.to_thread(blob.patch)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -3180,8 +3440,8 @@ async def hosted_audio(request: Request, audio_key: str, filename: str):
             timeout=20,
         )
         response_headers = {
-            "Cache-Control": "private, no-store",
-            "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
+            "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
+            "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes") or "bytes",
         }
         for header in ("Content-Type", "Content-Length", "Content-Range", "ETag", "Last-Modified"):
             value = upstream.headers.get(header)
@@ -3205,6 +3465,12 @@ async def hosted_audio(request: Request, audio_key: str, filename: str):
         return JSONResponse(status_code=exc.code, content={"success": False, "error": "Không thể tải audio an toàn.", "detail": detail.decode("utf-8", "ignore")})
     except Exception:
         return JSONResponse(status_code=400, content={"success": False, "error": "Audio link không hợp lệ hoặc đã bị đổi."})
+
+
+@app.api_route("/api/audio/{audio_key}", methods=["GET", "HEAD"])
+async def hosted_audio_short(request: Request, audio_key: str):
+    return await hosted_audio(request, audio_key, "audio.mp3")
+
 
 def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=55):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
@@ -3382,6 +3648,114 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
         return "", f"gemini {model} -> {e.code}: {detail}"
     except Exception as e:
         return "", f"gemini {model} -> {str(e)}"
+
+
+def _vertex_gemini_generate(
+    prompt_or_contents: Any,
+    system_instruction: str = "",
+    model: str = "gemini-2.5-pro",
+    temperature: float = 0.15,
+    max_output_tokens: int = 8192,
+    thinking_budget: int = 4096,
+    response_mime_type: Optional[str] = None,
+    image_part: Optional[Dict[str, str]] = None,
+    location: Optional[str] = None,
+    timeout_s: float = 60.0,
+) -> Tuple[str, str]:
+    """1 lần gọi Google Cloud Vertex AI REST API cho Gemini (sử dụng credit GCP).
+    Có cost guardrail: daily counter cap và fallback tự động sang free API keys.
+    """
+    flag = os.environ.get("ENABLE_GCP_VERTEX", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return "", "VERTEX_DISABLED"
+
+    token, project_id = _get_gcp_access_token_and_project()
+    if not token or not project_id:
+        return "", "VERTEX_UNCONFIGURED"
+
+    if not _check_and_increment_gcp_quota():
+        return "", "GCP_DAILY_CAP_REACHED"
+
+    loc = location or os.environ.get("GCP_VERTEX_LOCATION", "us-central1")
+    url = f"https://{loc}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{loc}/publishers/google/models/{model}:generateContent"
+
+    gen_config: Dict[str, Any] = {"temperature": temperature}
+    if response_mime_type:
+        gen_config["responseMimeType"] = response_mime_type
+
+    effective_max_tokens = max_output_tokens
+    if "2.5" in model:
+        if "2.5-pro" in model:
+            if thinking_budget > 0:
+                tb = max(1024, thinking_budget)
+                gen_config["thinkingConfig"] = {"thinkingBudget": tb}
+                effective_max_tokens = max_output_tokens + tb
+        else:
+            if thinking_budget > 0:
+                gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+                effective_max_tokens = max_output_tokens + thinking_budget
+            else:
+                gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
+    gen_config["maxOutputTokens"] = effective_max_tokens
+
+    if isinstance(prompt_or_contents, list):
+        contents = prompt_or_contents
+    else:
+        user_parts: List[Dict[str, Any]] = [{"text": str(prompt_or_contents)}]
+        if image_part and isinstance(image_part, dict):
+            m_type = str(image_part.get("mime_type") or "").strip().lower()
+            b64_data = str(image_part.get("data") or "").strip()
+            if m_type and b64_data:
+                user_parts.append({"inlineData": {"mimeType": m_type, "data": b64_data}})
+        contents = [{"role": "user", "parts": user_parts}]
+
+    body: Dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": gen_config,
+    }
+    if system_instruction:
+        body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+    try:
+        timeout_s = max(1.0, float(timeout_s))
+    except (TypeError, ValueError):
+        timeout_s = 60.0
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        cands = data.get("candidates") or []
+        if not cands:
+            return "", f"vertex {model}: empty response"
+        if cands[0].get("finishReason") == "MAX_TOKENS":
+            return "", "PROVIDER_TRUNCATED_OUTPUT"
+        parts = ((cands[0].get("content") or {}).get("parts") or [])
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        return (text, "") if text else ("", f"vertex {model}: rỗng")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")[:200]
+        except Exception:
+            pass
+        if exc.code == 429:
+            return "", "RATE_LIMIT"
+        if exc.code in (401, 403):
+            return "", "AUTH"
+        return "", f"vertex {model} -> {exc.code}: {detail}"
+    except Exception as exc:
+        return "", f"vertex {model} -> {str(exc)}"
 
 
 def _groq_chat(
@@ -3639,6 +4013,7 @@ def _writing_eval_chat(
 ) -> Tuple[str, str]:
     """Dedicated high-intelligence router for IELTS Writing evaluation and critique.
     Strictly prioritized:
+      Tier 0 (Primary GCP Credit): Google Cloud Vertex AI Gemini 2.5 Pro (thinking_budget=4096, temp=0.1)
       Tier 1: Google Gemini Reasoning & Multimodal (GEMINI_API_KEY, GEMINI_API_KEY_2, GOOGLE_API_KEY)
               gemini-2.5-pro / gemini-2.5-flash with thinking_budget=2048 and optional image_part.
       Tier 2: Groq Reasoning Models (GROQ_API_KEY pool)
@@ -3646,14 +4021,31 @@ def _writing_eval_chat(
       Tier 3: Cerebras 120B Reasoning (CEREBRAS_API_KEY pool)
               CEREBRAS_MODEL, gpt-oss-120b, llama-3.3-70b.
     """
+    last_err = ""
+
+    # Tier 0 (Primary GCP Credit): Vertex AI Gemini 2.5 Pro
+    vertex_model = os.environ.get("VERTEX_WRITING_MODEL", "gemini-2.5-pro")
+    text, err = _vertex_gemini_generate(
+        user_prompt,
+        system_instruction=sys_prompt,
+        model=vertex_model,
+        temperature=0.1,
+        max_output_tokens=max_tokens,
+        thinking_budget=4096,
+        response_mime_type="application/json" if json_mode else None,
+        image_part=image_part,
+        timeout_s=60.0,
+    )
+    if text:
+        return text, ""
+    last_err = err
+
     GROQ_BASE = "https://api.groq.com/openai/v1"
     CEREBRAS_BASE = "https://api.cerebras.ai/v1"
 
     gemini_keys = _rotated_api_keys("gemini_writing", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
     groq_keys = _rotated_api_keys("groq_writing", _api_key_pool("GROQ_API_KEY"))
     cerebras_keys = _rotated_api_keys("cerebras_writing", _api_key_pool("CEREBRAS_API_KEY"))
-
-    last_err = ""
 
     # Tier 1: Gemini Reasoning & Multimodal
     writing_gemini_models = list(dict.fromkeys([
@@ -4241,8 +4633,21 @@ async def ai_explain(
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
         )
 
-    text, err = _gemini_generate(sys_prompt, user_prompt, 800)
-    if err:
+    # Primary Route: Vertex AI Gemini 2.5 Flash (high quota, fast explanations)
+    vertex_explain_model = os.environ.get("VERTEX_EXPLAIN_MODEL", "gemini-2.5-flash")
+    text, err = _vertex_gemini_generate(
+        user_prompt,
+        system_instruction=sys_prompt,
+        model=vertex_explain_model,
+        temperature=0.7,
+        max_output_tokens=800,
+        thinking_budget=0,
+        timeout_s=45.0,
+    )
+    if not text:
+        # Fallback Route: free key pool (_gemini_generate / _groq_chat)
+        text, err = _gemini_generate(sys_prompt, user_prompt, 800)
+    if err and not text:
         return {"success": False, "error": _friendly_err(err, lang)}
     audio_evidence_segments = _audio_evidence_segments(
         context,
@@ -5432,6 +5837,62 @@ def _external_audio_mime(audio_url: str, response_mime: Any) -> str:
     return ""
 
 
+def _audio_suffix_for_mime(mime: str) -> str:
+    m = str(mime or "").lower()
+    if "mpeg" in m or "mp3" in m:
+        return ".mp3"
+    if "wav" in m:
+        return ".wav"
+    if "ogg" in m:
+        return ".ogg"
+    if "mp4" in m or "m4a" in m or "aac" in m:
+        return ".m4a"
+    if "flac" in m:
+        return ".flac"
+    if "webm" in m:
+        return ".webm"
+    return ".mp3"
+
+
+def _download_external_audio_to_file(audio_url: Any, destination_path: str) -> Tuple[int, str, str]:
+    """Download an external audio URL into a local file in 64 KB chunks, allowing up to 384 MB."""
+    raw_url = str(audio_url or "").strip()
+    if not raw_url or len(raw_url) > 4096:
+        return 0, "", "AUDIO_URL_REQUIRED"
+    download_url = _normalize_audio_url(raw_url)
+    parsed = urllib.parse.urlparse(download_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return 0, "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    try:
+        request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            content_length = str(response.headers.get("Content-Length") or "").strip()
+            if content_length.isdigit() and int(content_length) > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
+                return 0, "", "AUDIO_SOURCE_TOO_LARGE"
+            mime = _external_audio_mime(download_url, response.headers.get("Content-Type"))
+            total_bytes = 0
+            with open(destination_path, "wb") as out_f:
+                while chunk := response.read(64 * 1024):
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
+                        return 0, "", "AUDIO_SOURCE_TOO_LARGE"
+                    out_f.write(chunk)
+        if total_bytes == 0:
+            return 0, "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+        return total_bytes, mime or "audio/mpeg", ""
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(exc).casefold():
+            return 0, "", "EXTERNAL_AUDIO_TIMEOUT"
+        return 0, "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+    except (TimeoutError, socket.timeout):
+        return 0, "", "EXTERNAL_AUDIO_TIMEOUT"
+    except Exception as exc:
+        if "timed out" in str(exc).casefold():
+            return 0, "", "EXTERNAL_AUDIO_TIMEOUT"
+        return 0, "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
+
+
 def _download_external_audio_bytes(audio_url: Any) -> Tuple[bytes, str, str]:
     raw_url = str(audio_url or "").strip()
     if not raw_url or len(raw_url) > 4096:
@@ -5466,13 +5927,6 @@ def _download_external_audio_bytes(audio_url: Any) -> Tuple[bytes, str, str]:
     if not mime:
         return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
     return raw, mime, ""
-
-
-def _transcribe_external_audio(audio_url: Any, lang: str) -> Tuple[str, str, bool]:
-    raw, mime, error = _download_external_audio_bytes(audio_url)
-    if error:
-        return "", error, False
-    return _transcribe_audio_bytes(raw, mime, lang)
 
 
 def _find_ffmpeg_binary() -> Optional[str]:
@@ -5543,13 +5997,25 @@ def _transcode_whisper_chunk(ffmpeg_binary: str, source_path: str, start_seconds
         [
             ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-nostdin",
             "-ss", str(start_seconds), "-t", str(duration_seconds), "-i", source_path,
-            "-vn", "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
+            "-vn", "-sn", "-dn", "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
             "-f", "mp3", "-y", destination_path,
         ],
         check=False,
         capture_output=True,
-        timeout=100,
+        timeout=120,
     )
+    if completed.returncode != 0 or not os.path.isfile(destination_path):
+        completed = subprocess.run(
+            [
+                ffmpeg_binary, "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-ss", str(start_seconds), "-t", str(duration_seconds), "-i", source_path,
+                "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
+                "-f", "mp3", "-y", destination_path,
+            ],
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
     if completed.returncode != 0 or not os.path.isfile(destination_path):
         raise RuntimeError("AUDIO_CHUNK_TRANSCODE_FAILED")
     with open(destination_path, "rb") as handle:
@@ -5698,36 +6164,56 @@ def _transcribe_large_audio_with_gemini_file(source_path: str, verified: Dict[st
     return "", last_error, False
 
 
-def _transcribe_managed_audio_chunks(blob, verified: Dict[str, Any], lang: str) -> Tuple[str, str, bool]:
-    """Download only a verified Storage blob, transcode deterministic windows, and join in source order."""
+def _vertex_transcribe_audio_chunk(raw_chunk: bytes) -> Tuple[str, str]:
+    """Transcribe an audio chunk using Vertex AI Gemini 2.5 Flash with timestamped format."""
+    b64 = base64.b64encode(raw_chunk).decode("ascii")
+    prompt = (
+        "Transcribe this IELTS listening audio chunk accurately word for word. "
+        "Group the transcript into sequential timestamped blocks in exact (mm:ss - mm:ss) format, for example:\n"
+        "(00:00 - 00:25)\nSpoken transcript dialogue...\n"
+        "Never invent content, never summarize, and do not use markdown code blocks or explanations."
+    )
+    contents = [{
+        "role": "user",
+        "parts": [
+            {"text": prompt},
+            {"inlineData": {"mimeType": "audio/mp3", "data": b64}}
+        ]
+    }]
+    return _vertex_gemini_generate(
+        contents,
+        system_instruction="You are a professional IELTS listening audio transcriber.",
+        model="gemini-2.5-flash",
+        temperature=0.1,
+        max_output_tokens=4096,
+        thinking_budget=0,
+        timeout_s=60.0,
+    )
+
+
+def _transcribe_audio_file_chunks(source_path: str, verified: Dict[str, Any], lang: str) -> Tuple[str, str, bool]:
+    """Transcode source audio file into compact 16kHz mono 48kbps MP3 chunks and transcribe via Whisper / Vertex AI."""
     source_size = int(verified["size"])
     if source_size > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
         return "", "AUDIO_SOURCE_TOO_LARGE", False
-    with tempfile.TemporaryDirectory(prefix="ielts-os-transcribe-") as scratch:
-        source_path = os.path.join(scratch, "source" + Path(verified["filename"]).suffix.lower())
-        try:
-            blob.download_to_filename(source_path, timeout=120)
-        except Exception as exc:
-            if _storage_error_is_not_found(exc):
-                return "", "INTERNAL_AUDIO_NOT_FOUND", False
-            return "", "FIREBASE_AUDIO_DOWNLOAD_FAILED", False
-        if not os.path.isfile(source_path) or os.path.getsize(source_path) != source_size:
-            return "", "AUDIO_SOURCE_DOWNLOAD_INCOMPLETE", False
-        ffmpeg_binary = _find_ffmpeg_binary()
-        if not ffmpeg_binary:
-            return _transcribe_large_audio_with_gemini_file(source_path, verified)
-        try:
-            duration = _probe_audio_duration_seconds(source_path, ffmpeg_binary)
-            if duration > MAX_AUDIO_TRANSCRIPTION_SECONDS:
-                return "", "AUDIO_DURATION_EXCEEDS_LIMIT", False
-            plan = _plan_audio_transcription_chunks(duration, WHISPER_CHUNK_SECONDS)
-            if not plan or len(plan) > MAX_AUDIO_TRANSCRIPTION_CHUNKS:
-                return "", "AUDIO_CHUNK_LIMIT_EXCEEDED", False
-        except subprocess.TimeoutExpired:
-            return _transcribe_large_audio_with_gemini_file(source_path, verified)
-        except RuntimeError as exc:
-            return _transcribe_large_audio_with_gemini_file(source_path, verified)
 
+    ffmpeg_binary = _find_ffmpeg_binary()
+    if not ffmpeg_binary:
+        return _transcribe_large_audio_with_gemini_file(source_path, verified)
+
+    try:
+        duration = _probe_audio_duration_seconds(source_path, ffmpeg_binary)
+        if duration > MAX_AUDIO_TRANSCRIPTION_SECONDS:
+            return "", "AUDIO_DURATION_EXCEEDS_LIMIT", False
+        plan = _plan_audio_transcription_chunks(duration, WHISPER_CHUNK_SECONDS)
+        if not plan or len(plan) > MAX_AUDIO_TRANSCRIPTION_CHUNKS:
+            return "", "AUDIO_CHUNK_LIMIT_EXCEEDED", False
+    except subprocess.TimeoutExpired:
+        return _transcribe_large_audio_with_gemini_file(source_path, verified)
+    except RuntimeError:
+        return _transcribe_large_audio_with_gemini_file(source_path, verified)
+
+    with tempfile.TemporaryDirectory(prefix="ielts-os-chunk-") as scratch:
         def run_chunk(index: int, start: int, length: int):
             destination = os.path.join(scratch, f"chunk-{index:03d}.mp3")
             try:
@@ -5739,6 +6225,12 @@ def _transcribe_managed_audio_chunks(blob, verified: Dict[str, Any], lang: str) 
                     timeout_s=75,
                     max_provider_attempts=2,
                 )
+                if not text:
+                    # Fallback to Vertex AI Gemini 2.5 Flash
+                    v_text, v_err = _vertex_transcribe_audio_chunk(raw)
+                    if v_text:
+                        text = v_text
+                        err = ""
                 return index, _shift_marked_transcript(text, start) if text else "", err, rate_limited
             except subprocess.TimeoutExpired:
                 return index, "", "AUDIO_CHUNK_TRANSCODE_TIMEOUT", False
@@ -5760,14 +6252,56 @@ def _transcribe_managed_audio_chunks(blob, verified: Dict[str, Any], lang: str) 
                 outcomes[index] = (text, err, rate_limited)
         failures = [outcomes[index][1] for index in range(len(plan)) if not outcomes.get(index, ("", "MISSING", False))[0]]
         if failures:
-            # A temporary local transcoder/provider issue should not discard a
-            # verified large upload merely because this Vercel image lacks one
-            # codec. The File API fallback remains private and bounded.
             fallback_text, fallback_error, fallback_rate = _transcribe_large_audio_with_gemini_file(source_path, verified)
             if fallback_text:
                 return fallback_text, "", fallback_rate
             return "", next((error for error in failures if error), fallback_error or "EMPTY"), any(result[2] for result in outcomes.values())
         return "\n\n".join(outcomes[index][0].strip() for index in range(len(plan)) if outcomes[index][0].strip()), "", any(result[2] for result in outcomes.values())
+
+
+def _transcribe_managed_audio_chunks(blob, verified: Dict[str, Any], lang: str) -> Tuple[str, str, bool]:
+    """Download only a verified Storage blob, transcode deterministic windows, and join in source order."""
+    source_size = int(verified["size"])
+    if source_size > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
+        return "", "AUDIO_SOURCE_TOO_LARGE", False
+    with tempfile.TemporaryDirectory(prefix="ielts-os-transcribe-") as scratch:
+        source_path = os.path.join(scratch, "source" + Path(verified["filename"]).suffix.lower())
+        try:
+            blob.download_to_filename(source_path, timeout=120)
+        except Exception as exc:
+            if _storage_error_is_not_found(exc):
+                return "", "INTERNAL_AUDIO_NOT_FOUND", False
+            return "", "FIREBASE_AUDIO_DOWNLOAD_FAILED", False
+        if not os.path.isfile(source_path) or os.path.getsize(source_path) != source_size:
+            return "", "AUDIO_SOURCE_DOWNLOAD_INCOMPLETE", False
+        return _transcribe_audio_file_chunks(source_path, verified, lang)
+
+
+def _transcribe_external_audio(audio_url: Any, lang: str) -> Tuple[str, str, bool]:
+    """Download external audio in streaming chunks up to 384 MB and transcribe."""
+    # Fast path for standard external audio (<= 25 MB)
+    raw, mime, error = _download_external_audio_bytes(audio_url)
+    if not error:
+        return _transcribe_audio_bytes(raw, mime, lang)
+    if error != "AUDIO_SOURCE_TOO_LARGE":
+        return "", error, False
+
+    # Large audio path (> 25 MB up to 384 MB)
+    with tempfile.TemporaryDirectory(prefix="ielts-os-ext-transcribe-") as scratch:
+        temp_audio_path = os.path.join(scratch, "external_audio.tmp")
+        byte_count, mime, error = _download_external_audio_to_file(audio_url, temp_audio_path)
+        if error:
+            return "", error, False
+        if byte_count <= MAX_WHISPER_TRANSCRIPTION_BYTES:
+            with open(temp_audio_path, "rb") as f:
+                raw = f.read()
+            return _transcribe_audio_bytes(raw, mime, lang)
+        verified = {
+            "size": byte_count,
+            "filename": "external_audio" + _audio_suffix_for_mime(mime),
+            "content_type": mime,
+        }
+        return _transcribe_audio_file_chunks(temp_audio_path, verified, lang)
 
 
 def _transcribe_managed_audio(source: Dict[str, str], lang: str) -> Tuple[str, str, bool]:
@@ -6224,9 +6758,19 @@ async def hosted_exam_media(asset_id: str):
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed media is unavailable.") from exc
     return StreamingResponse(io.BytesIO(raw), media_type=mime_type, headers={
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
+        "Accept-Ranges": "bytes",
         "X-Content-Type-Options": "nosniff",
     })
+
+
+@app.get("/api/exam-generation/media/{media_key:path}")
+async def hosted_exam_generation_media(media_key: str):
+    """Serve immutable content-addressed media for exam generation with Edge CDN caching."""
+    media_match = re.search(r"media_[a-f0-9]{24}", media_key)
+    if not media_match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found.")
+    return await hosted_exam_media(media_match.group(0))
 
 
 @app.get("/api/image_base64")

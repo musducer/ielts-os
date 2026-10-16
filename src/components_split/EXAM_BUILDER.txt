@@ -196,6 +196,10 @@
                             <Ico name="download" size={14} /> Import (.docx)
                             {typeof handleFileUpload === 'function' && <input type="file" accept=".docx" multiple onChange={handleFileUpload as any} style={{ display: 'none' }} />}
                           </label>
+                          <label className="ebx-soft" style={{ background: EB.sheet, color: EB.ink, padding: '0 14px', height: 36, borderRadius: EB.radiusSm, cursor: scanExamBusy ? 'wait' : 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px solid ${EB.line}`, whiteSpace: 'nowrap', opacity: scanExamBusy ? 0.65 : 1 }}>
+                            <Ico name="scan" size={14} /> {scanExamBusy ? tx("Đang quét AI...", "Scanning AI...") : tx("Quét ảnh/PDF đề (AI)", "Scan Exam Image/PDF (AI)")}
+                            <input type="file" accept="image/*,.pdf" multiple disabled={scanExamBusy} onChange={handleScanExamUpload} style={{ display: 'none' }} />
+                          </label>
                           <div style={{display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 4px', height: 36, border: `1px solid ${EB.line}`, borderRadius: EB.radiusSm, background: EB.sheet}}>
                             <select aria-label="AI DOCX delivery mode" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationDeliveryMode} onChange={(event: any) => setAiGenerationDeliveryMode(event.target.value)} style={{width: 86, padding: '4px 6px', border: 'none', background: 'transparent', fontSize: 11.5, fontWeight: 700, boxShadow: 'none'}}><option value="exam">Exam</option><option value="practice">Practice</option></select>
                             <select aria-label="AI DOCX publication policy" disabled={aiGenerationBusy || aiGenerationIsActive(aiGenerationBatch)} value={aiGenerationPublicationPolicy} onChange={(event: any) => setAiGenerationPublicationPolicy(event.target.value)} style={{width: 104, padding: '4px 6px', border: 'none', background: 'transparent', fontSize: 11.5, fontWeight: 700, boxShadow: 'none'}}><option value="draft">Keep draft</option><option value="publish_when_ready">Publish ready</option></select>
@@ -459,6 +463,10 @@
                                     <input id="eb-import-explanations-docx" type="file" accept=".docx" onChange={(e:any) => handleSupplementDocxUpload(e, "explanations")} style={{display:'none'}} />
                                     <label htmlFor="eb-replace-passage-docx" className="ebx-soft" style={{background:EB.sheet,color:EB.ink,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${EB.line}`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
                                         <Ico name="plus" size={13} />Replace passage from DOCX
+                                    </label>
+                                    <label className="ebx-soft" style={{background:EB.sheet,color:EB.ink,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${EB.line}`,cursor:scanExamBusy ? 'wait' : 'pointer',display:'inline-flex',alignItems:'center',gap:7,opacity:scanExamBusy ? 0.65 : 1}}>
+                                        <Ico name="scan" size={13} />{scanExamBusy ? tx("Đang quét AI...", "Scanning AI...") : tx("Quét ảnh/PDF đề (AI)", "Scan Exam Image/PDF (AI)")}
+                                        <input type="file" accept="image/*,.pdf" multiple disabled={scanExamBusy} onChange={handleScanExamUpload} style={{display:'none'}} />
                                     </label>
                                     <label htmlFor="eb-import-explanations-docx" className="ebx-soft" style={{background:EB.accentWash,color:EB.accent,padding:'8px 12px',fontSize:12,fontWeight:700,borderRadius:EB.radiusSm,border:`1px solid ${C.accent}22`,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:7}}>
                                         <Ico name="bulb" size={13} />Import explanations DOCX

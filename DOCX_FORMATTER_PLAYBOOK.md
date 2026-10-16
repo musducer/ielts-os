@@ -10,11 +10,12 @@ Use `POST /api/upload_docx_batch` with repeated `files` form fields to parse up 
 - Teachers may remove or reorder Quest rows before confirming. The final confirmation writes test documents and ordered Quest nodes together.
 - Every DOCX remains independently valid under this playbook. Do not split one passage, answer bank, or question group across files.
 
-**Changelog:** 2026-10-15 — Official IELTS External Diagram Labelling layout (clean diagram without zoom, clean label rows, inline dashed dropzones with empty question numbers, filled blue option pills, inline flag, flex-wrap option bank) and Firebase Storage image URL unescaping (`&amp;` fix). Added multi-paragraph [EXPLANATION] support.
+**Changelog:** 2026-10-16 — Added AI Exam Scanner (`POST /api/scan_exam_page`) supporting 1–5 photographed/scanned exam pages (PNG/JPG/WEBP) or PDF documents using Cloud Vision OCR (`DOCUMENT_TEXT_DETECTION`) and Vertex AI Gemini 2.5 Pro (with free fallback) structured according to this playbook and ingested via in-memory DOCX compilation. Added Edge CDN caching headers (`s-maxage=31536000, immutable`, `Accept-Ranges: bytes`) across audio and exam media.
+2026-10-15 — Official IELTS External Diagram Labelling layout (clean diagram without zoom, clean label rows, inline dashed dropzones with empty question numbers, filled blue option pills, inline flag, flex-wrap option bank) and Firebase Storage image URL unescaping (`&amp;` fix). Added multi-paragraph [EXPLANATION] support.
 
 **Purpose:** Operating manual for an AI that converts a raw IELTS Reading, Listening, Writing, or Integrated test DOCX into the parser-ready DOCX accepted by api/index.py.
 
-**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-10-15 by the commit that updates this changelog.
+**Authority:** api/index.py is the source of truth. This handbook was verified against it on 2026-10-16 by the commit that updates this changelog.
 
 **Success condition:** The formatted DOCX parses into the intended sections, question types, visual layout, option bank, and answer keys without manual repair in Exam Builder.
 
@@ -785,6 +786,7 @@ Backend AI routes distribute requests across configured keys and fail over when 
 
 ## Changelog
 
+- **2026-10-16**: Added AI Exam Scanner (`POST /api/scan_exam_page`) supporting 1–5 photographed/scanned exam pages (PNG/JPG/WEBP) or PDF documents using Cloud Vision OCR (`DOCUMENT_TEXT_DETECTION`) and Vertex AI Gemini 2.5 Pro (with free fallback) structured according to this playbook and ingested via in-memory DOCX compilation. Added Edge CDN caching headers (`s-maxage=31536000, immutable`, `Accept-Ranges: bytes`) across audio and exam media.
 - **2026-10-15**: Added External Diagram Labelling (Section 4.12: side-by-side 2-column layout for `[DRAG]`/`[BLANK]` with `IMAGE:`, click-to-zoom lightbox modal) and multi-paragraph `[EXPLANATION]` parsing (Section 4.13: newline preservation across multiple paragraphs without leakage into question text).
 - **2026-09-09**: Documented Firebase Admin initialization and explicit manager allow-list requirements for protected AI raw-DOCX batch routes; configuration failures are surfaced as actionable API details.
 - **2026-09-10**: Raw-DOCX batches use Firestore leases and Firebase Storage artifacts instead of a Vercel filesystem. Each source is processed in ordered, independently resumable rows with two file-worker slots, question-stage heartbeat progress, authenticated DOCX download and durable managed-media delivery.

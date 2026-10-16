@@ -1,4 +1,38 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-15)
+# IELTS OS — Session Handoff (cập nhật 2026-10-16)
+
+## Tích hợp Tín dụng Google Cloud Platform (GCP Blaze Trial) & Triển khai Scale-to-Zero Cloud Run — 2026-10-16
+
+- **Issue 1: Xác thực Không phụ thuộc SDK GCP & Circuit Breaker Chống Đội Chi Phí (Zero-Dependency Token Minting & Anti-Runaway Billing Guardrail)**:
+  - *Mục tiêu*: Tận dụng hạn mức GCP Blaze Trial credit mà không làm phình to image triển khai, không xung đột thư viện và bảo đảm chi phí an toàn 100%.
+  - *Giải pháp triệt để*:
+    - Tận dụng chuỗi chứng thực `FIREBASE_SERVICE_ACCOUNT_JSON` có sẵn trên production để sinh OAuth2 Access Token cho REST API (`aiplatform.googleapis.com` và `vision.googleapis.com`) qua `google.oauth2.service_account.Credentials(scopes=["https://www.googleapis.com/auth/cloud-platform"])`.
+    - Bộ nhớ đệm token (in-memory token caching) tự động refresh trước thời điểm hết hạn 5 phút qua `google.auth.transport.requests.Request()`.
+    - Biến môi trường điều khiển: `ENABLE_GCP_VERTEX` (cho phép bật/tắt tức thì).
+    - Circuit breaker hàng ngày: Bộ đếm `_GCP_DAILY_COUNTER` với ngưỡng mặc định `GCP_DAILY_REQUEST_CAP=800` (tự động reset theo ngày UTC). Nếu chạm ngưỡng hoặc có lỗi, hệ thống lập tức ngắt gọi GCP và chuyển tiếp 100% sang pool API key miễn phí (`GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`).
+
+- **Issue 2: Định tuyến Ưu tiên Vertex AI cho Chấm Writing & Giải thích Đề thi AI**:
+  - *Writing Evaluation (`_writing_eval_chat`)*: Thiết lập Tier 0 Primary sử dụng Vertex AI `gemini-2.5-pro` (`thinking_budget=4096`, `temperature=0.1`) cho độ chính xác cao trên bài luận Band 7.5–8.5+, hỗ trợ visual input (`inlineData`) đối chiếu biểu đồ Task 1. Tự động fallback sang Tier 1 (AI Studio `GEMINI_API_KEY`), Tier 2 (Groq), Tier 3 (Cerebras).
+  - *AI Explanation (`/api/ai_explain`)*: Ưu tiên Vertex AI `gemini-2.5-flash` xử lý nhanh với hạn mức lớn, không bị chặn 429 rate limit của tier miễn phí, fallback tự động sang API keys miễn phí.
+
+- **Issue 3: Xử lý Bóc tách Audio Lớn (35 MB – 384 MB)**:
+  - *Streaming Download*: URL audio bên ngoài được stream xuống file tạm thành từng chunk 64 KB (cho phép file đến 384 MB thay vì bị giới hạn 25 MB).
+  - *Transcode Tinh gọn*: `_transcode_whisper_chunk` loại bỏ hoàn toàn video stream, subtitle, và cover-art (`-vn -sn -dn -map 0:a:0 -ac 1 -ar 16000 -c:a libmp3lame -b:a 48k`) giúp nén audio 10 phút xuống chỉ ~3.5 MB.
+  - *Chunking & Fallback*: Transcribe song song đa luồng; nếu Groq Whisper lỗi hoặc rate limit, tự động fallback sang Vertex AI `gemini-2.5-flash` sinh transcript dạng dải `(mm:ss - mm:ss)`. Tự động cộng offset mốc thời gian tuyệt đối chính xác cho từng chunk.
+
+- **Issue 4: AI Exam Scanner (`POST /api/scan_exam_page`)**:
+  - Nhận 1–5 ảnh chụp trang đề (PNG, JPG, WEBP) hoặc file PDF.
+  - Nhận diện văn bản bố cục cao cấp qua Google Cloud Vision `DOCUMENT_TEXT_DETECTION`.
+  - Tái cấu trúc thành đề thi chuẩn DOCX Formatter Playbook (`[PASSAGE]`, `[QUESTIONS]`, `[BLANK]`, `*answers`...) qua Vertex AI `gemini-2.5-pro`.
+  - Biên dịch in-memory thành tài liệu DOCX và nạp qua `parse_docx_to_quiz`, đảm bảo 100% tính tương thích.
+  - Frontend Exam Builder: Bổ sung nút quét thông minh `tx("Quét ảnh/PDF đề (AI)", "Scan Exam Image/PDF (AI)")` ở cả Exam Library Toolbar và Passage Toolbar (zero emojis, icon SVG scan, xử lý gộp đề hoặc tạo đề mới).
+
+- **Issue 5: Tiêu đề Caching Edge CDN & Byte Range**:
+  - Bổ sung `Cache-Control: public, max-age=31536000, s-maxage=31536000, immutable` và `Accept-Ranges: bytes` trên `/api/audio/...`, `/api/exam-media/...`, `/api/exam-generation/media/...`, và metadata khi hoàn tất upload Firebase Storage. Giúp CDN cache vĩnh viễn và trình duyệt tua audio tức thì.
+
+- **Issue 6: Triển khai Scale-to-Zero Cloud Run**:
+  - `Dockerfile`: base `python:3.11-slim`, cài đặt `ffmpeg`, `curl`, `ca-certificates`, `uvicorn[standard]`, `imageio-ffmpeg`.
+  - `.dockerignore`: loại bỏ `node_modules`, `dist`, `.git`, `tests`, `__pycache__`...
+  - `deploy_cloud_run.sh`: script triển khai với cờ `--region asia-southeast1`, `--min-instances=0` (scale-to-zero, $0 chi phí khi không có request), `--max-instances=4`, `--cpu=2`, `--memory=2Gi`, `--timeout=900`, `--concurrency=40`, `--cpu-throttling`.
 
 ## Sửa lỗi URL Firebase Storage (`&amp;token=`), Giao diện Gắn nhãn Sơ đồ Chuẩn IELTS CBT & Thu hẹp Lightbox Zoom — 2026-10-15
 

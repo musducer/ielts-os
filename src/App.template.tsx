@@ -2798,6 +2798,7 @@ const Ico = ({ name, size = 18, color = "currentColor", sw = 2, style }: { name:
         compass: <><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></>,
         hash: <><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></>,
         unlock: <><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></>,
+        scan: <><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></>,
         refresh: <><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></>,
         expand: <><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></>,
         moon: <><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></>,
@@ -8965,6 +8966,94 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     } catch (error: any) {
       logErrorToSystem("UPLOAD_DOCX_SUPPLEMENT_FAIL", error?.message || String(error), { fileName: file.name, mode });
       alert(tx("Không xử lý được file bổ sung: ", "Failed to process supplement file: ") + (error?.message || String(error)));
+    }
+  };
+
+  const [scanExamBusy, setScanExamBusy] = useState(false);
+
+  const handleScanExamUpload = async (e: any) => {
+    const rawFiles = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!rawFiles.length) return;
+    if (rawFiles.length > 5) {
+      alert(tx("Chỉ chọn tối đa 5 file ảnh hoặc PDF mỗi lần quét.", "Select at most 5 image or PDF files per scan."));
+      return;
+    }
+    const validFiles = rawFiles.filter((f: any) => {
+      const n = (f.name || "").toLowerCase();
+      const t = (f.type || "").toLowerCase();
+      return n.endsWith(".pdf") || n.endsWith(".png") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".webp")
+        || t.includes("pdf") || t.startsWith("image/");
+    });
+    if (!validFiles.length) {
+      alert(tx("Vui lòng chọn file hình ảnh (PNG, JPG, WEBP) hoặc PDF.", "Please select image files (PNG, JPG, WEBP) or PDF."));
+      return;
+    }
+
+    setScanExamBusy(true);
+    try {
+      const formData = new FormData();
+      validFiles.forEach((file: any) => formData.append("files", file));
+      const response = await fetch(`${getApiBase()}/api/scan_exam_page`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await readApiJson(response);
+      if (!response.ok || !data.success || !data.quiz) {
+        throw new Error(data?.error || data?.detail || tx("Không thể quét hoặc phân tích trang đề.", "Could not scan or parse exam page."));
+      }
+
+      const scannedQuiz = data.quiz;
+      const currentQuiz = editingQuizRef.current;
+      if (currentQuiz) {
+        const activeSection = Number(currentQuiz._activePassageTab || 0);
+        const nextSecs = [...(currentQuiz.sections || [])];
+        while (nextSecs.length <= activeSection) nextSecs.push({ passage: "", questions: [] });
+        const scannedPassage = (scannedQuiz.sections?.[0]?.passage) || scannedQuiz.passage || "";
+        const scannedQuestions = (scannedQuiz.sections?.[0]?.questions?.length ? scannedQuiz.sections[0].questions : scannedQuiz.questions) || [];
+
+        if (scannedPassage) {
+          nextSecs[activeSection].passage = nextSecs[activeSection].passage
+            ? `${nextSecs[activeSection].passage}\n\n${scannedPassage}`
+            : scannedPassage;
+          if (activeSection === 0 && !currentQuiz.passage) {
+            currentQuiz.passage = scannedPassage;
+          }
+        }
+        nextSecs[activeSection].questions = [...(nextSecs[activeSection].questions || []), ...scannedQuestions];
+        const mergedQuestions = [...(currentQuiz.questions || []), ...scannedQuestions];
+        const updated = {
+          ...currentQuiz,
+          sections: nextSecs,
+          questions: mergedQuestions,
+        };
+        editingQuizRef.current = updated;
+        setEditingQuiz(updated);
+        alert(tx(
+          `Đã quét thành công! Thêm ${scannedQuestions.length} câu hỏi vào phần thi hiện tại. Bấm Lưu để hoàn tất.`,
+          `Scan successful! Added ${scannedQuestions.length} questions to the current section. Click Save to finalize.`
+        ));
+      } else {
+        const newQuiz = {
+          ...scannedQuiz,
+          id: getTrueTime().toString(),
+          folder: builderFolder || "Root",
+          active: false,
+          audience: "ALL",
+          targetStudentIds: [],
+        };
+        editingQuizRef.current = newQuiz;
+        setEditingQuiz(newQuiz);
+        alert(tx(
+          `Đã quét và tạo đề thi mới với ${scannedQuiz.questions?.length || 0} câu hỏi! Bấm Lưu để lưu vào kho.`,
+          `Scanned and created new exam with ${scannedQuiz.questions?.length || 0} questions! Click Save to persist.`
+        ));
+      }
+    } catch (err: any) {
+      logErrorToSystem("SCAN_EXAM_PAGE_FAIL", err?.message || String(err));
+      alert(tx("Lỗi khi quét đề thi: ", "Error scanning exam: ") + (err?.message || String(err)));
+    } finally {
+      setScanExamBusy(false);
     }
   };
 

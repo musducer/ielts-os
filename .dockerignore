@@ -1,0 +1,29 @@
+# Git and IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.agents
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache
+tests
+
+# Node / Frontend build
+node_modules
+dist
+build
+*.local
+.env*
+!requirements.txt
+
+# Temp & Artifacts
+tmp
+temp
+*.log
+.system_generated
