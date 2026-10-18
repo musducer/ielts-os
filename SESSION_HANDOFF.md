@@ -1,5 +1,34 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-18)
 
+## Tự Động Gom Nhóm Bộ Đề VOL & Đề Luyện Tập Mở Rộng Trong Phòng Thi Học Viên (Student Portal Exam Room) — 2026-10-18
+
+- **Bối cảnh & Yêu cầu nghiệp vụ**:
+  1. *Thiếu cấu trúc phân loại bộ đề*: Danh sách đề thi trong phòng thi học viên (`portalTab === "exams"`) trước đây hiển thị dàn phẳng theo kỹ năng (`Listening`, `Reading`, `Writing`), khiến học viên gặp khó khăn khi tìm kiếm các bài thi thuộc cùng một bộ đề (ví dụ Bộ VOL 6, VOL 7, VOL 8, VOL 9, VOL 10, hoặc chuỗi đề Writing W-1 -> W-12).
+  2. *Không yêu cầu can thiệp dữ liệu thủ công (Zero Manual Data Edits)*: Toàn bộ đề thi trong Firestore đã được lưu với quy ước thư mục/tiêu đề tự nhiên (`LISTENING VOL 10`, `READING VOL [N]`, `VOL [N] TEST [N]...`, hoặc `W-[N]` cho Writing). Việc phân loại phải hoạt động động 100% bằng thuật toán nhận diện thông minh, không cần chạy script migrate database hay gán nhãn thủ công.
+  3. *Lỗi sắp xếp bảng chữ cái (Naive Alphabetical Sort)*: Sắp xếp theo chuỗi mặc định xếp `Test 10` trước `Test 2` (`Test 1`, `Test 10`, `Test 2`...). Cần cơ chế sắp xếp số tự nhiên (Natural Numeric Sorting) để đảm bảo trình tự kiểm tra chuẩn xác (`Test 1 -> Test 2 -> ... -> Test 10`).
+
+- **Giải pháp triệt để**:
+  1. *Bộ nhận diện và phân loại động (`classifyStudentQuiz` & `extractQuizTestOrder`)*:
+     - Nhận diện `VOL [N]` từ `quiz.folder` hoặc `quiz.title` (hỗ trợ cả các biến thể như `VOLUME [N]`, `VOL 9 TEST 1 ACADEMIC READING`,...).
+     - Tự động gom toàn bộ đề Writing có dạng `W-[N]` (như `W-1`, `W-2`, `W-10`) vào nhóm bộ đề `VOL W` (`volKey: "VOL_W"`).
+     - Phân định rạch ròi giữa bài thi thuộc chuỗi VOL (`isVolSeries: true`) và các đề luyện tập mở rộng/khác (`isVolSeries: false`).
+     - Trích xuất thứ tự số học tự nhiên của bài thi (`testOrder`) và số thứ tự VOL (`volNumber`) phục vụ hàm so sánh `compareQuizzesNaturally`.
+  2. *Thanh chọn VOL dạng viên thuốc tương tác (Interactive VOL Pill Selector)*:
+     - Thanh cuộn ngang hiển thị các pill đại diện cho từng tập VOL (`VOL 6`, `VOL 7`, `VOL 8`, `VOL 9`, `VOL 10`, `VOL W`) kèm badge đếm số lượng đề đã hoàn thành trên tổng số đề (`X/Y đề`).
+     - Tự động đổi màu chỉ thị thành công (xanh lá) khi học viên hoàn thành toàn bộ đề trong VOL.
+     - Hỗ trợ tùy chọn "Tất cả VOL" ("ALL") để duyệt toàn bộ các tập VOL xếp chồng trực quan khi có nhiều hơn 1 bộ VOL.
+     - Tự động ghi nhớ trạng thái VOL được chọn theo từng tab kỹ năng (`studentSelectedVolBySkill[studentExamSkillTab]`).
+  3. *Khu vực đề thi Phần A (Bộ đề VOL) & Phần B (Đề luyện tập & Mở rộng)*:
+     - Khung chứa bộ đề (VOL Container Card) hiển thị tiêu đề thư mục, thanh tiến độ hoàn thành trực quan (Progress Bar %) và danh sách thẻ bài thi.
+     - Các đề không thuộc VOL được tách riêng sang Phần B ("Đề luyện tập & Mở rộng") phía dưới với số lượng đề rõ ràng.
+     - Khi học viên gõ tìm kiếm (`stQuizSearch`), giao diện linh hoạt chuyển sang danh sách tìm kiếm phẳng được sắp xếp tự nhiên kèm badge nhận diện nhóm trên từng thẻ.
+  4. *Nâng cấp thẻ bài thi và tab Kết quả & Review*:
+     - Bổ sung huy hiệu tiến độ trực tiếp trên thẻ bài thi: nếu đã làm bài, hiển thị `✓ Đã làm · Band X (Y/Z)` cùng số lần làm bài.
+     - Tab "Kết quả & Review" (`examRoomTab === "results"`): Tự động hiển thị huy hiệu VOL nhỏ gọn (`VOL 10`, `VOL 9`, `VOL W`, hoặc `Mở rộng`) cạnh tên đề `r.quizTitle` giúp học viên tra cứu lịch sử thi theo bộ đề trong nháy mắt.
+  5. *Bảo toàn 100% logic cốt lõi & Quy chuẩn an toàn*:
+     - Giữ nguyên toàn bộ logic khoá thiết bị (`isLockedByOtherDevice`), khoá bài thi (`isLocked`), kiểm tra SEB (`isSEBRequired`), mật khẩu đề thi (`passcode`), thời gian mở/đóng (`scheduledStart`/`scheduledEnd`), và gói thi tổng hợp `myRealExamPackages`.
+     - `compile_app.py`, `npx tsc -b`, và `npx vite build` pass 100% không cảnh báo lỗi. Toàn bộ 29 unit tests pass.
+
 ## Khắc Phục Tái Sử Dụng Đáp Án Cho Dạng Matching 2 Cột Listening & Chuẩn Hóa 100% Giao Diện Sơ Đồ Quy Trình Flow-Chart Drag (IELTS CBT Parity) — 2026-10-18
 
 - **Vấn đề & Nguyên nhân gốc rễ**:

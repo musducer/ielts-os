@@ -3855,6 +3855,7 @@ export default function IeltsSupremeOS() {
   const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
   const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [studentSelectedVolBySkill, setStudentSelectedVolBySkill] = useState<Record<string, string>>({});
   const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
   const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
   const [examDocxBatchCommitState, setExamDocxBatchCommitState] = useState<"idle" | "error">("idle");

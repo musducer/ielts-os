@@ -3855,6 +3855,7 @@ export default function IeltsSupremeOS() {
   const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
   const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [studentSelectedVolBySkill, setStudentSelectedVolBySkill] = useState<Record<string, string>>({});
   const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
   const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
   const [examDocxBatchCommitState, setExamDocxBatchCommitState] = useState<"idle" | "error">("idle");
@@ -18464,6 +18465,89 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     const quizSkill = (quiz: Quiz | undefined) => isWritingQuiz(quiz) ? "Writing" as const : String(quiz?.type || "").toLowerCase().includes("listen") ? "Listening" as const : "Reading" as const;
     const activeQuizzesForSkill = activeQuizzes.filter(quiz => quizSkill(quiz) === studentExamSkillTab);
     const resultsForSkill = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
+
+    type QuizVolClassification = {
+      isVolSeries: boolean;
+      volKey: string;
+      volLabel: string;
+      volNumber: number;
+      testOrder: number;
+      extraGroupLabel: string;
+    };
+
+    const extractQuizTestOrder = (titleRaw: string, volNum: number | null): number => {
+      const title = String(titleRaw || "").trim();
+      const skillOrTestMatch = title.match(/\b(?:LISTENING|READING|WRITING|TEST)\s*[-_#.]?\s*(\d+)\b/i);
+      if (skillOrTestMatch) return parseInt(skillOrTestMatch[1], 10);
+
+      const wMatch = title.match(/\bW\s*[-_#.]?\s*(\d+)\b/i);
+      if (wMatch) return parseInt(wMatch[1], 10);
+
+      const stripped = volNum !== null
+        ? title.replace(new RegExp(`\\bVOL(?:UME)?\\s*[-_.]?\\s*${volNum}\\b`, "ig"), " ")
+        : title;
+      const fallbackNum = stripped.match(/\b(\d+)\b/);
+      if (fallbackNum) return parseInt(fallbackNum[1], 10);
+
+      return Number.MAX_SAFE_INTEGER;
+    };
+
+    const classifyStudentQuiz = (quiz: Quiz | undefined): QuizVolClassification => {
+      const folderRaw = String(quiz?.folder || "").trim();
+      const titleRaw = String(quiz?.title || "").trim();
+      const combinedSource = `${folderRaw} ${titleRaw}`;
+
+      const folderVolMatch = folderRaw.match(/\bVOL(?:UME)?\s*[-_.]?\s*(\d+)\b/i);
+      const titleVolMatch = titleRaw.match(/\bVOL(?:UME)?\s*[-_.]?\s*(\d+)\b/i);
+      const volMatch = folderVolMatch || titleVolMatch;
+
+      if (volMatch) {
+        const volNum = parseInt(volMatch[1], 10);
+        return {
+          isVolSeries: true,
+          volKey: `VOL_${volNum}`,
+          volLabel: `VOL ${volNum}`,
+          volNumber: volNum,
+          testOrder: extractQuizTestOrder(titleRaw, volNum),
+          extraGroupLabel: "",
+        };
+      }
+
+      const wSeriesMatch = titleRaw.match(/^\s*W\s*[-_#.]?\s*(\d+)\b/i) ||
+        (quizSkill(quiz) === "Writing" && combinedSource.match(/\bW\s*[-_#.]?\s*(\d+)\b/i));
+      if (wSeriesMatch) {
+        const wNum = parseInt(wSeriesMatch[1], 10);
+        return {
+          isVolSeries: true,
+          volKey: "VOL_W",
+          volLabel: "VOL W",
+          volNumber: 999,
+          testOrder: wNum,
+          extraGroupLabel: "",
+        };
+      }
+
+      const cleanFolder = folderRaw && folderRaw.toLowerCase() !== "root"
+        ? (folderRaw.split("/").map(s => s.trim()).filter(Boolean).pop() || "")
+        : "";
+
+      return {
+        isVolSeries: false,
+        volKey: "NON_VOL",
+        volLabel: cleanFolder || (i18n.language === "vi" ? "Đề luyện tập mở rộng" : "Extra Practice"),
+        volNumber: Number.MAX_SAFE_INTEGER,
+        testOrder: extractQuizTestOrder(titleRaw, null),
+        extraGroupLabel: cleanFolder || (i18n.language === "vi" ? "Đề luyện tập chung" : "General Practice"),
+      };
+    };
+
+    const compareQuizzesNaturally = (a: Quiz, b: Quiz): number => {
+      const ca = classifyStudentQuiz(a);
+      const cb = classifyStudentQuiz(b);
+      if (ca.volNumber !== cb.volNumber) return ca.volNumber - cb.volNumber;
+      if (ca.testOrder !== cb.testOrder) return ca.testOrder - cb.testOrder;
+      return String(a.title || "").localeCompare(String(b.title || ""), undefined, { numeric: true, sensitivity: "base" });
+    };
     const getMyQuestProgress = (assignment: TopicAssignment) => deriveQuestProgress(
       questProgress.find(progress => progress.studentId === me.id && progress.topicAssignmentId === assignment.id),
       assignment
@@ -19726,100 +19810,376 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 })}
               </div>
             )}
-            {examRoomTab === "available" && (
-            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-              {activeQuizzesForSkill.filter(q => (q.title || "").toLowerCase().includes((stQuizSearch || "").toLowerCase())).map(q => {
-                  const attemptCount = myQuizResults.filter(r => r && r.quizId === q.id).length;
-                  const now = getRealTime();
-                  const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
-                  const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
-                  const isPractice = isPracticeQuiz(q) || (q.practiceMode === true) || Number(q.maxAttempts) >= 99 || Number(q.maxAttempts) === Number.MAX_SAFE_INTEGER;
-                  const attemptDisplay = isPractice
-                    ? `${t('previous_attempts')}: ${attemptCount} (${tx('Không giới hạn', 'Unlimited')})`
-                    : `${t('previous_attempts')}: ${attemptCount}/${q.maxAttempts || 1}`;
-                  let statusText = "";
-                  let isAvailable = false;
-                  let badgeText = "";
-                  
-                  if (q.isLocked) { statusText = t('status_locked'); badgeText = t('status_locked'); }
-                  else if (now < startTime) { 
-                      statusText = `${t('opens_at')}: ${new Date(startTime).toLocaleString('vi-VN')}`; 
-                      badgeText = t('not_available'); 
-                  } 
-                  else if (now > endTime) { 
-                      statusText = t('status_closed'); 
-                      badgeText = t('status_closed'); 
-                  } 
-                  else if (!isPractice && attemptCount >= (q.maxAttempts || 1)) { 
-                      statusText = t('status_no_attempts'); 
-                      badgeText = t('status_no_attempts'); 
-                  } 
-                  else {
-                      isAvailable = true;
-                      statusText = q.scheduledEnd ? `${t('closes_at')}: ${new Date(endTime).toLocaleString('vi-VN')}` : t('status_available');
-                  }
+            {examRoomTab === "available" && (() => {
+              const renderStudentQuizCard = (q: Quiz, showGroupBadge?: boolean) => {
+                const attemptCount = myQuizResults.filter(r => r && r.quizId === q.id).length;
+                const now = getRealTime();
+                const startTime = q.scheduledStart ? parseVNTime(q.scheduledStart) : 0;
+                const endTime = q.scheduledEnd ? parseVNTime(q.scheduledEnd) : Infinity;
+                const isPractice = isPracticeQuiz(q) || (q.practiceMode === true) || Number(q.maxAttempts) >= 99 || Number(q.maxAttempts) === Number.MAX_SAFE_INTEGER;
+                const attemptDisplay = isPractice
+                  ? `${t('previous_attempts')}: ${attemptCount} (${tx('Không giới hạn', 'Unlimited')})`
+                  : `${t('previous_attempts')}: ${attemptCount}/${q.maxAttempts || 1}`;
+                let statusText = "";
+                let isAvailable = false;
+                let badgeText = "";
+                
+                if (q.isLocked) { statusText = t('status_locked'); badgeText = t('status_locked'); }
+                else if (now < startTime) { 
+                    statusText = `${t('opens_at')}: ${new Date(startTime).toLocaleString('vi-VN')}`; 
+                    badgeText = t('not_available'); 
+                } 
+                else if (now > endTime) { 
+                    statusText = t('status_closed'); 
+                    badgeText = t('status_closed'); 
+                } 
+                else if (!isPractice && attemptCount >= (q.maxAttempts || 1)) { 
+                    statusText = t('status_no_attempts'); 
+                    badgeText = t('status_no_attempts'); 
+                } 
+                else {
+                    isAvailable = true;
+                    statusText = q.scheduledEnd ? `${t('closes_at')}: ${new Date(endTime).toLocaleString('vi-VN')}` : t('status_available');
+                }
 
-                  // PHƯƠNG ÁN 2: KIỂM TRA KHÓA CỨNG KHI ĐANG THI TRÊN THIẾT BỊ KHÁC
-                  const localSessionId = localStorage.getItem("ielts_os_device_session");
-                  const isLockedByOtherDevice = me.activeExamId === q.id && me.currentSessionId && me.currentSessionId !== localSessionId;
+                // PHƯƠNG ÁN 2: KIỂM TRA KHÓA CỨNG KHI ĐANG THI TRÊN THIẾT BỊ KHÁC
+                const localSessionId = localStorage.getItem("ielts_os_device_session");
+                const isLockedByOtherDevice = me.activeExamId === q.id && me.currentSessionId && me.currentSessionId !== localSessionId;
 
-                  return (
-                      <div key={q.id} style={{ background: C.bg, padding: '11px 14px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: `1px solid ${C.border}` }}>
-                          <div>
-                              <div style={{fontWeight: 800, fontSize: 15}}>
-                                  {q.tag && <span style={{fontSize: 10, background: C.accent, color: '#fff', padding: '2px 6px', borderRadius: 4, marginRight: 5}}>{q.tag}</span>}
-                                  {q.title} {q.passcode && <span title={t('tip_pwd_required')}><Ico name="lock" size={13} color={C.sub} /></span>}
-                                  {q.isSEBRequired && <span title={t('tip_seb_required')} style={{marginLeft: 5}}><Ico name="shield" size={13} color={C.accent} /></span>}
-                                  <span style={{fontSize: 10, background: C.card, padding: '2px 6px', borderRadius: 4, marginLeft: 5}}>{q.type}</span>
-                              </div>
-                              <div style={{fontSize: 12, color: C.sub, marginTop: 4}}>{q.timeLimit} {t('time_limit')} • {(q.questions || []).length} {t('questions_count')} • {attemptDisplay}</div>
-                              <div style={{fontSize: 11, color: isLockedByOtherDevice ? C.warn : (isAvailable ? C.succ : C.err), marginTop: 4, fontWeight: 700}}>
-                                  <Ico name="clock" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{isLockedByOtherDevice ? t('locked_other_device') : statusText}
-                              </div>
-                          </div>
-                          {(isAvailable && !isLockedByOtherDevice) ? (
-                              <div style={{display: 'flex', gap: 10}}>
-                                  <button onClick={() => {
-    // Chuyển sang chế độ Preview (isPreview = true, isStudentTestUI = true)
-    // Điều này sẽ kích hoạt cơ chế mã hóa đề thi và chặn lưu kết quả thật
-    startExam(q, true, true);
-}} style={{ background: C.card, color: C.text, padding: "8px 15px", border: `1px solid ${C.border}`, borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 12 }} title={t('tip_test_ui')}><Ico name="monitor" size={13} /> {t('test_ui_btn')}</button>
-                                  <button onClick={() => {
-                                      // Khóa bài thi vào phiên này
-                                      const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
-                                      const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
-                                      setStudents(nx); syncData({ students: nx });
-                                      startExam(q, false);
-                                  }} style={{ background: C.accent, color: "#fff", padding: "8px 20px", boxShadow: `0 4px 10px ${C.accent}40`, border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}>{t('enter_exam')}</button>
-                              </div>
-                          ) : isLockedByOtherDevice ? (
-                              <button onClick={() => {
-                                  if(confirm(tx("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?", "THIS EXAM IS OPEN ON ANOTHER DEVICE!\n\nIf you continue, the session on that device will be terminated immediately. Are you sure you want to force entry?"))) {
-                                      const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
-                                      const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
-                                      setStudents(nx); syncData({ students: nx });
-                                      startExam(q, false);
-                                  }
-                              }} style={{ background: C.warn, color: "#fff", padding: "8px 15px", border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 11 }}>{t('force_take')}</button>
-                          ) : (
-                              <span style={{background: `${C.err}20`, color: C.err, padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700}}>{badgeText}</span>
-                          )}
+                const qClass = classifyStudentQuiz(q);
+                const groupBadgeText = qClass.isVolSeries ? qClass.volLabel : (qClass.extraGroupLabel || qClass.volLabel);
+
+                const userQuizResults = myQuizResults.filter(r => r && r.quizId === q.id);
+                const latestResult = userQuizResults.length > 0
+                  ? [...userQuizResults].sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id))[0]
+                  : undefined;
+
+                return (
+                    <div key={q.id} style={{ background: C.bg, padding: '11px 14px', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: `1px solid ${C.border}` }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5}}>
+                                {showGroupBadge && groupBadgeText && (
+                                  <span style={{fontSize: 10, fontWeight: 800, background: qClass.isVolSeries ? `${C.accent}15` : `${C.sub}18`, color: qClass.isVolSeries ? C.accent : C.text, border: `1px solid ${qClass.isVolSeries ? `${C.accent}40` : C.border}`, padding: '2px 6px', borderRadius: 4, letterSpacing: 0.3}}>
+                                    {groupBadgeText}
+                                  </span>
+                                )}
+                                {q.tag && <span style={{fontSize: 10, background: C.accent, color: '#fff', padding: '2px 6px', borderRadius: 4}}>{q.tag}</span>}
+                                <span>{q.title}</span>
+                                {q.passcode && <span title={t('tip_pwd_required')}><Ico name="lock" size={13} color={C.sub} /></span>}
+                                {q.isSEBRequired && <span title={t('tip_seb_required')}><Ico name="shield" size={13} color={C.accent} /></span>}
+                                <span style={{fontSize: 10, background: C.card, padding: '2px 6px', borderRadius: 4}}>{q.type}</span>
+                            </div>
+                            <div style={{fontSize: 12, color: C.sub, marginTop: 4, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6}}>
+                                <span>{q.timeLimit} {t('time_limit')} • {(q.questions || []).length} {t('questions_count')} • {attemptDisplay}</span>
+                                {latestResult && (
+                                  <span style={{fontSize: 11, fontWeight: 700, color: C.succ, background: `${C.succ}15`, padding: '1px 6px', borderRadius: 4}}>
+                                    ✓ {tx('Đã làm', 'Completed')}{latestResult.band ? ` · Band ${latestResult.band}` : ''} ({latestResult.score}/{latestResult.total})
+                                  </span>
+                                )}
+                            </div>
+                            <div style={{fontSize: 11, color: isLockedByOtherDevice ? C.warn : (isAvailable ? C.succ : C.err), marginTop: 4, fontWeight: 700}}>
+                                <Ico name="clock" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{isLockedByOtherDevice ? t('locked_other_device') : statusText}
+                            </div>
+                        </div>
+                        {(isAvailable && !isLockedByOtherDevice) ? (
+                            <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
+                                <button onClick={() => {
+                                    startExam(q, true, true);
+                                }} style={{ background: C.card, color: C.text, padding: "8px 15px", border: `1px solid ${C.border}`, borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 12 }} title={t('tip_test_ui')}><Ico name="monitor" size={13} /> {t('test_ui_btn')}</button>
+                                <button onClick={() => {
+                                    const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
+                                    const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
+                                    setStudents(nx); syncData({ students: nx });
+                                    startExam(q, false);
+                                }} style={{ background: C.accent, color: "#fff", padding: "8px 20px", boxShadow: `0 4px 10px ${C.accent}40`, border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}>{t('enter_exam')}</button>
+                            </div>
+                        ) : isLockedByOtherDevice ? (
+                            <button onClick={() => {
+                                if(confirm(tx("BÀI THI NÀY ĐANG ĐƯỢC MỞ Ở MỘT THIẾT BỊ KHÁC!\n\nNếu bạn tiếp tục, phiên làm bài ở thiết bị kia sẽ bị hủy bỏ và đá văng. Bạn có chắc chắn muốn ép buộc vào thi?", "THIS EXAM IS OPEN ON ANOTHER DEVICE!\n\nIf you continue, the session on that device will be terminated immediately. Are you sure you want to force entry?"))) {
+                                    const currentLocalSession = localStorage.getItem("ielts_os_device_session") || "";
+                                    const nx = students.map(s => s.id === me.id ? { ...s, activeExamId: q.id, currentSessionId: currentLocalSession } : s);
+                                    setStudents(nx); syncData({ students: nx });
+                                    startExam(q, false);
+                                }
+                            }} style={{ background: C.warn, color: "#fff", padding: "8px 15px", border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer', fontSize: 11, flexShrink: 0 }}>{t('force_take')}</button>
+                        ) : (
+                            <span style={{background: `${C.err}20`, color: C.err, padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, flexShrink: 0}}>{badgeText}</span>
+                        )}
+                    </div>
+                );
+              };
+
+              const isSearching = Boolean((stQuizSearch || "").trim());
+              const searchQuery = (stQuizSearch || "").trim().toLowerCase();
+
+              const searchResults = isSearching
+                ? activeQuizzesForSkill.filter(q => {
+                    const qClass = classifyStudentQuiz(q);
+                    const titleMatch = (q.title || "").toLowerCase().includes(searchQuery);
+                    const folderMatch = (q.folder || "").toLowerCase().includes(searchQuery);
+                    const volMatch = qClass.volLabel.toLowerCase().includes(searchQuery);
+                    const extraMatch = qClass.extraGroupLabel.toLowerCase().includes(searchQuery);
+                    return titleMatch || folderMatch || volMatch || extraMatch;
+                  }).sort(compareQuizzesNaturally)
+                : [];
+
+              const volQuizzes = activeQuizzesForSkill.filter(q => classifyStudentQuiz(q).isVolSeries);
+              const extraQuizzes = activeQuizzesForSkill.filter(q => !classifyStudentQuiz(q).isVolSeries).sort(compareQuizzesNaturally);
+
+              const volGroupsMap = new Map<string, { volKey: string; volLabel: string; volNumber: number; quizzes: Quiz[] }>();
+              for (const q of volQuizzes) {
+                const c = classifyStudentQuiz(q);
+                if (!volGroupsMap.has(c.volKey)) {
+                  volGroupsMap.set(c.volKey, {
+                    volKey: c.volKey,
+                    volLabel: c.volLabel,
+                    volNumber: c.volNumber,
+                    quizzes: []
+                  });
+                }
+                volGroupsMap.get(c.volKey)!.quizzes.push(q);
+              }
+
+              const volGroups = Array.from(volGroupsMap.values())
+                .map(g => ({
+                  ...g,
+                  quizzes: [...g.quizzes].sort(compareQuizzesNaturally)
+                }))
+                .sort((a, b) => a.volNumber - b.volNumber);
+
+              const currentSkillSelectedVol = studentSelectedVolBySkill[studentExamSkillTab];
+              let activeVolKey = currentSkillSelectedVol;
+              if (!activeVolKey || (activeVolKey !== "ALL" && !volGroups.some(g => g.volKey === activeVolKey))) {
+                activeVolKey = volGroups[0]?.volKey || "ALL";
+              }
+
+              const renderVolContainer = (group: { volKey: string; volLabel: string; volNumber: number; quizzes: Quiz[] }) => {
+                const completedCount = group.quizzes.filter(q => myQuizResults.some(r => r && r.quizId === q.id)).length;
+                const isAllDone = completedCount > 0 && completedCount === group.quizzes.length;
+                const pct = group.quizzes.length > 0 ? Math.round((completedCount / group.quizzes.length) * 100) : 0;
+
+                return (
+                  <div key={group.volKey} style={{
+                    background: C.card,
+                    border: `1px solid ${isAllDone ? `${C.succ}40` : C.border}`,
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    marginBottom: 14,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 10,
+                      marginBottom: 12,
+                      paddingBottom: 10,
+                      borderBottom: `1px solid ${C.border}`
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Ico name="folder" size={17} color={C.accent} />
+                        <span style={{ fontSize: 15, fontWeight: 900, color: C.text }}>{group.volLabel}</span>
+                        <span style={{ fontSize: 12, color: C.sub, fontWeight: 600 }}>({group.quizzes.length} {tx('đề', 'tests')})</span>
                       </div>
-                  )
-              })}
-              {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 10}}>{tx(`Chưa có đề ${studentExamSkillTab} khả dụng.`, `No available ${studentExamSkillTab} exams.`)}</div>}
-            </div>
-            )}
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 12, color: isAllDone ? C.succ : C.sub, fontWeight: 700 }}>
+                          {tx(`Đã hoàn thành ${completedCount}/${group.quizzes.length} đề`, `Completed ${completedCount}/${group.quizzes.length} tests`)}
+                        </span>
+                        <div style={{ width: 64, height: 6, background: `${C.border}`, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ width: `${pct}%`, height: '100%', background: isAllDone ? C.succ : C.accent, transition: 'width 0.3s' }} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {group.quizzes.map(q => renderStudentQuizCard(q, activeVolKey === "ALL"))}
+                    </div>
+                  </div>
+                );
+              };
+
+              if (isSearching) {
+                return (
+                  <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+                    {searchResults.length > 0 ? (
+                      searchResults.map(q => renderStudentQuizCard(q, true))
+                    ) : (
+                      <div style={{ color: C.sub, fontSize: 13, textAlign: 'center', padding: '24px 10px' }}>
+                        {tx(`Không tìm thấy bài thi phù hợp với từ khóa "${stQuizSearch}".`, `No exams matching "${stQuizSearch}".`)}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ marginTop: 14 }}>
+                  {/* Section A: VOL Series */}
+                  {volGroups.length > 0 && (
+                    <>
+                      {/* VOL Pill Selector */}
+                      <div style={{
+                        display: 'flex',
+                        gap: 8,
+                        overflowX: 'auto',
+                        padding: '2px 2px 12px 2px',
+                        scrollbarWidth: 'thin',
+                        alignItems: 'center'
+                      }}>
+                        {volGroups.map(group => {
+                          const isActive = activeVolKey === group.volKey;
+                          const completedCount = group.quizzes.filter(q => myQuizResults.some(r => r && r.quizId === q.id)).length;
+                          const isAllDone = completedCount > 0 && completedCount === group.quizzes.length;
+
+                          return (
+                            <button
+                              key={group.volKey}
+                              type="button"
+                              onClick={() => setStudentSelectedVolBySkill(prev => ({ ...prev, [studentExamSkillTab]: group.volKey }))}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                padding: '6px 13px',
+                                borderRadius: 20,
+                                border: `1px solid ${isActive ? C.accent : isAllDone ? `${C.succ}60` : C.border}`,
+                                background: isActive ? C.accent : isAllDone ? `${C.succ}12` : C.card,
+                                color: isActive ? '#fff' : isAllDone ? C.succ : C.text,
+                                fontSize: 12,
+                                fontWeight: 800,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                boxShadow: isActive ? `0 2px 8px ${C.accent}35` : 'none',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <span>{group.volLabel}</span>
+                              <span style={{
+                                fontSize: 10,
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                                background: isActive ? 'rgba(255,255,255,0.25)' : isAllDone ? `${C.succ}25` : C.border,
+                                color: isActive ? '#fff' : isAllDone ? C.succ : C.sub,
+                                fontWeight: 700
+                              }}>
+                                {completedCount}/{group.quizzes.length}
+                              </span>
+                            </button>
+                          );
+                        })}
+
+                        {volGroups.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setStudentSelectedVolBySkill(prev => ({ ...prev, [studentExamSkillTab]: "ALL" }))}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '6px 13px',
+                              borderRadius: 20,
+                              border: `1px solid ${activeVolKey === "ALL" ? C.accent : C.border}`,
+                              background: activeVolKey === "ALL" ? C.accent : C.card,
+                              color: activeVolKey === "ALL" ? '#fff' : C.sub,
+                              fontSize: 12,
+                              fontWeight: 800,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              boxShadow: activeVolKey === "ALL" ? `0 2px 8px ${C.accent}35` : 'none',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <span>{tx('Tất cả VOL', 'All Volumes')}</span>
+                            <span style={{
+                              fontSize: 10,
+                              padding: '1px 6px',
+                              borderRadius: 10,
+                              background: activeVolKey === "ALL" ? 'rgba(255,255,255,0.25)' : C.border,
+                              color: activeVolKey === "ALL" ? '#fff' : C.sub,
+                              fontWeight: 700
+                            }}>
+                              {volQuizzes.filter(q => myQuizResults.some(r => r && r.quizId === q.id)).length}/{volQuizzes.length}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* VOL Content Area */}
+                      {activeVolKey === "ALL"
+                        ? volGroups.map(g => renderVolContainer(g))
+                        : renderVolContainer(volGroups.find(g => g.volKey === activeVolKey) || volGroups[0])
+                      }
+                    </>
+                  )}
+
+                  {/* Section B: Extra Practice Quizzes */}
+                  {extraQuizzes.length > 0 && (
+                    <div style={{ marginTop: volGroups.length > 0 ? 18 : 0 }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 10,
+                        paddingLeft: 2
+                      }}>
+                        <Ico name="fileText" size={16} color={C.sub} />
+                        <span style={{ fontSize: 14, fontWeight: 800, color: C.text, letterSpacing: 0.2 }}>
+                          {tx(`Đề luyện tập & Mở rộng`, `Extra Practice Tests`)}
+                        </span>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: C.border, color: C.sub }}>
+                          {extraQuizzes.length}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {extraQuizzes.map(q => renderStudentQuizCard(q, true))}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeQuizzesForSkill.length === 0 && myRealExamPackages.length === 0 && (
+                    <div style={{ color: C.sub, fontSize: 13, textAlign: 'center', padding: 20 }}>
+                      {tx(`Chưa có đề ${studentExamSkillTab} khả dụng.`, `No available ${studentExamSkillTab} exams.`)}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {examRoomTab === "results" && (
                 <div style={{marginTop: 14}}>
                     {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{tx(`Chưa có kết quả ${studentExamSkillTab}.`, `No ${studentExamSkillTab} results yet.`)}</div>}
                     {[...resultsForSkill].filter(Boolean).sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)).map(r => {
                         if (!r) return null;
+                        const relatedQuiz = quizzes.find(qz => qz.id === r.quizId);
+                        const rClass = classifyStudentQuiz(relatedQuiz || ({ title: r.quizTitle } as any));
+                        const volBadge = rClass.isVolSeries
+                          ? rClass.volLabel
+                          : (rClass.extraGroupLabel || rClass.volLabel);
+
                         return (
                         <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>
                             <div style={{minWidth: 0}}>
-                                <div style={{fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{r.quizTitle}</div>
+                                <div style={{fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6}}>
+                                    {volBadge && (
+                                      <span style={{
+                                        fontSize: 10,
+                                        fontWeight: 800,
+                                        background: rClass.isVolSeries ? `${C.accent}15` : `${C.sub}18`,
+                                        color: rClass.isVolSeries ? C.accent : C.text,
+                                        border: `1px solid ${rClass.isVolSeries ? `${C.accent}40` : C.border}`,
+                                        padding: '1px 6px',
+                                        borderRadius: 4,
+                                        flexShrink: 0,
+                                        letterSpacing: 0.3
+                                      }}>
+                                        {volBadge}
+                                      </span>
+                                    )}
+                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.quizTitle}</span>
+                                </div>
                                 <div style={{fontSize: 11, color: C.sub, marginTop: 3}}>{r.date}</div>
                             </div>
                             <div style={{display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0}}>

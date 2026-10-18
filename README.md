@@ -53,6 +53,12 @@ Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase St
 - Hierarchical URL Routing Engine (Đồng Bộ URL Đa Tầng Không Phụ Thuộc Thư Viện Ngoài):
   - Ánh xạ 2 chiều thời gian thực giữa trạng thái ứng dụng React và URL trình duyệt qua HTML5 History API (`pushState`, `popstate`), tương thích hoàn toàn với SPA rewrite của Vercel (`vercel.json`) và Service Worker (`public/sw.js`).
   - Hỗ trợ deep linking, chia sẻ link trực tiếp và điều hướng Back/Forward tự nhiên cho mọi phân hệ: Auth (`/login`), Hệ thống (`/seb-guide`), Phòng thi (`/exam/:quizId`, `/exam/:quizId/real-mock`), Xem lại bài thi (`/exam/review/:resultId`, `/exam/writing-feedback/:resultId`), Bàn chấm giáo viên (`/teacher/grading/:resultId`), Bàn học học sinh (`/student/dashboard`, `/student/exams`, `/student/quests`, `/student/vocab`, `/student/rewards`, `/student/progress`), và Bàn làm việc giáo viên (`/teacher/dashboard`, `/teacher/exams`, `/teacher/exams/:quizId`, `/teacher/students`, `/teacher/students/:studentId`, `/teacher/classes`, `/teacher/arena`, `/teacher/finances`, `/teacher/drive`, `/teacher/quests`, `/teacher/academics`, `/teacher/history`).
+- Auto-Group VOL Series & Extra Practice Tests in Student Portal Exam Room:
+  - Zero manual tagging or data migration: Automatically detects VOL collections (e.g. VOL 6, VOL 7, VOL 8, VOL 9, VOL 10, and VOL W for Writing tests `W-1`, `W-2`, etc.) dynamically from `quiz.folder` and `quiz.title`.
+  - Interactive VOL Pill Selector: Horizontal scrollable pill bar displaying each VOL series, test completion counters (`X/Y đề`), success indicators for completed VOLs, and an 'All Volumes' stacked view.
+  - Dedicated Extra Practice Section: Cleanly isolates non-VOL quizzes into a distinct section beneath the VOL series grouped by folder or general practice.
+  - Natural Numeric Sorting: Ensures natural ascending test sequence (e.g., Test 1 -> Test 2 -> ... -> Test 10) avoiding naive alphabetical sort traps.
+  - Results & Review VOL Badges: Adds compact, color-coded VOL badges next to `quizTitle` in the Results tab for rapid historical recognition.
 - Zero-Latency Instant Audio Playback Engine for Listening Exams:
   - Hoisted persistent `<audio ref={audioRef}>` portal (`createPortal(..., document.body)`) keeping audio elements and buffered frames permanently alive across `pendingExamState`, `realExamInstructionGate`, and `activeExam`.
   - Dynamic `<link rel="preconnect">` and `<link rel="dns-prefetch">` injection for audio origin hosts to minimize DNS resolution and TCP handshake latency.
