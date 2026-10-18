@@ -63,7 +63,7 @@ Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase St
   - Automatic routing of Listening `MATCHING` questions to the official IELTS 2-column drag-and-drop interface (`idp-match2`) without rendering Reading radio matrices.
   - Multi-condition option reuse engine (`reuseTags`) preserving options in the drag bank when instructions allow ("more than once"), when answer keys contain duplicate selections, or when configured via `allowOptionReuse` / `[REUSE_OPTIONS]`.
   - Dropzone question number preservation (`data-placeholder`) ensuring empty or cleared slots never lose their prompt numbers upon DOM restoration.
-  - Flow-Chart Drag-and-Drop 100% CBT Parity: Comprehensive tag/line-break cleanup, inline flow marker extraction, uniform 500px column box widths with aligned borders, left-aligned text & title, seamless inline dropzones (100px min-width, 28px height, 1px dashed black border), solid black connector arrows, and bidirectional drag-to-bank slot clearing across Test Room and Review modes.
+  - Flow-Chart Drag-and-Drop 100% CBT Parity: Global CSS display inline override preventing dropzone line breaks, chart title and unnumbered step preservation (`flowTitle`, `flowSteps`) with backward-compatible extraction, uniform boxed node styling with centered heading, seamless inline dropzones (100px min-width, 28px height, 1px dashed border), solid black connector arrows, and right-hand word bank cleanly top-aligned with the flowchart.
 
 ### Retention cron
 

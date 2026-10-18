@@ -774,24 +774,28 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { width:100%; max-width:820px; margin:0 0 20px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 500px) max-content; gap:36px; align-items:start; }
-                      .idp-flowchart-panel { width:100%; max-width:500px; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:stretch; }
-                      .idp-flowchart-layout .idp-flowchart-panel { width:100%; max-width:500px; margin:0; }
+                      .idp-flowchart-wrap { width:100%; max-width:780px; margin:12px 0 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(280px, 460px) max-content; gap:32px; align-items:start; }
+                      .idp-flowchart-panel { width:100%; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:stretch; }
+                      .idp-flowchart-layout .idp-flowchart-panel { width:100%; margin:0; }
+                      .idp-flowchart-heading { font-size:16px; font-weight:700; color:var(--etext); text-align:center; margin:0 0 10px 0; line-height:1.35; }
                       .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
                       .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
                       .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:28px; box-sizing:border-box; margin:0; padding:5px 12px; text-align:left; justify-content:flex-start; font:400 13.5px/1.25 Arial,sans-serif; border:1px solid #777; border-radius:4px; background:#fff; color:#000; box-shadow:none; cursor:grab; }
                       .idp-flowchart-bank .idp-wordbank-item:hover:not(.used) { border-color:#0969da; background:#f0f7ff; }
                       .idp-flowchart-bank .idp-wordbank-item.selected { border-color:#0969da; background:#e8f2ff; outline:1px solid #0969da; }
-                      .idp-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #000; border-radius:2px; background:#fff; padding:10px 14px; line-height:1.6; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left !important; margin:0; }
-                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:left !important; }
-                      .idp-flowchart-arrow { width:100%; height:26px; margin:3px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 28'%3E%3Cpath fill='%23000' d='M10 0h4v14h6L12 28 4 14h6z'/%3E%3C/svg%3E") center/24px 28px no-repeat; }
+                      .idp-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #4b5563; border-radius:1px; background:#fff; padding:8px 12px; line-height:1.5; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; margin:0; }
+                      .idp-flowchart-node .highlightable-content,
+                      .idp-flowchart-node > .idp-flowchart-text,
+                      .idp-flowchart-node > .idp-flowchart-text * { display:inline !important; text-align:left !important; }
+                      .idp-flowchart-node br { display:none !important; }
+                      .idp-flowchart-arrow { width:100%; height:24px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
                       .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:100px; height:28px; min-height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000 !important; border-radius:3px; background:#fff !important; color:#000 !important; font:700 13px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; white-space:normal; }
                       .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; border-color:#000 !important; background:#f8fafc !important; font-weight:600; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
                       .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:100px !important; height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000; border-radius:3px; background:#fff; color:#000; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
-                      .idp-flowchart-title, .idp-flowchart-title * { text-align:left !important; font-weight:700 !important; }
-                      .idp-flowchart-title { font-size:calc(var(--efont) + 3px); margin-bottom:14px; color:var(--etext); }
+                      .idp-flowchart-title, .idp-flowchart-title * { text-align:center !important; font-weight:700 !important; }
+                      .idp-flowchart-title { font-size:16px; margin-bottom:10px; color:var(--etext); }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; display: inline; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 8px auto !important; }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
@@ -2011,7 +2015,70 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        const url = String(mapPlanSource || "").match(/https?:\/\/[^\s<>"']+/i)?.[0];
                        return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" referrerpolicy="no-referrer" loading="lazy" alt="Map or plan" />` : "";
                    })();
-                   const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
+                   const flowChartData = (() => {
+                       if (!isFlowChartGroup) return null;
+                       const firstQ: any = group.questions[0] || {};
+                       if (firstQ.flowSteps && Array.isArray(firstQ.flowSteps) && firstQ.flowSteps.length > 0) {
+                           return {
+                               title: firstQ.flowTitle || "",
+                               steps: firstQ.flowSteps,
+                               cleanInstruction: group.instruction,
+                           };
+                       }
+                       // Backward-compatible extraction from group.instruction and group.context
+                       const rawInstruction = group.instruction || "";
+                       const rawSegments = rawInstruction
+                           .split(/<\/(?:div|p)>/i)
+                           .map((s: string) => s.replace(/<(?:div|p)\b[^>]*>/i, "").trim())
+                           .filter(Boolean);
+                       const standardInstructionLines: string[] = [];
+                       let extractedTitle = "";
+                       const leadingSteps: Array<{ type: string; html: string; questionNumber: number | null }> = [];
+                       const isArrow = (txt: string, html: string) =>
+                           /^(?:↓|⬇|▼|⇩|\|\s*v|->|→|v|&darr;|&#8595;)$/i.test(txt) || /idp-flow-arrow/i.test(html);
+                       const isStandardInstruction = (txt: string) =>
+                           /^\s*(?:Questions?\b|Complete\b|Choose\b|Write\b|NB\b|Read\b|Look\b)/i.test(txt);
+
+                       for (const seg of rawSegments) {
+                           const plain = seg.replace(/<[^>]+>/g, "").trim();
+                           if (!plain) continue;
+                           if (isArrow(plain, seg)) continue;
+                           if (isStandardInstruction(plain) && leadingSteps.length === 0 && !extractedTitle) {
+                               standardInstructionLines.push(seg);
+                           } else {
+                               if (!extractedTitle && leadingSteps.length === 0 && (/<(?:strong|b)\b/i.test(seg) || !/^\s*\(/.test(plain))) {
+                                   extractedTitle = seg;
+                               } else {
+                                   leadingSteps.push({ type: "step", html: seg, questionNumber: null });
+                               }
+                           }
+                       }
+
+                       const allSteps: Array<{ type: string; html: string; questionNumber: number | null; q?: any }> = [
+                           ...leadingSteps,
+                           ...group.questions.map((q: any) => ({
+                               type: "step",
+                               html: q.text,
+                               questionNumber: q.questionNumber,
+                               q,
+                           })),
+                       ];
+
+                       const cleanIns = standardInstructionLines.length
+                           ? "<div>" + standardInstructionLines.join("</div><div>") + "</div>"
+                           : (extractedTitle || leadingSteps.length ? "" : group.instruction);
+
+                       return {
+                           title: extractedTitle,
+                           steps: allSteps,
+                           cleanInstruction: cleanIns,
+                       };
+                   })();
+                   const displayInstruction = isMapPlanMatching
+                       ? stripMapPlanVisual(group.instruction)
+                       : isFlowChartGroup && flowChartData
+                           ? flowChartData.cleanInstruction
+                           : group.instruction;
                    showInstruction = !isHtmlEmpty(displayInstruction);
                    const mainPassage = activeExam?.sections ? activeExam.sections[currentSectionIndex]?.passage : (activeExam.passage || visibleGroups[0]?.context || "");
                    const externalDiagramImageUrl = (() => {
@@ -2033,7 +2100,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const displaySafeContext = isExternalDiagramGroup
                        ? safeHtml.replace(/<img\b[^>]*>/gi, "").replace(/IMAGE:\s*\S+/gi, "").trim()
                        : safeHtml;
-                   const showContext = !isMapPlanMatching && !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage) && (!isExternalDiagramGroup || displaySafeContext.replace(/<[^>]*>/g, '').trim().length > 0);
+                   const showContext = !isFlowChartGroup && !isMapPlanMatching && !isHtmlEmpty(group.context) && (isListeningLayout || group.context !== mainPassage) && (!isExternalDiagramGroup || displaySafeContext.replace(/<[^>]*>/g, '').trim().length > 0);
 
                   // ĐàFIX: Tự động tính toán Header "Questions X-Y" chuẩn IDP
                   const firstGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === group.questions[0].id) + 1;
@@ -2071,11 +2138,46 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             if (!val) return "";
                             return resolveOptionAnswerText({ ...q, options: flowOptions }, val) || String(val);
                         }).filter(Boolean);
+                         const flowTitle = flowChartData?.title || (group.questions[0] as any)?.flowTitle || "";
+                         let stepsToRender: Array<{ html: string; questionNumber?: number | null; q?: any }> = [];
+                         if (flowChartData?.steps && flowChartData.steps.length > 0) {
+                             stepsToRender = flowChartData.steps.map((st: any) => {
+                                 if (st.q) return st;
+                                 if (st.questionNumber != null) {
+                                     const foundQ = group.questions.find((item: any) => Number(item.questionNumber) === Number(st.questionNumber));
+                                     return { ...st, q: foundQ };
+                                 }
+                                 return st;
+                             });
+                         } else {
+                             stepsToRender = group.questions.map((q: any) => ({ html: q.text, questionNumber: q.questionNumber, q }));
+                         }
+
                         return (
                         <div className="idp-flowchart-wrap">
                         <div className={isDragFlow ? "idp-flowchart-layout" : ""}>
                         <div className="idp-flowchart-panel">
-                          {group.questions.map((q, flowIdx) => {
+                          {flowTitle && (
+                              <div className="idp-flowchart-heading" dangerouslySetInnerHTML={{ __html: renderSafeHTML(flowTitle) }} />
+                          )}
+                          {stepsToRender.map((step, flowIdx) => {
+                              const q = step.q;
+                              if (!q) {
+                                  const stepCleanHtml = String(step.html || "")
+                                      .replace(/<br\s*\/?>/gi, " ")
+                                      .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
+                                      .replace(/&nbsp;/gi, " ")
+                                      .replace(/\s+/g, " ")
+                                      .trim();
+                                  return (
+                                      <React.Fragment key={`flow-step-${flowIdx}`}>
+                                          <div className="idp-flowchart-node">
+                                              <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="context" dataQid={group.questions[0]?.id} html={renderSafeHTML(stepCleanHtml)} />
+                                          </div>
+                                          {flowIdx < stepsToRender.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
+                                      </React.Fragment>
+                                  );
+                              }
                               const qGlobalIdx = (activeExam.questions || []).findIndex((x:any) => x.id === q.id) + 1;
                               // DOCX paragraphs arrive wrapped in block tags. A flow node is one
                               // inline sentence, so unwrap paragraph containers before splitting
@@ -2098,6 +2200,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
                                            {beforeText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />}
+                                           {beforeText && " "}
                                            {hasFlowGap && (isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
@@ -2129,9 +2232,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
                                               style={{ textAlign: 'center', minWidth: 100 }}
                                            />)}
+                                           {afterText && " "}
                                            {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
                                       </div>
-                                      {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
+                                      {flowIdx < stepsToRender.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                   </React.Fragment>
                               );
                           })}

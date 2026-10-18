@@ -1005,6 +1005,8 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     """
     instruction_html: List[str] = []
     flow_nodes: List[Tuple[str, str]] = []
+    flow_title = ""
+    flow_steps: List[Dict[str, Any]] = []
     options: List[str] = []
     answers: Dict[str, str] = {}
     explanations: Dict[str, Dict[str, Any]] = {}
@@ -1014,6 +1016,8 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     current_answer = ""
     answer_start = re.compile(r'^(\d+)\s*[\.)]\s*$')
     marker_re = re.compile(r'\[(\d+)\]')
+    arrow_line_re = re.compile(r'^(?:↓|⬇|▼|⇩|\|\s*v|->|→|v|&darr;|&#8595;)$', re.IGNORECASE)
+    instruction_header_re = re.compile(r'^\s*(?:Questions?\b|Complete\b|Choose\b|Write\b|NB\b|Read\b|Look\b)', re.IGNORECASE)
 
     active_explanation_targets: List[str] = []
 
@@ -1026,6 +1030,8 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
             continue
         if re.match(r'^\s*\[REUSE(?:_OPTIONS)?\]\s*$', text_line, re.IGNORECASE):
             has_explicit_reuse = True
+            continue
+        if re.match(r'^\s*\[[A-Z0-9_]+\]\s*$', text_line, re.IGNORECASE) and text_line.upper() not in {"[FLOW]", "[/FLOW]", "[CONTEXT]", "[/CONTEXT]"}:
             continue
         upper = text_line.upper()
         exp_match = RE_MANUAL_EXPLANATION.match(text_line)
@@ -1065,18 +1071,41 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
                 answers[current_answer] = re.sub(r'^\*+\s*', '', text_line).strip()
             continue
 
-        markers = marker_re.findall(text_line)
-        if in_flow or markers:
-            for number in markers:
-                if not any(existing_number == number for existing_number, _ in flow_nodes):
-                    flow_nodes.append((number, html_line))
-            continue
         if in_options:
             option = re.sub(r'^\s*[A-Za-z][\.)]\s*', '', text_line).strip()
             if option:
                 options.append(option)
             continue
-        instruction_html.append(html_line)
+
+        # Skip standalone arrow lines
+        if arrow_line_re.match(text_line) or re.search(r'idp-flow-arrow', html_line, re.IGNORECASE):
+            continue
+
+        markers = marker_re.findall(text_line)
+        if markers:
+            for number in markers:
+                flow_steps.append({"type": "step", "html": html_line, "questionNumber": int(number)})
+                if not any(existing_number == number for existing_number, _ in flow_nodes):
+                    flow_nodes.append((number, html_line))
+            continue
+
+        if in_flow:
+            if not flow_title and len(flow_steps) == 0 and ('<strong' in html_line.lower() or '<b' in html_line.lower()):
+                flow_title = html_line
+            else:
+                flow_steps.append({"type": "step", "html": html_line, "questionNumber": None})
+            continue
+
+        # Lines before [FLOW]
+        if instruction_header_re.match(text_line):
+            instruction_html.append(html_line)
+            continue
+
+        # Non-instruction lines before [FLOW]: either title or leading unnumbered step
+        if not flow_title and len(flow_steps) == 0 and ('<strong' in html_line.lower() or '<b' in html_line.lower() or not re.match(r'^\s*\(', text_line)):
+            flow_title = html_line
+        else:
+            flow_steps.append({"type": "step", "html": html_line, "questionNumber": None})
 
     if not flow_nodes:
         return
@@ -1099,11 +1128,14 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
             "text": node_html,
             "options": shared_options.copy(),
             "correctAnswer": answers.get(number, ""),
+            "flowTitle": flow_title,
+            "flowSteps": flow_steps,
         }
         if allow_flow_reuse:
             question["allowOptionReuse"] = True
         attach_manual_explanation(question, explanations.get(str(number)))
         target_questions.append(question)
+
 
 
 def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):

@@ -25,15 +25,16 @@
   3. *Bảo toàn số thứ tự câu hỏi khi trống*:
      - Thêm `data-placeholder={...}` và `data-num={...}` vào tất cả `.idp-dropzone` trong `idp-match2` và `renderFlowChart`.
      - Cập nhật effect khôi phục DOM trong `src/App.template.tsx` bỏ qua `.idp-summary-dropzone` để bảo vệ cấu trúc HTML bên trong.
-  4. *Đồng bộ 100% quy chuẩn giao diện Flow-Chart chuẩn IELTS Computer-Delivered (Ảnh mẫu CD IELTS)*:
-     - **Kích thước hộp đồng đều 100%**: `.idp-flowchart-panel` cố định `max-width: 500px; align-items: stretch;`, `.idp-flowchart-node` đặt `width: 100%; border: 1px solid #000; border-radius: 2px; padding: 10px 14px;` — toàn bộ các bước trong chuỗi sơ đồ có cùng chiều rộng chuẩn xác 500px, mép trái và mép phải gióng hàng thẳng tắp.
-     - **Căn lề trái toàn bộ văn bản và tiêu đề**: `.idp-flowchart-title` và `.idp-flowchart-node` áp dụng `text-align: left !important; font-weight: 700 !important;` theo đúng thiết kế đề thi thật.
-     - **Ô điền inline nằm trên cùng 1 dòng với chữ**: Bóc sạch `<br/>`, `<div>`, `<p>` và gạch chân đuôi; `.idp-dropzone` và `.idp-inline-input` đặt `min-width: 100px; height: 28px; border: 1px dashed #000; border-radius: 3px; display: inline-flex; vertical-align: middle;` nằm liền khối tự nhiên giữa các cụm từ (ví dụ `Put [ 18 ] on the back`).
-     - **Mũi tên liên kết chuẩn**: `.idp-flowchart-arrow` dùng SVG mũi tên đen đặc (`24px x 28px`) căn giữa nối các hộp.
-     - **Kho từ kéo thả bên phải**: `.idp-flowchart-bank .idp-wordbank-item` căn lề trái (`align-items: flex-start`), bo góc nhẹ `4px`, viền `1px solid #777`, chiều rộng `fit-content` theo độ dài từng từ.
-     - Đồng bộ giao diện xem lại bài thi Review (`REVIEW_QUIZ.txt`) với cùng cấu trúc 500px, viền đen, căn lề trái và badge inline.
+  4. *Đồng bộ 100% quy chuẩn giao diện Flow-Chart chuẩn IELTS Computer-Delivered (IELTS CBT Parity)*:
+     - **Triệt tiêu ép xuống dòng toàn cục (`src/index.css`)**: Thêm rule ưu tiên cao `.idp-flowchart-node .highlightable-content, .idp-flowchart-node .idp-flowchart-text, .idp-flowchart-node .idp-flowchart-text * { display: inline !important; }` và `.idp-flowchart-node br { display: none !important; }` để loại bỏ việc rule toàn cục `.highlightable-content { display: block !important; }` ép dropzone nhảy xuống dòng dưới nhãn tiền tố.
+     - **Bảo toàn tiêu đề sơ đồ và các bước không đánh số (api/index.py)**: `process_flow_drag_block` bóc tách độc lập `flowTitle` (như *Plan for last lesson*) và tất cả các bước không đánh số `flowSteps` (cả trước và trong `[FLOW]`, ví dụ *(class) watch a movie*, *(small groups) have a discussion*), bỏ qua dòng mũi tên (`ARROW_LINE_RE`), giữ sạch phần chỉ dẫn thi `instruction_html`, và gắn `flowTitle`, `flowSteps` vào mọi câu hỏi của nhóm.
+     - **Tương thích ngược cho đề đã tải lên (ACTIVE_EXAM.txt & REVIEW_QUIZ.txt)**: Tự động trích xuất tiêu đề sơ đồ và các bước không đánh số từ `group.instruction` nếu chưa có `q.flowSteps`, loại bỏ chúng khỏi `displayInstruction` và ẩn `group.context` để không tràn toàn màn hình.
+     - **Bố cục 2 cột IDP chuẩn xác**: Cột trái `.idp-flowchart-panel` (`minmax(280px, 460px)`) chứa tiêu đề sơ đồ `.idp-flowchart-heading` căn giữa ở đỉnh, nối tiếp chuỗi hộp `.idp-flowchart-node` (viền `1px solid #4b5563`, bo góc `1px`, padding `8px 12px`, căn trái) kết nối bằng mũi tên đen đặc `.idp-flowchart-arrow` (`20px x 22px`). Kho thẻ từ vựng `.idp-flowchart-bank` ở cột phải tự động gióng hàng ngang thẳng tắp với đỉnh sơ đồ.
+     - **Ô điền inline nằm trên cùng 1 dòng với chữ**: Đảm bảo khoảng trắng `" "` giữa `beforeText`, `.idp-dropzone` và `afterText` (ví dụ `(class) [ 26 ]`, `(pairs) [ 27 ]`), hiển thị liền mạch trên 1 dòng đơn.
+     - Đồng bộ giao diện xem lại bài thi Review (`REVIEW_QUIZ.txt`) với cùng cấu trúc tiêu đề, bước không đánh số, viền hộp và badge inline.
   5. *Kiểm thử & Biên dịch*:
-     - Bổ sung unit test `tests/test_allow_option_reuse.py` kiểm thử 3 kịch bản: `[REUSE_OPTIONS]`, chỉ dẫn "more than once", và đáp án trùng lặp. 3/3 tests pass 100%.
+     - Bổ sung unit test `tests/test_allow_option_reuse.py` kiểm thử cả tái dùng đáp án và bóc tách `flowTitle` + `flowSteps`. 4/4 tests pass 100%. Toàn bộ 29 unit tests pass.
+     - Kiểm thử giao diện trực tiếp qua Playwright: các hộp sơ đồ có cùng chiều rộng chuẩn xác 460px, văn bản và ô dropzone nằm trên cùng 1 dòng (độ lệch tâm Y < 1.5px), kho từ căn ngang bằng đỉnh sơ đồ.
      - `compile_app.py`, `npx tsc -b`, `npx vite build` pass 100% không cảnh báo lỗi.
 
 ## Chuẩn Hóa Phân Tích Bẫy Nhận Thức (AI Cognitive Trap Diagnosis) & Bảng Lựa Chọn Gây Nhiễu (Option Distractor Breakdown) — 2026-10-17

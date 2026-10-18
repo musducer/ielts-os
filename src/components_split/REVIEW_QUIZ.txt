@@ -895,13 +895,15 @@
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
-                  .rv-flowchart-review { width:100%; max-width:500px; margin:0 0 20px; display:flex; flex-direction:column; align-items:stretch; }
-                  .rv-flowchart-review .rv-flowchart-node { width:100%; box-sizing:border-box; border:1.5px solid #000; border-radius:2px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.6 Arial,sans-serif; text-align:left !important; margin:0; }
+                  .rv-flowchart-review { width:100%; max-width:460px; margin:0 0 20px; display:flex; flex-direction:column; align-items:stretch; }
+                  .rv-flowchart-heading { font-size:16px; font-weight:700; color:#1e293b; text-align:center; margin:0 0 10px 0; line-height:1.35; }
+                  .rv-flowchart-review .rv-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #4b5563; border-radius:1px; background:#fff; padding:8px 12px; color:#111827; font:400 15px/1.5 Arial,sans-serif; text-align:left !important; margin:0; }
+                  .rv-flowchart-review .rv-flowchart-node .highlightable-content,
+                  .rv-flowchart-review .rv-flowchart-node * { display:inline !important; text-align:left !important; }
+                  .rv-flowchart-review .rv-flowchart-node br { display:none !important; }
                   .rv-flowchart-review .rv-completion-badge { min-width:100px; min-height:28px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 10px; border-radius:3px; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; white-space:normal; }
                   .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
-                  .rv-flowchart-arrow { position:relative; width:100%; height:26px; margin:3px 0; font-size:0; line-height:1; }
-                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2.5px); width:5px; height:14px; background:#000; }
-                  .rv-flowchart-arrow::after { content:""; position:absolute; top:12px; left:calc(50% - 9px); border:9px solid transparent; border-top:14px solid #000; }
+                  .rv-flowchart-arrow { width:100%; height:24px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
                   .rv-flowchart-correction { margin:4px 0 0 0; color:#047857; font:700 12.5px/1.35 Arial,sans-serif; text-align:left !important; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
@@ -1702,14 +1704,104 @@
                                   const evidence = explainMap[question.id]?.audioEvidence;
                                   if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
                               };
+                              const flowChartData = (() => {
+                                  const firstQ: any = flowQuestions[0] || {};
+                                  if (firstQ.flowSteps && Array.isArray(firstQ.flowSteps) && firstQ.flowSteps.length > 0) {
+                                      return {
+                                          title: firstQ.flowTitle || "",
+                                          steps: firstQ.flowSteps,
+                                          cleanInstruction: q.instruction,
+                                      };
+                                  }
+                                  const rawInstruction = q.instruction || "";
+                                  const rawSegments = rawInstruction
+                                      .split(/<\/(?:div|p)>/i)
+                                      .map((s: string) => s.replace(/<(?:div|p)\b[^>]*>/i, "").trim())
+                                      .filter(Boolean);
+                                  const standardInstructionLines: string[] = [];
+                                  let extractedTitle = "";
+                                  const leadingSteps: Array<{ type: string; html: string; questionNumber: number | null }> = [];
+                                  const isArrow = (txt: string, html: string) =>
+                                      /^(?:↓|⬇|▼|⇩|\|\s*v|->|→|v|&darr;|&#8595;)$/i.test(txt) || /idp-flow-arrow/i.test(html);
+                                  const isStandardInstruction = (txt: string) =>
+                                      /^\s*(?:Questions?\b|Complete\b|Choose\b|Write\b|NB\b|Read\b|Look\b)/i.test(txt);
+
+                                  for (const seg of rawSegments) {
+                                      const plain = seg.replace(/<[^>]+>/g, "").trim();
+                                      if (!plain) continue;
+                                      if (isArrow(plain, seg)) continue;
+                                      if (isStandardInstruction(plain) && leadingSteps.length === 0 && !extractedTitle) {
+                                          standardInstructionLines.push(seg);
+                                      } else {
+                                          if (!extractedTitle && leadingSteps.length === 0 && (/<(?:strong|b)\b/i.test(seg) || !/^\s*\(/.test(plain))) {
+                                              extractedTitle = seg;
+                                          } else {
+                                              leadingSteps.push({ type: "step", html: seg, questionNumber: null });
+                                          }
+                                      }
+                                  }
+
+                                  const allSteps: Array<{ type: string; html: string; questionNumber: number | null; question?: any }> = [
+                                      ...leadingSteps,
+                                      ...flowQuestions.map((fq: any) => ({
+                                          type: "step",
+                                          html: fq.text,
+                                          questionNumber: fq.questionNumber,
+                                          question: fq,
+                                      })),
+                                  ];
+
+                                  const cleanIns = standardInstructionLines.length
+                                      ? "<div>" + standardInstructionLines.join("</div><div>") + "</div>"
+                                      : (extractedTitle || leadingSteps.length ? "" : q.instruction);
+
+                                  return {
+                                      title: extractedTitle,
+                                      steps: allSteps,
+                                      cleanInstruction: cleanIns,
+                                  };
+                              })();
+                              const displayIns = flowChartData?.cleanInstruction !== undefined ? flowChartData.cleanInstruction : q.instruction;
+                              const flowTitle = flowChartData?.title || (flowQuestions[0] as any)?.flowTitle || "";
+                              let stepsToRender: Array<{ html: string; questionNumber?: number | null; question?: any }> = [];
+                              if (flowChartData?.steps && flowChartData.steps.length > 0) {
+                                  stepsToRender = flowChartData.steps.map((st: any) => {
+                                      if (st.question) return st;
+                                      if (st.questionNumber != null) {
+                                          const foundQ = flowQuestions.find((item: any) => Number(item.questionNumber) === Number(st.questionNumber));
+                                          return { ...st, question: foundQ };
+                                      }
+                                      return st;
+                                  });
+                              } else {
+                                  stepsToRender = flowQuestions.map((fq: any) => ({ html: fq.text, questionNumber: fq.questionNumber, question: fq }));
+                              }
                               return <section key={`flow-drag-review-${q.id}`} className="rv-completion-review" style={{marginBottom:20}}>
-                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
+                                  {displayIns && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(displayIns)}} />}
                                   <div className="rv-flowchart-review" onClick={(event:any) => {
                                       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
                                       const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
                                       if (question) selectFlowQuestion(question);
                                   }}>
-                                      {flowQuestions.map((question: any, index: number) => {
+                                      {flowTitle && (
+                                          <div className="rv-flowchart-heading" dangerouslySetInnerHTML={{__html:formatContent(flowTitle)}} />
+                                      )}
+                                      {stepsToRender.map((step: any, index: number) => {
+                                          const question = step.question;
+                                          if (!question) {
+                                              const cleanedText = String(step.html || "")
+                                                  .replace(/<br\s*\/?>/gi, " ")
+                                                  .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
+                                                  .replace(/&nbsp;/gi, " ")
+                                                  .replace(/\s+/g, " ")
+                                                  .trim();
+                                              return (
+                                                  <React.Fragment key={`rv-flow-step-${index}`}>
+                                                      <div className="rv-flowchart-node" dangerouslySetInnerHTML={{__html:formatContent(cleanedText)}} />
+                                                      {index < stepsToRender.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
+                                                  </React.Fragment>
+                                              );
+                                          }
                                           const state = rvCompletionAnswer(question);
                                           const number = rvQuestionNumber(question);
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
@@ -1725,7 +1817,7 @@
                                           return <React.Fragment key={question.id}>
                                               <div className="rv-flowchart-node" style={{borderColor:state.correct ? C.succ : state.blank ? C.warn : C.err}} dangerouslySetInnerHTML={{__html:renderedNode}} />
                                               {!state.correct && <div className="rv-flowchart-correction">Correct answer: {state.expected}</div>}
-                                              {index < flowQuestions.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
+                                              {index < stepsToRender.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
                                           </React.Fragment>;
                                       })}
                                   </div>

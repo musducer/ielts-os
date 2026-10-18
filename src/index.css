@@ -154,3 +154,11 @@ b, strong, .exam-content-block b, .exam-content-block strong,
     text-align: inherit;
     display: block !important;
 }
+.idp-flowchart-node .highlightable-content,
+.idp-flowchart-node .idp-flowchart-text,
+.idp-flowchart-node .idp-flowchart-text * {
+    display: inline !important;
+}
+.idp-flowchart-node br {
+    display: none !important;
+}
