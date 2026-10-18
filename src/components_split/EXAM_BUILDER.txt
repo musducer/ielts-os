@@ -65,7 +65,7 @@
                         while (j < qs.length && qs[j].type === q.type
                                && (qs[j].groupContext || "") === (q.groupContext || "")
                                && (qs[j].instruction || "") === (q.instruction || "")
-                               && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))
+                               && (q.type !== 'MAP_DRAG' || resolveQuestionMapUrl(qs[j]) === resolveQuestionMapUrl(q))
                                && (q.type !== 'DIAGRAM_LABEL' || String(qs[j].diagramImageUrl || '') === String(q.diagramImageUrl || ''))) {
                             if ((q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING') && JSON.stringify(qs[j].options || []) !== JSON.stringify(q.options || [])) break;
                             sharedQs.push(qs[j]);
@@ -563,7 +563,7 @@
                                             <div style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
                                                 <div style={{fontFamily: EB.fLabel, fontWeight: 700, fontSize: 13, color: EB.accent, letterSpacing: '0.04em', textTransform: 'uppercase'}}>{titleStr}</div>
                                                 <select className="ebx-soft" value={q.type} onChange={(e: any) => {
-                                                    updateGroup((qItem: any) => ({ ...qItem, type: e.target.value as any, correctAnswer: e.target.value === "CHOICE" ? 0 : "" }));
+                                                    updateGroup((qItem: any) => ({ ...qItem, type: e.target.value as any, mapImageUrl: e.target.value === "MAP_DRAG" ? (resolveQuestionMapUrl(qItem) || qItem.mapImageUrl || "") : qItem.mapImageUrl, correctAnswer: e.target.value === "CHOICE" ? 0 : (qItem.correctAnswer ?? "") }));
                                                 }} style={selBox}>
                                                     <option value="CHOICE">{t('eb_opt_choice')}</option>
                                                     <option value="CHOICE_MULTIPLE">{t('eb_opt_multi')}</option>
@@ -891,7 +891,7 @@
                                             </div>;
                                         })() : grp.groupType === 'MAP_DRAG' ? (() => {
                                             const mapSource: any = grp.questions[0];
-                                            const mapUrl = String(mapSource.mapImageUrl || '');
+                                            const mapUrl = resolveQuestionMapUrl(mapSource);
                                             const mapSlots: Record<string, any> = mapSource.mapSlots || {};
                                             const mapNumber = (question: any, offset: number) => String(question.text || '').match(/\d+/)?.[0] || String(qIndex + offset + 1);
                                             const mapNumbers = grp.questions.map((question: any, offset: number) => mapNumber(question, offset));
@@ -922,7 +922,7 @@
                                             const options = (mapSource.options || []).map((option: any) => String(option));
                                             return <div style={{display:'grid', gap:18}}>
                                                 <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1fr) minmax(210px, .4fr)', gap:14}}>
-                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={mapUrl} onChange={(event:any) => updateMap({mapImageUrl:event.target.value})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
+                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={String(mapSource.mapImageUrl ?? mapUrl)} onChange={(event:any) => updateMap({mapImageUrl: normalizeExternalMediaUrl(event.target.value)})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
                                                     <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Pin question<select value={activeSlot || ''} onChange={(event:any) => setMapDragEditorSelection(event.target.value)} style={{display:'block', width:'100%', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:700}}>{mapNumbers.map((number:string) => <option key={number} value={number}>Question {number}</option>)}</select></label>
                                                 </div>
                                                 <div className="eb-map-drag-canvas" style={{minHeight:mapUrl ? 0 : 170, overflow:'auto', border:`1px dashed ${EB.line}`, background:EB.wash, textAlign:'center'}}>
@@ -931,8 +931,8 @@
                                                         const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
                                                         const current = slotAt(activeSlot, mapNumbers.indexOf(activeSlot));
                                                         setSlots({ ...mapSlots, [activeSlot]: {...current, x:clamp(((event.clientX-bounds.left)/bounds.width)*100,0,100), y:clamp(((event.clientY-bounds.top)/bounds.height)*100,0,100)} });
-                                                    }} style={{position:'relative', display:'inline-block', width:'fit-content', maxWidth:'100%', lineHeight:0, cursor:'crosshair'}}>
-                                                        <img src={mapUrl} alt="Map slot editor" draggable={false} style={{display:'block', width:'auto', maxWidth:'100%', height:'auto', maxHeight:560, objectFit:'contain'}} />
+                                                    }} style={{position:'relative', display:'inline-block', width:'100%', maxWidth:780, lineHeight:0, cursor:'crosshair'}}>
+                                                        <img src={mapUrl} alt="Map slot editor" referrerPolicy="no-referrer" draggable={false} style={{display:'block', width:'100%', maxWidth:'100%', height:'auto', maxHeight:560, objectFit:'contain', margin:'0 auto'}} />
                                                         {mapNumbers.map((number:string, index:number) => { const slot=slotAt(number,index); return <div key={number} className="eb-map-slot" onPointerDown={(event:any) => moveSlot(number,event)} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, height:`${slot.height || 7}%`, minWidth:50, minHeight:24, transform:'translate(-50%, -50%)', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box', border:`2px dashed ${number===activeSlot?EB.accent:'#64748b'}`, background:'rgba(255,255,255,.84)', color:EB.ink, fontFamily:EB.fMono, fontWeight:800, lineHeight:1.2, cursor:'grab', touchAction:'none', userSelect:'none'}}>{number}<button type="button" title="Drag to resize" onPointerDown={(event:any)=>{event.stopPropagation();moveSlot(number,event,true)}} style={{position:'absolute', right:-6, bottom:-6, width:13, height:13, padding:0, border:'2px solid #fff', borderRadius:'50%', background:EB.accent, cursor:'nwse-resize'}} /></div> })}
                                                     </div> : <div style={{padding:46, textAlign:'center', color:EB.sub}}>Paste the map image URL to pin the answer slots.</div>}
                                                 </div>

@@ -70,6 +70,11 @@ Test-room media URLs support PNG, JPEG, WebP, GIF and SVG, including Firebase St
   - Multi-condition option reuse engine (`reuseTags`) preserving options in the drag bank when instructions allow ("more than once"), when answer keys contain duplicate selections, or when configured via `allowOptionReuse` / `[REUSE_OPTIONS]`.
   - Dropzone question number preservation (`data-placeholder`) ensuring empty or cleared slots never lose their prompt numbers upon DOM restoration.
   - Flow-Chart Drag-and-Drop 100% CBT Parity: Global CSS display inline override preventing dropzone line breaks, chart title and unnumbered step preservation (`flowTitle`, `flowSteps`) with backward-compatible extraction, uniform boxed node styling with centered heading, seamless inline dropzones (100px min-width, 28px height, 1px dashed border), solid black connector arrows, and right-hand word bank cleanly top-aligned with the flowchart.
+- Map Labelling Onto Map (`MAP_DRAG`) Firebase Storage & SVG Dimension Stabilization:
+  - Full URL parameter preservation: Patched `url_re` in DOCX parser avoiding truncation of filenames with parentheses (e.g. `campus%20(2).svg?alt=media&token=...`) and HTML entity unescaping (`&amp;` -> `&`).
+  - Auto-generated default slots (`x: 50.0`, `y: 18.0 + idx * step`, `width: 16.0`, `height: 7.0`) ensuring questions are never dropped when `[SLOTS]` is omitted.
+  - Universal media resolvers (`normalizeExternalMediaUrl`, `resolveQuestionMapUrl`) and cross-field synchronization (`mapImageUrl` / `groupImageUrl` / `diagramImageUrl`).
+  - Elimination of SVG 0x0 collapse across Exam Builder, Active Exam, and Review Quiz via container and image width/height constraints with `referrerPolicy="no-referrer"`.
 
 ### Retention cron
 

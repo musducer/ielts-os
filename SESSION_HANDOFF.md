@@ -1,5 +1,38 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-18)
 
+## Khắc Phục Lỗi Hiển Thị Ảnh Firebase Storage & SVG Thu Nhỏ 0x0 Trong Dạng Bài Map Labelling (`MAP_DRAG`) — 2026-10-18
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Cắt cụt URL Firebase Storage do dấu ngoặc đơn hoặc HTML Entity*:
+     - Biểu thức chính quy `url_re` trong `api/index.py` chứa ký tự đóng ngoặc `\)` trong tập loại trừ (`[^\s\]\)<>"\']`), dẫn đến việc các file ảnh trên Firebase Storage có tên chứa dấu ngoặc (ví dụ `campus%20(2).svg?alt=media&token=...`) bị cắt cụt ngay tại `)`, làm hỏng query token và gây lỗi tải ảnh.
+     - Các entity HTML như `&amp;` trong query string `?alt=media&token=...` không được unescape triệt để, khiến request đến Firebase Storage bị từ chối hoặc trả về 403 Forbidden.
+  2. *Mất câu hỏi khi đề bài thiếu thẻ `[SLOTS]`*:
+     - Trong `process_map_drag_block`, nếu đề thi import từ DOCX chỉ có danh sách câu hỏi và đáp án (`18.`, `19.`, `20.`) nhưng thiếu hoặc bị lỗi block `[SLOTS]`, parser cũ bỏ qua hoàn toàn câu hỏi hoặc chuyển sai thành dạng khác, khiến các câu hỏi bị biến mất.
+  3. *Mất URL ảnh khi chuyển đổi loại câu hỏi trong Exam Builder*:
+     - Khi đổi `q.type` sang `MAP_DRAG`, thuộc tính `mapImageUrl` không được kế thừa từ `groupImageUrl` hay `diagramImageUrl`, làm mất link ảnh đã có sẵn.
+  4. *SVG bị co rút kích thước thành 0px × 0px (SVG 0x0 Collapse)*:
+     - Các file SVG trên Firebase Storage định nghĩa `viewBox` nhưng không có thuộc tính chiều rộng `width` cố định bằng pixel. Khi đặt CSS `display: inline-block; width: fit-content` trên khung chứa `.idp-map-drag-stage` và `.eb-map-drag-stage` kèm `width: auto` trên thẻ `<img>`, trình duyệt tính toán kích thước nội tại (intrinsic width) bằng 0, khiến ảnh SVG biến mất hoàn toàn.
+
+- **Giải pháp triệt để**:
+  1. *Chuẩn hóa URL ảnh toàn diện (`api/index.py` & `src/App.template.tsx`)*:
+     - Cập nhật `url_re = re.compile(r'https?://[^\s\]<>"\']+', re.IGNORECASE)` trong cả `process_map_drag_block` và `process_diagram_label_block`, bảo toàn trọn vẹn URL chứa ngoặc đơn và query parameters của Firebase Storage.
+     - Tự động unescape HTML entities (`&amp;` -> `&`) và chuẩn hóa khoảng trắng `%20` cho tất cả URL hình ảnh.
+     - Bổ sung helper dùng chung `normalizeExternalMediaUrl` và `resolveQuestionMapUrl` trong `src/App.template.tsx`, giải quyết đa tầng nguồn ảnh: `mapImageUrl` -> `groupImageUrl` -> `diagramImageUrl` -> trích xuất từ `groupContext` / `instruction`.
+     - Đồng bộ gán `question["mapImageUrl"] = group_image_url` bên cạnh `groupImageUrl` và `diagramImageUrl` trong `process_block`.
+  2. *Tự động sinh slot mặc định khi thiếu `[SLOTS]`*:
+     - Trong `process_map_drag_block`, cho phép nhận diện các dòng câu hỏi `18.`, `19.`, `20.` ngoài block slots.
+     - Tự động tính toán và khởi tạo vị trí slot mặc định (`x: 50.0`, `y: 18.0 + idx * step`, `width: 16.0`, `height: 7.0`) cho bất kỳ câu hỏi nào chưa có tọa độ, đảm bảo 100% câu hỏi đều xuất hiện đầy đủ trên bản đồ.
+  3. *Khắc phục triệt để lỗi SVG 0x0 Collapse (Exam Builder, Active Exam, Review)*:
+     - `src/components_split/EXAM_BUILDER.txt`: Đặt `.eb-map-drag-stage` thành `width: 100%; maxWidth: 780px` và `<img>` thành `display: block; width: 100%; maxWidth: 100%; height: auto; maxHeight: 560px; objectFit: contain; margin: 0 auto`. Bổ sung `referrerPolicy="no-referrer"`.
+     - `src/components_split/ACTIVE_EXAM.txt`: Đặt `.idp-map-drag-stage` thành `display: block; width: 100%; max-width: 820px; margin: 0 auto` và `<img>` thành `display: block; width: 100%; max-width: 100%; height: auto`.
+     - `src/components_split/REVIEW_QUIZ.txt`: Đồng bộ `width: 100%; maxWidth: 100%; height: auto; objectFit: contain` cho thẻ `<img>` trong review stage.
+  4. *Kế thừa dữ liệu ảnh mượt mà trong Exam Builder*:
+     - Khi chuyển loại câu hỏi sang `MAP_DRAG`, tự động nạp `mapImageUrl` qua `resolveQuestionMapUrl(qItem)`.
+     - Trong `getBuilderGroups`, so sánh `resolveQuestionMapUrl(qs[j]) === resolveQuestionMapUrl(q)` để nhóm các câu hỏi cùng bản đồ chuẩn xác.
+  5. *Kiểm thử & Biên dịch*:
+     - Bổ sung unit test `test_map_drag_firebase_url_and_fallback_slots` trong `tests/test_allow_option_reuse.py`. 5/5 tests pass 100%. Toàn bộ 30 backend tests pass.
+     - `compile_app.py`, `npx tsc -b`, `npx vite build` pass 100% không cảnh báo lỗi.
+
 ## Tự Động Gom Nhóm Bộ Đề VOL & Đề Luyện Tập Mở Rộng Trong Phòng Thi Học Viên (Student Portal Exam Room) — 2026-10-18
 
 - **Bối cảnh & Yêu cầu nghiệp vụ**:

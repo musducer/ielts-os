@@ -2290,6 +2290,37 @@ const normalizeImageUrl = (rawUrl: string): string => {
     }
     return u;
 };
+const normalizeExternalMediaUrl = (rawUrl: any): string => {
+  let s = String(rawUrl || "").trim();
+  if (!s) return "";
+  // Strip accidental prefixes like "IMAGE:", "[IMAGE]", "Link ảnh:"
+  s = s.replace(/^(?:\[IMAGE\]|IMAGE\s*:|Link\s*ảnh\s*:)\s*/i, "").trim();
+  // Extract from <img src="..."> if HTML was passed
+  const imgMatch = s.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+  if (imgMatch?.[1]) s = imgMatch[1].trim();
+  else {
+    const urlMatch = s.match(/https?:\/\/[^\s<>"']+/i);
+    if (urlMatch?.[0]) s = urlMatch[0].trim();
+  }
+  // Unescape HTML entities (&amp; -> &) critical for Firebase ?alt=media&token=...
+  s = s.replace(/&amp;/gi, "&");
+  // Encode raw spaces if present in URL
+  s = s.replace(/\s+/g, "%20");
+  return normalizeImageUrl(s);
+};
+
+const resolveQuestionMapUrl = (question: any): string => {
+  if (!question) return "";
+  const direct = normalizeExternalMediaUrl(
+    question.mapImageUrl || question.groupImageUrl || question.diagramImageUrl || ""
+  );
+  if (direct) return direct;
+  const fromContext = normalizeExternalMediaUrl(question.groupContext || "");
+  if (fromContext.startsWith("http")) return fromContext;
+  const fromInstruction = normalizeExternalMediaUrl(question.instruction || "");
+  if (fromInstruction.startsWith("http")) return fromInstruction;
+  return "";
+};
 const isSupportedRemoteImageUrl = (value: any) => {
     const url = String(value || "").trim();
     if (!/^https?:\/\//i.test(url)) return false;
@@ -2302,7 +2333,7 @@ const isSupportedRemoteImageUrl = (value: any) => {
     }
 };
 const renderRemoteImageHtml = (url: string, alt = "Visual Content") => {
-    const cleanUrl = normalizeImageUrl(url);
+    const cleanUrl = normalizeExternalMediaUrl(url);
     return `<img src="${escapeHtmlAttribute(cleanUrl)}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="${escapeHtmlAttribute(alt)}" />`;
 };
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
@@ -2330,14 +2361,13 @@ const formatContent = (html: string) => {
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
     // Match image URLs preserving query strings (?alt=media&token=..., ?w=..., etc.) and handle IMAGE: / Url: prefixes
-    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
-        if (p1) return _match; // Already inside src="", skip
-        const cleanUrl = normalizeImageUrl(p2);
+    res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
+        const cleanUrl = normalizeExternalMediaUrl(p1);
         return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
-    
-    res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        const cleanUrl = normalizeImageUrl(p1);
+    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
+        if (p1) return _match; // Already inside src="", skip
+        const cleanUrl = normalizeExternalMediaUrl(p2);
         return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     

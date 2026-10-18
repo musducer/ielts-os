@@ -105,5 +105,36 @@ class TestAllowOptionReuse(unittest.TestCase):
         self.assertEqual(steps[3]["questionNumber"], 27)
 
 
+    def test_map_drag_firebase_url_and_fallback_slots(self):
+        doc = docx.Document()
+        fb_url = "https://firebasestorage.googleapis.com/v0/b/app.appspot.com/o/maps%2Fcampus%20(2).svg?alt=media&amp;token=abcdef-12345"
+        lines = [
+            doc.add_paragraph("[MAP_DRAG]"),
+            doc.add_paragraph("Label the map below."),
+            doc.add_paragraph(f"IMAGE: {fb_url}"),
+            doc.add_paragraph("OPTIONS:"),
+            doc.add_paragraph("A. Library"),
+            doc.add_paragraph("B. Cafeteria"),
+            doc.add_paragraph("C. Sports Center"),
+            doc.add_paragraph("18. Library"),
+            doc.add_paragraph("*A"),
+            doc.add_paragraph("19. Cafeteria"),
+            doc.add_paragraph("*B"),
+        ]
+
+        target_questions = []
+        process_block("MAP_DRAG", lines, target_questions)
+        self.assertEqual(len(target_questions), 2)
+        # Verify URL is unescaped and not truncated at closing paren or query string
+        expected_url = "https://firebasestorage.googleapis.com/v0/b/app.appspot.com/o/maps%2Fcampus%20(2).svg?alt=media&token=abcdef-12345"
+        self.assertEqual(target_questions[0]["mapImageUrl"], expected_url)
+        # Verify fallback slots were auto-generated when [SLOTS] was omitted
+        slots = target_questions[0].get("mapSlots", {})
+        self.assertIn("18", slots)
+        self.assertIn("19", slots)
+        self.assertEqual(slots["18"]["questionNumber"], 18)
+        self.assertEqual(slots["19"]["questionNumber"], 19)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -890,7 +890,7 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
         re.IGNORECASE,
     )
     question_re = re.compile(r'^(\d+)\s*[\.)]\s*(.*)$')
-    url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
+    url_re = re.compile(r'https?://[^\s\]<>"\']+', re.IGNORECASE)
     active_explanation_targets: List[str] = []
 
     for line in raw_lines:
@@ -941,15 +941,13 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             continue
 
         question_match = question_re.match(line)
-        if question_match:
-            q_num_matched = question_match.group(1)
-            current_question = q_num_matched
+        if question_match and not in_slots:
+            current_question = question_match.group(1)
             inline_answer = question_match.group(2).strip()
             if inline_answer.startswith("*"):
                 answers[current_question] = inline_answer.lstrip("*").strip()
             in_options = False
-            if q_num_matched in slots:
-                continue
+            continue
 
         if current_question:
             if line.startswith("*"):
@@ -958,7 +956,7 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
 
         url_match = url_re.search(line)
         if url_match and not image_url:
-            image_url = html.unescape(url_match.group(0)).replace("&amp;", "&").strip()
+            image_url = html.unescape(url_match.group(0).strip()).replace("&amp;", "&")
             continue
         if in_options:
             options.append(re.sub(r'^\s*[A-Za-z][\.)]\s*', '', line).strip())
@@ -966,17 +964,22 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             instruction_lines.append(line)
 
     # Prefer slot order (the map is the source of truth) and retain answer-only rows.
-    numbers = list(slots.keys()) or list(answers.keys())
+    numbers = list(dict.fromkeys(list(slots.keys()) + list(answers.keys())))
     if not image_url:
-        return
-    if not slots and (numbers or answers):
-        fallback_type = "DRAG" if options else "BLANK"
-        process_block(fallback_type, lines, target_questions, fallback_image_url=image_url)
         return
     if not numbers:
         return
     instruction = "<div>" + "</div><div>".join(html.escape(line) for line in instruction_lines) + "</div>" if instruction_lines else ""
     shared_slots = {key: value.copy() for key, value in slots.items()}
+    for idx, number in enumerate(numbers):
+        if number not in shared_slots:
+            shared_slots[number] = {
+                "questionNumber": int(number),
+                "x": 50.0,
+                "y": round(18.0 + idx * (64.0 / max(1, len(numbers) - 1 or 1)), 1),
+                "width": 16.0,
+                "height": 7.0,
+            }
     for number in numbers:
         slot = shared_slots.get(number)
         if not slot:
@@ -1169,7 +1172,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
     box_re = re.compile(r'^\s*\[BOX\s+([A-Za-z0-9_-]+)\s*([^\]]*)\]\s*$', re.IGNORECASE)
     answer_re = re.compile(r'^\s*(\d+)\s*[.)]\s*\*?\s*(.*)$')
     prop_re = re.compile(r'\b(x|y|w|h|width|height|targetX|targetY)\s*=\s*([\d.]+)\s*%?', re.IGNORECASE)
-    url_re = re.compile(r'https?://[^\s\]\)<>"\']+', re.IGNORECASE)
+    url_re = re.compile(r'https?://[^\s\]<>"\']+', re.IGNORECASE)
 
     def parse_props(raw: str, defaults: Dict[str, float]) -> Dict[str, float]:
         out = dict(defaults)
@@ -1238,7 +1241,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
         if raw.upper().startswith("IMAGE:"):
             found = url_re.search(raw)
             if found:
-                image_url = html.unescape(found.group(0)).replace("&amp;", "&").strip()
+                image_url = html.unescape(found.group(0).strip()).replace("&amp;", "&")
             continue
         if raw.upper().startswith("IMAGE_MODE:"):
             requested_mode = raw.split(":", 1)[1].strip().upper().replace("-", "_")
@@ -1650,6 +1653,7 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if group_image_url:
             question["groupImageUrl"] = group_image_url
             question["diagramImageUrl"] = group_image_url
+            question["mapImageUrl"] = group_image_url
         attach_manual_explanation(
             question,
             q.get("manualExplanation") or explanations_by_number.get(str(q.get("questionNumber", "")))

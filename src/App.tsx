@@ -2290,6 +2290,37 @@ const normalizeImageUrl = (rawUrl: string): string => {
     }
     return u;
 };
+const normalizeExternalMediaUrl = (rawUrl: any): string => {
+  let s = String(rawUrl || "").trim();
+  if (!s) return "";
+  // Strip accidental prefixes like "IMAGE:", "[IMAGE]", "Link ảnh:"
+  s = s.replace(/^(?:\[IMAGE\]|IMAGE\s*:|Link\s*ảnh\s*:)\s*/i, "").trim();
+  // Extract from <img src="..."> if HTML was passed
+  const imgMatch = s.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+  if (imgMatch?.[1]) s = imgMatch[1].trim();
+  else {
+    const urlMatch = s.match(/https?:\/\/[^\s<>"']+/i);
+    if (urlMatch?.[0]) s = urlMatch[0].trim();
+  }
+  // Unescape HTML entities (&amp; -> &) critical for Firebase ?alt=media&token=...
+  s = s.replace(/&amp;/gi, "&");
+  // Encode raw spaces if present in URL
+  s = s.replace(/\s+/g, "%20");
+  return normalizeImageUrl(s);
+};
+
+const resolveQuestionMapUrl = (question: any): string => {
+  if (!question) return "";
+  const direct = normalizeExternalMediaUrl(
+    question.mapImageUrl || question.groupImageUrl || question.diagramImageUrl || ""
+  );
+  if (direct) return direct;
+  const fromContext = normalizeExternalMediaUrl(question.groupContext || "");
+  if (fromContext.startsWith("http")) return fromContext;
+  const fromInstruction = normalizeExternalMediaUrl(question.instruction || "");
+  if (fromInstruction.startsWith("http")) return fromInstruction;
+  return "";
+};
 const isSupportedRemoteImageUrl = (value: any) => {
     const url = String(value || "").trim();
     if (!/^https?:\/\//i.test(url)) return false;
@@ -2302,7 +2333,7 @@ const isSupportedRemoteImageUrl = (value: any) => {
     }
 };
 const renderRemoteImageHtml = (url: string, alt = "Visual Content") => {
-    const cleanUrl = normalizeImageUrl(url);
+    const cleanUrl = normalizeExternalMediaUrl(url);
     return `<img src="${escapeHtmlAttribute(cleanUrl)}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="${escapeHtmlAttribute(alt)}" />`;
 };
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
@@ -2330,14 +2361,13 @@ const formatContent = (html: string) => {
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
     // Match image URLs preserving query strings (?alt=media&token=..., ?w=..., etc.) and handle IMAGE: / Url: prefixes
-    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
-        if (p1) return _match; // Already inside src="", skip
-        const cleanUrl = normalizeImageUrl(p2);
+    res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
+        const cleanUrl = normalizeExternalMediaUrl(p1);
         return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
-    
-    res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        const cleanUrl = normalizeImageUrl(p1);
+    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
+        if (p1) return _match; // Already inside src="", skip
+        const cleanUrl = normalizeExternalMediaUrl(p2);
         return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     
@@ -12019,7 +12049,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               globalStyles={globalStyles}
           />;
       }
-      const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
+      const cleanMediaUrl = (url: any) => normalizeExternalMediaUrl(url);
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -13873,16 +13903,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               </section>;
                           }
                           if (q.type === "MAP_DRAG") {
-                              const mapUrl = String((q as any).mapImageUrl || "").trim();
+                              const mapUrl = resolveQuestionMapUrl(q);
                               const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
-                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && resolveQuestionMapUrl(candidate) === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               if (alreadyRendered) return null;
                               const mapQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
-                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && resolveQuestionMapUrl(candidate) === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
@@ -13899,7 +13929,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
                                           {mapUrl ? (
-                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
+                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ width: '100%', maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
                                           ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
@@ -14669,7 +14699,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
-          const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
+          const cleanMediaUrl = (url: any) => normalizeExternalMediaUrl(url);
           const formatExamRemaining = (seconds: number) => {
               const safe = Math.max(0, Math.floor(seconds || 0));
               const mins = Math.floor(safe / 60);
@@ -15596,8 +15626,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       /* Map labelling type 2: named tags are placed directly on the map. */
                       .idp-map-drag-layout { display:grid; grid-template-columns:minmax(0, 1fr) var(--idp-map-bank-w, 190px); gap:24px; align-items:start; max-width:1180px; }
                       .idp-map-drag-canvas { width:100%; overflow:auto; border:1px solid #b8c0cc; background:#f8fafc; box-shadow:0 8px 24px rgba(15,23,42,.08); text-align:center; }
-                      .idp-map-drag-stage { position:relative; display:inline-block; width:fit-content; max-width:100%; line-height:0; }
-                      .idp-map-drag-stage img { display:block; width:auto; max-width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; }
+                      .idp-map-drag-stage { position:relative; display:block; width:100%; max-width:820px; margin:0 auto; line-height:0; }
+                      .idp-map-drag-stage img { display:block; width:100%; max-width:100%; height:auto; max-height:min(72vh, 760px); object-fit:contain; margin:0 auto; }
                       .idp-map-drag-slot { position:absolute; transform:translate(-50%, -50%); box-sizing:border-box; min-width:62px; min-height:28px; display:flex; align-items:center; justify-content:center; gap:5px; padding:3px 6px; border:2px dashed #64748b; background:rgba(255,255,255,.88); color:#172033; font:700 13px/1.2 Arial,sans-serif; line-height:1.2; text-align:center; cursor:pointer; z-index:2; transition:background .15s,border-color .15s,box-shadow .15s; }
                       .idp-map-drag-slot:hover, .idp-map-drag-slot.is-target { border-color:#0969da; background:#eff6ff; box-shadow:0 0 0 3px rgba(9,105,218,.13); }
                       .idp-map-drag-slot.is-filled { border-style:solid; border-color:#0969da; background:#e6f0ff; color:#0550ae; font-size:12px; }
@@ -16491,7 +16521,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       currentSectionQuestions.forEach((q: any) => {
                           const ctx = q.groupContext || "";
                           const ins = q.instruction || "";
-                          const mapKey = q.type === "MAP_DRAG" ? String(q.mapImageUrl || "") : "";
+                          const mapKey = q.type === "MAP_DRAG" ? resolveQuestionMapUrl(q) : "";
                           // Nếu groupContext có nội dung mới, TÁCH NHÓM MỚI. Nếu rỗng, vẫn gộp vào nhóm cũ để không bị rời rạc
                           const sameContext = !tempGroup || ctx === "" || tempGroup.context === ctx;
                           // Instruction can appear only on the first question of a contiguous group.
@@ -17048,7 +17078,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                    const renderMapDrag = () => {
                        const sourceQuestion = group.questions[0] as any;
-                       const mapImageUrl = String(sourceQuestion.mapImageUrl || "").trim();
+                       const mapImageUrl = resolveQuestionMapUrl(sourceQuestion);
                        const rawOptions: string[] = (sourceQuestion.options || []).map((option: any) => String(option).trim()).filter(Boolean);
                        const maxOptionLength = rawOptions.length ? Math.max(...rawOptions.map(option => option.replace(/<[^>]+>/g, '').length)) : 12;
                        const mapBankWidth = Math.max(142, Math.min(360, Math.round(maxOptionLength * 7.25) + 42));
@@ -20991,7 +21021,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         while (j < qs.length && qs[j].type === q.type
                                && (qs[j].groupContext || "") === (q.groupContext || "")
                                && (qs[j].instruction || "") === (q.instruction || "")
-                               && (q.type !== 'MAP_DRAG' || String(qs[j].mapImageUrl || '') === String(q.mapImageUrl || ''))
+                               && (q.type !== 'MAP_DRAG' || resolveQuestionMapUrl(qs[j]) === resolveQuestionMapUrl(q))
                                && (q.type !== 'DIAGRAM_LABEL' || String(qs[j].diagramImageUrl || '') === String(q.diagramImageUrl || ''))) {
                             if ((q.type === 'CHOICE_MULTIPLE' || q.type === 'MATCHING') && JSON.stringify(qs[j].options || []) !== JSON.stringify(q.options || [])) break;
                             sharedQs.push(qs[j]);
@@ -21489,7 +21519,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <div style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
                                                 <div style={{fontFamily: EB.fLabel, fontWeight: 700, fontSize: 13, color: EB.accent, letterSpacing: '0.04em', textTransform: 'uppercase'}}>{titleStr}</div>
                                                 <select className="ebx-soft" value={q.type} onChange={(e: any) => {
-                                                    updateGroup((qItem: any) => ({ ...qItem, type: e.target.value as any, correctAnswer: e.target.value === "CHOICE" ? 0 : "" }));
+                                                    updateGroup((qItem: any) => ({ ...qItem, type: e.target.value as any, mapImageUrl: e.target.value === "MAP_DRAG" ? (resolveQuestionMapUrl(qItem) || qItem.mapImageUrl || "") : qItem.mapImageUrl, correctAnswer: e.target.value === "CHOICE" ? 0 : (qItem.correctAnswer ?? "") }));
                                                 }} style={selBox}>
                                                     <option value="CHOICE">{t('eb_opt_choice')}</option>
                                                     <option value="CHOICE_MULTIPLE">{t('eb_opt_multi')}</option>
@@ -21817,7 +21847,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             </div>;
                                         })() : grp.groupType === 'MAP_DRAG' ? (() => {
                                             const mapSource: any = grp.questions[0];
-                                            const mapUrl = String(mapSource.mapImageUrl || '');
+                                            const mapUrl = resolveQuestionMapUrl(mapSource);
                                             const mapSlots: Record<string, any> = mapSource.mapSlots || {};
                                             const mapNumber = (question: any, offset: number) => String(question.text || '').match(/\d+/)?.[0] || String(qIndex + offset + 1);
                                             const mapNumbers = grp.questions.map((question: any, offset: number) => mapNumber(question, offset));
@@ -21848,7 +21878,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             const options = (mapSource.options || []).map((option: any) => String(option));
                                             return <div style={{display:'grid', gap:18}}>
                                                 <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1fr) minmax(210px, .4fr)', gap:14}}>
-                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={mapUrl} onChange={(event:any) => updateMap({mapImageUrl:event.target.value})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
+                                                    <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Map image URL<input value={String(mapSource.mapImageUrl ?? mapUrl)} onChange={(event:any) => updateMap({mapImageUrl: normalizeExternalMediaUrl(event.target.value)})} placeholder="https://.../map.png" style={{display:'block', width:'100%', boxSizing:'border-box', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink}} /></label>
                                                     <label style={{fontSize:12, fontWeight:800, color:EB.sub}}>Pin question<select value={activeSlot || ''} onChange={(event:any) => setMapDragEditorSelection(event.target.value)} style={{display:'block', width:'100%', marginTop:6, padding:'10px 12px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:700}}>{mapNumbers.map((number:string) => <option key={number} value={number}>Question {number}</option>)}</select></label>
                                                 </div>
                                                 <div className="eb-map-drag-canvas" style={{minHeight:mapUrl ? 0 : 170, overflow:'auto', border:`1px dashed ${EB.line}`, background:EB.wash, textAlign:'center'}}>
@@ -21857,8 +21887,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
                                                         const current = slotAt(activeSlot, mapNumbers.indexOf(activeSlot));
                                                         setSlots({ ...mapSlots, [activeSlot]: {...current, x:clamp(((event.clientX-bounds.left)/bounds.width)*100,0,100), y:clamp(((event.clientY-bounds.top)/bounds.height)*100,0,100)} });
-                                                    }} style={{position:'relative', display:'inline-block', width:'fit-content', maxWidth:'100%', lineHeight:0, cursor:'crosshair'}}>
-                                                        <img src={mapUrl} alt="Map slot editor" draggable={false} style={{display:'block', width:'auto', maxWidth:'100%', height:'auto', maxHeight:560, objectFit:'contain'}} />
+                                                    }} style={{position:'relative', display:'inline-block', width:'100%', maxWidth:780, lineHeight:0, cursor:'crosshair'}}>
+                                                        <img src={mapUrl} alt="Map slot editor" referrerPolicy="no-referrer" draggable={false} style={{display:'block', width:'100%', maxWidth:'100%', height:'auto', maxHeight:560, objectFit:'contain', margin:'0 auto'}} />
                                                         {mapNumbers.map((number:string, index:number) => { const slot=slotAt(number,index); return <div key={number} className="eb-map-slot" onPointerDown={(event:any) => moveSlot(number,event)} style={{position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, height:`${slot.height || 7}%`, minWidth:50, minHeight:24, transform:'translate(-50%, -50%)', display:'flex', alignItems:'center', justifyContent:'center', boxSizing:'border-box', border:`2px dashed ${number===activeSlot?EB.accent:'#64748b'}`, background:'rgba(255,255,255,.84)', color:EB.ink, fontFamily:EB.fMono, fontWeight:800, lineHeight:1.2, cursor:'grab', touchAction:'none', userSelect:'none'}}>{number}<button type="button" title="Drag to resize" onPointerDown={(event:any)=>{event.stopPropagation();moveSlot(number,event,true)}} style={{position:'absolute', right:-6, bottom:-6, width:13, height:13, padding:0, border:'2px solid #fff', borderRadius:'50%', background:EB.accent, cursor:'nwse-resize'}} /></div> })}
                                                     </div> : <div style={{padding:46, textAlign:'center', color:EB.sub}}>Paste the map image URL to pin the answer slots.</div>}
                                                 </div>

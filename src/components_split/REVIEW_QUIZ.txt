@@ -13,7 +13,7 @@
               globalStyles={globalStyles}
           />;
       }
-      const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
+      const cleanMediaUrl = (url: any) => normalizeExternalMediaUrl(url);
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -1867,16 +1867,16 @@
                               </section>;
                           }
                           if (q.type === "MAP_DRAG") {
-                              const mapUrl = String((q as any).mapImageUrl || "").trim();
+                              const mapUrl = resolveQuestionMapUrl(q);
                               const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
-                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && resolveQuestionMapUrl(candidate) === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               if (alreadyRendered) return null;
                               const mapQuestions = rvActiveQuestions.filter((candidate: any) =>
                                   candidate.type === "MAP_DRAG"
-                                  && String(candidate.mapImageUrl || "").trim() === mapUrl
+                                  && resolveQuestionMapUrl(candidate) === mapUrl
                                   && rvSectionOf(candidate) === rvActiveIdx
                               );
                               const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
@@ -1893,7 +1893,7 @@
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
                                           {mapUrl ? (
-                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
+                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ width: '100%', maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
                                           ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
