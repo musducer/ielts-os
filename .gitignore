@@ -25,6 +25,8 @@ dist-ssr
 
 .vercel
 .vercel_python_packages/
+.venv/
+.venv*/
 
 # Python/cache
 __pycache__/
@@ -46,3 +48,23 @@ tmp/
 *.encoding-backup
 *.lnk
 ~$*
+
+# Scratch & Debug artifacts
+_*
+bruh.py
+build_clean_svg.py
+download_book.py
+studocu_downloader.py
+clean_*.json
+clean_*.png
+crop_*.png
+debug_*.png
+real_*.json
+side_by_side_clean.png
+source.txt
+pipeline AI.md
+api.ieltsmate.vn/
+www.ieltsmate.vn/
+api/pyproject.toml
+api/uv.lock
+

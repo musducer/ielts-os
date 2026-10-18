@@ -425,6 +425,27 @@
                                     return { ...previous, type: "Writing", writingTasks, questions: writingQuestions({ ...previous, type: "Writing", writingTasks }) };
                                 });
                                 return <div className="eb-writing-editor" style={{ display: 'grid', gap: 26 }}>
+                                    {/* Writing Sandbox Teacher Toggle */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: 10 }}>
+                                        <div>
+                                            <div style={{ fontSize: 13, fontWeight: 700, color: EB.ink, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={EB.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                                <span>{tx("Writing Brainstorm & Outline Sandbox (Luyện tập)", "Writing Brainstorm & Outline Sandbox (Practice Mode)")}</span>
+                                            </div>
+                                            <div style={{ fontSize: 11.5, color: EB.sub, marginTop: 3 }}>
+                                                {tx("Cho phép học sinh mở thanh công cụ hỗ trợ gợi ý góc nhìn, Collocations và kiểm tra dàn bài trong lúc làm bài. Tự động vô hiệu hóa trong phòng thi thật (Real Exam).", "Allows students to open the AI sandbox for perspectives, collocations, and outline check during practice. Automatically disabled during Real Exam mode.")}
+                                            </div>
+                                        </div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 12, color: EB.ink }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(editingQuiz?.allowWritingSandbox)}
+                                                onChange={e => setEditingQuiz((prev: any) => prev ? { ...prev, allowWritingSandbox: e.target.checked } : prev)}
+                                                style={{ width: 16, height: 16, cursor: 'pointer' }}
+                                            />
+                                            <span>{Boolean(editingQuiz?.allowWritingSandbox) ? tx("Đang bật", "Enabled") : tx("Đang tắt", "Disabled")}</span>
+                                        </label>
+                                    </div>
                                     {tasks.map((task: WritingTaskDefinition) => <section key={task.id} style={{ borderTop: `1px solid ${EB.line}`, paddingTop: 22 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
                                             <div><div style={ebEyebrow}>Part {task.taskNumber}</div><h3 style={{ margin: '5px 0 0', fontSize: 20, color: EB.ink }}>{task.title}</h3></div>
@@ -745,6 +766,12 @@
                                                             <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Benefits" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
                                                         </label>
                                                     </div>
+                                                    <div style={{marginTop: 12}}>
+                                                        <label style={{display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: EB.ink, cursor: 'pointer'}}>
+                                                            <input type="checkbox" checked={Boolean(q.allowOptionReuse)} onChange={(e: any) => updateGroup((qItem: any) => ({ ...qItem, allowOptionReuse: e.target.checked }))} />
+                                                            Allow reusing options (options do not disappear from bank when dragged)
+                                                        </label>
+                                                    </div>
                                                 </div>
                                                 <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.12fr) minmax(260px, .88fr)', gap:20, alignItems:'start'}}>
                                                     <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
@@ -922,6 +949,12 @@
                                                 <label style={{...ebEyebrow, display:'flex'}}><Ico name="edit" size={13} />Flow-chart nodes</label>
                                                 <div style={{display:'grid', gap:9}}>{grp.questions.map((item:any, offset:number) => <div key={item.id} style={{display:'grid', gridTemplateColumns:'46px minmax(0,1fr) minmax(160px,.42fr)', gap:10, alignItems:'center', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, background:EB.sheet}}><span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>#{qIndex + offset + 1}</span><input value={String(item.text || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,text:event.target.value}:entry)} placeholder={`Flow-chart text with [${qIndex + offset + 1}]`} style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /><input value={String(item.correctAnswer || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /></div>)}</div>
                                                 <label style={{...ebEyebrow, display:'flex'}}><Ico name="key" size={13} />Answer bank, one option per line<textarea value={flowOptions.join('\n')} onChange={(event:any)=>updateFlow({options:event.target.value.split(/\r?\n/).map((line:string)=>line.replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean)})} placeholder={'first material\nsecond process\nfinal result'} style={{display:'block',width:'100%',minHeight:125,boxSizing:'border-box',marginTop:8,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,resize:'vertical'}} /></label>
+                                                <div style={{marginTop: 4}}>
+                                                    <label style={{display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: EB.ink, cursor: 'pointer'}}>
+                                                        <input type="checkbox" checked={Boolean(q.allowOptionReuse)} onChange={(e: any) => updateGroup((qItem: any) => ({ ...qItem, allowOptionReuse: e.target.checked }))} />
+                                                        Allow reusing options (options do not disappear from bank when dragged)
+                                                    </label>
+                                                </div>
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>

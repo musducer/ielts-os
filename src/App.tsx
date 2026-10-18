@@ -8,6 +8,7 @@ import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
+import { getStorage, ref as storageRef, uploadBytesResumable } from "firebase/storage";
 import {
   deriveQuestProgress,
   emptyQuestProgress,
@@ -66,6 +67,7 @@ try {
   db = initializeFirestore(app, {});
 }
 const auth = getAuth(app);
+const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
@@ -1560,8 +1562,20 @@ const formatQuestReward = (reward: any) => {
   return String(reward?.rewardValue || reward?.description || type).trim();
 };
 
+export interface ErrorDnaProfile {
+  signature: string;
+  updatedAt: number;
+  totalAnalyzedAttempts: number;
+  totalQuestionsAnalyzed: number;
+  typeAccuracy: Array<{ label: string; correct: number; total: number; accuracy: number }>;
+  categoryBreakdown: { lexicalGap: number; distractorTrap: number; scopeMisread: number };
+  recurringTraps: Array<{ titleVi: string; titleEn: string; detailVi: string; detailEn: string; severity: "high" | "medium" }>;
+  actionPlanVi: string[];
+  actionPlanEn: string[];
+}
+
 interface VocabCard { id: string; word: string; phonetic?: string; pos?: string; meaning?: string; example?: string; cefr?: string; category?: string; evidence?: string; box: number; due: number; createdAt: number; }
-interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
+interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; errorDna?: ErrorDnaProfile; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
 interface Session { id: string | number; studentId: string; studentName: string; teacher: string; skills: string[]; date: string; duration: number; rate: number; earnings: number; notes: string; rubric: Rubric; isPaid: boolean; }
 interface ScheduleMaterial { id: string; url: string; label?: string; }
@@ -1637,7 +1651,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
 interface AiGenerationBatchState {
   batch_id: string;
@@ -2267,18 +2281,30 @@ const escapeHtmlAttribute = (value: any) => String(value ?? "")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+const normalizeImageUrl = (rawUrl: string): string => {
+    let u = String(rawUrl || "").trim();
+    // Convert Google Drive view/share links into direct image streams
+    const gDriveMatch = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]+)/i);
+    if (gDriveMatch) {
+        return `https://drive.google.com/uc?export=view&id=${gDriveMatch[1]}`;
+    }
+    return u;
+};
 const isSupportedRemoteImageUrl = (value: any) => {
     const url = String(value || "").trim();
     if (!/^https?:\/\//i.test(url)) return false;
+    if (/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)/i.test(url)) return true;
+    if (/\/o\/[^\s<"']+\?alt=media/i.test(url)) return true;
     try {
         return supportedImagePathRe.test(new URL(url).pathname);
     } catch {
         return false;
     }
 };
-const renderRemoteImageHtml = (url: string, alt = "Visual Content") => (
-    `<img src="${escapeHtmlAttribute(url)}" style="max-width: 100%; height: auto; object-fit: contain; border-radius: 8px; display: block; margin: 15px 0;" alt="${escapeHtmlAttribute(alt)}" />`
-);
+const renderRemoteImageHtml = (url: string, alt = "Visual Content") => {
+    const cleanUrl = normalizeImageUrl(url);
+    return `<img src="${escapeHtmlAttribute(cleanUrl)}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="${escapeHtmlAttribute(alt)}" />`;
+};
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
@@ -2287,7 +2313,7 @@ const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(htm
     ],
     ALLOWED_ATTR: [
         "align", "alt", "class", "colspan", "data-field", "data-note", "data-note-id", "data-optindex", "data-qid", "dir", "height", "href", "lang",
-        "rel", "rowspan", "src", "style", "target", "title", "width"
+        "loading", "referrerpolicy", "rel", "rowspan", "src", "style", "target", "title", "width"
     ],
     ALLOW_DATA_ATTR: true,
 }));
@@ -2303,18 +2329,16 @@ const formatContent = (html: string) => {
     if (!html) return "";
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
-    // BẢN VÁ 1: Thêm (src=["'])? để kiểm tra xem link đã nằm trong thẻ <img> chưa. Nếu có rồi thì BỎ QUA không bọc thêm nữa!
-    // Firebase Storage media URLs often end with .svg in the pathname but carry
-    // ?alt=media&token=... query params, so validate the URL pathname rather
-    // than using a raw url.endsWith(...) or a query-blind extension regex.
-    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
-        if (p1) return _match; // Đã là hình ảnh, bỏ qua
-        if (!isSupportedRemoteImageUrl(p2)) return _match;
-        return renderRemoteImageHtml(p2);
+    // Match image URLs preserving query strings (?alt=media&token=..., ?w=..., etc.) and handle IMAGE: / Url: prefixes
+    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
+        if (p1) return _match; // Already inside src="", skip
+        const cleanUrl = normalizeImageUrl(p2);
+        return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     
     res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        return renderRemoteImageHtml(p1);
+        const cleanUrl = normalizeImageUrl(p1);
+        return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     
     // ==========================================
@@ -3994,7 +4018,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -4064,6 +4088,149 @@ export default function IeltsSupremeOS() {
   const [rvAudioPlaying, setRvAudioPlaying] = useState(false);
   const [pendingAudioResume, setPendingAudioResume] = useState<{time: number, status: string} | null>(null);
   const [gracePeriod, setGracePeriod] = useState<number | null>(null);
+
+  // AI Pedagogical Features States & Refs
+  const dnaInFlightRef = useRef<Set<string>>(new Set());
+  const [showWritingSandbox, setShowWritingSandbox] = useState(false);
+  const [writingSandboxTab, setWritingSandboxTab] = useState<"brainstorm" | "critique">("brainstorm");
+  const [writingSandboxLoading, setWritingSandboxLoading] = useState(false);
+  const [writingSandboxOutline, setWritingSandboxOutline] = useState("");
+  const [writingSandboxBrainstormData, setWritingSandboxBrainstormData] = useState<any>(null);
+  const [writingSandboxCritiqueData, setWritingSandboxCritiqueData] = useState<any>(null);
+
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotActiveQ, setCopilotActiveQ] = useState<any>(null);
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string }>>([]);
+  const [copilotInput, setCopilotInput] = useState("");
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotExpanded, setCopilotExpanded] = useState(false);
+  const copilotChatBoxRef = useRef<HTMLDivElement | null>(null);
+  const copilotMsgCountRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (copilotChatBoxRef.current && (copilotOpen || copilotMessages.length > copilotMsgCountRef.current)) {
+      copilotChatBoxRef.current.scrollTop = copilotChatBoxRef.current.scrollHeight;
+    }
+    copilotMsgCountRef.current = copilotMessages.length;
+  }, [copilotOpen, copilotMessages.length, copilotLoading]);
+
+  const handleWritingSandboxAction = async (task: any, mode: "brainstorm" | "critique_outline") => {
+    if (writingSandboxLoading) return;
+    setWritingSandboxLoading(true);
+    try {
+      const res = await fetch("/api/writing_sandbox_coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskPrompt: task?.prompt || task?.instructions || "",
+          taskType: task?.taskNumber === 1 ? "Task 1" : "Task 2",
+          mode,
+          outlineText: mode === "critique_outline" ? writingSandboxOutline : undefined
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (mode === "brainstorm") {
+        setWritingSandboxBrainstormData(data);
+      } else {
+        setWritingSandboxCritiqueData(data);
+      }
+    } catch (err: any) {
+      alert(tx("Lỗi hỗ trợ viết: ", "Writing coach error: ") + (err?.message || String(err)));
+    } finally {
+      setWritingSandboxLoading(false);
+    }
+  };
+
+  const handleSendCopilotMessage = async (customPrompt?: string) => {
+    const textToSend = String(customPrompt || copilotInput || "").trim();
+    if (!textToSend || copilotLoading) return;
+
+    const newMessages = [...copilotMessages, { role: "user" as const, text: textToSend }];
+    setCopilotMessages(newMessages);
+    setCopilotInput("");
+    setCopilotLoading(true);
+
+    try {
+      const rqQuiz = reviewQuiz?.quiz as any;
+      const rqResult = reviewQuiz?.result as any;
+      const isListening = Boolean(rqQuiz && (String(rqQuiz.type || "").toUpperCase().includes("LISTEN") || rqQuiz.skill === "Listening"));
+      const q = copilotActiveQ;
+
+      // Extract full passage or transcript
+      let passageText = "";
+      if (q && rqQuiz?.readingPassages && typeof q.passageIndex === "number") {
+        passageText = rqQuiz.readingPassages[q.passageIndex] || "";
+      } else if (Array.isArray(rqQuiz?.readingPassages) && rqQuiz.readingPassages.length) {
+        passageText = rqQuiz.readingPassages.join("\n\n--- NEXT PASSAGE ---\n\n");
+      } else {
+        passageText = rqQuiz?.readingPassage || "";
+      }
+      const transcriptText = rqQuiz?.transcript || rqQuiz?.audioTranscript || rqQuiz?.listeningTranscript || "";
+      const passageOrTranscript = isListening ? transcriptText : (passageText || transcriptText);
+
+      // Student mistakes and answers breakdown for omniscient context
+      const allQs: any[] = Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : [];
+      const userAnswers = rqResult?.answers || {};
+      const wrongList = allQs.filter((item: any) => {
+        const given = userAnswers[item.id];
+        const accepted = String(item.correctAnswer || item.correct || "").split("/").map((s: string) => s.trim().toLowerCase());
+        return !given || !accepted.includes(String(given).trim().toLowerCase());
+      }).slice(0, 15).map((item: any, idx: number) => ({
+        number: item.questionNumber || (idx + 1),
+        type: item.type || item.questionType || "",
+        text: (item.question || item.title || "").slice(0, 90),
+        studentAnswer: userAnswers[item.id] || "(blank)",
+        correctAnswer: item.correctAnswer || item.correct || ""
+      }));
+
+      const payloadQuestion = q ? {
+        id: q.id,
+        questionNumber: q.questionNumber || "",
+        type: q.type || "",
+        text: q.question || q.title || "",
+        options: q.options || [],
+        correctAnswer: q.correctAnswer || q.correct || "",
+        studentAnswer: userAnswers[q.id] || "(blank)",
+        manualExplanation: q.manualExplanation || "",
+        passage: passageText,
+        transcript: transcriptText,
+        skill: isListening ? "Listening" : "Reading"
+      } : null;
+
+      const res = await fetch("/api/review_copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lang: i18n.language === "vi" ? "vi" : "en",
+          quizTitle: rqQuiz?.title || "IELTS Practice Test",
+          quizType: isListening ? "Listening" : "Reading",
+          passageOrTranscript,
+          activeQuestion: payloadQuestion,
+          examOverview: {
+            totalQuestions: allQs.length,
+            wrongCount: wrongList.length,
+            wrongQuestions: wrongList
+          },
+          messages: newMessages.map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
+          // Backward compatibility
+          question: payloadQuestion,
+          studentAnswer: q ? userAnswers[q.id] : undefined,
+          chatHistory: newMessages.slice(0, -1),
+          userMessage: textToSend
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.reply) {
+        setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
+      }
+    } catch (err: any) {
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối gia sư AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Copilot. Please try again.") }]);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
 
   const [_isFocusMode, setIsFocusMode] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(true);
@@ -4297,7 +4464,7 @@ export default function IeltsSupremeOS() {
       });
       const dropzones = document.querySelectorAll('.idp-dropzone') as NodeListOf<HTMLElement>;
       dropzones.forEach(dz => {
-        if (dz.closest('.idp-heading-slot-render')) return;
+        if (dz.closest('.idp-heading-slot-render') || dz.classList.contains('idp-summary-dropzone')) return;
         const qId = dz.getAttribute('data-qid');
         if (!qId) return;
         const stateVal = examAnswers[qId] !== undefined ? String(examAnswers[qId]) : "";
@@ -4413,6 +4580,242 @@ export default function IeltsSupremeOS() {
   const [showDebtWarning, setShowDebtWarning] = useState(false);
   const [debtConfirmCountdown, setDebtConfirmCountdown] = useState(5);
   const [hasClaimedDaily, setHasClaimedDaily] = useState(false);
+
+  // ============================================================================
+  // HIERARCHICAL URL ROUTING ENGINE (Bidirectional URL <-> App State Sync)
+  // ============================================================================
+  const isRoutingPopStateRef = useRef(false);
+  const initialRouteAppliedRef = useRef(false);
+
+  // Computes the canonical hierarchical path for the current UI state
+  const computeCurrentPath = (): string => {
+    if (!currentUser) return "/login";
+    if (sebGuideQuiz) return "/seb-guide";
+    if (activeExam) {
+      if (activeExam.realExamContext) return `/exam/${encodeURIComponent(activeExam.id)}/real-mock`;
+      return `/exam/${encodeURIComponent(activeExam.id)}`;
+    }
+    if (reviewQuiz) {
+      const resId = reviewQuiz.result?.id || "latest";
+      if (isWritingQuiz(reviewQuiz.quiz)) {
+        return userRole === "TEACHER"
+          ? `/teacher/grading/${encodeURIComponent(resId)}`
+          : `/exam/writing-feedback/${encodeURIComponent(resId)}`;
+      }
+      return `/exam/review/${encodeURIComponent(resId)}`;
+    }
+
+    if (userRole === "STUDENT") {
+      if (portalTab === "exams") return "/student/exams";
+      if (portalTab === "quests") return "/student/quests";
+      if (portalTab === "vocab") return "/student/vocab";
+      if (portalTab === "rewards") return "/student/rewards";
+      if (portalTab === "progress") return "/student/progress";
+      return "/student/dashboard";
+    }
+
+    if (userRole === "TEACHER") {
+      if (activeTab === "STUDENTS") {
+        return profileId ? `/teacher/students/${encodeURIComponent(profileId)}` : "/teacher/students";
+      }
+      if (activeTab === "EXAM_BUILDER") {
+        return editingQuiz?.id ? `/teacher/exams/${encodeURIComponent(editingQuiz.id)}` : "/teacher/exams";
+      }
+      if (activeTab === "CLASSROOM") return "/teacher/classes";
+      if (activeTab === "LIVE_ARENA") return "/teacher/arena";
+      if (activeTab === "FINANCE") return "/teacher/finances";
+      if (activeTab === "DRIVE") return "/teacher/drive";
+      if (activeTab === "TOPIC_ASSIGNMENTS") return "/teacher/quests";
+      if (activeTab === "ACADEMICS") return "/teacher/academics";
+      if (activeTab === "HISTORY") return "/teacher/history";
+      return "/teacher/dashboard";
+    }
+
+    return "/";
+  };
+
+  // Parses a pathname and updates application state accordingly
+  const applyRouteFromPath = (pathname: string) => {
+    if (!pathname || pathname === "/" || pathname === "/login") {
+      if (!currentUser) return;
+      if (userRole === "TEACHER") {
+        setActiveTab("DASHBOARD");
+      } else if (userRole === "STUDENT") {
+        setPortalTab("home");
+      }
+      return;
+    }
+
+    // 1. /seb-guide
+    if (pathname === "/seb-guide") {
+      if (quizzes.length > 0 && !sebGuideQuiz) {
+        setSebGuideQuiz(quizzes[0]);
+      }
+      return;
+    }
+
+    // 2. /exam/:quizId or /exam/:quizId/real-mock
+    const examMatch = pathname.match(/^\/exam\/([^/]+)(\/real-mock)?$/);
+    if (examMatch) {
+      const qId = decodeURIComponent(examMatch[1]);
+      const targetQuiz = quizzes.find(q => q.id === qId);
+      if (targetQuiz) {
+        if (examMatch[2] && !targetQuiz.realExamContext) {
+          targetQuiz.realExamContext = {
+            packageId: 'standalone',
+            packageTitle: targetQuiz.title,
+            packageQuizIds: [targetQuiz.id],
+            packageAttemptId: 'attempt_' + Date.now(),
+            testTakerId: 'CANDIDATE',
+            orderIndex: 1,
+            total: 1,
+            isFinal: true,
+          };
+        }
+        setActiveExam(targetQuiz);
+        return;
+      }
+    }
+
+    // 3. /exam/review/:resultId or /exam/writing-feedback/:resultId or /teacher/grading/:resultId
+    const reviewMatch = pathname.match(/^\/(?:exam\/review|exam\/writing-feedback|teacher\/grading)\/([^/]+)$/);
+    if (reviewMatch) {
+      const rId = decodeURIComponent(reviewMatch[1]);
+      const targetResult = quizResults.find(r => r.id === rId);
+      if (targetResult) {
+        const targetQuiz = quizzes.find(q => q.id === targetResult.quizId);
+        if (targetQuiz) {
+          setReviewQuiz({ quiz: targetQuiz, result: targetResult });
+          return;
+        }
+      }
+    }
+
+    // 4. Student routes: /student/*
+    if (pathname.startsWith("/student")) {
+      // Guard: Teacher accessing student route redirects to teacher dashboard
+      if (userRole === "TEACHER") {
+        setActiveTab("DASHBOARD");
+        window.history.replaceState({ path: "/teacher/dashboard" }, "", "/teacher/dashboard");
+        return;
+      }
+      if (pathname === "/student/exams") setPortalTab("exams");
+      else if (pathname === "/student/quests" || pathname === "/student/assignments") setPortalTab("quests");
+      else if (pathname === "/student/vocab") setPortalTab("vocab");
+      else if (pathname === "/student/rewards") setPortalTab("rewards");
+      else if (pathname === "/student/progress") setPortalTab("progress");
+      else setPortalTab("home");
+
+      if (activeExam) setActiveExam(null);
+      if (reviewQuiz) setReviewQuiz(null);
+      if (sebGuideQuiz) setSebGuideQuiz(null);
+      return;
+    }
+
+    // 5. Teacher routes: /teacher/*
+    if (pathname.startsWith("/teacher")) {
+      // Guard: Student accessing teacher route redirects to student dashboard
+      if (userRole === "STUDENT") {
+        setPortalTab("home");
+        window.history.replaceState({ path: "/student/dashboard" }, "", "/student/dashboard");
+        return;
+      }
+
+      const studentDetailMatch = pathname.match(/^\/teacher\/students\/([^/]+)$/);
+      if (studentDetailMatch) {
+        setActiveTab("STUDENTS");
+        setProfileId(decodeURIComponent(studentDetailMatch[1]));
+      } else if (pathname === "/teacher/students") {
+        setActiveTab("STUDENTS");
+        setProfileId(null);
+      } else if (pathname.startsWith("/teacher/exams")) {
+        setActiveTab("EXAM_BUILDER");
+        const quizEditMatch = pathname.match(/^\/teacher\/exams\/([^/]+)$/);
+        if (quizEditMatch) {
+          const editId = decodeURIComponent(quizEditMatch[1]);
+          const found = quizzes.find(q => q.id === editId);
+          if (found) setEditingQuiz(found);
+        }
+      } else if (pathname === "/teacher/classes" || pathname === "/teacher/classroom") {
+        setActiveTab("CLASSROOM");
+      } else if (pathname === "/teacher/arena") {
+        setActiveTab("LIVE_ARENA");
+      } else if (pathname === "/teacher/finances" || pathname === "/teacher/finance") {
+        setActiveTab("FINANCE");
+      } else if (pathname === "/teacher/drive") {
+        setActiveTab("DRIVE");
+      } else if (pathname === "/teacher/quests" || pathname === "/teacher/assignments") {
+        setActiveTab("TOPIC_ASSIGNMENTS");
+      } else if (pathname === "/teacher/academics") {
+        setActiveTab("ACADEMICS");
+      } else if (pathname === "/teacher/history") {
+        setActiveTab("HISTORY");
+      } else {
+        setActiveTab("DASHBOARD");
+      }
+
+      if (activeExam) setActiveExam(null);
+      if (reviewQuiz) setReviewQuiz(null);
+      if (sebGuideQuiz) setSebGuideQuiz(null);
+      return;
+    }
+  };
+
+  // Synchronize State -> Browser URL
+  useEffect(() => {
+    if (authChecking) return;
+    if (isRoutingPopStateRef.current) {
+      isRoutingPopStateRef.current = false;
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const targetPath = computeCurrentPath();
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ path: targetPath }, "", targetPath);
+    }
+  }, [
+    authChecking,
+    currentUser,
+    userRole,
+    activeExam?.id,
+    activeExam?.realExamContext,
+    reviewQuiz?.result?.id,
+    sebGuideQuiz?.id,
+    editingQuiz?.id,
+    portalTab,
+    activeTab,
+    profileId,
+  ]);
+
+  // Handle Browser Back / Forward Button (popstate event)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => {
+      // If student is currently taking an exam, confirm exit to prevent accidental loss of work
+      if (activeExam) {
+        const confirmMsg = i18n.language === "vi"
+          ? "Bạn có chắc chắn muốn rời khỏi phòng thi? Bài làm chưa nộp sẽ không được lưu điểm."
+          : "Are you sure you want to leave the exam? Unsubmitted progress will not be graded.";
+        if (!window.confirm(confirmMsg)) {
+          window.history.pushState({ path: `/exam/${activeExam.id}` }, "", `/exam/${activeExam.id}`);
+          return;
+        }
+      }
+      isRoutingPopStateRef.current = true;
+      applyRouteFromPath(window.location.pathname);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [quizzes, quizResults, currentUser, userRole, activeExam]);
+
+  // Initial Route Hydration (apply route on initial page load once data is ready)
+  useEffect(() => {
+    if (!loaded || !currentUser || authChecking) return;
+    if (!initialRouteAppliedRef.current) {
+      initialRouteAppliedRef.current = true;
+      applyRouteFromPath(window.location.pathname);
+    }
+  }, [loaded, currentUser, authChecking, quizzes.length, quizResults.length]);
   
   const [pushTitle, setPushTitle] = useState("");
   const [pushBody, setPushBody] = useState("");
@@ -4836,6 +5239,50 @@ export default function IeltsSupremeOS() {
   const [_showQuestionMap, _setShowQuestionMap] = useState(false);
   const [enableTimerBeep, _setEnableTimerBeep] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isAudioReadyToPlay, setIsAudioReadyToPlay] = useState(false);
+
+  const preloadOrActiveAudioUrl = (() => {
+    if (activeExam) {
+      const isListening = String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated";
+      if (isListening && activeExam.audioUrl) return activeExam.audioUrl.trim();
+    }
+    if (pendingExamState?.quiz) {
+      const q = pendingExamState.quiz;
+      const isListening = String(q.type).toLowerCase().includes("listen") || q.type === "Integrated";
+      if (isListening && q.audioUrl) return q.audioUrl.trim();
+    }
+    if (realExamInstructionGate) {
+      const gateQuiz = (quizzesRef.current || quizzes || []).find(q => q.id === realExamInstructionGate.quizId);
+      const isListening = realExamInstructionGate.skill === "Listening" || (gateQuiz && (String(gateQuiz.type).toLowerCase().includes("listen") || gateQuiz.type === "Integrated"));
+      if (isListening && gateQuiz?.audioUrl) return gateQuiz.audioUrl.trim();
+    }
+    if (userRole === "STUDENT" && realExamSession) {
+      const pkg = realExamPackages.find(item => item.id === realExamSession.packageId);
+      if (pkg) {
+        const completed = new Set(realExamSession.completedQuizIds || []);
+        const nextQuizId = pkg.quizIds?.find(id => !completed.has(id));
+        if (nextQuizId) {
+          const nextQuiz = (quizzesRef.current || quizzes || []).find(q => q.id === nextQuizId);
+          const isListening = nextQuiz && (String(nextQuiz.type).toLowerCase().includes("listen") || nextQuiz.type === "Integrated" || (nextQuiz as any).skill === "Listening");
+          if (isListening && nextQuiz?.audioUrl) return nextQuiz.audioUrl.trim();
+        }
+      }
+    }
+    return "";
+  })();
+
+  const checkAndSetAudioReady = (audio: HTMLAudioElement | null) => {
+    if (!audio) return;
+    try {
+      const hasEnoughBuffered = audio.buffered && audio.buffered.length > 0 && audio.buffered.end(0) >= Math.min(5, audio.duration || 5);
+      if (audio.readyState >= 3 || hasEnoughBuffered) {
+        setIsAudioReadyToPlay(true);
+      }
+    } catch {
+      setIsAudioReadyToPlay(true);
+    }
+  };
+
   // Some Chromium/SEB builds strip custom DataTransfer MIME types at drop time.
   // Keep the source slot locally so an already-placed card can still be moved.
   const dragSourceQuestionRef = useRef<string>("");
@@ -5128,14 +5575,19 @@ export default function IeltsSupremeOS() {
     // gesture upgrades buffering, which preserves autoplay permission and lets the
     // browser's native range loader maintain a healthy playback buffer.
     audio.preload = "auto";
-    if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+    if (audio.readyState === 0 && (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
       audio.load();
     }
     setManagedAudioLoading();
+    if (isTouchAudioHost() && !androidAudioCtxRef.current) {
+      void warmAndroidAudioPath();
+    }
     try {
-      await warmAndroidAudioPath();
       recordAudioDiagnostic("user-play-attempt", audio);
       await audio.play();
+      if (!isListeningReviewAudio()) {
+        setAudioStatus("PLAYING");
+      }
     } catch (error) {
       recordAudioDiagnostic("user-play-failed", audio, error instanceof Error ? `${error.name}:${error.message}` : String(error));
       console.warn("Exam audio could not start:", error);
@@ -6229,92 +6681,64 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [activeExam?.id, activeExam?.audioUrl, reviewQuiz?.quiz?.id, reviewQuiz?.quiz?.audioUrl]);
 
   useEffect(() => {
-      // Warm only the first 256 KB while the Listening instruction screen is open.
-      // Native <audio preload="metadata"> remains authoritative for playback, Range,
-      // and the timer; this request never plays, reloads, or changes that element.
-      if (!activeExam?.audioUrl
-          || !isListeningExamAudio()
-          || examAudioShouldPlayRef.current
-          || !["IDLE", "LOADING", "PAUSED"].includes(audioStatus)) return;
+    if (!preloadOrActiveAudioUrl) {
+      setIsAudioReadyToPlay(true);
+      return;
+    }
+    setIsAudioReadyToPlay(false);
 
-      const connection = (navigator as any).connection as { saveData?: boolean; effectiveType?: string } | undefined;
-      const effectiveType = String(connection?.effectiveType || "").toLowerCase();
-      if (connection?.saveData || effectiveType === "slow-2g" || effectiveType === "2g") {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, connection?.saveData ? "save-data" : effectiveType);
-          return;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.preload = "auto";
+      if (audio.readyState === 0 && (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
+        try { audio.load(); } catch { }
       }
+      checkAndSetAudioReady(audio);
+    }
 
-      let target: URL;
-      try {
-          target = new URL(activeExam.audioUrl, window.location.href);
-      } catch {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "invalid-url");
-          return;
+    const fallbackTimer = window.setTimeout(() => {
+      setIsAudioReadyToPlay(true);
+    }, 6000);
+
+    return () => {
+      window.clearTimeout(fallbackTimer);
+    };
+  }, [preloadOrActiveAudioUrl]);
+
+  useEffect(() => {
+    if (!preloadOrActiveAudioUrl) return;
+    try {
+      const u = new URL(preloadOrActiveAudioUrl, window.location.href);
+      const origin = u.origin;
+      if (!origin || origin === window.location.origin) return;
+
+      let preconnect = document.querySelector(`link[rel="preconnect"][href="${origin}"]`) as HTMLLinkElement | null;
+      let dnsPrefetch = document.querySelector(`link[rel="dns-prefetch"][href="${origin}"]`) as HTMLLinkElement | null;
+      let createdPreconnect = false;
+      let createdDnsPrefetch = false;
+
+      if (!preconnect) {
+        preconnect = document.createElement("link");
+        preconnect.rel = "preconnect";
+        preconnect.href = origin;
+        preconnect.crossOrigin = "anonymous";
+        document.head.appendChild(preconnect);
+        createdPreconnect = true;
       }
-      if (target.origin !== window.location.origin) {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "cross-origin");
-          return;
+      if (!dnsPrefetch) {
+        dnsPrefetch = document.createElement("link");
+        dnsPrefetch.rel = "dns-prefetch";
+        dnsPrefetch.href = origin;
+        document.head.appendChild(dnsPrefetch);
+        createdDnsPrefetch = true;
       }
-
-      const key = target.href;
-      if (audioPrewarmUrlsRef.current.has(key)) return;
-      audioPrewarmUrlsRef.current.add(key);
-
-      const controller = new AbortController();
-      let disposed = false;
-      let timedOut = false;
-      const startedAt = performance.now();
-      const timeout = window.setTimeout(() => {
-          timedOut = true;
-          controller.abort();
-      }, 4500);
-
-      void (async () => {
-          let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-          try {
-              recordAudioDiagnostic("prewarm-start", audioRef.current, "bytes=0-262143");
-              const response = await fetch(key, {
-                  headers: { Range: "bytes=0-262143" },
-                  cache: "no-store",
-                  signal: controller.signal,
-              });
-              if (response.status !== 206 || !response.body) {
-                  await response.body?.cancel();
-                  if (!disposed) recordAudioDiagnostic("prewarm-unexpected-response", audioRef.current, `status=${response.status}`);
-                  return;
-              }
-
-              reader = response.body.getReader();
-              let bytesRead = 0;
-              while (bytesRead < 262144) {
-                  const { done, value } = await reader.read();
-                  if (done || !value) break;
-                  bytesRead += value.byteLength;
-              }
-              await reader.cancel();
-              reader = null;
-              if (!disposed) recordAudioDiagnostic("prewarm-complete", audioRef.current, `${Math.min(bytesRead, 262144)}B/${Math.round(performance.now() - startedAt)}ms`);
-          } catch (error) {
-              if (!disposed) {
-                  const detail = timedOut
-                      ? "timeout"
-                      : error instanceof Error ? error.name : String(error);
-                  recordAudioDiagnostic("prewarm-failed", audioRef.current, detail);
-              }
-          } finally {
-              window.clearTimeout(timeout);
-              if (reader) {
-                  try { await reader.cancel(); } catch { }
-              }
-          }
-      })();
 
       return () => {
-          disposed = true;
-          window.clearTimeout(timeout);
-          controller.abort();
+        if (createdPreconnect && preconnect?.parentNode) preconnect.parentNode.removeChild(preconnect);
+        if (createdDnsPrefetch && dnsPrefetch?.parentNode) dnsPrefetch.parentNode.removeChild(dnsPrefetch);
       };
-  }, [activeExam?.id, activeExam?.audioUrl, audioStatus]);
+    } catch { }
+  }, [preloadOrActiveAudioUrl]);
 
   useEffect(() => {
       const currentAudio = isListeningReviewAudio() ? reviewQuiz?.quiz : activeExam;
@@ -6374,7 +6798,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [activeExam?.id, (activeExam as any)?.audioMode, reviewQuiz?.quiz?.id, audioRate, playbackRate, meetAudioIssue]);
 
   useEffect(() => {
-      if (!activeExam) {
+      if (!activeExam && !pendingExamState && !realExamInstructionGate) {
           examAudioShouldPlayRef.current = false;
           clearExamAudioResumeTimer();
           if (audioRef.current) {
@@ -6396,7 +6820,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           setSelectedDragAnswer("");
           setSaveStatus("Saved");
       }
-  }, [activeExam]);
+  }, [activeExam, pendingExamState, realExamInstructionGate]);
 
   useEffect(() => {
     if (userRole !== "TEACHER") return;
@@ -7011,9 +7435,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .replace(/[^\S\r\n]+/g, " ")
         .replace(/\n{2,}/g, "\n")
         .trim();
+      const cleanOptText = (raw: any): string => {
+        let s = stripTags(raw);
+        while (/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/.test(s)) {
+          s = s.replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
+        }
+        return s;
+      };
       const optStr = q.type === 'MATCHING'
         ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
-        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
+        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${cleanOptText(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
@@ -7032,8 +7463,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
       } else if (q.type === 'CHOICE') {
-        correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
-        stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
+        const cNum = Number(q.correctAnswer);
+        const cRaw = (!isNaN(cNum) && q.options?.[cNum]) ? q.options[cNum] : q.correctAnswer;
+        const cLetter = !isNaN(cNum) ? `${String.fromCharCode(65 + cNum)}. ` : (/^[A-Za-z]$/.test(String(q.correctAnswer).trim()) ? `${String(q.correctAnswer).trim().toUpperCase()}. ` : "");
+        correctStr = `${cLetter}${cleanOptText(cRaw)}`;
+
+        const sNum = Number(studentAnsRaw);
+        const sRaw = (!isNaN(sNum) && q.options?.[sNum]) ? q.options[sNum] : studentAnsRaw;
+        const sLetter = !isNaN(sNum) ? `${String.fromCharCode(65 + sNum)}. ` : (/^[A-Za-z]$/.test(String(studentAnsRaw).trim()) ? `${String(studentAnsRaw).trim().toUpperCase()}. ` : "");
+        stuStr = blank ? "(trống)" : `${sLetter}${cleanOptText(sRaw)}`;
       } else if (q.type === 'MATCHING') {
         correctStr = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
         stuStr = blank ? "(trống)" : stripTags(resolveMatchingAnswerText(q, studentAnsRaw));
@@ -7047,15 +7485,35 @@ const applyWorkspaceSnapshot = (snap: any) => {
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
       const fullQuiz = (quizzes || []).find(x => x && x.id === quiz?.id) || quiz;
-      // FIX: câu thuộc Passage 2/3 phải lấy đúng bài đọc của section đó, KHÔNG dùng fullQuiz.passage
-      // (backend chỉ gán passage = sections[0] = Passage 1 -> AI nhận nhầm văn bản, báo "không tìm thấy").
-      let qPassage: string = fullQuiz?.passage || "";
-      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       const secs = (fullQuiz as any)?.sections;
+      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       if (Array.isArray(secs) && secs.length) {
         if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-        if (qSectionIndex >= 0 && secs[qSectionIndex]) qPassage = secs[qSectionIndex].passage || qPassage;
       }
+      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
+      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
+
+      // Robust passage resolution with fallback chain
+      let qPassage: string = (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
+        || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passageHtml)
+        || fullQuiz?.passage
+        || (fullQuiz as any)?.passageHtml
+        || (isListeningQuestion && Array.isArray(secs) ? (secs[0]?.passage || secs[0]?.passageHtml || secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage) : "")
+        || "";
+
+      // Robust transcript resolution with fallback chain
+      const fullTranscript = stripTags(
+        fullQuiz?.transcript ||
+        (fullQuiz as any)?.transcriptHtml ||
+        (isListeningQuestion ? (
+          (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage) ||
+          secs?.[0]?.passage ||
+          secs?.[0]?.passageHtml ||
+          fullQuiz?.passage ||
+          (fullQuiz as any)?.passageHtml ||
+          (Array.isArray(secs) ? secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage : "")
+        ) : "")
+      );
       const matchingKind = (() => {
         if (q.type === 'DRAG_DROP_HEADING') return 'headings';
         if (q.type !== 'MATCHING') return '';
@@ -7072,8 +7530,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
           .filter((text) => text.length >= 30);
         return paragraphs[matchingTargetLabel.charCodeAt(0) - 65] || '';
       })();
-      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
-      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
       const timestampQuestions = isListeningQuestion
         ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
         : [];
@@ -7096,7 +7552,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       // A full 30-minute transcript can exceed the model context. Keep the slice
       // belonging to this part/question, rather than always truncating at Part 1.
-      const fullTranscript = stripTags(fullQuiz?.transcript);
       const transcriptForQuestion = (() => {
         const limit = 23000;
         if (!isListeningQuestion || fullTranscript.length <= limit) return fullTranscript;
@@ -7115,9 +7570,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
       })();
       // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
       const ctxParts = isListeningQuestion
-        ? [transcriptForQuestion, stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
+        ? [transcriptForQuestion, stripTags(qPassage), stripTags(q.groupContext)].filter(Boolean)
         : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
-      const context = ctxParts.join("\n").trim().slice(0, 24000);
+      const seenCtx = new Set<string>();
+      const uniqueCtxParts = ctxParts.filter((part) => {
+        const trimmed = part.trim();
+        if (!trimmed || seenCtx.has(trimmed)) return false;
+        seenCtx.add(trimmed);
+        return true;
+      });
+      const context = uniqueCtxParts.join("\n\n").trim().slice(0, 24000);
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
         if (question.type === "CHOICE") {
@@ -7174,6 +7636,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
             ? { ...data.audioEvidence, segments: audioEvidenceSegments }
             : undefined,
           audioEvidenceSegments,
+          deconstruction: data.deconstruction || undefined,
         } }));
       }
       else {
@@ -7241,36 +7704,88 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (!initResponse.ok || !initData?.uploadUrl || !initData?.uploadId) {
         throw new Error(String(initData?.detail || initData?.error || "Could not prepare the audio upload."));
       }
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
-        Object.entries(initData.requiredHeaders || {}).forEach(([name, value]) => {
-          xhr.setRequestHeader(name, String(value));
+      const uploadContentType = initData.contentType || initData.requiredHeaders?.["Content-Type"] || file.type || "audio/mpeg";
+      let directPutFailed = false;
+      let directPutError: any = null;
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
+          // Send ONLY the Content-Type header to avoid triggering extra CORS preflight checks
+          xhr.setRequestHeader("Content-Type", uploadContentType);
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && event.total > 0) {
+              setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
+            }
+          };
+          audioUploadAbortRef.current = () => {
+            audioUploadCancelledRef.current = true;
+            xhr.abort();
+          };
+          xhr.onerror = () => {
+            audioUploadAbortRef.current = null;
+            const err: any = new Error("The browser could not reach secure audio storage. Please try again.");
+            err.status = xhr.status;
+            reject(err);
+          };
+          xhr.onabort = () => {
+            audioUploadAbortRef.current = null;
+            reject(new Error("Audio upload was cancelled."));
+          };
+          xhr.onload = () => {
+            audioUploadAbortRef.current = null;
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else {
+              const err: any = new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`);
+              err.status = xhr.status;
+              reject(err);
+            }
+          };
+          xhr.send(file);
         });
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable && event.total > 0) {
-            setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
-          }
-        };
+      } catch (putErr: any) {
+        if (audioUploadCancelledRef.current || putErr?.name === "AbortError" || String(putErr?.message || "").includes("cancelled")) {
+          throw putErr;
+        }
+        // If direct PUT encounters network/CORS error (xhr.status === 0), fall back to Firebase Client SDK
+        if (putErr?.status === 0 || String(putErr?.message || "").includes("could not reach secure audio storage")) {
+          directPutFailed = true;
+          directPutError = putErr;
+        } else {
+          throw putErr;
+        }
+      }
+
+      if (directPutFailed) {
+        console.warn("Direct Storage PUT failed due to CORS/network, falling back to Firebase Client SDK uploadBytesResumable...", directPutError);
+        const storagePath = initData.storagePath || `exam-audio/${user.uid}/${initData.uploadId}/${safeName}`;
+        const fileRef = storageRef(storage, storagePath);
+        const uploadTask = uploadBytesResumable(fileRef, file, { contentType: uploadContentType });
         audioUploadAbortRef.current = () => {
           audioUploadCancelledRef.current = true;
-          xhr.abort();
+          uploadTask.cancel();
         };
-        xhr.onerror = () => {
-          audioUploadAbortRef.current = null;
-          reject(new Error("The browser could not reach secure audio storage. Please try again."));
-        };
-        xhr.onabort = () => {
-          audioUploadAbortRef.current = null;
-          reject(new Error("Audio upload was cancelled."));
-        };
-        xhr.onload = () => {
-          audioUploadAbortRef.current = null;
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`));
-        };
-        xhr.send(file);
-      });
+        await new Promise<void>((resolve, reject) => {
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              if (snapshot.totalBytes > 0) {
+                setAudioUploadProgress(Math.max(1, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)));
+              }
+            },
+            (err) => {
+              audioUploadAbortRef.current = null;
+              reject(err);
+            },
+            () => {
+              audioUploadAbortRef.current = null;
+              resolve();
+            }
+          );
+        });
+      }
       const completeController = new AbortController();
       audioUploadAbortRef.current = () => {
         audioUploadCancelledRef.current = true;
@@ -9057,6 +9572,144 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const CANONICAL_IELTS_TYPES = [
+    { key: "multiple_choice", labelVi: "Trắc nghiệm (Multiple Choice)", labelEn: "Multiple Choice" },
+    { key: "tfng_ynng", labelVi: "T/F/NG & Y/N/NG", labelEn: "True/False/Not Given & Yes/No/Not Given" },
+    { key: "matching_headings", labelVi: "Nối tiêu đề (Headings)", labelEn: "Matching Headings" },
+    { key: "matching_info_features", labelVi: "Nối thông tin / Đặc điểm", labelEn: "Matching Information / Features" },
+    { key: "completion_notes_summary", labelVi: "Điền từ (Notes/Summary/Sentence)", labelEn: "Fill in Blanks (Notes/Summary/Sentence)" },
+    { key: "diagram_flowchart_map", labelVi: "Sơ đồ / Bản đồ / Flowchart", labelEn: "Diagram / Map / Flowchart Labelling" },
+    { key: "short_answer", labelVi: "Câu hỏi ngắn (Short Answer)", labelEn: "Short Answer Questions" },
+    { key: "other", labelVi: "Dạng câu hỏi khác", labelEn: "Other Question Types" }
+  ];
+
+  const categorizeIeltsQuestionType = (q: any): { key: string; labelVi: string; labelEn: string } => {
+    const raw = `${q?.questionType || ""} ${q?.subType || ""} ${q?.type || ""}`.toLowerCase();
+    if (raw.includes("head")) return CANONICAL_IELTS_TYPES[2];
+    if (raw.includes("true") || raw.includes("false") || raw.includes("not given") || raw.includes("tfng") || raw.includes("yes") || raw.includes("no") || raw.includes("ynng")) return CANONICAL_IELTS_TYPES[1];
+    if (raw.includes("diagram") || raw.includes("map") || raw.includes("flow_chart") || raw.includes("flowchart") || raw.includes("external_diagram")) return CANONICAL_IELTS_TYPES[5];
+    if (raw.includes("summary") || raw.includes("note") || raw.includes("sentence") || raw.includes("table") || raw.includes("form") || raw.includes("completion") || raw.includes("blank")) return CANONICAL_IELTS_TYPES[4];
+    if (raw.includes("match")) return CANONICAL_IELTS_TYPES[3];
+    if (raw.includes("choice") || raw.includes("multiple") || raw.includes("mcq")) return CANONICAL_IELTS_TYPES[0];
+    if (raw.includes("short")) return CANONICAL_IELTS_TYPES[6];
+    return CANONICAL_IELTS_TYPES[7];
+  };
+
+  const triggerErrorDnaAnalysis = async (targetStudent: Student, force = false) => {
+    if (!targetStudent?.id) return;
+    const sid = targetStudent.id;
+    if (dnaInFlightRef.current.has(sid)) return;
+
+    const studentResults = (quizResults || []).filter(r => r && r.studentId === sid).sort((a, b) => safeString(b.date).localeCompare(safeString(a.date)));
+    if (studentResults.length === 0) return;
+
+    const typeMap: Record<string, { key: string; labelVi: string; labelEn: string; correct: number; total: number }> = {};
+    CANONICAL_IELTS_TYPES.forEach(t => {
+      typeMap[t.key] = { ...t, correct: 0, total: 0 };
+    });
+
+    const recentMistakes: Array<{ quizTitle: string; skill: string; questionType: string; subType: string; questionText: string; studentAnswer: string; correctAnswer: string }> = [];
+    let totalQuestionsAnalyzed = 0;
+
+    studentResults.forEach(r => {
+      if (!r || !r.answers) return;
+      const quiz = (quizzes || []).find(q => q && q.id === r.quizId);
+      if (!quiz || !Array.isArray(quiz.questions)) return;
+      const summary = getQuizScoreSummary(quiz, r.answers || {});
+      summary.groups.forEach((group: any) => {
+        const q = group.questions[0];
+        if (!q) return;
+        const cat = categorizeIeltsQuestionType(q);
+        totalQuestionsAnalyzed += group.total;
+        typeMap[cat.key].total += group.total;
+        typeMap[cat.key].correct += group.score;
+
+        if (group.score < group.total && recentMistakes.length < 15) {
+          const studentAns = r.answers[q.id];
+          const studentAnsStr = Array.isArray(studentAns) ? studentAns.join(", ") : String(studentAns ?? "(skipped)");
+          const correctStr = String(q.correctAnswer ?? q.correct ?? (Array.isArray(q.answers) ? q.answers.join(" / ") : "N/A"));
+          recentMistakes.push({
+            quizTitle: quiz.title || r.quizTitle || "Exam",
+            skill: (quiz as any).skill || (String(quiz.type).toUpperCase().includes("LISTEN") ? "Listening" : "Reading"),
+            questionType: cat.labelEn,
+            subType: q.subType || q.type || "",
+            questionText: String(q.question || q.text || q.prompt || "").slice(0, 160),
+            studentAnswer: studentAnsStr.slice(0, 100),
+            correctAnswer: correctStr.slice(0, 100)
+          });
+        }
+      });
+    });
+
+    if (totalQuestionsAnalyzed === 0) return;
+
+    const typeAccuracy = CANONICAL_IELTS_TYPES.map(t => {
+      const data = typeMap[t.key];
+      const acc = data.total > 0 ? Math.round((data.correct / data.total) * 100) : 0;
+      return {
+        key: t.key,
+        label: tx(t.labelVi, t.labelEn),
+        correct: data.correct,
+        total: data.total,
+        accuracy: acc
+      };
+    }).filter(item => item.total > 0);
+
+    const signature = `${studentResults.length}_${studentResults[0]?.date || ""}_${totalQuestionsAnalyzed}`;
+
+    if (!force && targetStudent.errorDna && targetStudent.errorDna.signature === signature && targetStudent.errorDna.categoryBreakdown) {
+      return;
+    }
+
+    dnaInFlightRef.current.add(sid);
+
+    try {
+      const res = await fetch("/api/analyze_error_dna", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentName: targetStudent.name || "Student",
+          targetBand: targetStudent.target || "7.0",
+          typeAccuracy,
+          recentMistakes
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.success) {
+        const updatedDna: ErrorDnaProfile = {
+          signature,
+          updatedAt: Date.now(),
+          totalAnalyzedAttempts: studentResults.length,
+          totalQuestionsAnalyzed,
+          typeAccuracy,
+          categoryBreakdown: data.categoryBreakdown || { lexicalGap: 34, distractorTrap: 33, scopeMisread: 33 },
+          recurringTraps: data.recurringTraps || [],
+          actionPlanVi: data.actionPlanVi || [],
+          actionPlanEn: data.actionPlanEn || []
+        };
+
+        setStudents(prev => {
+          const next = prev.map(s => s.id === sid ? { ...s, errorDna: updatedDna } : s);
+          void syncData({ students: next });
+          return next;
+        });
+      }
+    } catch (err) {
+      console.warn("Error DNA diagnosis deferred:", err);
+    } finally {
+      dnaInFlightRef.current.delete(sid);
+    }
+  };
+
+  useEffect(() => {
+    if (!students || !students.length || !quizResults || !quizResults.length) return;
+    const currentSt = students.find(s => s.email && currentUser?.email && s.email.toLowerCase() === currentUser.email.toLowerCase());
+    if (currentSt && (!currentSt.errorDna || !currentSt.errorDna.categoryBreakdown)) {
+      void triggerErrorDnaAnalysis(currentSt);
+    }
+  }, [students, quizResults, currentUser]);
+
   const saveQuiz = async (quizToSave?: any): Promise<boolean> => {
       const isEvent = quizToSave && typeof quizToSave.preventDefault === 'function';
       const targetQuiz = isEvent ? undefined : quizToSave;
@@ -9708,6 +10361,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const confirmRealExamInstructionGate = () => {
     const gate = realExamInstructionGate;
     if (!gate?.ready) return;
+    if (isTouchAudioHost()) void warmAndroidAudioPath();
+    const a = audioRef.current;
+    if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      a.preload = "auto";
+      if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+    }
     const pkg = realExamPackages.find(item => item.id === gate.packageId);
     const quizId = gate.quizId;
     setRealExamInstructionGate(null);
@@ -9932,6 +10591,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
+      if (isTouchAudioHost()) void warmAndroidAudioPath();
+      const a = audioRef.current;
+      if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          a.preload = "auto";
+          if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+      }
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
       const sourceQuiz = isStudentTestUI ? createTestUIQuiz(quiz) : quiz;
       const writingTasks = normalizeWritingTasks(sourceQuiz);
@@ -10269,6 +10934,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
       }
 
+      if (me) {
+          void triggerErrorDnaAnalysis(me, true);
+      }
+
       if (!state.isPreview) {
           setLiveSessions(prev => {
               const nx = prev.filter(x => x.id !== (currentUser?.email || "unknown"));
@@ -10583,6 +11252,202 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       // _C_BASE: bảng màu GỐC. Portal học viên phủ theme vĩnh viễn lên _C_BASE (shadow C cục bộ),
       // KHÔNG ảnh hưởng phòng thi vì phòng thi (activeExam) đã return TRƯỚC block học viên.
       const _C_BASE = C;
+
+      const renderErrorDnaSection = (student: Student | null | undefined, isAnalyzing = false, onRefresh?: () => void) => {
+        if (!student) return null;
+        const dna = student.errorDna;
+        const studentResults = (quizResults || []).filter(r => r && r.studentId === student.id);
+        const hasTests = studentResults.length > 0;
+
+        return (
+          <div className="card" style={{ padding: "22px 26px", border: `1px solid ${C.border}`, borderRadius: 14, background: C.card, marginTop: 18, marginBottom: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', padding: 6, borderRadius: 8, background: `${C.accent}14`, color: C.accent }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V6a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v14a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2h2"/></svg>
+                  </span>
+                  <h3 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 18, fontWeight: 700, color: C.text }}>
+                    {tx("Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy", "Error DNA & Weakness Diagnostic Engine")}
+                  </h3>
+                </div>
+                <p style={{ margin: '4px 0 0 0', fontSize: 12.5, color: C.sub }}>
+                  {tx("Hệ thống tự động phân tích đa chiều từ lịch sử làm bài để định vị chính xác lỗ hổng nhận thức.", "Automatically diagnosed from real exam submissions to pinpoint cognitive vulnerabilities.")}
+                </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {dna && (
+                  <>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 10px', borderRadius: 20, color: C.sub }}>
+                      {dna.totalAnalyzedAttempts} {tx("bài thi", "tests")} ({dna.totalQuestionsAnalyzed} {tx("câu hỏi", "questions")})
+                    </span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, background: isAnalyzing ? `${C.warn}15` : `${C.succ}15`, border: `1px solid ${isAnalyzing ? C.warn : C.succ}35`, color: isAnalyzing ? C.warn : C.succ, padding: '4px 10px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      {isAnalyzing && <Ico name="refresh" size={12} />}
+                      {isAnalyzing ? tx("Đang cập nhật...", "Analyzing...") : tx("AI đã phân tích", "AI Diagnosed")}
+                    </span>
+                  </>
+                )}
+                {hasTests && (
+                  <button
+                    type="button"
+                    disabled={isAnalyzing}
+                    onClick={() => {
+                      if (onRefresh) onRefresh();
+                      else void triggerErrorDnaAnalysis(student, true);
+                    }}
+                    style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 600, color: C.sub, cursor: isAnalyzing ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title={tx("Phân tích lại DNA lỗi sai", "Re-diagnose Error DNA")}
+                  >
+                    <Ico name="refresh" size={12} />
+                    <span>{tx("Chẩn đoán lại", "Re-diagnose")}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!hasTests ? (
+              <div style={{ textAlign: 'center', padding: '24px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                {tx("Chưa có kết quả bài thi Reading/Listening nào để chẩn đoán. Hãy hoàn thành ít nhất 1 bài thi.", "No Reading or Listening exam results yet. Complete at least 1 test to generate your Error DNA profile.")}
+              </div>
+            ) : !dna ? (
+              <div style={{ textAlign: 'center', padding: '30px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                <Ico name="refresh" size={20} color={C.accent} />
+                <div>{tx("Đang tự động tính toán dữ liệu và phân tích DNA lỗi sai...", "Automatically calculating mistake patterns and diagnosing Error DNA...")}</div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 20 }}>
+                {/* 1. THREE COGNITIVE CATEGORIES */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                    {tx("1. Phân loại căn nguyên lỗi sai (Cognitive Error Breakdown)", "1. Cognitive Error Breakdown")}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                    {/* Lexical Gap */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#eef2ff', border: '1px solid #c7d2fe', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#3730a3' }}>
+                          {tx("Lỗ hổng Từ vựng / Paraphrase", "Lexical & Paraphrase Gap")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#4338ca' }}>
+                          {dna.categoryBreakdown?.lexicalGap ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Chưa nhận diện được từ đồng nghĩa hoặc thiếu vốn từ vựng học thuật.", "Unrecognized synonyms, collocations, or vocabulary deficit.")}
+                      </div>
+                    </div>
+
+                    {/* Distractor Trap */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#92400e' }}>
+                          {tx("Bẫy Nhiễu & Phủ định Ngầm", "Distractor & Negative Trap")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#b45309' }}>
+                          {dna.categoryBreakdown?.distractorTrap ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Mắc bẫy từ trùng lặp nguyên văn hoặc người nói tự đính chính sau đó.", "Fell for verbatim surface matches or speaker self-corrections.")}
+                      </div>
+                    </div>
+
+                    {/* Scope Misread */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fff1f2', border: '1px solid #fecdd3', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#9f1239' }}>
+                          {tx("Đọc sai Phạm vi & Chi tiết", "Scope Misread & Overgeneralization")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#be123c' }}>
+                          {dna.categoryBreakdown?.scopeMisread ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Suy diễn quá phạm vi, bỏ sót mạo từ hoặc từ hạn định giới hạn (only, all).", "Overgeneralization, extrapolation, or overlooked qualifiers.")}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. QUESTION TYPE ACCURACY BARS */}
+                {dna.typeAccuracy && dna.typeAccuracy.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("2. Độ chính xác theo dạng câu hỏi (Question Type Accuracy)", "2. Question Type Accuracy")}
+                    </div>
+                    <div style={{ display: 'grid', gap: 9 }}>
+                      {dna.typeAccuracy.map((ct: any) => {
+                        const barColor = ct.accuracy >= 70 ? C.succ : ct.accuracy >= 50 ? C.warn : C.err;
+                        return (
+                          <div key={ct.key || ct.label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
+                              <span style={{ color: C.text }}>{ct.label}</span>
+                              <span style={{ fontFamily: 'var(--mono)', color: barColor }}>
+                                {ct.accuracy}% <span style={{ color: C.sub, fontWeight: 400 }}>({ct.correct}/{ct.total})</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, ct.accuracy))}%`, background: barColor, borderRadius: 3, transition: 'width 0.4s ease' }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. RECURRING TRAPS IDENTIFIED */}
+                {dna.recurringTraps && dna.recurringTraps.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("3. Các bẫy đề học viên thường mắc (Recurring Traps Identified)", "3. Recurring Traps Identified")}
+                    </div>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {dna.recurringTraps.map((trap: any, index: number) => {
+                        const isHigh = trap.severity === "high";
+                        return (
+                          <div key={index} style={{ padding: '12px 16px', borderRadius: 10, background: isHigh ? '#fff5f5' : '#fffbeb', border: `1px solid ${isHigh ? '#fed7d7' : '#fef08a'}`, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                {tx(trap.titleVi, trap.titleEn)}
+                              </span>
+                              <span style={{ fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, padding: '2px 8px', borderRadius: 4, background: isHigh ? '#fed7d7' : '#fef08a', color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                {isHigh ? tx("Tần suất cao", "High Frequency") : tx("Thường gặp", "Moderate")}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.45 }}>
+                              {tx(trap.detailVi, trap.detailEn)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. 7-DAY ACTION PLAN */}
+                {((dna.actionPlanVi && dna.actionPlanVi.length > 0) || (dna.actionPlanEn && dna.actionPlanEn.length > 0)) && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("4. Kế hoạch hành động 7 ngày từ AI (AI Action Plan)", "4. 7-Day AI Action Plan")}
+                    </div>
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 18px', display: 'grid', gap: 8 }}>
+                      {(i18n.language === "vi" ? (dna.actionPlanVi || dna.actionPlanEn || []) : (dna.actionPlanEn || dna.actionPlanVi || [])).map((step: string, index: number) => (
+                        <div key={index} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12.5, color: C.text, lineHeight: 1.5 }}>
+                          <span style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: `${C.accent}20`, color: C.accent, fontSize: 11, fontWeight: 800, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                            {index + 1}
+                          </span>
+                          <span>{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      };
 
   const globalStyles = useMemo(() => (
         <style>{`
@@ -11067,6 +11932,77 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     </div>
   ) : null;
 
+  const persistentAudioNode = (!reviewQuiz && preloadOrActiveAudioUrl && typeof document !== "undefined") ? (
+    createPortal(
+      <audio
+        key={preloadOrActiveAudioUrl}
+        ref={audioRef}
+        preload="auto"
+        playsInline
+        src={preloadOrActiveAudioUrl}
+        controlsList="nodownload noremoteplayback"
+        onContextMenu={(event: any) => event.preventDefault()}
+        onDragStart={(event: any) => event.preventDefault()}
+        onEnded={handleExamAudioEnded}
+        onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
+        onPlaying={handleExamAudioPlaying}
+        onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
+        onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
+        onCanPlay={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("canplay", audio);
+          checkAndSetAudioReady(audio);
+          if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio);
+        }}
+        onCanPlayThrough={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("canplaythrough", audio);
+          checkAndSetAudioReady(audio);
+        }}
+        onProgress={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          checkAndSetAudioReady(audio);
+        }}
+        onLoadedData={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("loadeddata", audio);
+          checkAndSetAudioReady(audio);
+        }}
+        onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
+        onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
+        onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
+        onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
+        onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
+        onLoadedMetadata={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          audio.muted = false;
+          audio.defaultMuted = false;
+          audio.volume = Math.max(0, Math.min(1, _audioVolume));
+          setAudioDur(audio.duration || 0);
+          updateExamMediaSessionPosition(audio);
+          checkAndSetAudioReady(audio);
+          if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
+            audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
+            setAudioCur(audio.currentTime);
+            updateExamMediaSessionPosition(audio);
+            setPendingAudioResume(null);
+          }
+        }}
+        onDurationChange={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0);
+        }}
+        onTimeUpdate={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          publishAudioProgress(audio);
+          checkAndSetAudioReady(audio);
+        }}
+        style={{ position: 'fixed', top: 0, left: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none', zIndex: -1 }}
+      />,
+      document.body
+    )
+  ) : null;
+
   if (reviewQuiz) {
       if (isWritingQuiz(reviewQuiz.quiz)) {
           return <WritingFeedback
@@ -11082,7 +12018,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               globalStyles={globalStyles}
           />;
       }
-      const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
+      const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
       let currentContext = "";
       const rvSections = reviewQuiz.quiz.sections || [];
       const rvHasSections = rvSections.length > 1;
@@ -11143,6 +12079,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (el.duration && isFinite(el.duration) && secs > el.duration) return;
           el.currentTime = secs;
           setRvAudioCur(secs);
+          rvJumpToTranscript(tstr);
           void requestReviewAudioPlayback();
       };
       const rvJumpToTranscript = (timestamp: string, quote = '') => {
@@ -11157,6 +12094,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // 1. If quote is provided (length >= 4), try finding the block whose normalized text contains it
           if (normalizedQuote.length >= 4) {
               target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote)) || null;
+              // If full quote doesn't match a single block, try the first 35 chars
+              if (!target && normalizedQuote.length > 25) {
+                  const subQuote = normalizedQuote.slice(0, 35).trim();
+                  target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(subQuote)) || null;
+              }
           }
 
           // 2. Otherwise, find by timestamp: exact match, overlap with [requestedStart, requestedEnd], or closest preceding block
@@ -11181,14 +12123,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   target = timedBlocks.filter(b => Number(b.dataset.rvTranscriptStart) <= requestedStart).pop() || null;
               }
 
-              // Fallback to first timed block
+              // Fallback to first timed block only if timestamp was provided
               if (!target && timedBlocks.length) {
                   target = timedBlocks[0];
               }
           }
 
-          // Fallback to first block
-          if (!target) {
+          // Fallback to first block ONLY if a valid timestamp was provided but no exact block matched
+          if (!target && requestedStart >= 0) {
               target = blocks[0];
           }
           if (!target) return;
@@ -11247,6 +12189,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           .replace(/\s+/g, ' ')
           .trim()
           .toLocaleLowerCase();
+      const rvQuizAny = reviewQuiz.quiz as any;
+      const rvSourceTextNormalized = rvNormalizeEvidenceText(
+          (rvQuizAny?.transcript || '') + ' ' +
+          (rvQuizAny?.audioTranscript || '') + ' ' +
+          (rvQuizAny?.listeningTranscript || '') + ' ' +
+          (rvQuizAny?.readingPassage || '') + ' ' +
+          (Array.isArray(rvQuizAny?.readingPassages) ? rvQuizAny.readingPassages.join(' ') : '')
+      );
       const rvReadingEvidenceNodes = () => {
           const root = document.getElementById('ielts-passage-content');
           if (!root) return [];
@@ -11312,6 +12262,29 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               node.classList.remove('rv-reading-evidence-target');
               node.classList.add('rv-reading-evidence-located');
           }), 1800);
+      };
+      const rvCleanExplainText = (text: string, hasDecon: boolean) => {
+          if (!hasDecon || !text) return text;
+          const lines = text.split("\n");
+          const filtered: string[] = [];
+          let skippingOptions = false;
+          for (const line of lines) {
+              const trimmed = line.trim();
+              if (/^(let'?s look at (the )?other options|các phương án còn lại|xem xét các lựa chọn|phương án khác)/i.test(trimmed)) {
+                  skippingOptions = true;
+                  continue;
+              }
+              if (skippingOptions) {
+                  if (/^(\*|-|\d+\.|\([A-Za-z]\)|[A-Za-z]\.)\s+/i.test(trimmed)) {
+                      continue;
+                  }
+                  if (trimmed.length > 0 && !trimmed.startsWith("*") && !trimmed.startsWith("-")) {
+                      skippingOptions = false;
+                  }
+              }
+              if (!skippingOptions) filtered.push(line);
+          }
+          return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
       };
       const rvRenderExplanationCopy = (value: string) => {
           const text = String(value || '').trim();
@@ -11482,6 +12455,19 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           {aiState?.loading ? <Ico name="refresh" size={14} /> : <Ico name="bulb" size={14} />}
                           Why (AI)
                       </button>
+                      <button
+                          type="button"
+                          className="rv-review-action"
+                          style={{ background: 'rgba(99, 102, 241, 0.08)', color: '#4f46e5', borderColor: 'rgba(99, 102, 241, 0.25)' }}
+                          onClick={() => {
+                              setCopilotActiveQ(aiQuestion || question);
+                              setCopilotOpen(true);
+                          }}
+                          title={tx("Trao đổi 1-1 với gia sư AI về câu này", "Ask AI Copilot about this question")}
+                      >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                          {tx("Hỏi AI", "Ask AI")}
+                      </button>
                       {!!quotes.length && (
                           <button type="button" className="rv-review-action rv-review-action-evidence" onClick={() => rvJumpToManualEvidence(question)} title={rvActiveIsListening ? "Locate quote in transcript" : "Locate quote in reading passage"}>
                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
@@ -11501,7 +12487,294 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   </div>
                   {aiState?.loading && <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>}
                   {!!aiState && !aiState.loading && (
-                      <div className="rv-completion-explanation"><b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />{rvRenderExplain(aiState.text || '', aiState.audioEvidence, aiState.audioEvidenceSegments)}</div>
+                      <div className="rv-completion-explanation">
+                          <b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />
+                          {rvRenderExplain(
+                              rvCleanExplainText(aiState.text || '', Boolean(aiState.deconstruction?.distractorBreakdown?.length)),
+                              aiState.audioEvidence,
+                              aiState.audioEvidenceSegments
+                          )}
+                          {(() => {
+                              const dec = aiState.deconstruction;
+                              if (!dec) return null;
+                              const pPairs = Array.isArray(dec.paraphrasePairs) ? dec.paraphrasePairs : [];
+                              const validPairs = pPairs.filter((pair: any) => {
+                                  const qT = String(pair?.questionTerm || pair?.questionPhrase || '').trim();
+                                  const pT = String(pair?.passageTerm || pair?.sourcePhrase || '').trim();
+                                  return qT.length > 0 && pT.length > 0 && qT !== '-' && pT !== '-';
+                              });
+                              const dItems = Array.isArray(dec.distractorBreakdown) ? dec.distractorBreakdown : [];
+                              const cleanOptionText = (raw: string): string => {
+                                  let s = String(raw || "").trim();
+                                  while (/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/.test(s)) {
+                                      s = s.replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
+                                  }
+                                  return s;
+                              };
+                              const isUnanswered = studentAnswer === undefined || studentAnswer === null || studentAnswer === '' || studentAnswer === '(trống)' || studentAnswer === '(bỏ trống)' || studentAnswer === 'No answer' || (Array.isArray(studentAnswer) && studentAnswer.length === 0);
+                              const rawTrapType = String(dec.trapType || '').trim();
+                              const hasNoAudioInTrap = /no audio|without (the )?audio|kh[oô]ng c[oó] audio|thi[eế]u audio/i.test(rawTrapType);
+                              const displayTrapType = hasNoAudioInTrap
+                                  ? (isUnanswered ? tx("Bắt nhịp từ khóa & chuyển ý", "Signpost & Transition Strategy") : tx("Bẫy từ khóa gây nhiễu", "Keyword Distractor Trap"))
+                                  : rawTrapType;
+
+                              let displayWhyWrong = String(dec.whyStudentWrong || '').trim();
+                              if (/without (the )?audio|kh[oô]ng c[oó] audio/i.test(displayWhyWrong)) {
+                                  displayWhyWrong = isUnanswered
+                                      ? tx("Cần chú ý từ khóa dẫn đường (signpost words) và bắt nhịp thông tin trước khi đáp án xuất hiện để không bị lỡ khoảng thời gian then chốt.", "Focus on signpost language and predict key answer categories before the speaker moves past the critical cue window.")
+                                      : tx("Phương án này chứa bẫy từ khóa gây nhiễu hoặc suy diễn quá mức so với dữ liệu gốc.", "This option contains misleading keyword distractors or unwarranted extrapolation.");
+                              }
+
+                              return (
+                                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                                      {/* 1. TRAP BADGE & REASONING */}
+                                      {displayTrapType && (
+                                          <div style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: 6,
+                                              background: isUnanswered ? '#fef3c7' : '#fef2f2',
+                                              color: isUnanswered ? '#92400e' : '#b91c1c',
+                                              border: `1px solid ${isUnanswered ? '#fde68a' : '#fecaca'}`,
+                                              padding: '3px 9px',
+                                              borderRadius: 6,
+                                              fontSize: 11.5,
+                                              fontWeight: 700,
+                                              marginBottom: 6
+                                          }}>
+                                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                                              <span>{isUnanswered ? tx("CHIẾN THUẬT: ", "STRATEGY: ") : "TRAP: "}{displayTrapType}</span>
+                                          </div>
+                                      )}
+                                      {displayWhyWrong && (
+                                          <div style={{
+                                              fontSize: 12,
+                                              color: isUnanswered ? '#92400e' : '#991b1b',
+                                              background: isUnanswered ? '#fffbeb' : '#fff5f5',
+                                              borderLeft: `3px solid ${isUnanswered ? '#f59e0b' : '#ef4444'}`,
+                                              borderRadius: '0 6px 6px 0',
+                                              padding: '6px 10px',
+                                              marginBottom: 10,
+                                              lineHeight: 1.45
+                                          }}>
+                                              <strong>{isUnanswered ? tx("Chiến thuật xử lý câu bỏ trống: ", "Unanswered question strategy: ") : tx("Chẩn đoán lỗi sai: ", "Cognitive trap diagnosis: ")}</strong>
+                                              {displayWhyWrong}
+                                          </div>
+                                      )}
+
+                                      {/* 2. PARAPHRASE CHIPS */}
+                                      {validPairs.length > 0 && (
+                                          <div style={{ marginBottom: 10 }}>
+                                              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: C.sub, marginBottom: 6 }}>
+                                                  {tx("Bảng đối chiếu Paraphrase", "Paraphrase Mapping")}
+                                              </div>
+                                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                  {validPairs.map((pair: any, pIdx: number) => {
+                                                      const qTerm = pair.questionTerm || pair.questionPhrase;
+                                                      const pTerm = pair.passageTerm || pair.sourcePhrase;
+                                                      const note = pair.explanation || pair.note;
+                                                      return (
+                                                          <div key={pIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 9px', fontSize: 11.5 }}>
+                                                              <span style={{ fontWeight: 700, color: '#1e40af' }}>{qTerm}</span>
+                                                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                                                              <span style={{ fontWeight: 700, color: '#047857' }}>{pTerm}</span>
+                                                              {note && <span style={{ color: C.sub, fontSize: 10.5, fontStyle: 'italic', borderLeft: `1px solid ${C.border}`, paddingLeft: 6 }}>{note}</span>}
+                                                          </div>
+                                                      );
+                                                  })}
+                                              </div>
+                                          </div>
+                                      )}
+
+                                      {/* 3. DISTRACTOR ELIMINATION LIST */}
+                                      {dItems.length > 0 && (
+                                          <div>
+                                              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: C.sub, marginBottom: 6 }}>
+                                                  {tx("Phân tích bẫy từng lựa chọn", "Option Distractor Breakdown")}
+                                              </div>
+                                              <div style={{ display: 'grid', gap: 5 }}>
+                                                  {dItems.map((item: any, oIdx: number) => {
+                                                      const rawStatus = String(item.status || item.verdict || '').trim();
+                                                      const statusUpper = rawStatus.toUpperCase();
+                                                      const isElimExplicit = statusUpper.includes('ELIMINATE') || statusUpper.includes('INCORRECT') || statusUpper.includes('WRONG') || statusUpper.includes('FALSE') || statusUpper.includes('TRAP') || statusUpper.includes('DISTRACTOR');
+
+                                                      const targetQ = aiQuestion || question;
+                                                      const defaultLetter = String.fromCharCode(65 + oIdx);
+                                                      const pMatch = String(item.option || '').trim().match(/^\s*\(?([A-Za-z0-9]+)[\.\)\:]\s*(.*)$/);
+                                                      const explicitLetter = pMatch && pMatch[1].length === 1 && /^[A-Za-z]$/.test(pMatch[1]) ? pMatch[1].toUpperCase() : '';
+                                                      const optLetter = explicitLetter || defaultLetter;
+
+                                                      const originalOpt = (Array.isArray(targetQ?.options) && targetQ.options[oIdx]) ? targetQ.options[oIdx] : '';
+                                                      const optBody = cleanOptionText(item.option || originalOpt);
+                                                      const displayOptionHeader = `${optLetter}. ${optBody}`;
+
+                                                      // 1. Correctness matching against targetQ.correctAnswer
+                                                      const qAnsRaw = targetQ?.correctAnswer ?? targetQ?.correct ?? targetQ?.answer;
+                                                      let isCorrectOption = false;
+
+                                                      if (targetQ?.type === 'CHOICE_MULTIPLE' || Array.isArray(qAnsRaw)) {
+                                                          const ansArray = Array.isArray(qAnsRaw) ? qAnsRaw : String(qAnsRaw || '').split(/[,;\s/]+/).filter(Boolean);
+                                                          isCorrectOption = ansArray.some((a: any) => {
+                                                              const aStr = String(a).trim();
+                                                              const aNum = Number(aStr);
+                                                              if (!isNaN(aNum) && /^\d+$/.test(aStr) && aNum === oIdx) return true;
+                                                              if (aStr.toUpperCase() === optLetter) return true;
+                                                              const cleanA = cleanOptionText(aStr).toLowerCase();
+                                                              return cleanA && (optBody.toLowerCase() === cleanA || (cleanA.length > 3 && optBody.toLowerCase().includes(cleanA)));
+                                                          });
+                                                      } else if (qAnsRaw !== undefined && qAnsRaw !== null && qAnsRaw !== '') {
+                                                          const qAnsStr = String(qAnsRaw).trim();
+                                                          const qAnsUpper = qAnsStr.toUpperCase();
+                                                          const qAnsNum = Number(qAnsStr);
+
+                                                          if (!isNaN(qAnsNum) && /^\d+$/.test(qAnsStr) && qAnsNum === oIdx) {
+                                                              isCorrectOption = true;
+                                                          } else if (qAnsUpper.length === 1 && /^[A-Z]$/.test(qAnsUpper) && qAnsUpper === optLetter) {
+                                                              isCorrectOption = true;
+                                                          } else {
+                                                              const tokens = qAnsUpper.split(/[,;\s/]+/).map((s: string) => s.trim()).filter(Boolean);
+                                                              if (tokens.includes(optLetter) || tokens.includes(String(oIdx))) {
+                                                                  isCorrectOption = true;
+                                                              } else {
+                                                                  const cleanQAns = cleanOptionText(qAnsStr).toLowerCase();
+                                                                  const cleanBody = optBody.toLowerCase();
+                                                                  if (cleanQAns && (cleanBody === cleanQAns || (cleanQAns.length > 3 && cleanBody.includes(cleanQAns)) || (cleanBody.length > 3 && cleanQAns.includes(cleanBody)))) {
+                                                                      isCorrectOption = true;
+                                                                  } else {
+                                                                      const tfngMap: Record<string, string> = {
+                                                                          'T': 'TRUE', 'TRUE': 'TRUE',
+                                                                          'F': 'FALSE', 'FALSE': 'FALSE',
+                                                                          'NG': 'NOT GIVEN', 'NOT GIVEN': 'NOT GIVEN',
+                                                                          'Y': 'YES', 'YES': 'YES',
+                                                                          'N': 'NO', 'NO': 'NO'
+                                                                      };
+                                                                      if (tfngMap[cleanBody.toUpperCase()] && tfngMap[cleanBody.toUpperCase()] === tfngMap[qAnsUpper]) {
+                                                                          isCorrectOption = true;
+                                                                      }
+                                                                  }
+                                                              }
+                                                          }
+                                                      } else {
+                                                          isCorrectOption = statusUpper.includes('CORRECT') && !isElimExplicit;
+                                                      }
+
+                                                      // 2. Student choice matching
+                                                      const stuRaw = studentAnswer;
+                                                      let isStudentChoice = false;
+                                                      if (!isUnanswered) {
+                                                          if (Array.isArray(stuRaw)) {
+                                                              isStudentChoice = stuRaw.some((s: any) => {
+                                                                  const sStr = String(s).trim();
+                                                                  const sNum = Number(sStr);
+                                                                  if (!isNaN(sNum) && /^\d+$/.test(sStr) && sNum === oIdx) return true;
+                                                                  if (sStr.toUpperCase() === optLetter) return true;
+                                                                  const cleanS = cleanOptionText(sStr).toLowerCase();
+                                                                  return cleanS && (optBody.toLowerCase() === cleanS || (cleanS.length > 3 && optBody.toLowerCase().includes(cleanS)));
+                                                              });
+                                                          } else {
+                                                              const sStr = String(stuRaw).trim();
+                                                              const sUpper = sStr.toUpperCase();
+                                                              const sNum = Number(sStr);
+                                                              if (!isNaN(sNum) && /^\d+$/.test(sStr) && sNum === oIdx) {
+                                                                  isStudentChoice = true;
+                                                              } else if (sUpper.length === 1 && /^[A-Z]$/.test(sUpper) && sUpper === optLetter) {
+                                                                  isStudentChoice = true;
+                                                              } else {
+                                                                  const cleanS = cleanOptionText(sStr).toLowerCase();
+                                                                  if (cleanS && (optBody.toLowerCase() === cleanS || (cleanS.length > 3 && optBody.toLowerCase().includes(cleanS)))) {
+                                                                      isStudentChoice = true;
+                                                                  }
+                                                              }
+                                                          }
+                                                      }
+
+                                                      const isWrongStudentChoice = !isCorrectOption && isStudentChoice;
+
+                                                      // 3. Styling & Badges
+                                                      let badgeText = 'ELIMINATE';
+                                                      let badgeBg = '#f1f5f9';
+                                                      let badgeColor = '#475569';
+                                                      let badgeBorder = '1px solid #cbd5e1';
+
+                                                      let rowBg = '#f8fafc';
+                                                      let rowBorder = '1px solid #e2e8f0';
+                                                      let titleColor = '#1e293b';
+                                                      let reasonColor = '#475569';
+
+                                                      if (isCorrectOption) {
+                                                          badgeText = 'CORRECT';
+                                                          badgeBg = '#dcfce7';
+                                                          badgeColor = '#15803d';
+                                                          badgeBorder = '1px solid #86efac';
+                                                          rowBg = '#f0fdf4';
+                                                          rowBorder = '1px solid #bbf7d0';
+                                                          titleColor = '#166534';
+                                                          reasonColor = '#15803d';
+                                                      } else if (isWrongStudentChoice) {
+                                                          badgeText = 'YOUR CHOICE · ELIMINATE';
+                                                          badgeBg = '#fee2e2';
+                                                          badgeColor = '#b91c1c';
+                                                          badgeBorder = '1px solid #fca5a5';
+                                                          rowBg = '#fff5f5';
+                                                          rowBorder = '1px solid #fecaca';
+                                                          titleColor = '#991b1b';
+                                                          reasonColor = '#7f1d1d';
+                                                      }
+
+                                                      let rawReason = String(item.reason || item.trapReason || '').trim();
+                                                      if (/without (the )?audio|kh[oô]ng c[oó] audio|impossible to confirm/i.test(rawReason)) {
+                                                          rawReason = isCorrectOption
+                                                              ? tx("Phương án này trả lời trực tiếp và phù hợp nhất với trọng tâm câu hỏi.", "This option directly and correctly satisfies the question prompt.")
+                                                              : tx("Phương án này chứa bẫy từ khóa gây nhiễu hoặc thông tin bị bóp méo.", "This option is a distractor containing distorted keywords or unwarranted assumptions.");
+                                                      }
+                                                      const reasonText = rawReason || (rawStatus.length > 15 ? rawStatus : '');
+
+                                                      return (
+                                                          <div key={oIdx} style={{
+                                                              display: 'flex',
+                                                              alignItems: 'baseline',
+                                                              gap: 8,
+                                                              padding: '6px 10px',
+                                                              borderRadius: 6,
+                                                              background: rowBg,
+                                                              border: rowBorder,
+                                                              fontSize: 11.5,
+                                                              lineHeight: 1.45
+                                                          }}>
+                                                              <span style={{
+                                                                  padding: '2px 6px',
+                                                                  borderRadius: 4,
+                                                                  fontWeight: 800,
+                                                                  fontSize: 9,
+                                                                  letterSpacing: 0.5,
+                                                                  textTransform: 'uppercase',
+                                                                  background: badgeBg,
+                                                                  color: badgeColor,
+                                                                  border: badgeBorder,
+                                                                  flexShrink: 0
+                                                              }}>
+                                                                  {badgeText}
+                                                              </span>
+                                                              <div style={{ flex: 1 }}>
+                                                                  <strong style={{ color: titleColor, marginRight: 6 }}>
+                                                                      {displayOptionHeader}
+                                                                  </strong>
+                                                                  {reasonText && (
+                                                                      <span style={{ color: reasonColor }}>
+                                                                          {reasonText}
+                                                                      </span>
+                                                                  )}
+                                                              </div>
+                                                          </div>
+                                                      );
+                                                  })}
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
+                              );
+                          })()}
+                      </div>
                   )}
               </div>
           );
@@ -11627,14 +12900,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
-                  .rv-flowchart-review { width:min(100%, 540px); margin:0; }
-                  .rv-flowchart-review .rv-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:6px 8px; color:#111827; font:400 15px/1.48 Arial,sans-serif; text-align:left; }
-                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 3px; padding:1px 7px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
+                  .rv-flowchart-review { width:min(100%, 720px); margin:0; display:flex; flex-direction:column; align-items:center; }
+                  .rv-flowchart-review .rv-flowchart-node { border:1.5px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.5 Arial,sans-serif; text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
+                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 8px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
                   .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
-                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:0; font-size:0; line-height:1; }
+                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:2px 0; font-size:0; line-height:1; }
                   .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
                   .rv-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
-                  .rv-flowchart-correction { margin:3px 0 4px; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:left; }
+                  .rv-flowchart-correction { margin:4px auto; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:center !important; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
                   .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
@@ -11909,6 +13182,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               <img
                                   key={idx}
                                   src={cleanMediaUrl(imgUrl)}
+                                  referrerPolicy="no-referrer"
+                                  loading="lazy"
                                   alt="Reading passage illustration"
                                   style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15 }}
                               />
@@ -12445,7 +13720,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
                                           const label = state.blank ? 'No answer' : state.given;
                                           const slotLabel = state.blank ? number : label;
-                                          const renderedNode = formatContent(question.text || '').replace(/\[\d+\]/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${rvEscapeHtml(slotLabel)}</button>`);
+                                          const cleanedText = String(question.text || "")
+                                              .replace(/<br\s*\/?>/gi, " ")
+                                              .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
+                                              .replace(/&nbsp;/gi, " ")
+                                              .replace(/\s+/g, " ")
+                                              .trim();
+                                          const renderedNode = formatContent(cleanedText).replace(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${rvEscapeHtml(slotLabel)}</button>`);
                                           return <React.Fragment key={question.id}>
                                               <div className="rv-flowchart-node" style={{borderColor:state.correct ? C.succ : state.blank ? C.warn : C.err}} dangerouslySetInnerHTML={{__html:renderedNode}} />
                                               {!state.correct && <div className="rv-flowchart-correction">Correct answer: {state.expected}</div>}
@@ -12490,7 +13771,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
                                   <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
                                       <div style={{position:'relative',minWidth:760,aspectRatio:diagramAspectRatio,background:'#fff'}}>
-                                          {imageUrl && <img src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
+                                          {imageUrl && <img src={cleanMediaUrl(imageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
                                           {!isOverlayDiagram && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:DiagramTextBox)=>{if(!Number.isFinite(Number(box.targetX))||!Number.isFinite(Number(box.targetY))) return null;const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||26)/2;const y1=box.anchor==='center'?Number(box.y):Number(box.y)+(Number(box.height)||16)/2;return <line key={`diagram-review-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke"/>;})}</svg>}
                                           {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
                                       </div>
@@ -12525,7 +13806,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
                                       <div className="rv-map-review-stage">
                                           {mapUrl ? (
-                                              <img src={cleanMediaUrl(mapUrl)} alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
+                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
                                           ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
                                           {mapUrl && mapQuestions.map((question: any, index: number) => {
                                               const slot = slotFor(question, index);
@@ -12592,6 +13873,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           <div style={{ marginTop: 10, marginBottom: 10 }}>
                                               <img
                                                   src={cleanMediaUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
+                                                  referrerPolicy="no-referrer"
+                                                  loading="lazy"
                                                   alt="Diagram reference"
                                                   style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block', borderRadius: 4 }}
                                               />
@@ -12640,6 +13923,525 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       )})}
                   </div>
               </div>
+
+              {/* COPILOT KEYFRAME STYLES */}
+              <style>{`
+                  @keyframes copilotPanelIn {
+                      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+                      to { opacity: 1; transform: translateY(0) scale(1); }
+                  }
+                  @keyframes copilotMsgIn {
+                      from { opacity: 0; transform: translateY(8px); }
+                      to { opacity: 1; transform: translateY(0); }
+                  }
+                  @keyframes copilotWave {
+                      0%, 80%, 100% { transform: scale(0.6); opacity: 0.35; }
+                      40% { transform: scale(1); opacity: 1; }
+                  }
+                  @keyframes copilotBeacon {
+                      0%, 100% { transform: scale(1); opacity: 1; }
+                      50% { transform: scale(1.4); opacity: 0.4; }
+                  }
+              `}</style>
+
+              {/* REVIEW COPILOT FLOATING LAUNCHER BUTTON */}
+              <button
+                  type="button"
+                  onClick={() => setCopilotOpen(!copilotOpen)}
+                  style={{
+                      position: 'fixed',
+                      bottom: 24,
+                      right: 24,
+                      zIndex: 9999,
+                      background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
+                      color: '#fff',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: 999,
+                      padding: '11px 20px',
+                      boxShadow: '0 10px 28px rgba(79, 70, 229, 0.4), 0 2px 6px rgba(0, 0, 0, 0.1)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      letterSpacing: -0.01,
+                      transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+                  }}
+                  title={tx("Mở gia sư AI 1-1", "Open 1-on-1 AI Copilot")}
+              >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                  <span>{tx("Gia sư IELTS AI", "IELTS AI Tutor")}</span>
+                  <span style={{ position: 'relative', display: 'inline-flex', width: 8, height: 8 }}>
+                      <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: '#4ade80', animation: 'copilotBeacon 2s infinite ease-in-out' }} />
+                      <span style={{ position: 'relative', width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }} />
+                  </span>
+              </button>
+
+              {/* REVIEW COPILOT FLOATING SLIDE-OVER CHAT PANEL */}
+              {copilotOpen && (
+                  <div
+                      style={{
+                          position: 'fixed',
+                          bottom: 78,
+                          right: 24,
+                          width: copilotExpanded ? 680 : 425,
+                          maxWidth: 'calc(100vw - 32px)',
+                          height: copilotExpanded ? 760 : 585,
+                          maxHeight: 'calc(100vh - 90px)',
+                          zIndex: 9999,
+                          background: C.card,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 20,
+                          boxShadow: '0 24px 60px -12px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(0,0,0,0.06)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          overflow: 'hidden',
+                          animation: 'copilotPanelIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                          transition: 'width 0.3s cubic-bezier(0.16, 1, 0.3, 1), height 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+                      }}
+                  >
+                      {/* Panel Header */}
+                      <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${C.accent}12, #4338ca0e)`, borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                              <span style={{ display: 'inline-flex', padding: 6, borderRadius: 10, background: 'linear-gradient(135deg, #4f46e5, #4338ca)', color: '#fff', flexShrink: 0 }}>
+                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                              </span>
+                              <div style={{ minWidth: 0 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                                          {tx("Gia sư IELTS AI Master", "IELTS AI Master Tutor")}
+                                      </span>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#16a34a', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '1px 6px', borderRadius: 999 }}>
+                                          <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#22c55e' }} />
+                                          {tx("Trực tuyến", "Online")}
+                                      </span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11, color: C.sub }}>
+                                      {copilotActiveQ ? (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(99, 102, 241, 0.1)', color: '#4338ca', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>
+                                              {tx("Đang hỏi Câu", "Focused on Q")}: {rvQuestionNumber(copilotActiveQ)}
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setCopilotActiveQ(null)}
+                                                  style={{ background: 'transparent', border: 'none', color: '#6366f1', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 800, marginLeft: 2 }}
+                                                  title={tx("Bỏ ghim câu hỏi để hỏi toàn bài", "Unpin question to ask about whole test")}
+                                              >
+                                                  ✕
+                                              </button>
+                                          </span>
+                                      ) : (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                              <span style={{ fontWeight: 600, color: '#047857' }}>{tx("Toàn bài thi", "Full Exam")}</span>
+                                              {rvAllQuestions.length > 0 && (
+                                                  <select
+                                                      value=""
+                                                      onChange={e => {
+                                                          const targetId = e.target.value;
+                                                          const found = rvAllQuestions.find((qq: any) => String(qq?.id) === targetId);
+                                                          if (found) setCopilotActiveQ(found);
+                                                      }}
+                                                      style={{ fontSize: 10.5, padding: '2px 5px', borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, cursor: 'pointer' }}
+                                                  >
+                                                      <option value="">{tx("Chọn câu để hỏi...", "Focus on a question...")}</option>
+                                                      {rvAllQuestions.map((qq: any) => (
+                                                          <option key={qq.id} value={qq.id}>
+                                                              {tx("Câu", "Q")}{rvQuestionNumber(qq)}: {String(qq.question || qq.title || qq.type || "").slice(0, 30)}
+                                                          </option>
+                                                      ))}
+                                                  </select>
+                                              )}
+                                          </span>
+                                      )}
+                                  </div>
+                              </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <button
+                                  type="button"
+                                  onClick={() => setCopilotExpanded(!copilotExpanded)}
+                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+                                  title={copilotExpanded ? tx("Thu nhỏ", "Collapse") : tx("Mở rộng", "Expand")}
+                              >
+                                  {copilotExpanded ? (
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/></svg>
+                                  ) : (
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                                  )}
+                              </button>
+                              <button
+                                  type="button"
+                                  onClick={() => setCopilotMessages([])}
+                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+                                  title={tx("Xóa lịch sử chat", "Clear conversation")}
+                              >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                              </button>
+                              <button
+                                  type="button"
+                                  onClick={() => setCopilotOpen(false)}
+                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+                                  aria-label="Close copilot"
+                              >
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                              </button>
+                          </div>
+                      </div>
+
+                      {/* Quick prompt chips */}
+                      <div style={{ padding: '8px 12px', background: C.bg, borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 6, overflowX: 'auto', whiteSpace: 'nowrap' }}>
+                          {copilotActiveQ ? (
+                              <>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Tại sao đáp án của em lại sai so với đáp án đúng?", "Why is my answer incorrect compared to the official key?"))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Tại sao em sai?", "Why am I wrong?")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Chỉ ra từ khóa paraphrase chính trong câu này giữa câu hỏi và bài đọc/audio.", "Identify key paraphrase mappings between question and passage/audio."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Chỉ từ Paraphrase", "Show Paraphrases")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Dịch và phân tích cấu trúc ngữ pháp của câu chứa đáp án đúng.", "Translate and dissect the grammar of the evidence sentence."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Phân tích dẫn chứng", "Dissect Evidence")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Cho em mẹo làm bài để tránh bẫy dạng câu này lần sau.", "Give me strategies to avoid traps on this question type."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Mẹo làm bài", "Tips for this type")}
+                                  </button>
+                              </>
+                          ) : (
+                              <>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Tóm tắt các lỗi sai chính trong bài thi này và nguyên nhân cốt lõi.", "Summarize my main mistakes and their core causes in this exam."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Tóm tắt lỗi sai bài này", "Summarize mistakes")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Phân tích 3 bẫy đề nguy hiểm nhất em gặp phải trong đề thi này.", "Analyze the 3 most dangerous traps I encountered in this test."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Phân tích bẫy đề lớn nhất", "Analyze worst traps")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Tổng hợp 5 cụm từ vựng học thuật Band 8+ đắt giá nhất xuất hiện trong bài.", "Extract 5 high-value Band 8+ academic collocations from this test."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Từ vựng Band 8+ trong bài", "Band 8+ Vocab")}
+                                  </button>
+                                  <button
+                                      type="button"
+                                      onClick={() => void handleSendCopilotMessage(tx("Đề xuất kế hoạch luyện tập để tăng 1.0 Band điểm dựa trên bài thi này.", "Suggest a concrete study plan to gain +1.0 Band based on this test."))}
+                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
+                                  >
+                                      {tx("Chiến thuật tăng 1.0 Band", "Strategy to gain +1.0 Band")}
+                                  </button>
+                              </>
+                          )}
+                      </div>
+
+                      {(() => {
+                          const rvRenderCopilotAiContent = (rawText: string) => {
+                              const lines = rawText.split('\n');
+                              const elements: React.ReactNode[] = [];
+                              let currentList: { type: 'ul' | 'ol'; items: React.ReactNode[] } | null = null;
+
+                              const parseSubTokens = (str: string, sKey: string): React.ReactNode => {
+                                  const re = /(\[(\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?)\])|(["“]([^"”\n]{2,250})["”])/g;
+                                  const pieces: React.ReactNode[] = [];
+                                  let lastI = 0;
+                                  let m: RegExpExecArray | null;
+
+                                  while ((m = re.exec(str)) !== null) {
+                                      if (m.index > lastI) {
+                                          pieces.push(str.slice(lastI, m.index));
+                                      }
+                                      if (m[1]) {
+                                          const tsLabel = m[2];
+                                          pieces.push(
+                                              <button
+                                                  key={`${sKey}-ts-${m.index}`}
+                                                  type="button"
+                                                  onClick={() => rvSeek(tsLabel)}
+                                                  style={{
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: 3,
+                                                      padding: '1px 6px',
+                                                      margin: '0 3px',
+                                                      background: 'rgba(16, 185, 129, 0.08)',
+                                                      color: '#047857',
+                                                      border: '1px solid rgba(16, 185, 129, 0.28)',
+                                                      borderRadius: 4,
+                                                      fontSize: '0.9em',
+                                                      fontWeight: 700,
+                                                      cursor: 'pointer',
+                                                      verticalAlign: 'baseline',
+                                                      lineHeight: 1.4
+                                                  }}
+                                                  title={tx("Phát audio từ mốc này", `Play audio from ${tsLabel}`)}
+                                              >
+                                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 18 12 6 20 6 4"/></svg>
+                                                  <span>{tsLabel}</span>
+                                              </button>
+                                          );
+                                      } else if (m[3]) {
+                                          const qStr = (m[4] || '').trim();
+                                          const normalizedQ = rvNormalizeEvidenceText(qStr);
+                                          const isLabel = /^(problem|solution|suggestion|pattern|option\s+[a-g]|question\s+\d+|true|false|not\s+given|yes|no|listening|reading|task\s+[12])$/i.test(qStr);
+                                          const isSubstantive = qStr.length >= 10 && qStr.split(/\s+/).length >= 2;
+                                          const matchesSource = Boolean(normalizedQ.length >= 6 && rvSourceTextNormalized && rvSourceTextNormalized.includes(normalizedQ));
+
+                                          if (isSubstantive && !isLabel && matchesSource) {
+                                              pieces.push(
+                                                  <button
+                                                      key={`${sKey}-q-${m.index}`}
+                                                      type="button"
+                                                      onClick={() => {
+                                                          if (rvActiveIsListening) {
+                                                              rvJumpToTranscript("", qStr);
+                                                          } else {
+                                                              rvJumpToEvidence(qStr);
+                                                          }
+                                                      }}
+                                                      style={{
+                                                          display: 'inline-flex',
+                                                          alignItems: 'center',
+                                                          gap: 3,
+                                                          padding: '1px 6px',
+                                                          margin: '0 2px',
+                                                          background: 'rgba(99, 102, 241, 0.08)',
+                                                          color: '#4338ca',
+                                                          border: '1px solid rgba(99, 102, 241, 0.25)',
+                                                          borderRadius: 4,
+                                                          fontSize: '0.92em',
+                                                          fontWeight: 600,
+                                                          cursor: 'pointer',
+                                                          verticalAlign: 'baseline',
+                                                          textAlign: 'left'
+                                                      }}
+                                                      title={rvActiveIsListening ? tx("Xem dẫn chứng trong transcript", "Locate in transcript") : tx("Xem dẫn chứng trong bài đọc", "Locate in passage")}
+                                                  >
+                                                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                                      <span>“{qStr}”</span>
+                                                  </button>
+                                              );
+                                          } else {
+                                              pieces.push(`“${qStr}”`);
+                                          }
+                                      }
+                                      lastI = re.lastIndex;
+                                  }
+
+                                  if (lastI < str.length) {
+                                      pieces.push(str.slice(lastI));
+                                  }
+                                  return pieces;
+                              };
+
+                              const renderInline = (content: string, pKey: string): React.ReactNode => {
+                                  const boldParts = content.split(/\*\*([^*]+)\*\*/g);
+                                  return boldParts.map((bPart, bIdx) => {
+                                      const isBold = bIdx % 2 === 1;
+                                      const sub = parseSubTokens(bPart, `${pKey}-b${bIdx}`);
+                                      return isBold ? <strong key={`${pKey}-strong-${bIdx}`} style={{ fontWeight: 700, color: C.text }}>{sub}</strong> : <React.Fragment key={`${pKey}-fr-${bIdx}`}>{sub}</React.Fragment>;
+                                  });
+                              };
+
+                              const flushList = (key: string) => {
+                                  if (!currentList) return;
+                                  if (currentList.type === 'ul') {
+                                      elements.push(
+                                          <ul key={key} style={{ margin: '4px 0 6px', paddingLeft: 18, listStyleType: 'disc' }}>
+                                              {currentList.items.map((it, idx) => <li key={idx} style={{ margin: '3px 0' }}>{it}</li>)}
+                                          </ul>
+                                      );
+                                  } else {
+                                      elements.push(
+                                          <ol key={key} style={{ margin: '4px 0 6px', paddingLeft: 20 }}>
+                                              {currentList.items.map((it, idx) => <li key={idx} style={{ margin: '3px 0' }}>{it}</li>)}
+                                          </ol>
+                                      );
+                                  }
+                                  currentList = null;
+                              };
+
+                              lines.forEach((line, lIdx) => {
+                                  const trimmed = line.trim();
+                                  if (!trimmed) {
+                                      flushList(`list-f-${lIdx}`);
+                                      return;
+                                  }
+
+                                  const headingMatch = trimmed.match(/^#{1,4}\s+(.+)$/);
+                                  if (headingMatch) {
+                                      flushList(`list-h-${lIdx}`);
+                                      elements.push(
+                                          <div key={`h-${lIdx}`} style={{ fontWeight: 800, fontSize: 13, color: C.text, margin: '8px 0 3px' }}>
+                                              {renderInline(headingMatch[1], `h-in-${lIdx}`)}
+                                          </div>
+                                      );
+                                      return;
+                                  }
+
+                                  const ulMatch = trimmed.match(/^[-*•]\s+(.+)$/);
+                                  if (ulMatch && !trimmed.startsWith('**')) {
+                                      if (!currentList || currentList.type !== 'ul') {
+                                          flushList(`list-ul-${lIdx}`);
+                                          currentList = { type: 'ul', items: [] };
+                                      }
+                                      currentList.items.push(renderInline(ulMatch[1], `ul-${lIdx}`));
+                                      return;
+                                  }
+
+                                  const olMatch = trimmed.match(/^(\d+)[\.\)]\s+(.+)$/);
+                                  if (olMatch) {
+                                      if (!currentList || currentList.type !== 'ol') {
+                                          flushList(`list-ol-${lIdx}`);
+                                          currentList = { type: 'ol', items: [] };
+                                      }
+                                      currentList.items.push(renderInline(olMatch[2], `ol-${lIdx}`));
+                                      return;
+                                  }
+
+                                  flushList(`list-p-${lIdx}`);
+                                  elements.push(
+                                      <p key={`p-${lIdx}`} style={{ margin: '3px 0 5px', lineHeight: 1.55 }}>
+                                          {renderInline(trimmed, `p-in-${lIdx}`)}
+                                      </p>
+                                  );
+                              });
+
+                              flushList('list-end');
+                              return elements;
+                          };
+
+                          return (
+                              <div
+                                  ref={copilotChatBoxRef}
+                                  style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}
+                              >
+                                  {copilotMessages.length === 0 ? (
+                                      <div style={{ margin: 'auto', textAlign: 'center', color: C.sub, fontSize: 12.5, lineHeight: 1.5, padding: '24px 14px' }}>
+                                          <div style={{ display: 'inline-flex', padding: 12, borderRadius: '50%', background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(67, 56, 202, 0.15))', color: C.accent, marginBottom: 10 }}>
+                                              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                                          </div>
+                                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                                              {tx("Gia sư IELTS AI 1-1 Sẵn sàng Đồng hành", "Personalized 1-on-1 IELTS AI Master")}
+                                          </div>
+                                          <div style={{ marginTop: 6, maxWidth: 360, margin: '6px auto 0' }}>
+                                              {tx(
+                                                  "Mình đã nắm trọn vẹn toàn bộ đề thi, transcript/bài đọc và bài làm của bạn. Bạn có thể hỏi bất kỳ điều gì: phân tích một câu, chiến thuật giải đề, hay giải thích từ vựng nhé!",
+                                                  "I have full context over this entire exam, passages/transcripts, and your answers. Feel free to ask anything: break down any question, discuss strategies, or unpack vocabulary!"
+                                              )}
+                                          </div>
+                                      </div>
+                                  ) : (
+                                      copilotMessages.map((msg, mIdx) => {
+                                          const isUser = msg.role === "user";
+                                          return (
+                                              <div
+                                                  key={mIdx}
+                                                  style={{
+                                                      alignSelf: isUser ? 'flex-end' : 'flex-start',
+                                                      maxWidth: copilotExpanded ? '82%' : '88%',
+                                                      background: isUser ? 'linear-gradient(135deg, #4f46e5, #4338ca)' : C.bg,
+                                                      color: isUser ? '#fff' : C.text,
+                                                      border: isUser ? 'none' : `1px solid ${C.border}`,
+                                                      borderRadius: isUser ? '16px 16px 3px 16px' : '16px 16px 16px 3px',
+                                                      padding: '10px 14px',
+                                                      fontSize: 12.5,
+                                                      lineHeight: 1.55,
+                                                      wordBreak: 'break-word',
+                                                      boxShadow: isUser ? '0 4px 12px rgba(79, 70, 229, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)',
+                                                      animation: 'copilotMsgIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards'
+                                                  }}
+                                              >
+                                                  {!isUser && (
+                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, paddingBottom: 4, borderBottom: `1px solid ${C.border}`, fontSize: 10.5, color: C.sub }}>
+                                                          <span style={{ fontWeight: 700, color: C.accent }}>IELTS AI Master</span>
+                                                          <button
+                                                              type="button"
+                                                              onClick={() => {
+                                                                  if (navigator.clipboard) void navigator.clipboard.writeText(msg.text);
+                                                              }}
+                                                              style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 0, fontSize: 10 }}
+                                                              title={tx("Sao chép nội dung", "Copy text")}
+                                                          >
+                                                              {tx("Sao chép", "Copy")}
+                                                          </button>
+                                                      </div>
+                                                  )}
+                                                  <div style={{ wordBreak: 'break-word' }}>
+                                                      {isUser ? <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div> : rvRenderCopilotAiContent(msg.text)}
+                                                  </div>
+                                              </div>
+                                          );
+                                      })
+                                  )}
+                                  {copilotLoading && (
+                                      <div style={{ alignSelf: 'flex-start', background: C.bg, border: `1px solid ${C.border}`, borderRadius: '16px 16px 16px 3px', padding: '10px 16px', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                          <div style={{ display: 'flex', gap: 4 }}>
+                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0s' }} />
+                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0.2s' }} />
+                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0.4s' }} />
+                                          </div>
+                                          <span style={{ fontSize: 11.5, color: C.sub }}>{tx("Gia sư AI đang phân tích...", "AI Tutor is analyzing...")}</span>
+                                      </div>
+                                  )}
+                              </div>
+                          );
+                      })()}
+
+                      {/* Input box */}
+                      <div style={{ padding: '10px 12px', background: C.card, borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input
+                              type="text"
+                              value={copilotInput}
+                              onChange={e => setCopilotInput(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') void handleSendCopilotMessage(); }}
+                              placeholder={copilotActiveQ ? tx(`Hỏi gia sư về Câu ${rvQuestionNumber(copilotActiveQ)}...`, `Ask AI about Question ${rvQuestionNumber(copilotActiveQ)}...`) : tx("Hỏi gia sư AI về đề thi hoặc bất kỳ câu hỏi nào...", "Ask AI tutor about this exam or any question...")}
+                              style={{ flex: 1, padding: '9px 13px', fontSize: 12.5, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, outline: 'none' }}
+                          />
+                          <button
+                              type="button"
+                              disabled={copilotLoading || !copilotInput.trim()}
+                              onClick={() => void handleSendCopilotMessage()}
+                              style={{
+                                  padding: '9px 14px',
+                                  borderRadius: 10,
+                                  background: copilotLoading || !copilotInput.trim() ? C.border : 'linear-gradient(135deg, #4f46e5, #4338ca)',
+                                  color: '#fff',
+                                  border: 'none',
+                                  cursor: copilotLoading || !copilotInput.trim() ? 'default' : 'pointer',
+                                  opacity: copilotLoading || !copilotInput.trim() ? 0.6 : 1,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  transition: 'all 0.2s'
+                              }}
+                              title="Send"
+                          >
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                          </button>
+                      </div>
+                  </div>
+              )}
           </div>
       );
   }
@@ -12680,9 +14482,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       if (pendingExamState) {
           const q = pendingExamState.quiz;
           const isListeningExam = String(q.type).toLowerCase().includes("listen");
+          const hasAudio = isListeningExam || q.type === "Integrated";
           const isPractice = isPracticeQuiz(q);
+          const isReadyToStart = (hasAudio && q.audioUrl) ? (isOfflineReady && isAudioReadyToPlay) : isOfflineReady;
           return (
-              <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
+              <>
+                  {persistentAudioNode}
+                  <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
                   <style>{`
                       @keyframes idp-spin { to { transform: rotate(360deg); } }
                       .idp-spinner { width: 48px; height: 48px; border: 4px solid #e0e0e0; border-top-color: #111; border-radius: 50%; animation: idp-spin 0.8s linear infinite; margin: 0 auto 24px; }
@@ -12705,7 +14511,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       {/* Body */}
                       <div className="instructions-content" style={{ padding: '32px', overflowY: 'auto', flex: 1, fontSize: 15, lineHeight: 1.7, color: '#24292f' }}>
                       <div style={{ textAlign: 'center', padding: '0 0 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                          {!isOfflineReady ? (
+                          {!isReadyToStart ? (
                               <>
                                   <div className="idp-spinner"></div>
                                   <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: '#24292f' }}>{t('pend_loading')}</div>
@@ -12742,8 +14548,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
                   <div style={{ padding: '18px 32px', background: '#f4f5f7', borderTop: '1px solid #d1d5db', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
                       <button className="idp-back-btn" onClick={() => setPendingExamState(null)}>Back</button>
-                      <button className="idp-start-btn" disabled={!isOfflineReady} style={{ opacity: isOfflineReady ? 1 : 0.5, cursor: isOfflineReady ? 'pointer' : 'not-allowed' }} onClick={() => {
-                          if (!isOfflineReady) return;
+                      <button className="idp-start-btn" disabled={!isReadyToStart} style={{ opacity: isReadyToStart ? 1 : 0.5, cursor: isReadyToStart ? 'pointer' : 'not-allowed' }} onClick={() => {
+                          if (!isReadyToStart) return;
+                          if (isTouchAudioHost()) void warmAndroidAudioPath();
+                          const a = audioRef.current;
+                          if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+                              a.preload = "auto";
+                              if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+                          }
                           const { quiz, isPreview, isStudentTestUI } = pendingExamState;
                           setPendingExamState(null);
                           confirmStartExam(quiz, isPreview, isStudentTestUI);
@@ -12753,6 +14565,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   </div>
                   </div>
               </div>
+              </>
           );
       }
 
@@ -12763,7 +14576,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
-          const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
+          const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
           const formatExamRemaining = (seconds: number) => {
               const safe = Math.max(0, Math.floor(seconds || 0));
               const mins = Math.floor(safe / 60);
@@ -13300,64 +15113,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           };
 
           return (
-              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
-                   onDragOverCapture={feedbackAnswerDrag}
-                   onDragEndCapture={() => { endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null); }}
-                   onDropCapture={(event: any) => {
-                       if (!feedbackAnswerDrag(event)) return;
-                       if (!answerBankAt(event.target as HTMLElement)) return;
-                       event.preventDefault(); event.stopPropagation();
-                       if (event.dataTransfer?.getData('application/x-ielts-heading-id')) {
-                           const heading = readDroppedHeading(event);
-                           if (heading.sourceQid) clearHeading(heading.sourceQid);
-                       } else {
-                           const sourceQid = readDraggedSource(event);
-                           if (sourceQid) handleAnswerChange(sourceQid, '', 'DRAG_DROP');
-                       }
-                       endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null);
-                   }}
-                   onContextMenu={(e: any) => {
-                       if (isPractice) return;
-                       if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
-                           openHighlightDeleteMenu(e, e.target as HTMLElement);
-                       } else {
-                           e.preventDefault(); 
-                       }
-                   }}>
-                  
-                  {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="metadata" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
-                          onContextMenu={(event: any) => event.preventDefault()}
-                          onDragStart={(event: any) => event.preventDefault()}
-                          onEnded={handleExamAudioEnded}
-                          onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
-                          onPlaying={handleExamAudioPlaying}
-                          onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
-                          onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
-                          onCanPlay={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; recordAudioDiagnostic("canplay", audio); if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio); }}
-                          onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
-                          onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
-                          onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
-                          onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
-                          onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
-                          onLoadedMetadata={(e: any) => {
-                              const audio = e.currentTarget as HTMLAudioElement;
-                              audio.muted = false;
-                              audio.defaultMuted = false;
-                              audio.volume = Math.max(0, Math.min(1, _audioVolume));
-                              setAudioDur(audio.duration || 0);
-                              updateExamMediaSessionPosition(audio);
-                              if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
-                                  audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
-                                  setAudioCur(audio.currentTime);
-                                  updateExamMediaSessionPosition(audio);
-                                  setPendingAudioResume(null);
-                              }
-                          }}
-                          onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
-                          onTimeUpdate={(e: any) => publishAudioProgress(e.currentTarget as HTMLAudioElement)}
-                          style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
-                  )}
+              <>
+                  {persistentAudioNode}
+                  <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
+                       onDragOverCapture={feedbackAnswerDrag}
+                       onDragEndCapture={() => { endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null); }}
+                       onDropCapture={(event: any) => {
+                           if (!feedbackAnswerDrag(event)) return;
+                           if (!answerBankAt(event.target as HTMLElement)) return;
+                           event.preventDefault(); event.stopPropagation();
+                           if (event.dataTransfer?.getData('application/x-ielts-heading-id')) {
+                               const heading = readDroppedHeading(event);
+                               if (heading.sourceQid) clearHeading(heading.sourceQid);
+                           } else {
+                               const sourceQid = readDraggedSource(event);
+                               if (sourceQid) handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                           }
+                           endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null);
+                       }}
+                       onContextMenu={(e: any) => {
+                           if (isPractice) return;
+                           if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
+                               openHighlightDeleteMenu(e, e.target as HTMLElement);
+                           } else {
+                               e.preventDefault(); 
+                           }
+                       }}>
 
                   {globalStyles}
                   {/* HIDDEN DIV DỌN DẸP TS WARNING */}
@@ -13564,23 +15345,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { width:min(100%, 610px); margin:0 0 18px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 420px) max-content; gap:18px; align-items:start; }
-                      .idp-flowchart-panel { width:min(100%, 420px); margin:0; padding:0; background:transparent; border:0; }
+                      .idp-flowchart-wrap { width:min(100%, 720px); margin:0 0 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) max-content; gap:20px; align-items:start; }
+                      .idp-flowchart-panel { width:100%; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:center; }
                       .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
                       .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
                       .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
                       .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:26px; box-sizing:border-box; margin:0; padding:4px 8px; text-align:left; justify-content:flex-start; font:700 13px/1.2 Arial,sans-serif; }
-                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:5px 7px; line-height:1.42; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; }
-                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:left !important; }
-                      .idp-flowchart-arrow { width:100%; height:22px; margin:0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
-                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
+                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; line-height:1.5; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
+                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:center !important; }
+                      .idp-flowchart-arrow { width:100%; height:22px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
+                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
                       .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; background:#f5f5f5 !important; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
-                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; }
-                      .idp-flowchart-title, .idp-flowchart-title * { text-align:left !important; }
-                      .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
-                      .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
+                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
+                      .idp-flowchart-title, .idp-flowchart-title * { text-align:center !important; }
+                      .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; display: inline; }
+                      .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 8px auto !important; }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
                       .writing-pane { min-width:0; height:100%; overflow:auto; box-sizing:border-box; }
                       .writing-prompt { padding:28px 36px 44px; line-height:1.62; color:var(--etext); }
@@ -13789,7 +15570,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
-                      .idp-match2-items .idp-dropzone { width: 100%; height: 28px; min-height: 28px; max-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+                      .idp-match2-items .idp-dropzone { width: 100%; min-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; border: 1px dashed #4b5563; border-radius: 4px; background: #fff; font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--etext); text-align: center; }
+                      .idp-match2-items .idp-dropzone.filled { border-style: solid; background: #f8fafc; font-weight: 500; }
+                      .idp-match2-items .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f7ff; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-sentence-ending { max-width:780px; text-align:left; }
                       .idp-sentence-ending-list { display:grid; gap:12px; margin-bottom:14px; }
@@ -14146,12 +15929,207 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       onMouseUp={() => setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter(false)}>
                       <div className="writing-test-prompt exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 280, overflowY: 'auto', padding: '30px 18px', boxSizing: 'border-box', lineHeight: 1.55, fontSize: 15, color: '#111', background: '#fff' }}>
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
-                          {task?.mediaUrl && <img src={cleanMediaUrl(task.mediaUrl)} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
+                          {task?.mediaUrl && <img src={cleanMediaUrl(task.mediaUrl)} referrerPolicy="no-referrer" loading="lazy" alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
                       <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'ew-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center', touchAction: 'none' }}>
                           <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
                       <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
+                          {Boolean(activeExam?.allowWritingSandbox) && !activeExam?.realExamContext && (
+                              <div style={{ width: '90%', marginBottom: 14 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                      <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>
+                                          Part {task?.taskNumber || 1} Answer
+                                      </span>
+                                      <button
+                                          type="button"
+                                          onClick={() => setShowWritingSandbox(!showWritingSandbox)}
+                                          style={{
+                                              background: showWritingSandbox ? 'rgba(79, 70, 229, 0.1)' : '#f3f4f6',
+                                              color: showWritingSandbox ? '#4f46e5' : '#4b5563',
+                                              border: `1px solid ${showWritingSandbox ? '#c7d2fe' : '#d1d5db'}`,
+                                              padding: '5px 12px',
+                                              borderRadius: 6,
+                                              fontSize: 12,
+                                              fontWeight: 700,
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: 6
+                                          }}
+                                      >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                          <span>{showWritingSandbox ? tx("Đóng AI Sandbox", "Close AI Sandbox") : tx("Mở AI Sandbox (Ý tưởng & Dàn bài)", "Open AI Sandbox")}</span>
+                                      </button>
+                                  </div>
+
+                                  {showWritingSandbox && (
+                                      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                                          {/* Tabs */}
+                                          <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: 12, gap: 8 }}>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setWritingSandboxTab("brainstorm")}
+                                                  style={{
+                                                      background: 'transparent',
+                                                      border: 'none',
+                                                      borderBottom: writingSandboxTab === "brainstorm" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                      color: writingSandboxTab === "brainstorm" ? '#4f46e5' : '#6b7280',
+                                                      fontWeight: 700,
+                                                      fontSize: 12,
+                                                      padding: '6px 10px',
+                                                      cursor: 'pointer'
+                                                  }}
+                                              >
+                                                  {tx("Góc nhìn & C1/C2 Collocations", "Perspectives & Collocations")}
+                                              </button>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setWritingSandboxTab("critique")}
+                                                  style={{
+                                                      background: 'transparent',
+                                                      border: 'none',
+                                                      borderBottom: writingSandboxTab === "critique" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                      color: writingSandboxTab === "critique" ? '#4f46e5' : '#6b7280',
+                                                      fontWeight: 700,
+                                                      fontSize: 12,
+                                                      padding: '6px 10px',
+                                                      cursor: 'pointer'
+                                                  }}
+                                              >
+                                                  {tx("Kiểm tra Logic dàn bài", "Outline Logic Check")}
+                                              </button>
+                                          </div>
+
+                                          {/* Tab 1: Brainstorm */}
+                                          {writingSandboxTab === "brainstorm" && (
+                                              <div style={{ display: 'grid', gap: 10 }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                      <span style={{ fontSize: 11.5, color: '#4b5563' }}>
+                                                          {tx("Gợi ý các góc nhìn phản biện và collocations học thuật Band 8+ phù hợp với đề bài.", "AI perspectives and Band 8+ academic collocations tailored to this prompt.")}
+                                                      </span>
+                                                      <button
+                                                          type="button"
+                                                          disabled={writingSandboxLoading}
+                                                          onClick={() => void handleWritingSandboxAction(task, "brainstorm")}
+                                                          style={{
+                                                              background: '#4f46e5',
+                                                              color: '#fff',
+                                                              border: 'none',
+                                                              padding: '5px 12px',
+                                                              borderRadius: 6,
+                                                              fontSize: 11.5,
+                                                              fontWeight: 700,
+                                                              cursor: writingSandboxLoading ? 'default' : 'pointer',
+                                                              opacity: writingSandboxLoading ? 0.6 : 1,
+                                                              display: 'inline-flex',
+                                                              alignItems: 'center',
+                                                              gap: 5
+                                                          }}
+                                                      >
+                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                          <span>{writingSandboxLoading ? tx("Đang phân tích đề...", "Brainstorming...") : tx("Gợi ý ý tưởng & từ vựng", "Brainstorm Ideas")}</span>
+                                                      </button>
+                                                  </div>
+
+                                                  {writingSandboxBrainstormData && (
+                                                      <div style={{ display: 'grid', gap: 10, marginTop: 4 }}>
+                                                          {/* Perspectives */}
+                                                          {Array.isArray(writingSandboxBrainstormData.perspectives) && writingSandboxBrainstormData.perspectives.length > 0 && (
+                                                              <div style={{ display: 'grid', gap: 6 }}>
+                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
+                                                                      {tx("Góc nhìn phản biện (Perspectives)", "Critical Perspectives")}
+                                                                  </div>
+                                                                  {writingSandboxBrainstormData.perspectives.map((p: any, pIdx: number) => (
+                                                                      <div key={pIdx} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
+                                                                          <b style={{ color: '#1e3a8a' }}>{p.nameVi || p.nameEn}:</b> <span style={{ color: '#374151' }}>{p.argumentVi || p.argumentEn}</span>
+                                                                      </div>
+                                                                  ))}
+                                                              </div>
+                                                          )}
+
+                                                          {/* Collocations */}
+                                                          {Array.isArray(writingSandboxBrainstormData.collocations) && writingSandboxBrainstormData.collocations.length > 0 && (
+                                                              <div style={{ display: 'grid', gap: 6 }}>
+                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
+                                                                      {tx("C1/C2 Academic Collocations", "Band 8+ Academic Collocations")}
+                                                                  </div>
+                                                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                                      {writingSandboxBrainstormData.collocations.map((c: any, cIdx: number) => (
+                                                                          <span key={cIdx} style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '4px 8px', borderRadius: 4, fontSize: 11.5, fontWeight: 600 }} title={c.meaningVi || c.usage}>
+                                                                              {c.phrase}
+                                                                          </span>
+                                                                      ))}
+                                                                  </div>
+                                                              </div>
+                                                          )}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          )}
+
+                                          {/* Tab 2: Outline Critique */}
+                                          {writingSandboxTab === "critique" && (
+                                              <div style={{ display: 'grid', gap: 8 }}>
+                                                  <div style={{ fontSize: 11.5, color: '#4b5563' }}>
+                                                      {tx("Viết 3-5 gạch đầu dòng dàn ý bài viết của bạn. Huấn luyện viên AI sẽ đánh giá tính mạch lạc và cảnh báo thiếu ý:", "Write 3-5 bullet points of your planned outline. AI coach will check coherence and task coverage:")}
+                                                  </div>
+                                                  <textarea
+                                                      value={writingSandboxOutline}
+                                                      onChange={e => setWritingSandboxOutline(e.target.value)}
+                                                      placeholder={tx("Ví dụ:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...", "e.g.:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...")}
+                                                      style={{ width: '100%', height: 75, resize: 'vertical', padding: '8px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#111', boxSizing: 'border-box' }}
+                                                  />
+                                                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                                      <button
+                                                          type="button"
+                                                          disabled={writingSandboxLoading || !writingSandboxOutline.trim()}
+                                                          onClick={() => void handleWritingSandboxAction(task, "critique_outline")}
+                                                          style={{
+                                                              background: '#4f46e5',
+                                                              color: '#fff',
+                                                              border: 'none',
+                                                              padding: '5px 12px',
+                                                              borderRadius: 6,
+                                                              fontSize: 11.5,
+                                                              fontWeight: 700,
+                                                              cursor: writingSandboxLoading || !writingSandboxOutline.trim() ? 'default' : 'pointer',
+                                                              opacity: writingSandboxLoading || !writingSandboxOutline.trim() ? 0.5 : 1,
+                                                              display: 'inline-flex',
+                                                              alignItems: 'center',
+                                                              gap: 5
+                                                          }}
+                                                      >
+                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                          <span>{writingSandboxLoading ? tx("Đang kiểm tra dàn bài...", "Evaluating...") : tx("Kiểm tra logic dàn bài", "Check Outline Logic")}</span>
+                                                      </button>
+                                                  </div>
+
+                                                  {writingSandboxCritiqueData && (
+                                                      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', display: 'grid', gap: 6, marginTop: 4 }}>
+                                                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#111' }}>
+                                                              <span style={{ padding: '2px 8px', borderRadius: 4, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                                                                  {tx("Độ bao quát", "Coverage")}: {writingSandboxCritiqueData.coverageRating || "Good"}
+                                                              </span>
+                                                          </div>
+                                                          <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.45 }}>
+                                                              <b>{tx("Nhận xét mạch lạc: ", "Logic & Coherence: ")}</b>
+                                                              {tx(writingSandboxCritiqueData.progressionFeedbackVi, writingSandboxCritiqueData.progressionFeedbackEn) || writingSandboxCritiqueData.progressionFeedbackEn}
+                                                          </div>
+                                                          {Array.isArray(writingSandboxCritiqueData.socraticQuestions) && writingSandboxCritiqueData.socraticQuestions.length > 0 && (
+                                                              <div style={{ fontSize: 11.5, color: '#4338ca', background: '#eef2ff', padding: '6px 10px', borderRadius: 6 }}>
+                                                                  <b>{tx("Gợi ý nâng cao Band: ", "Socratic prompt: ")}</b>
+                                                                  {writingSandboxCritiqueData.socraticQuestions[0]}
+                                                              </div>
+                                                          )}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          )}
+                                      </div>
+                                  )}
+                              </div>
+                          )}
                           <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
                           <div style={{ width: '90%', textAlign: 'right', marginTop: 7, fontSize: 14, color: '#111' }}>Words: {countWritingWords(answer)}</div>
                           <div style={{ position: 'absolute', right: '4%', bottom: 30, display: 'flex', gap: 5 }}>
@@ -14181,11 +16159,53 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           </div>
                           <div style={{ fontSize: 15, marginBottom: 22 }}>To continue, click Play.</div>
                           {renderMeetAudioNotice()}
-                          <button onClick={() => { void requestExamAudioPlayback(); }}
-                              style={{ background: '#fff', color: '#111', border: 'none', padding: '10px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-                              <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
-                              Play
-                          </button>
+                          {(() => {
+                              const isBuffering = !isAudioReadyToPlay;
+                              const isStarting = audioStatus === "LOADING";
+                              const isDisabled = isBuffering || isStarting;
+                              return (
+                                  <button
+                                      type="button"
+                                      disabled={isDisabled}
+                                      onClick={() => { if (!isDisabled) void requestExamAudioPlayback(); }}
+                                      style={{
+                                          background: isDisabled ? '#9ca3af' : '#fff',
+                                          color: isDisabled ? '#374151' : '#111',
+                                          border: 'none',
+                                          padding: '10px 24px',
+                                          fontSize: 15,
+                                          fontWeight: 600,
+                                          cursor: isDisabled ? 'not-allowed' : 'pointer',
+                                          borderRadius: 4,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 9,
+                                          opacity: isDisabled ? 0.85 : 1,
+                                          transition: 'background 0.15s, opacity 0.15s'
+                                      }}>
+                                      {isBuffering ? (
+                                          <>
+                                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'idp-spin 0.8s linear infinite' }}>
+                                                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                                              </svg>
+                                              <span>Preparing audio...</span>
+                                          </>
+                                      ) : isStarting ? (
+                                          <>
+                                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'idp-spin 0.8s linear infinite' }}>
+                                                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                                              </svg>
+                                              <span>Starting...</span>
+                                          </>
+                                      ) : (
+                                          <>
+                                              <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
+                                              <span>Play</span>
+                                          </>
+                                      )}
+                                  </button>
+                              );
+                          })()}
                       </div>
                   </div>
               )}
@@ -14449,7 +16469,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
                       q.subType === "FLOWCHART" || q.subType === "FLOWCHART_DRAG"
                   );
-                  const dragOptions = isDragDropGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
+                  const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
+                  const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+                  const hasMapPlanVisual = (value: string) => /<img\b|https?:\/\/[^\s<>"']+/i.test(value || "");
+                  const stripMapPlanVisual = (value: string) => String(value || "")
+                      .replace(/<img\b[^>]*>/gi, "")
+                      .replace(/(?:IMAGE|Url)\s*:\s*https?:\/\/[^\s<>"']+/gi, "")
+                      .replace(/https?:\/\/[^\s<>"']+/gi, "")
+                      .replace(/<p>\s*<\/p>/gi, "")
+                      .trim();
+                  const mapPlanSourceField = hasMapPlanVisual(group.context) ? "groupContext" : (hasMapPlanVisual(group.instruction) ? "instruction" : "");
+                  const isMapPlanMatching = isListeningLayout && isMatchingGroup && !!mapPlanSourceField;
+                  const isListeningColumnMatching =
+                      isListeningLayout
+                      && isMatchingGroup
+                      && !isMapPlanMatching
+                      && !isInfoMatching
+                      && group.questions.every((q: any) => String(q.subType || "").toUpperCase() !== "MAP_LABELLING");
+                  const rawDragOptions = (isDragDropGroup || isListeningColumnMatching)
+                      ? (group.questions.find(q => q.options && q.options.length > 0)?.options || [])
+                      : [];
+                  const dragOptions = isListeningColumnMatching
+                      ? rawDragOptions.map((opt: any) => cleanOptionAnswerText(opt) || String(opt)).filter(Boolean)
+                      : rawDragOptions;
                   // Nhãn 2 cột kéo-thả: rút các dòng nhãn ngắn trong instruction (vd "Attractions", "Areas of the festival").
                   const dragLabels = (() => {
                       // Bóc span highlight/note/temp + thẻ inline TRƯỚC khi tách dòng — nếu không, học sinh highlight
@@ -14467,9 +16510,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
                   let dragCleanInstruction = group.instruction || "";
                   dragLabels.forEach(l => { dragCleanInstruction = dragCleanInstruction.split(`<div>${l}</div>`).join(`<div class="idp-draglabel-hide">${l}</div>`); });
-                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
-                  // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
-                  const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
                   // A heading answer persists as its Roman id, so the tray must be
                   // built from the same rich catalog as the passage slot. Imports
@@ -14521,26 +16561,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   
                   const isHtmlEmpty = (htmlStr: string) => !htmlStr || (!htmlStr.includes('<img') && htmlStr.replace(/<[^>]*>?/gm, '').replace(/ /g, '').trim() === '');
                    let showInstruction = !isHtmlEmpty(group.instruction);
-                   const hasMapPlanVisual = (value: string) => /<img\b|https?:\/\/[^\s<>"']+/i.test(value || "");
-                   const stripMapPlanVisual = (value: string) => String(value || "")
-                       .replace(/<img\b[^>]*>/gi, "")
-                       .replace(/https?:\/\/[^\s<>"']+/gi, "")
-                       .replace(/<p>\s*<\/p>/gi, "")
-                       .trim();
 
                   // CHỈ HIỂN THỊ CONTEXT Ở CỘT CU HỎI NẾU:
                   // 1. Đang ở layout 1 cột (Listening/Part 1) HOẶC
                   // 2. Form 2 cột nhưng câu hỏi có đoạn văn CONTEXT PHỤ (khác với bài đọc chính đã ở cột trái)
-                   const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
-                   const mapPlanSourceField = hasMapPlanVisual(group.context) ? "groupContext" : (hasMapPlanVisual(group.instruction) ? "instruction" : "");
-                   const isMapPlanMatching = isListeningLayout && isMatchingGroup && !!mapPlanSourceField;
                    const mapPlanSource = mapPlanSourceField === "groupContext" ? group.context : group.instruction;
                    const mapPlanImageHtml = (() => {
                        if (!isMapPlanMatching) return "";
-                       const imageTags = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
-                       if (imageTags.length) return sanitizeRichHtml(imageTags.join(""));
+                       const rawImgs = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
+                       if (rawImgs.length) {
+                           const patchedImgs = rawImgs.map(tag => {
+                               if (/referrerpolicy\s*=/i.test(tag)) return tag;
+                               return tag.replace(/<img\b/i, '<img referrerpolicy="no-referrer" loading="lazy"');
+                           });
+                           return sanitizeRichHtml(patchedImgs.join(""));
+                       }
                        const url = String(mapPlanSource || "").match(/https?:\/\/[^\s<>"']+/i)?.[0];
-                       return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" alt="Map or plan" />` : "";
+                       return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" referrerpolicy="no-referrer" loading="lazy" alt="Map or plan" />` : "";
                    })();
                    const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
                    showInstruction = !isHtmlEmpty(displayInstruction);
@@ -14581,8 +16618,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         const flowOptions: string[] = isDragFlow
                             ? (group.questions.find((q: any) => Array.isArray(q.options) && q.options.length)?.options || []).map((option: any) => String(option).trim()).filter(Boolean)
                             : [];
-                        const assigned = group.questions.map((q: any) => String(examAnswers[q.id] || "")).filter(Boolean);
-                        const reuseTags = group.questions.length > flowOptions.length;
+                        const normalizedGroupCorrectAnswers = group.questions
+                            .map((q: any) => normalizeComparableAnswer(resolveOptionAnswerText({ ...q, options: flowOptions }, q.correctAnswer)))
+                            .filter(Boolean);
+                        const hasDuplicateCorrectAnswers =
+                            normalizedGroupCorrectAnswers.length > 0 &&
+                            new Set(normalizedGroupCorrectAnswers).size < normalizedGroupCorrectAnswers.length;
+                        const instructionAllowsReuse =
+                            /\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b/i.test(
+                                `${group.instruction || ""} ${group.context || ""}`
+                            );
+                        const explicitReuse = group.questions.some((q: any) => Boolean(q.allowOptionReuse));
+                        const reuseTags =
+                            explicitReuse
+                            || instructionAllowsReuse
+                            || hasDuplicateCorrectAnswers
+                            || group.questions.length > flowOptions.length;
+                        const assigned = group.questions.map((q: any) => {
+                            const val = examAnswers[q.id];
+                            if (!val) return "";
+                            return resolveOptionAnswerText({ ...q, options: flowOptions }, val) || String(val);
+                        }).filter(Boolean);
                         return (
                         <div className="idp-flowchart-wrap">
                         <div className={isDragFlow ? "idp-flowchart-layout" : ""}>
@@ -14592,23 +16648,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               // DOCX paragraphs arrive wrapped in block tags. A flow node is one
                               // inline sentence, so unwrap paragraph containers before splitting
                               // the original marker into text + gap + text.
-                              const flowHtml = String(q.text || "").replace(/<\/?(?:div|p)\b[^>]*>/gi, "").replace(/&nbsp;/gi, " ");
-                              const flowMarker = flowHtml.match(/\[(\d+)\]/);
+                              const flowHtml = String(q.text || "")
+                                  .replace(/<br\s*\/?>/gi, " ")
+                                  .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
+                                  .replace(/&nbsp;/gi, " ")
+                                  .replace(/\s+/g, " ")
+                                  .trim();
+                              const flowMarker = flowHtml.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/);
                               const rawText = flowHtml;
-                              const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…|…/);
+                              const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…+/);
                               const hasFlowGap = Boolean(blankMatch);
                               const flowNumber = flowMarker?.[1] || String(qGlobalIdx);
-                              const beforeText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml;
-                              const afterText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "";
+                              const beforeText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml).trim();
+                              const afterText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "").trim();
                               const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
                               return (
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
+                                           {beforeText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />}
                                            {hasFlowGap && (isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
-                                              aria-label={`Question ${flowNumber}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
+                                               data-num={flowNumber}
+                                               data-placeholder={flowNumber}
+                                               aria-label={`Question ${flowNumber}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
                                                title={isAnsweredFlow ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
@@ -14634,17 +16697,28 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
                                               style={{ textAlign: 'center', minWidth: 88 }}
                                            />)}
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
+                                           {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
                                       </div>
                                       {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                   </React.Fragment>
                               );
                           })}
                         </div>
-                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
+                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices"
+                            onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                            onDrop={(e: any) => {
+                                e.preventDefault();
+                                const sourceQid = readDraggedSource(e);
+                                if (sourceQid) {
+                                    handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                                    dragSourceQuestionRef.current = '';
+                                    setSelectedDragAnswer('');
+                                }
+                            }}
+                        >
                             <div className="idp-flowchart-bank-items">
                                 {flowOptions.map((option: string, index: number) => {
-                                    const used = !reuseTags && assigned.includes(option);
+                                    const used = !reuseTags && assigned.some((ans: string) => normalizeComparableAnswer(ans) === normalizeComparableAnswer(option));
                                     return <button type="button" key={`${option}-${index}`} draggable={!used}
                                         className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
                                         onClick={() => { if (!used) selectBankAnswer(option); }}
@@ -14793,7 +16867,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            <div className="idp-map-drag-layout" style={{ "--idp-map-bank-w": `${mapBankWidth}px` } as React.CSSProperties}>
                                <div className="idp-map-drag-canvas" aria-label="Interactive map">
                                    {mapImageUrl ? <div className="idp-map-drag-stage">
-                                   <img src={cleanMediaUrl(mapImageUrl)} alt="Map labelling diagram" draggable={false} />
+                                   <img src={cleanMediaUrl(mapImageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" draggable={false} />
                                    {group.questions.map((question: any, index: number) => {
                                        const slot = getSlot(question, index);
                                        const answer = String(examAnswers[question.id] || "");
@@ -14871,7 +16945,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
@@ -14919,6 +16993,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 <div className="idp-external-diagram-col-visual">
                                     <img
                                         src={cleanMediaUrl(externalDiagramImageUrl)}
+                                        referrerPolicy="no-referrer"
+                                        loading="lazy"
                                         alt="Diagram visual"
                                         draggable={false}
                                         style={{
@@ -15048,7 +17124,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ghi đè ngay khi popup Note/Highlight mở (re-render) -> vùng quét tạm biến mất, không highlight được. */}
                               {shouldShowAutoHeader && <StaticHtmlBlock tagName="h3" className="scorableItemHeadline highlightable-content" html={groupTitle} />}
 
-                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML((isDragDropGroup && dragOptions.length > 0) ? dragCleanInstruction : displayInstruction)} />}
+                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML(((isDragDropGroup || isListeningColumnMatching) && dragOptions.length > 0) ? dragCleanInstruction : displayInstruction)} />}
                           </div>
                           
                           {showContext && !isWordBankDrag && (
@@ -15080,7 +17156,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               renderFlowChart()
                           ) : isSentenceEndingDrag && dragOptions.length > 0 ? (
                               renderSentenceEndingDrag()
-                          ) : isMatchingGroup && group.questions.length > 0 ? (
+                          ) : isMatchingGroup && !isListeningColumnMatching && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
                                   <div className="idp-map-plan-layout">
                                       <div className="idp-map-plan-visual">
@@ -15130,35 +17206,84 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           </div>
                                                         );
                                                       })()
-                                                  ) : isDragDropGroup && dragOptions.length > 0 ? (
+                                                  ) : (isDragDropGroup || isListeningColumnMatching) && dragOptions.length > 0 ? (
                                                       (() => {
-                                                          // Tái dùng tag khi số câu > số đáp án (vd 7 câu / 3 theorist) -> kho KHÔNG vơi.
-                                                          const reuseTags = group.questions.length > dragOptions.length;
-                                                          const usedWords = group.questions.map(q => examAnswers[q.id] as string).filter(Boolean);
-                                                          const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
+                                                          const normalizedGroupCorrectAnswers = group.questions
+                                                              .map((q: any) => normalizeComparableAnswer(resolveOptionAnswerText({ ...q, options: dragOptions }, q.correctAnswer)))
+                                                              .filter(Boolean);
+                                                          const hasDuplicateCorrectAnswers =
+                                                              normalizedGroupCorrectAnswers.length > 0 &&
+                                                              new Set(normalizedGroupCorrectAnswers).size < normalizedGroupCorrectAnswers.length;
+                                                          const instructionAllowsReuse =
+                                                              /\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b/i.test(
+                                                                  `${group.instruction || ""} ${group.context || ""}`
+                                                              );
+                                                          const explicitReuse = group.questions.some((q: any) => Boolean(q.allowOptionReuse));
+                                                          const reuseTags =
+                                                              isListeningColumnMatching
+                                                              || explicitReuse
+                                                              || instructionAllowsReuse
+                                                              || hasDuplicateCorrectAnswers
+                                                              || group.questions.length > dragOptions.length;
+                                                          const bankWords = reuseTags
+                                                              ? dragOptions
+                                                              : dragOptions.filter((opt: string) => !group.questions.some(q => {
+                                                                  const val = examAnswers[q.id];
+                                                                  if (!val) return false;
+                                                                  const normVal = normalizeComparableAnswer(resolveMatchingAnswerText({ ...q, options: dragOptions }, val));
+                                                                  return normVal === normalizeComparableAnswer(opt);
+                                                              }));
                                                           return (
                                                           <div className="idp-match2" style={{ "--idp-drag-bank-w": `${dragBankW}px` } as React.CSSProperties}>
                                                               {/* CỘT TRÁI: các mục có ô thả (chuẩn hình 2: Fossil categories / Points made) */}
                                                               <div className="idp-match2-items" style={{gridTemplateColumns: `minmax(0, 1fr) ${groupZoneW}px`}}>
                                                                   {dragItemsLabel && <div className="idp-match2-h">{dragItemsLabel}</div>}
-                                                                  {group.questions.map((q:any) => {
+                                                                  {group.questions.map((q: any) => {
                                                                       const gi = groupQuestionNumbers[group.questions.indexOf(q)] || group.questions.indexOf(q) + 1;
-                                                                      const val = examAnswers[q.id] as string;
+                                                                      const rawVal = examAnswers[q.id] as string;
+                                                                      const val = rawVal ? (resolveOptionAnswerText({ ...q, options: rawDragOptions.length ? rawDragOptions : dragOptions }, rawVal) || rawVal) : "";
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val || 'Drag an answer here'} aria-label={val || `Answer slot ${gi}`}>{val || gi}</span>
+                                                                              <span
+                                                                                  className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                                                  data-qid={q.id}
+                                                                                  data-num={String(gi)}
+                                                                                  data-placeholder={String(gi)}
+                                                                                  draggable={!!val}
+                                                                                  onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                                                  onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                                                                  onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                                                                  onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                                                  onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                                                                  title={val ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                                                                  aria-label={val || `Answer slot ${gi}`}
+                                                                              >
+                                                                                  {val || gi}
+                                                                              </span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
                                                               </div>
                                                               {/* CỘT PHẢI: kho tag (Features / Theorists) */}
-                                                              <div className="idp-match2-bank">
+                                                              <div
+                                                                  className="idp-match2-bank"
+                                                                  onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                                                                  onDrop={(e: any) => {
+                                                                      e.preventDefault();
+                                                                      const sourceQid = readDraggedSource(e);
+                                                                      if (sourceQid) {
+                                                                          handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                                                                          dragSourceQuestionRef.current = '';
+                                                                          setSelectedDragAnswer('');
+                                                                      }
+                                                                  }}
+                                                              >
                                                                   {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
                                                                       <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
                                                                           onClick={() => selectBankAnswer(String(opt))}
-                                                                          onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
+                                                                          onDragStart={(e: any) => beginAnswerDrag(e, opt, opt)}>
                                                                           <span>{opt}</span>
                                                                       </div>
                                                                   ))}
@@ -15598,8 +17723,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          )}
 
                   </div>
-              );
-          }
+              </>
+          );
+      }
 
   if (userRole === "STUDENT" && realExamSession && !activeExam && !pendingExamState && !reviewQuiz) {
     const pkg = realExamPackages.find(item => item.id === realExamSession.packageId);
@@ -15672,7 +17798,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     );
     if (realExamInstructionGate && pkg && realExamInstructionGate.packageId === pkg.id) {
       return (
-        <div className="real-exam-shell">
+        <>
+          {persistentAudioNode}
+          <div className="real-exam-shell">
           <style>{`
             .real-exam-shell{min-height:100dvh;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
             .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
@@ -15727,9 +17855,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           </main>
           {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
         </div>
-      );
-    }
-    return (
+      </>
+    );
+  }
+  return (
+    <>
+      {persistentAudioNode}
       <div className="real-exam-shell">
         <style>{`
           .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
@@ -15832,8 +17963,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         {renderRealExamBottomBar(true)}
         {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
       </div>
-    );
-  }
+    </>
+  );
+}
 
       // ==========================================
       // VIEW: STUDENT DASHBOARD
@@ -16845,6 +18977,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               </div>
             </div>
           </div>
+
+          {/* ERROR DNA & WEAKNESS DIAGNOSTIC ENGINE */}
+          {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
           </>)}
 
           {/* ===== TAB: PHẦN THƯỞNG ===== */}
@@ -18657,6 +20792,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     return { ...previous, type: "Writing", writingTasks, questions: writingQuestions({ ...previous, type: "Writing", writingTasks }) };
                                 });
                                 return <div className="eb-writing-editor" style={{ display: 'grid', gap: 26 }}>
+                                    {/* Writing Sandbox Teacher Toggle */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: EB.sheet, border: `1px solid ${EB.line}`, borderRadius: 10 }}>
+                                        <div>
+                                            <div style={{ fontSize: 13, fontWeight: 700, color: EB.ink, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={EB.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                                <span>{tx("Writing Brainstorm & Outline Sandbox (Luyện tập)", "Writing Brainstorm & Outline Sandbox (Practice Mode)")}</span>
+                                            </div>
+                                            <div style={{ fontSize: 11.5, color: EB.sub, marginTop: 3 }}>
+                                                {tx("Cho phép học sinh mở thanh công cụ hỗ trợ gợi ý góc nhìn, Collocations và kiểm tra dàn bài trong lúc làm bài. Tự động vô hiệu hóa trong phòng thi thật (Real Exam).", "Allows students to open the AI sandbox for perspectives, collocations, and outline check during practice. Automatically disabled during Real Exam mode.")}
+                                            </div>
+                                        </div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 12, color: EB.ink }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(editingQuiz?.allowWritingSandbox)}
+                                                onChange={e => setEditingQuiz((prev: any) => prev ? { ...prev, allowWritingSandbox: e.target.checked } : prev)}
+                                                style={{ width: 16, height: 16, cursor: 'pointer' }}
+                                            />
+                                            <span>{Boolean(editingQuiz?.allowWritingSandbox) ? tx("Đang bật", "Enabled") : tx("Đang tắt", "Disabled")}</span>
+                                        </label>
+                                    </div>
                                     {tasks.map((task: WritingTaskDefinition) => <section key={task.id} style={{ borderTop: `1px solid ${EB.line}`, paddingTop: 22 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16 }}>
                                             <div><div style={ebEyebrow}>Part {task.taskNumber}</div><h3 style={{ margin: '5px 0 0', fontSize: 20, color: EB.ink }}>{task.title}</h3></div>
@@ -18977,6 +21133,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <input value={q.rightTitle || ''} onChange={(e: any) => updateGroup((qItem: any) => ({...qItem, rightTitle: e.target.value}))} placeholder="Benefits" style={{padding:'9px 10px', border:`1px solid ${EB.line}`, borderRadius:8, background:EB.sheet, color:EB.ink, fontWeight:600}} />
                                                         </label>
                                                     </div>
+                                                    <div style={{marginTop: 12}}>
+                                                        <label style={{display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: EB.ink, cursor: 'pointer'}}>
+                                                            <input type="checkbox" checked={Boolean(q.allowOptionReuse)} onChange={(e: any) => updateGroup((qItem: any) => ({ ...qItem, allowOptionReuse: e.target.checked }))} />
+                                                            Allow reusing options (options do not disappear from bank when dragged)
+                                                        </label>
+                                                    </div>
                                                 </div>
                                                 <div style={{display:'grid', gridTemplateColumns:'minmax(0, 1.12fr) minmax(260px, .88fr)', gap:20, alignItems:'start'}}>
                                                     <div style={{background:EB.wash, padding:'18px 20px', borderRadius:EB.radius}}>
@@ -19154,6 +21316,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 <label style={{...ebEyebrow, display:'flex'}}><Ico name="edit" size={13} />Flow-chart nodes</label>
                                                 <div style={{display:'grid', gap:9}}>{grp.questions.map((item:any, offset:number) => <div key={item.id} style={{display:'grid', gridTemplateColumns:'46px minmax(0,1fr) minmax(160px,.42fr)', gap:10, alignItems:'center', padding:'10px', border:`1px solid ${EB.line}`, borderRadius:EB.radiusSm, background:EB.sheet}}><span style={{fontFamily:EB.fMono, color:EB.accent, fontWeight:800}}>#{qIndex + offset + 1}</span><input value={String(item.text || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,text:event.target.value}:entry)} placeholder={`Flow-chart text with [${qIndex + offset + 1}]`} style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /><input value={String(item.correctAnswer || '')} onChange={(event:any)=>updateGroup((entry:any, entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px', border:`1px solid ${EB.line}`, borderRadius:7, background:EB.wash, color:EB.ink}} /></div>)}</div>
                                                 <label style={{...ebEyebrow, display:'flex'}}><Ico name="key" size={13} />Answer bank, one option per line<textarea value={flowOptions.join('\n')} onChange={(event:any)=>updateFlow({options:event.target.value.split(/\r?\n/).map((line:string)=>line.replace(/^\s*[A-Za-z][.)]\s*/, '').trim()).filter(Boolean)})} placeholder={'first material\nsecond process\nfinal result'} style={{display:'block',width:'100%',minHeight:125,boxSizing:'border-box',marginTop:8,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink,resize:'vertical'}} /></label>
+                                                <div style={{marginTop: 4}}>
+                                                    <label style={{display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: EB.ink, cursor: 'pointer'}}>
+                                                        <input type="checkbox" checked={Boolean(q.allowOptionReuse)} onChange={(e: any) => updateGroup((qItem: any) => ({ ...qItem, allowOptionReuse: e.target.checked }))} />
+                                                        Allow reusing options (options do not disappear from bank when dragged)
+                                                    </label>
+                                                </div>
                                             </div>;
                                         })() : (grp.groupType === 'BLANK' || grp.groupType === 'DRAG_DROP' || grp.groupType === 'SHORT_ANSWER') ? (
                                             <div>
@@ -20695,6 +22863,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             pAvg = valid.length ? (valid.reduce((a, c) => a + Number(c.band), 0) / valid.length).toFixed(1) : "—";
             pTrend = pResults.length >= 2 ? (Number(pResults[0].band) >= Number(pResults[1].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="chevronDown" size={14} color={C.err} />) : null;
             pTypes = errorAnalytics.studentTypes[profile.id] || [];
+            if (pResults.length > 0 && (!profile.errorDna || !profile.errorDna.categoryBreakdown)) {
+              void triggerErrorDnaAnalysis(profile);
+            }
           }
 
           const allHours = history.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600;
@@ -21712,27 +23883,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               )}
                             </div>
 
-                            {/* Phân tích dạng bài yếu của học viên */}
-                            {pTypes.length > 0 && (
-                              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '18px 20px' }}>
-                                {secHead(t('ea_title'), 'target')}
-                                <div style={{ display: 'grid', gap: 9 }}>
-                                  {pTypes.map(ct => (
-                                    <div key={ct.label}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                                        <span style={{ color: C.text }}>{formatQuestionTypeLabel(ct.label)}</span>
-                                        <span style={{ fontFamily: 'var(--mono)', color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>
-                                          {ct.rate}% <span style={{ color: C.sub, fontWeight: 400 }}>({t('ea_questions_n', { n: ct.total })})</span>
-                                        </span>
-                                      </div>
-                                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
-                                        <div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err, borderRadius: 3 }} />
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                            {/* Chẩn đoán DNA Lỗi sai & Lỗ hổng tư duy của học viên */}
+                            {renderErrorDnaSection(profile, dnaInFlightRef.current.has(profile.id))}
 
                             {/* Ghi chú riêng của giáo viên */}
                             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '16px 20px' }}>
@@ -22422,6 +24574,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         </div>,
         document.body
       )}
+      {persistentAudioNode}
     </div>
   );
 }

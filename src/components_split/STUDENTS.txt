@@ -26,6 +26,9 @@
             pAvg = valid.length ? (valid.reduce((a, c) => a + Number(c.band), 0) / valid.length).toFixed(1) : "—";
             pTrend = pResults.length >= 2 ? (Number(pResults[0].band) >= Number(pResults[1].band) ? <Ico name="trending" size={14} color={C.succ} /> : <Ico name="chevronDown" size={14} color={C.err} />) : null;
             pTypes = errorAnalytics.studentTypes[profile.id] || [];
+            if (pResults.length > 0 && (!profile.errorDna || !profile.errorDna.categoryBreakdown)) {
+              void triggerErrorDnaAnalysis(profile);
+            }
           }
 
           const allHours = history.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600;
@@ -1043,27 +1046,8 @@
                               )}
                             </div>
 
-                            {/* Phân tích dạng bài yếu của học viên */}
-                            {pTypes.length > 0 && (
-                              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '18px 20px' }}>
-                                {secHead(t('ea_title'), 'target')}
-                                <div style={{ display: 'grid', gap: 9 }}>
-                                  {pTypes.map(ct => (
-                                    <div key={ct.label}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                                        <span style={{ color: C.text }}>{formatQuestionTypeLabel(ct.label)}</span>
-                                        <span style={{ fontFamily: 'var(--mono)', color: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err }}>
-                                          {ct.rate}% <span style={{ color: C.sub, fontWeight: 400 }}>({t('ea_questions_n', { n: ct.total })})</span>
-                                        </span>
-                                      </div>
-                                      <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
-                                        <div style={{ height: '100%', width: `${ct.rate}%`, background: ct.rate >= 70 ? C.succ : ct.rate >= 50 ? C.warn : C.err, borderRadius: 3 }} />
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                            {/* Chẩn đoán DNA Lỗi sai & Lỗ hổng tư duy của học viên */}
+                            {renderErrorDnaSection(profile, dnaInFlightRef.current.has(profile.id))}
 
                             {/* Ghi chú riêng của giáo viên */}
                             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '16px 20px' }}>

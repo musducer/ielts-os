@@ -10,7 +10,8 @@ class JobTransitionError(ValueError):
 
 
 LEGAL_TRANSITIONS: Dict[str, Set[str]] = {
-    "QUEUED": {"GENERATING", "FAILED", "CANCELLED"},
+    # Source/layout/media preflight can require review before the first AI call.
+    "QUEUED": {"GENERATING", "MANUAL_REVIEW", "FAILED", "CANCELLED"},
     "GENERATING": {"VALIDATING", "MANUAL_REVIEW", "FAILED"},
     "VALIDATING": {"REPAIRING", "READY_FOR_REVIEW", "MANUAL_REVIEW", "FAILED"},
     "REPAIRING": {"VALIDATING", "MANUAL_REVIEW", "FAILED"},

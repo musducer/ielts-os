@@ -8,7 +8,7 @@ service firebase.storage {
         && request.auth.token.email.matches('^[^@]+@ielts\\.os$');
     }
 
-    match /exam-audio/{quizId}/{fileName} {
+    match /exam-audio/{allPaths=**} {
       allow get: if true;
       allow list: if false;
       allow create, update: if isTeacher()

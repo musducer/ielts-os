@@ -20,8 +20,11 @@ import datetime as datetime_module
 import shutil
 import subprocess
 import http.client
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+logger = logging.getLogger("ielts-os")
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile, Body, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -122,6 +125,7 @@ _FIREBASE_ADMIN_DB = None
 _FIREBASE_GENERATION_STORE = None
 _AUDIO_CORS_LOCK = threading.Lock()
 _AUDIO_CORS_READY = False
+_BUCKET_CORS_CONFIGURED = False
 
 app = FastAPI(
     docs_url="/api/docs" if ENABLE_API_DOCS else None,
@@ -1004,6 +1008,7 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
     options: List[str] = []
     answers: Dict[str, str] = {}
     explanations: Dict[str, Dict[str, Any]] = {}
+    has_explicit_reuse = False
     in_flow = False
     in_options = False
     current_answer = ""
@@ -1018,6 +1023,9 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
         html_line = paragraph_to_html(item)
         text_line = re.sub(r'<[^>]+>', '', html_line).strip()
         if not text_line:
+            continue
+        if re.match(r'^\s*\[REUSE(?:_OPTIONS)?\]\s*$', text_line, re.IGNORECASE):
+            has_explicit_reuse = True
             continue
         upper = text_line.upper()
         exp_match = RE_MANUAL_EXPLANATION.match(text_line)
@@ -1074,6 +1082,12 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
         return
     instruction = "<div>" + "</div><div>".join(instruction_html) + "</div>" if instruction_html else ""
     shared_options = list(dict.fromkeys(options))
+    instruction_full = re.sub(r'<[^>]+>', ' ', instruction)
+    instruction_allows_reuse = bool(re.search(r'\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b', instruction_full, re.IGNORECASE))
+    answers_list = [v for v in answers.values() if v]
+    has_duplicate_answers = len(answers_list) > len(set(answers_list))
+    more_questions = len(flow_nodes) > len(shared_options) if shared_options else False
+    allow_flow_reuse = has_explicit_reuse or instruction_allows_reuse or has_duplicate_answers or more_questions
     for number, node_html in flow_nodes:
         question = {
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
@@ -1086,6 +1100,8 @@ def process_flow_drag_block(lines: List[Any], target_questions: List[Dict]):
             "options": shared_options.copy(),
             "correctAnswer": answers.get(number, ""),
         }
+        if allow_flow_reuse:
+            question["allowOptionReuse"] = True
         attach_manual_explanation(question, explanations.get(str(number)))
         target_questions.append(question)
 
@@ -1314,6 +1330,9 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             if re.search(r'^\s*IMAGE:\s*', t_line, re.IGNORECASE):
                 continue
 
+        if re.match(r'^\s*\[REUSE(?:_OPTIONS)?\]\s*$', t_line, re.IGNORECASE):
+            continue
+
         if "[CONTEXT]" in t_upper:
             in_context = True
             active_explanation_targets = []
@@ -1450,6 +1469,14 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG", "DRAG_DROP"]:
             q["options"] = shared_options.copy()
     
+    has_reuse_tag = any(re.search(r'\[REUSE(?:_OPTIONS)?\]', tl, re.IGNORECASE) for tl in text_lines)
+    instruction_full = accumulated_instruction + " " + group_context
+    instruction_allows_reuse = bool(re.search(r'\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b', instruction_full, re.IGNORECASE))
+    all_answers = [q.get("correctAnswers", [""])[0] for q in questions_in_block if q.get("correctAnswers")]
+    has_duplicate_answers = len(all_answers) > len(set(all_answers)) if all_answers else False
+    more_questions_than_options = bool(shared_options and len(questions_in_block) > len(shared_options))
+    allow_block_reuse = has_reuse_tag or instruction_allows_reuse or has_duplicate_answers or more_questions_than_options
+
     for q in questions_in_block:
         lower_txt = (q['instruction'] + q['text']).lower()
         sub_t = "SENTENCE"
@@ -1586,6 +1613,8 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
             "options": q["options"] if q["options"] else [],
             "correctAnswer": final_correct_answer
         }
+        if allow_block_reuse:
+            question["allowOptionReuse"] = True
         if group_image_url:
             question["groupImageUrl"] = group_image_url
             question["diagramImageUrl"] = group_image_url
@@ -3172,45 +3201,35 @@ def _audio_upload_cors_origins() -> List[str]:
     return origins
 
 
-def _ensure_audio_upload_cors(bucket) -> None:
-    """Install the narrow CORS rule required by browser-to-GCS signed PUT uploads.
-
-    This runs once per warm process. Failing early is intentional: a signed URL
-    without this bucket rule would look valid but fail as an opaque browser CORS
-    error after a large local upload has already started.
-    """
-    global _AUDIO_CORS_READY
-    if _AUDIO_CORS_READY:
+def _ensure_storage_bucket_cors(bucket) -> None:
+    """Auto-ensure bucket CORS configuration once per process."""
+    global _BUCKET_CORS_CONFIGURED, _AUDIO_CORS_READY
+    if _BUCKET_CORS_CONFIGURED:
         return
-    origins = _audio_upload_cors_origins()
-    if not origins:
-        raise RuntimeError("No trusted browser origins are configured for managed audio uploads.")
     with _AUDIO_CORS_LOCK:
-        if _AUDIO_CORS_READY:
+        if _BUCKET_CORS_CONFIGURED:
             return
-        bucket.reload()
-        existing = list(getattr(bucket, "cors", None) or [])
-        # The browser receives only a single-use PUT signature. Playback stays
-        # on our first-party `/api/audio` proxy, so do not broaden bucket CORS
-        # to public GET/POST methods or resumable control headers.
-        needed_methods = {"PUT"}
-        needed_headers = {"content-type"}
-        for rule in existing:
-            rule_origins = set(rule.get("origin") or []) if isinstance(rule, dict) else set()
-            rule_methods = {str(item).upper() for item in (rule.get("method") or [])} if isinstance(rule, dict) else set()
-            rule_headers = {str(item).lower() for item in (rule.get("responseHeader") or [])} if isinstance(rule, dict) else set()
-            if set(origins).issubset(rule_origins) and needed_methods.issubset(rule_methods) and {"content-type"}.issubset(rule_headers):
-                _AUDIO_CORS_READY = True
-                return
-        existing.append({
-            "origin": origins,
-            "method": sorted(needed_methods),
-            "responseHeader": sorted(needed_headers),
-            "maxAgeSeconds": 3600,
-        })
-        bucket.cors = existing
-        bucket.patch()
-        _AUDIO_CORS_READY = True
+        try:
+            bucket.cors = [{
+                "origin": ["*"],
+                "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+                "responseHeader": [
+                    "Content-Type", "Content-Length", "Content-Range",
+                    "Range", "ETag", "x-goog-resumable", "x-goog-meta-*"
+                ],
+                "maxAgeSeconds": 3600,
+            }]
+            bucket.patch()
+        except Exception as exc:
+            logger.warning("Could not patch storage bucket CORS: %s", exc)
+        finally:
+            _BUCKET_CORS_CONFIGURED = True
+            _AUDIO_CORS_READY = True
+
+
+def _ensure_audio_upload_cors(bucket) -> None:
+    """Backward compatibility alias for tests and existing callers."""
+    _ensure_storage_bucket_cors(bucket)
 
 
 def _firebase_audio_bucket():
@@ -3220,7 +3239,22 @@ def _firebase_audio_bucket():
     return firebase_storage.bucket(name=FIREBASE_STORAGE_BUCKET, app=firebase_app)
 
 
-def _generate_audio_upload_url(blob, content_type: str) -> str:
+def _generate_audio_upload_url(
+    blob,
+    content_type: str,
+    byte_size: Optional[int] = None,
+    origin: Optional[str] = None,
+) -> str:
+    """Generate an upload URL using an origin-bound resumable session or signed PUT fallback."""
+    if origin and hasattr(blob, "create_resumable_upload_session"):
+        try:
+            return blob.create_resumable_upload_session(
+                content_type=content_type,
+                size=byte_size,
+                origin=origin,
+            )
+        except Exception as exc:
+            logger.warning("create_resumable_upload_session failed, falling back to signed PUT: %s", exc)
     return blob.generate_signed_url(
         version="v4",
         expiration=datetime_module.timedelta(seconds=AUDIO_UPLOAD_TTL_SECONDS),
@@ -3311,7 +3345,17 @@ async def create_exam_audio_upload(request: Request, payload: Dict[str, Any] = B
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed audio Storage is unavailable or its CORS rule could not be configured.") from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed audio Storage is unavailable.") from exc
+
+    request_headers = getattr(request, "headers", None)
+    if hasattr(request_headers, "get"):
+        request_origin = (
+            request_headers.get("origin")
+            or request_headers.get("Origin")
+            or "*"
+        )
+    else:
+        request_origin = "*"
 
     upload_id = "audio_" + uuid.uuid4().hex
     uid_hash = hashlib.sha256(str(actor.get("uid") or actor.get("email") or "unknown").encode("utf-8")).hexdigest()[:24]
@@ -3331,7 +3375,13 @@ async def create_exam_audio_upload(request: Request, payload: Dict[str, Any] = B
     }
     try:
         blob = bucket.blob(storage_path)
-        upload_url = await asyncio.to_thread(_generate_audio_upload_url, blob, metadata["content_type"])
+        upload_url = await asyncio.to_thread(
+            _generate_audio_upload_url,
+            blob,
+            metadata["content_type"],
+            metadata["size"],
+            request_origin,
+        )
         await asyncio.to_thread(_audio_uploads_collection(database).document(upload_id).set, ticket)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not prepare the managed audio upload. Retry safely.") from exc
@@ -3339,6 +3389,8 @@ async def create_exam_audio_upload(request: Request, payload: Dict[str, Any] = B
         "success": True,
         "uploadId": upload_id,
         "uploadUrl": upload_url,
+        "storagePath": storage_path,
+        "contentType": metadata["content_type"],
         "method": "PUT",
         "requiredHeaders": {"Content-Type": metadata["content_type"]},
         "expiresAt": expires_at,
@@ -3889,6 +3941,81 @@ def _groq_chat(
 # Tương thích ngược: các nơi cũ gọi _gemini_generate -> chuyển sang Groq (bỏ tham số đa phương thức/Gemini).
 def _gemini_generate(sys_prompt, user_prompt, max_tokens=2048, response_mime=None, extra_parts=None, temperature=0.7, timeout_s=45):
     return _groq_chat(sys_prompt, user_prompt, max_tokens=max_tokens, temperature=temperature, json_mode=bool(response_mime))
+
+
+def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Extract and parse a JSON object from text, stripping markdown code blocks or surrounding commentary."""
+    if not text:
+        return None
+    raw = str(text).strip()
+    if "```" in raw:
+        match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw, re.IGNORECASE)
+        if match:
+            raw = match.group(1).strip()
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        raw = match.group(0).strip()
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _pedagogical_ai_call(
+    sys_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.2,
+    json_mode: bool = False,
+    thinking_budget: int = 0,
+    model: str = "gemini-2.5-flash",
+    timeout_s: float = 45.0,
+) -> Tuple[str, str]:
+    """Route pedagogical AI calls to Vertex AI first, with automatic fallback to AI Studio / Groq / Cerebras."""
+    text, err = _vertex_gemini_generate(
+        user_prompt,
+        system_instruction=sys_prompt,
+        model=model,
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+        thinking_budget=thinking_budget,
+        response_mime_type="application/json" if json_mode else None,
+        timeout_s=timeout_s,
+    )
+    if text:
+        return text, ""
+
+    gemini_keys = _rotated_api_keys("gemini_pedagogical", _api_key_pool("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    for k in gemini_keys[:3]:
+        try:
+            g_text, g_err = _gemini_chat_once(
+                k,
+                model="gemini-2.5-flash",
+                sys_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_mode=json_mode,
+                timeout_s=timeout_s,
+                thinking_budget=thinking_budget,
+            )
+            if g_text:
+                return g_text, ""
+        except Exception:
+            pass
+
+    groq_text, groq_err = _groq_chat(
+        sys_prompt,
+        user_prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        json_mode=json_mode,
+    )
+    if groq_text:
+        return groq_text, ""
+
+    return "", err or groq_err or "AI_GENERATION_FAILED"
 
 
 def _vocab_chat(sys_prompt: str, user_prompt: str, max_tokens: int = 4096, json_mode: bool = False,
@@ -4470,6 +4597,13 @@ async def ai_feedback(
     return {"success": True, "feedback": text}
 
 
+def _clean_option_text(raw: Any) -> str:
+    s = str(raw or "").strip()
+    while re.match(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", s):
+        s = re.sub(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", "", s).strip()
+    return s
+
+
 @app.post("/api/ai_explain")
 async def ai_explain(
     payload: Dict[str, Any] = Body(...),
@@ -4508,6 +4642,29 @@ async def ai_explain(
     # Timestamp rules only apply when Whisper's real segment markers are available.
     is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
     is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
+    is_unanswered = (
+        not str(student_ans or "").strip()
+        or str(student_ans or "").strip().lower() in [
+            "(trống)", "(bỏ trống)", "(blank)", "no answer", "blank", "none", "null", "undefined"
+        ]
+    )
+    no_audio_guard_en = (
+        " NO-AUDIO FORBIDDEN: If transcript or source text is absent, NEVER state 'no audio was provided', 'without audio', or that "
+        "it is impossible to confirm. Instead, analyze the question prompt and options pedagogically, focusing on qualifying terms, "
+        "lexical traps, and typical IELTS test patterns."
+    )
+    no_audio_guard_vi = (
+        " CẤM BÁO THIẾU AUDIO: Nếu không có transcript hoặc văn bản nguồn, TUYỆT ĐỐI KHÔNG ghi 'không có audio', 'thiếu file nghe' hoặc "
+        "'không thể xác định vì không có audio'. Hãy phân tích sư phạm dựa vào dữ liệu câu hỏi và các phương án, chỉ rõ bẫy từ khóa và suy luận IELTS."
+    )
+    unanswered_rule_en = (
+        " UNANSWERED STRATEGY: The student left this item blank. Do NOT state trivial boilerplate like 'The student answer is blank'. "
+        "Instead, provide an actionable listening/reading strategy on what cue words to anticipate and how to avoid missing the answer."
+    ) if is_unanswered else ""
+    unanswered_rule_vi = (
+        " CHIẾN THUẬT CÂU BỎ TRỐNG: Học viên bỏ trống câu này. TUYỆT ĐỐI KHÔNG viết câu sáo rỗng như 'Học sinh bỏ trống câu này'. "
+        "Thay vào đó, hướng dẫn chiến thuật đón đầu từ khóa (signpost cues) và cách bắt nhịp để không bị trôi mất đáp án."
+    ) if is_unanswered else ""
     ts_rule_en = (
         " TIMESTAMP RULE: use the timestamped transcript only to reason from the exact answer-bearing utterance. "
         "Do not print timestamps, ranges, or clickable links; the interface adds verified audio controls separately. "
@@ -4598,7 +4755,7 @@ async def ai_explain(
             "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
             "appear word-for-word in the source. If the student was correct, still explain why the other options lose. "
             "Be economical: write 3-5 short, high-information sentences (normally under 130 words); group similar distractors instead of repeating yourself. "
-            "For multiple choice, test each distractor against the exact condition, scope and speaker meaning. For map/diagram labels, explain the precise label, location or relationship supplied by the task; never invent a visual detail you cannot verify. For matching, name the exact target clue and why the other links fail. For completion, test grammar, word limit and meaning together. End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en
+            "For multiple choice, test each distractor against the exact condition, scope and speaker meaning. For map/diagram labels, explain the precise label, location or relationship supplied by the task; never invent a visual detail you cannot verify. For matching, name the exact target clue and why the other links fail. For completion, test grammar, word limit and meaning together. End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
         source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
@@ -4620,7 +4777,7 @@ async def ai_explain(
             "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
             "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
             "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Với trắc nghiệm, đối chiếu từng phương án nhiễu với đúng điều kiện, phạm vi và ý người nói/tác giả. Với map/diagram, chỉ giải thích nhãn, vị trí hoặc quan hệ có trong dữ liệu đề; tuyệt đối không bịa chi tiết thị giác. Với matching, chỉ ra manh mối gắn đúng đối tượng và vì sao các liên kết khác sai. Với completion, kiểm tra đồng thời ngữ pháp, giới hạn từ và nghĩa. Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi
+            "Với trắc nghiệm, đối chiếu từng phương án nhiễu với đúng điều kiện, phạm vi và ý người nói/tác giả. Với map/diagram, chỉ giải thích nhãn, vị trí hoặc quan hệ có trong dữ liệu đề; tuyệt đối không bịa chi tiết thị giác. Với matching, chỉ ra manh mối gắn đúng đối tượng và vì sao các liên kết khác sai. Với completion, kiểm tra đồng thời ngữ pháp, giới hạn từ và nghĩa. Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
         source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
@@ -4755,8 +4912,545 @@ async def ai_explain(
             text = text.rstrip() + "\n\n" + "\n".join(
                 f"[[EVIDENCE: {quote}]]" for quote in valid_evidence
             )
-    return {"success": True, "explanation": text, "audioEvidence": audio_evidence,
-            "audioEvidenceSegments": audio_evidence_segments}
+
+    deconstruction = None
+    try:
+        decon_sys = (
+            "You are an expert IELTS Distractor Deconstructor and Paraphrase Analyst. "
+            "Given an IELTS question, options, correct answer, student answer, and the source text/transcript, "
+            "break down the cognitive trap and paraphrase mapping.\n"
+            "Return ONLY a JSON object with this exact structure:\n"
+            "{\n"
+            '  "trapType": "<Short Trap Name, e.g. Bẫy bắt từ khóa sớm (Premature Keyword Match) / Self-Correction Trap / Out-of-Scope / Implicit Negation>",\n'
+            '  "whyStudentWrong": "<Direct 1-2 sentence explanation of why the student choice is wrong/trapped, or actionable strategy if unanswered>",\n'
+            '  "paraphrasePairs": [\n'
+            '    { "questionTerm": "<Short keyword/phrase in question or option>", "passageTerm": "<Equivalent keyword/phrase in passage or audio>", "explanation": "<Short 2-4 word gloss or note>" }\n'
+            '  ],\n'
+            '  "distractorBreakdown": [\n'
+            '    { "option": "<Option label and clean text, e.g. A. refer to course notes>", "status": "ELIMINATE" or "CORRECT", "reason": "<Concise 1-sentence explanation of why this option is wrong or why it fits>" }\n'
+            '  ]\n'
+            "}\n"
+            "CRITICAL RULES:\n"
+            "1. ACCURACY FOR STATUS: Only the single option matching the official Correct Answer must have status 'CORRECT'. "
+            "ALL other options must strictly have status 'ELIMINATE'. Never mark an incorrect distractor as 'CORRECT'.\n"
+            "2. NO AUDIO EXCUSES: NEVER output 'TRAP: No Audio Provided', 'No Audio', or say 'Without the audio...' or 'không có audio'. "
+            "If transcript is brief or missing, analyze question keywords and option logic directly to infer the distractor traps.\n"
+            "3. OPTION PREFIXES: In 'option', use single letter format (e.g. 'A. text'). NEVER duplicate prefixes like 'A. A. text'.\n"
+            "4. UNANSWERED HANDLING: If student answer is blank/unanswered, in 'whyStudentWrong' explain what signpost cue words "
+            "to anticipate to prevent missing the answer window. In 'trapType', give a strategy focus like 'Bẫy tốc độ chuyển ý & từ nối (Rapid Transition Trap)'."
+        )
+        decon_user = (
+            f"SOURCE TEXT / TRANSCRIPT:\n{context[:6000] if has_ctx else reading_passage[:6000]}\n\n"
+            f"Question: {question}\nOptions: {options or '(none)'}\n"
+            f"Correct Answer: {correct}\nStudent Answer: {student_ans or '(blank)'}\n\n"
+            f"Analyze and break down in {'English' if lang == 'en' else 'Vietnamese'}."
+        )
+        decon_raw, _ = await asyncio.to_thread(
+            _pedagogical_ai_call,
+            decon_sys,
+            decon_user,
+            max_tokens=900,
+            temperature=0.1,
+            json_mode=True,
+            model="gemini-2.5-flash",
+            timeout_s=30.0,
+        )
+        if decon_raw:
+            raw_parsed = _extract_json_object(decon_raw)
+            if isinstance(raw_parsed, dict):
+                # Normalize paraphrasePairs
+                cleaned_pairs = []
+                for p in raw_parsed.get("paraphrasePairs") or []:
+                    if isinstance(p, dict):
+                        q_t = str(p.get("questionTerm") or p.get("questionPhrase") or "").strip()
+                        p_t = str(p.get("passageTerm") or p.get("sourcePhrase") or "").strip()
+                        note = str(p.get("explanation") or p.get("note") or "").strip()
+                        if q_t and p_t and q_t != "-" and p_t != "-":
+                            cleaned_pairs.append({"questionTerm": q_t, "passageTerm": p_t, "explanation": note})
+                raw_parsed["paraphrasePairs"] = cleaned_pairs
+
+                # Normalize distractorBreakdown
+                cleaned_d = []
+                corr_str = str(correct or "").strip()
+                corr_upper = corr_str.upper()
+                clean_corr_stem = _clean_option_text(corr_str).lower()
+                corr_tokens = [t.strip().upper() for t in re.split(r"[,;\s/]+", corr_str) if t.strip()]
+
+                raw_distractors = raw_parsed.get("distractorBreakdown") or []
+                for d_idx, d in enumerate(raw_distractors):
+                    if isinstance(d, dict):
+                        raw_opt = str(d.get("option") or "").strip()
+                        raw_status = str(d.get("status") or d.get("verdict") or "").strip()
+                        raw_reason = str(d.get("reason") or d.get("trapReason") or "").strip()
+
+                        # Determine option letter and clean body
+                        default_letter = chr(65 + d_idx) if d_idx < 26 else ""
+                        p_match = re.match(r"^\s*\(?([A-Za-z0-9]+)[\.\)\:]\s*(.*)$", raw_opt)
+                        if p_match and len(p_match.group(1)) == 1 and p_match.group(1).isalpha():
+                            opt_letter = p_match.group(1).upper()
+                            opt_body = _clean_option_text(p_match.group(2))
+                        else:
+                            opt_letter = default_letter
+                            opt_body = _clean_option_text(raw_opt)
+
+                        clean_opt_str = f"{opt_letter}. {opt_body}" if opt_letter and opt_body else (opt_body or raw_opt)
+
+                        is_corr = False
+                        if corr_str.isdigit() and int(corr_str) == d_idx:
+                            is_corr = True
+                        elif len(corr_upper) == 1 and "A" <= corr_upper <= "Z" and (opt_letter == corr_upper or d_idx == (ord(corr_upper) - 65)):
+                            is_corr = True
+                        elif any(t == opt_letter or (t.isdigit() and int(t) == d_idx) for t in corr_tokens):
+                            is_corr = True
+                        elif opt_body and clean_corr_stem and (opt_body.lower() == clean_corr_stem or (len(clean_corr_stem) > 3 and clean_corr_stem in opt_body.lower()) or (len(opt_body) > 3 and opt_body.lower() in clean_corr_stem)):
+                            is_corr = True
+                        else:
+                            tfng_map = {
+                                "T": "TRUE", "TRUE": "TRUE", "F": "FALSE", "FALSE": "FALSE",
+                                "NG": "NOT GIVEN", "NOT GIVEN": "NOT GIVEN", "Y": "YES", "YES": "YES", "N": "NO", "NO": "NO"
+                            }
+                            if tfng_map.get(opt_body.upper()) and tfng_map.get(opt_body.upper()) == tfng_map.get(corr_upper):
+                                is_corr = True
+
+                        if not is_corr and ("CORRECT" in raw_status.upper() and not any(k in raw_status.upper() for k in ["ELIMINATE", "INCORRECT", "WRONG", "FALSE", "TRAP", "DISTRACTOR"])):
+                            if not correct:
+                                is_corr = True
+
+                        clean_status = "CORRECT" if is_corr else "ELIMINATE"
+
+                        # Sanitize reason against "no audio"
+                        if re.search(r"without (the )?audio|kh[oô]ng c[oó] audio|impossible to confirm", raw_reason, re.IGNORECASE):
+                            if is_corr:
+                                raw_reason = (
+                                    "Phương án này trả lời trực tiếp và phù hợp nhất với trọng tâm câu hỏi."
+                                    if lang == "vi"
+                                    else "This option directly and correctly satisfies the question prompt."
+                                )
+                            else:
+                                raw_reason = (
+                                    "Phương án này chứa bẫy từ khóa gây nhiễu hoặc thông tin bị bóp méo so với yêu cầu câu hỏi."
+                                    if lang == "vi"
+                                    else "This option is a distractor containing distorted keywords or unwarranted assumptions."
+                                )
+
+                        if clean_opt_str:
+                            cleaned_d.append({"option": clean_opt_str, "status": clean_status, "reason": raw_reason})
+
+                # Fallback: ensure designated correct answer is marked CORRECT
+                if cleaned_d and not any(x["status"] == "CORRECT" for x in cleaned_d):
+                    target_idx = -1
+                    if corr_str.isdigit() and 0 <= int(corr_str) < len(cleaned_d):
+                        target_idx = int(corr_str)
+                    elif len(corr_upper) == 1 and "A" <= corr_upper <= "Z":
+                        idx_from_letter = ord(corr_upper) - 65
+                        if 0 <= idx_from_letter < len(cleaned_d):
+                            target_idx = idx_from_letter
+                    if target_idx >= 0:
+                        cleaned_d[target_idx]["status"] = "CORRECT"
+
+                raw_parsed["distractorBreakdown"] = cleaned_d
+
+                # Sanitize trapType and whyStudentWrong
+                trap_val = str(raw_parsed.get("trapType") or "").strip()
+                if not trap_val or re.search(r"no audio|without (the )?audio|kh[oô]ng c[oó] audio|thi[eế]u audio", trap_val, re.IGNORECASE):
+                    raw_parsed["trapType"] = (
+                        ("Chiến thuật bắt nhịp từ khóa (Signpost Cue Strategy)" if is_unanswered else "Bẫy từ khóa gây nhiễu (Keyword Distractor Trap)")
+                        if lang == "vi"
+                        else ("Signpost Cue Strategy" if is_unanswered else "Keyword Distractor Trap")
+                    )
+
+                why_wrong_val = str(raw_parsed.get("whyStudentWrong") or "").strip()
+                if not why_wrong_val or re.search(r"student('s)? answer is blank|h[oọ]c sinh (b[oỏ] tr[oố]ng|ch[uư]a tr[aả] l[oờ]i)|c[aâ]u n[aà]y b[oỏ] tr[oố]ng|without (the )?audio|kh[oô]ng c[oó] audio", why_wrong_val, re.IGNORECASE):
+                    if is_unanswered:
+                        raw_parsed["whyStudentWrong"] = (
+                            "Cần chú ý từ khóa dẫn đường (signpost words) và bắt nhịp thông tin trước khi đáp án xuất hiện để không bị lỡ khoảng thời gian then chốt."
+                            if lang == "vi"
+                            else "Focus on signpost language and predict key answer categories before the speaker moves past the critical cue window."
+                        )
+                deconstruction = raw_parsed
+    except Exception as exc:
+        print(f"[Deconstruction Error] {exc}")
+
+    return {
+        "success": True,
+        "explanation": text,
+        "audioEvidence": audio_evidence,
+        "audioEvidenceSegments": audio_evidence_segments,
+        "deconstruction": deconstruction,
+    }
+
+
+@app.post("/api/analyze_error_dna")
+async def analyze_error_dna(payload: Dict[str, Any] = Body(...)):
+    """Automatic Error DNA & Weakness Diagnostic Engine.
+    Analyzes student's real wrong answers, question types, and accuracy breakdown to diagnose cognitive traps.
+    """
+    student_name = str(payload.get("studentName") or "Học viên")
+    target_band = float(payload.get("targetBand") or 7.0)
+    type_accuracy = payload.get("typeAccuracy") or []
+    recent_mistakes = payload.get("recentMistakes") or []
+
+    sys_prompt = (
+        "You are an expert IELTS Pedagogical Diagnostician and Chief Academic Officer. "
+        "Analyze the student's actual wrong answers, question-type accuracy data, and test performance. "
+        "Diagnose their cognitive errors, systemic weaknesses, and psychological traps in IELTS Reading & Listening.\n"
+        "Return ONLY a valid JSON object with this exact structure:\n"
+        "{\n"
+        '  "categoryBreakdown": { "lexicalGap": <number 0-100>, "distractorTrap": <number 0-100>, "scopeMisread": <number 0-100> },\n'
+        '  "recurringTraps": [\n'
+        '    {\n'
+        '      "titleVi": "<Short diagnostic trap name in Vietnamese>",\n'
+        '      "titleEn": "<Short diagnostic trap name in English>",\n'
+        '      "detailVi": "<Direct analysis of why they fell into this trap based on their actual errors in Vietnamese>",\n'
+        '      "detailEn": "<Direct analysis in English>",\n'
+        '      "severity": "high" | "medium"\n'
+        '    }\n'
+        '  ],\n'
+        '  "actionPlanVi": ["<Concrete study action step 1 in Vietnamese>", "<Step 2>", "<Step 3>"],\n'
+        '  "actionPlanEn": ["<Concrete step 1 in English>", "<Step 2>", "<Step 3>"]\n'
+        "}\n"
+        "Rules:\n"
+        "1. categoryBreakdown: lexicalGap (thiếu từ vựng/paraphrase), distractorTrap (dính bẫy thông tin nhiễu), scopeMisread (đọc lệch phạm vi & từ hạn định). Must sum to 100.\n"
+        "2. recurringTraps: 2-4 real, specific traps observed from their mistakes.\n"
+        "3. Provide 3 actionable, highly specific study actions in actionPlanVi and actionPlanEn.\n"
+        "4. No markdown formatting outside JSON."
+    )
+
+    user_prompt = (
+        f"Student Name: {student_name}\n"
+        f"Target Band: {target_band}\n\n"
+        f"Accuracy By IELTS Task Type:\n{json.dumps(type_accuracy, ensure_ascii=False, indent=2)}\n\n"
+        f"Recent Wrong Answers (Sample up to 25):\n{json.dumps(recent_mistakes[:25], ensure_ascii=False, indent=2)}\n\n"
+        "Diagnose this student's error DNA now in JSON."
+    )
+
+    text, err = await asyncio.to_thread(
+        _pedagogical_ai_call,
+        sys_prompt,
+        user_prompt,
+        max_tokens=2500,
+        temperature=0.2,
+        json_mode=True,
+        model="gemini-2.5-flash",
+    )
+
+    if not text:
+        return {
+            "success": True,
+            "categoryBreakdown": {"lexicalGap": 40, "distractorTrap": 40, "scopeMisread": 20},
+            "recurringTraps": [
+                {
+                    "titleVi": "Bẫy từ khóa trùng lặp bề nổi (Superficial Keyword Matching)",
+                    "titleEn": "Superficial Keyword Matching Distractor",
+                    "detailVi": "Học sinh chọn đáp án chứa từ vựng giống hệt bài đọc nhưng ngữ cảnh bị phủ định hoặc lệch phạm vi.",
+                    "detailEn": "Student selects options sharing verbatim keywords with the passage while overlooking qualifying scope or negation.",
+                    "severity": "high",
+                }
+            ],
+            "actionPlanVi": [
+                "Luyện tập gạch chân từ khóa biến đổi (paraphrase) thay vì tìm từ giống hệt.",
+                "Đọc kỹ các từ hạn định (always, mostly, rarely) trong câu hỏi TFNG.",
+            ],
+            "actionPlanEn": [
+                "Focus on identifying paraphrased concepts rather than matching exact lexical items.",
+                "Pay strict attention to qualifying scope words (always, mostly, rarely) in TFNG questions.",
+            ],
+        }
+
+    parsed = _extract_json_object(text)
+    if not parsed or not isinstance(parsed, dict):
+        parsed = {}
+
+    cat = parsed.get("categoryBreakdown") or {}
+    lex = int(cat.get("lexicalGap", 40))
+    dist = int(cat.get("distractorTrap", 40))
+    scope = int(cat.get("scopeMisread", 20))
+    tot = lex + dist + scope
+    if tot > 0 and tot != 100:
+        lex = round((lex / tot) * 100)
+        dist = round((dist / tot) * 100)
+        scope = max(0, 100 - lex - dist)
+
+    return {
+        "success": True,
+        "categoryBreakdown": {
+            "lexicalGap": lex,
+            "distractorTrap": dist,
+            "scopeMisread": scope,
+        },
+        "recurringTraps": parsed.get("recurringTraps") or [],
+        "actionPlanVi": parsed.get("actionPlanVi") or [],
+        "actionPlanEn": parsed.get("actionPlanEn") or [],
+    }
+
+
+@app.post("/api/review_copilot")
+async def review_copilot(payload: Dict[str, Any] = Body(...)):
+    """Interactive 1-on-1 IELTS Tutor Review Copilot.
+    Supports both question-focused mode and free-form exam review mode with full context.
+    """
+    lang = str(payload.get("lang") or "vi").lower()
+    quiz_title = str(payload.get("quizTitle") or "IELTS Practice Test")
+    quiz_type = str(payload.get("quizType") or "Reading")
+    passage_or_transcript = str(payload.get("passageOrTranscript") or payload.get("passage") or payload.get("transcript") or "")[:20000]
+    active_question = payload.get("activeQuestion") or payload.get("question") or {}
+    exam_overview = payload.get("examOverview") or {}
+
+    raw_messages = payload.get("messages") or []
+    if not raw_messages and payload.get("userMessage"):
+        history = payload.get("chatHistory") or []
+        raw_messages = [
+            {"role": "user" if h.get("role") == "user" else "assistant", "content": h.get("text", "")}
+            for h in history
+        ]
+        raw_messages.append({"role": "user", "content": payload.get("userMessage", "")})
+
+    has_active_q = bool(active_question and (active_question.get("text") or active_question.get("question") or active_question.get("id")))
+
+    if has_active_q:
+        sys_prompt = (
+            "You are an elite, warm, highly encouraging and intellectually sharp IELTS 8.5+ Personal Master Tutor. "
+            f"You are working 1-on-1 with a student reviewing their '{quiz_title}' ({quiz_type}) exam, focusing on a specific question.\n\n"
+            "STRICT PEDAGOGICAL RULES:\n"
+            "1. Ground your explanation strictly in the provided passage or audio transcript below. Never invent external facts.\n"
+            "2. When citing verbatim evidence from the passage/transcript, enclose the exact phrase (at least 3-4 words) in straight double quotes, e.g., \"annual revenue grew by 15%\". Do NOT put double quotes around generic labels, question terms, or concepts like Problem, Solution, or Option A (use bold **Problem** or single quotes instead).\n"
+            "3. If this is a Listening test and timestamps are present in the transcript, cite timestamps in [mm:ss] format (e.g. [02:15]), which allows the student to seek audio directly.\n"
+            "4. Tone: Inspiring, conversational, sharp, and easy to understand (like ChatGPT/Claude with deep pedagogical mastery). Avoid robotic jargon. Give clear takeaways, explain the cognitive traps, and provide actionable tips.\n"
+            f"5. Reply in {'English' if lang == 'en' else 'Vietnamese'}.\n"
+        )
+        context_block = (
+            f"--- PASSAGE / TRANSCRIPT ---\n{passage_or_transcript}\n\n"
+            f"--- CURRENT FOCUSED QUESTION ---\n"
+            f"Question Number: {active_question.get('questionNumber', 'N/A')}\n"
+            f"Question Type: {active_question.get('type', 'N/A')}\n"
+            f"Question Text: {active_question.get('text') or active_question.get('question', '')}\n"
+            f"Options: {active_question.get('options', '')}\n"
+            f"Student's Answer: {active_question.get('studentAnswer', '(blank)')}\n"
+            f"Correct Answer: {active_question.get('correctAnswer', '')}\n"
+            f"Teacher Manual Explanation: {active_question.get('manualExplanation', '')}\n"
+            "--------------------------------\n"
+        )
+    else:
+        sys_prompt = (
+            "You are an elite, warm, highly encouraging and intellectually sharp IELTS 8.5+ Personal Master Tutor. "
+            f"You are conversing freely with a student reviewing their entire '{quiz_title}' ({quiz_type}) exam performance.\n\n"
+            "STRICT PEDAGOGICAL RULES:\n"
+            "1. You have omniscient knowledge of the student's exam results, their mistakes, and the complete passage/transcript.\n"
+            "2. When the student asks general questions, summarize their weaknesses, identify recurring cognitive traps, recommend score-boosting strategies, or highlight Band 8+ academic collocations.\n"
+            "3. If the student asks about any specific question number (e.g., 'câu 14' or 'question 8'), use the exam overview and passage below to locate that question and analyze why they got it right or wrong.\n"
+            "4. When citing verbatim evidence from the passage/transcript, enclose the exact phrase (at least 3-4 words) in straight double quotes, e.g., \"annual revenue grew by 15%\". Do NOT put double quotes around generic labels, question terms, or concepts like Problem, Solution, or Option A (use bold **Problem** or single quotes instead).\n"
+            "5. If this is a Listening test and timestamps are present in the transcript, cite timestamps in [mm:ss] format (e.g. [02:15]), which allows the student to seek audio directly.\n"
+            "6. Tone: Natural, friendly, razor-sharp like a world-class mentor. Format with clean bullet points and bolding for readability.\n"
+            f"7. Reply in {'English' if lang == 'en' else 'Vietnamese'}.\n"
+        )
+        wrong_summary_lines = []
+        for w in (exam_overview.get("wrongQuestions") or []):
+            wrong_summary_lines.append(f"- Q{w.get('number')}: Type={w.get('type')}, Student='{w.get('studentAnswer')}', Correct='{w.get('correctAnswer')}'. Prompt: {str(w.get('text') or '')[:80]}")
+        wrong_summary_text = "\n".join(wrong_summary_lines) or "(All questions correct or no mistakes recorded)"
+
+        context_block = (
+            f"--- PASSAGE / TRANSCRIPT ---\n{passage_or_transcript}\n\n"
+            f"--- EXAM OVERVIEW ---\n"
+            f"Total Questions: {exam_overview.get('totalQuestions', 'N/A')}\n"
+            f"Number of Incorrect Questions: {exam_overview.get('wrongCount', 'N/A')}\n"
+            f"Student Mistakes Breakdown:\n{wrong_summary_text}\n"
+            "--------------------------------\n"
+        )
+
+    convo_parts = [context_block]
+    for msg in raw_messages[-8:]:
+        role = "Student" if msg.get("role") in ("user", "student") else "Tutor"
+        content = str(msg.get("content") or msg.get("text") or "").strip()
+        if content:
+            convo_parts.append(f"{role}: {content}")
+
+    user_prompt = "\n\n".join(convo_parts) + "\n\nTutor:"
+
+    reply_text, err = await asyncio.to_thread(
+        _pedagogical_ai_call,
+        sys_prompt,
+        user_prompt,
+        max_tokens=1200,
+        temperature=0.3,
+        json_mode=False,
+        model="gemini-2.5-flash",
+    )
+
+    if not reply_text:
+        fallback = (
+            "Rất tiếc, gia sư AI đang bận xử lý dữ liệu. Em vui lòng thử lại sau ít giây nhé!"
+            if lang == "vi" else
+            "Sorry, the AI tutor is currently busy. Please try asking again in a moment!"
+        )
+        return {"success": False, "reply": fallback, "error": err}
+
+    return {"success": True, "reply": reply_text.strip()}
+
+
+@app.post("/api/writing_sandbox_coach")
+async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
+    """Writing Brainstorm & Outline Sandbox.
+    Supports two modes: 'brainstorm' (Socratic angles + C1/C2 topic collocations) and 'critique_outline' (logic check).
+    """
+    mode = str(payload.get("mode") or "brainstorm").strip().lower()
+    task_number = 1 if "1" in str(payload.get("taskType") or payload.get("taskNumber") or "") else 2
+    prompt_text = str(payload.get("promptText") or payload.get("taskPrompt") or "")
+    lang = str(payload.get("lang") or "vi").lower()
+
+    if mode == "brainstorm":
+        sys_prompt = (
+            "You are a Senior IELTS Writing Examiner and Master Coach (Band 9.0). "
+            f"You are providing Socratic brainstorming scaffolding for IELTS Writing Task {task_number}.\n"
+            "CRITICAL INSTRUCTION: Do NOT write full essay paragraphs or model answers! Provide thought-provoking angles and vocabulary tools to empower the student to write their own essay.\n"
+            "Return ONLY a JSON object with this exact structure:\n"
+            "{\n"
+            '  "perspectives": [\n'
+            '    {\n'
+            '      "angleTitle": "<Concise title of angle/thesis 1>",\n'
+            '      "coreArgument": "<1-2 sentence core reasoning>",\n'
+            '      "realWorldExampleHint": "<A real-world case/scenario they could develop>"\n'
+            '    },\n'
+            '    {\n'
+            '      "angleTitle": "<Concise title of contrasting angle/thesis 2>",\n'
+            '      "coreArgument": "<1-2 sentence core reasoning>",\n'
+            '      "realWorldExampleHint": "<A real-world case/scenario they could develop>"\n'
+            '    }\n'
+            '  ],\n'
+            '  "collocations": [\n'
+            '    {\n'
+            '      "phrase": "<C1/C2 collocations/idiomatic phrase 1>",\n'
+            '      "meaningVi": "<Meaning in Vietnamese>",\n'
+            '      "meaningEn": "<Meaning in English>",\n'
+            '      "usageHint": "<Brief grammatical or contextual usage tip>"\n'
+            '    }\n'
+            '  ],\n'
+            '  "structureChecklist": [\n'
+            '    "<Key Task Response/Achievement requirement 1>",\n'
+            '    "<Key requirement 2>",\n'
+            '    "<Key requirement 3>"\n'
+            '  ]\n'
+            "}\n"
+            "Rules:\n"
+            "1. perspectives must contain exactly 2 distinct, strong thesis angles.\n"
+            "2. collocations must contain 6 to 8 sophisticated, topic-specific C1/C2 collocations.\n"
+            "3. structureChecklist must provide 3-4 concrete structural checks.\n"
+            f"4. angleTitle, coreArgument, and structureChecklist should be in {'Vietnamese' if lang == 'vi' else 'English'}."
+        )
+        user_prompt = f"IELTS Writing Task {task_number} Prompt:\n{prompt_text}\n\nGenerate brainstorming sandbox tools in JSON."
+        text, err = await asyncio.to_thread(
+            _pedagogical_ai_call,
+            sys_prompt,
+            user_prompt,
+            max_tokens=2000,
+            temperature=0.3,
+            json_mode=True,
+            model="gemini-2.5-flash",
+        )
+        parsed = _extract_json_object(text) if text else None
+        if not parsed or not isinstance(parsed, dict):
+            return {
+                "success": False,
+                "error": err or "Could not generate brainstorming perspectives.",
+            }
+        raw_perspectives = parsed.get("perspectives") or []
+        normalized_perspectives = []
+        for p in raw_perspectives:
+            title = str(p.get("angleTitle") or p.get("nameVi") or p.get("nameEn") or "")
+            arg = str(p.get("coreArgument") or p.get("argumentVi") or p.get("argumentEn") or "")
+            normalized_perspectives.append({
+                "angleTitle": title,
+                "nameVi": p.get("nameVi") or title,
+                "nameEn": p.get("nameEn") or title,
+                "coreArgument": arg,
+                "argumentVi": p.get("argumentVi") or arg,
+                "argumentEn": p.get("argumentEn") or arg,
+                "realWorldExampleHint": str(p.get("realWorldExampleHint") or "")
+            })
+        return {
+            "success": True,
+            "perspectives": normalized_perspectives,
+            "collocations": parsed.get("collocations") or [],
+            "structureChecklist": parsed.get("structureChecklist") or [],
+        }
+
+    elif mode == "critique_outline":
+        student_outline = payload.get("studentOutline") or {}
+        outline_text = str(payload.get("outlineText") or "").strip()
+        thesis = str(student_outline.get("thesis") or "")
+        body1 = str(student_outline.get("body1") or "")
+        body2 = str(student_outline.get("body2") or "")
+
+        sys_prompt = (
+            "You are a Senior IELTS Writing Examiner and Socratic Tutor. "
+            f"Evaluate the student's essay outline for IELTS Writing Task {task_number}.\n"
+            "Evaluate:\n"
+            "- Prompt coverage: Did they address all parts of the question prompt?\n"
+            "- Logical progression & coherence: Do body paragraphs flow logically from the thesis?\n"
+            "- Warnings against overgeneralization, sweeping claims, or off-topic drift.\n"
+            "- 2-3 concrete Socratic suggestions/questions to sharpen their arguments.\n\n"
+            "Return ONLY a JSON object with this exact structure:\n"
+            "{\n"
+            '  "promptCoverage": "<1-2 sentences assessing how fully the outline covers the prompt>",\n'
+            '  "coverageRating": "<Good | Adequate | Incomplete>",\n'
+            '  "logicalProgression": "<1-2 sentences on coherence between thesis and body arguments>",\n'
+            '  "warnings": [\n'
+            '    "<Concrete risk or overgeneralization to avoid 1>",\n'
+            '    "<Risk 2>"\n'
+            '  ],\n'
+            '  "suggestions": [\n'
+            '    "<Socratic question or constructive argument improvement 1>",\n'
+            '    "<Suggestion 2>"\n'
+            '  ]\n'
+            "}\n"
+            f"Language: {'Vietnamese' if lang == 'vi' else 'English'}."
+        )
+
+        outline_display = outline_text if outline_text else (
+            f"- Thesis / Overview: {thesis or '(blank)'}\n"
+            f"- Body Paragraph 1 (Main Idea & Support): {body1 or '(blank)'}\n"
+            f"- Body Paragraph 2 (Main Idea & Support): {body2 or '(blank)'}"
+        )
+
+        user_prompt = (
+            f"Task {task_number} Prompt:\n{prompt_text}\n\n"
+            f"Student's Outline:\n{outline_display}\n\n"
+            "Critique this outline in JSON."
+        )
+
+        text, err = await asyncio.to_thread(
+            _pedagogical_ai_call,
+            sys_prompt,
+            user_prompt,
+            max_tokens=1500,
+            temperature=0.2,
+            json_mode=True,
+            model="gemini-2.5-flash",
+        )
+        parsed = _extract_json_object(text) if text else None
+        if not parsed or not isinstance(parsed, dict):
+            return {
+                "success": False,
+                "error": err or "Could not critique outline.",
+            }
+        cov = parsed.get("promptCoverage") or ""
+        prog = parsed.get("logicalProgression") or ""
+        sug = parsed.get("suggestions") or []
+        return {
+            "success": True,
+            "promptCoverage": cov,
+            "coverageRating": parsed.get("coverageRating") or "Good",
+            "coverageFeedbackVi": parsed.get("coverageFeedbackVi") or cov,
+            "coverageFeedbackEn": parsed.get("coverageFeedbackEn") or cov,
+            "logicalProgression": prog,
+            "progressionFeedbackVi": parsed.get("progressionFeedbackVi") or prog,
+            "progressionFeedbackEn": parsed.get("progressionFeedbackEn") or prog,
+            "warnings": parsed.get("warnings") or [],
+            "suggestions": sug,
+            "socraticQuestions": parsed.get("socraticQuestions") or sug,
+        }
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid mode. Must be 'brainstorm' or 'critique_outline'.")
 
 
 def _parse_ai_items(text: str):

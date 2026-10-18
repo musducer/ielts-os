@@ -36,6 +36,10 @@ def _clean_option(value: Any) -> str:
     return re.sub(r"^[A-Za-z][.)]\s*", "", _plain(value)).strip()
 
 
+def _join_rich(values: Any) -> str:
+    return " ".join(text for value in values for text in [_plain(value)] if text)
+
+
 def _canonical_choice_answer(question: Question) -> Any:
     raw = option_answer_values(question)
     indexes: List[int] = []
@@ -69,16 +73,8 @@ def _parser_type(question: Question) -> str:
 
 
 def _canonical_explanation_raw(question: Question) -> str:
-    if not question.explanation:
-        return ""
-    chunks = [_plain(question.explanation.why)]
-    evidence = question.explanation.evidence
-    if evidence.quote:
-        chunks.append(f'"{_plain(evidence.quote)}"')
-    if evidence.locator:
-        locator = _plain(evidence.locator)
-        chunks.append(locator if locator.startswith("[") else f"[{locator}]")
-    return " ".join(chunk for chunk in chunks if chunk)
+    from .docx_renderer import explanation_text
+    return explanation_text(question)
 
 
 def canonical_parser_projection(exam: CanonicalExam) -> Dict[str, Any]:
@@ -95,7 +91,7 @@ def canonical_parser_projection(exam: CanonicalExam) -> Dict[str, Any]:
                     "minimumWords": task.minimum_words or (150 if task.task_number == 1 else 250),
                     "recommendedMinutes": task.recommended_minutes or (20 if task.task_number == 1 else 40),
                     "mediaUrl": task.media_url,
-                    "prompt": " ".join(_plain(line) for line in task.prompt),
+                    "prompt": _join_rich(task.prompt),
                 }
                 for task in sorted(exam.writing_tasks, key=lambda item: item.task_number)
             ],
@@ -109,15 +105,15 @@ def canonical_parser_projection(exam: CanonicalExam) -> Dict[str, Any]:
                 "questionNumber": question.question_number,
                 "type": _parser_type(question),
                 "text": _plain(question.text) or f"{question.question_number}.",
-                "instruction": " ".join(_plain(line) for line in question.instruction),
-                "groupContext": " ".join(_plain(line) for line in question.context),
+                "instruction": _join_rich(question.instruction),
+                "groupContext": _join_rich(question.context),
                 "options": [_clean_option(option.content) for option in question.options],
                 "correctAnswer": _canonical_answer(question),
                 "passageIndex": index,
                 "explanationWhy": _canonical_explanation_raw(question),
                 "evidenceQuote": _plain(explanation.evidence.quote) if explanation else "",
             })
-        sections.append({"passage": " ".join(_plain(line) for line in section.passage), "questions": items})
+        sections.append({"passage": _join_rich(section.passage), "questions": items})
     return {
         "title": _plain(exam.title),
         "type": exam.exam_type,
@@ -221,7 +217,15 @@ def _rich_sequence(exam: CanonicalExam) -> List[RichParagraph]:
                 output.extend(option.content for option in question.options)
             if question.block_type not in {"FLOW_DRAG", "MAP_DRAG", "DIAGRAM_LABEL"}:
                 output.append(question.text)
-    return [paragraph for paragraph in output if paragraph.text.strip()]
+    def flattened(values):
+        for paragraph in values:
+            if paragraph.table:
+                for row in paragraph.table["rows"]:
+                    for cell in row["cells"]:
+                        yield from flattened([RichParagraph.from_value(p) for p in cell["paragraphs"]])
+            elif paragraph.text.strip():
+                yield paragraph
+    return list(flattened(output))
 
 
 def _native_alignment(paragraph: Any) -> str:
@@ -235,7 +239,10 @@ def verify_native_format_contract(exam: CanonicalExam, path: str | Path) -> None
     `index.py` verifies semantic parser output below; this native check closes the
     gap before `paragraph_to_html()` flattens Word runs into HTML.
     """
-    paragraphs = docx.Document(str(path)).paragraphs
+    from docx.text.paragraph import Paragraph
+    document = docx.Document(str(path))
+    paragraphs = [Paragraph(element, document) for element in document.element.body.iter()
+                  if element.tag.endswith('}p')]
     cursor = 0
     for expected in _rich_sequence(exam):
         expected_text = expected.text

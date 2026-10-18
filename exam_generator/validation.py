@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from .providers import ProviderError, TextProvider
+from .providers import TextProvider
 from .schema import CanonicalExam, OPTION_BACKED_TYPES, option_answer_values, validate_canonical_exam
 
 
@@ -15,6 +17,10 @@ class ValidationIssue:
     code: str
     message: str
     question_number: int | None = None
+    stage: str = ""
+    block_id: str = ""
+    retryable: bool = False
+    recovery_attempted: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -62,22 +68,51 @@ Check factual grounding against the supplied source, answer validity, IELTS task
 and whether the explanation/evidence supports the answer. Do not rewrite the exam."""
 
 
-def critic_review(provider: TextProvider, exam: CanonicalExam, source_text: str, model: str) -> List[ValidationIssue]:
-    try:
-        payload = provider.complete_json(
-            system=CRITIC_SYSTEM,
-            user=f"SOURCE:\n{source_text}\n\nEXAM:\n{exam.to_dict()}",
-            model=model,
-            max_tokens=3000,
-            json_mode=True,
-            temperature=0.0,
-            phase="critic",
+def critic_review(provider: TextProvider, exam: CanonicalExam, source_text: str, model: str,
+                  *, image_inputs: Optional[List[Dict[str, str]]] = None,
+                  focus_question_number: Optional[int] = None) -> List[ValidationIssue]:
+    question_types = {question.question_number: question.block_type
+                      for section in exam.sections for question in section.questions}
+    visual_numbers_set = set()
+    for binding in exam.media_bindings:
+        match = re.match(r"^question:(\d+)(?::|$)", str(binding.get("association") or ""))
+        if not match:
+            continue
+        number = int(match.group(1))
+        if binding.get("required_for_solving") is True or question_types.get(number) in {"MAP_DRAG", "DIAGRAM_LABEL"}:
+            visual_numbers_set.add(number)
+    visual_numbers = sorted(visual_numbers_set)
+    exam_payload: Any = exam.to_dict()
+    focus_rule = ""
+    if focus_question_number is not None:
+        question_payload = next((asdict(question) for section in exam.sections for question in section.questions
+                                 if question.question_number == focus_question_number), None)
+        if question_payload is None:
+            return [ValidationIssue("FAIL", "CRITIC_SCOPE_INVALID", "Visual critic question does not exist.",
+                                    focus_question_number, stage="CRITIC_REVIEW")]
+        exam_payload = {"question": question_payload}
+        occurrence_ids = [str(item.get("occurrence_id") or "") for item in (image_inputs or [])]
+        focus_rule = (
+            f" Audit only question {focus_question_number}. Inspect the supplied visual itself. Confirm the answer, "
+            "the exact visible evidence quote/data, its locator, and that evidence.source_id is one of "
+            f"{occurrence_ids}. Always set question_number={focus_question_number}."
         )
-    except ProviderError as exc:
-        return [ValidationIssue("WARN", "CRITIC_UNAVAILABLE", str(exc))]
+    elif visual_numbers:
+        focus_rule = (f" Questions {visual_numbers} receive separate visual audits. In this text-only pass, do not "
+                      "guess or fail their image-dependent semantics; audit their non-visual contract only.")
+    payload = provider.complete_json(
+        system=CRITIC_SYSTEM + focus_rule + " Return at least one explicit PASS or blocking issue.",
+        user=f"<SOURCE_DATA>{source_text}</SOURCE_DATA>\n<EXAM>{json.dumps(exam_payload, ensure_ascii=False)}</EXAM>",
+        model=model,
+        max_tokens=3000,
+        json_mode=True,
+        temperature=0.0,
+        phase="critic",
+        image_inputs=image_inputs or None,
+    )
     raw_issues = payload.get("issues", [])
     if not isinstance(raw_issues, list):
-        return [ValidationIssue("WARN", "CRITIC_MALFORMED", "Critic did not return an issues list.")]
+        return [ValidationIssue("FAIL", "CRITIC_SCHEMA_INVALID", "Critic did not return an issues list.", stage="CRITIC_REVIEW")]
     issues: List[ValidationIssue] = []
     for raw in raw_issues:
         if not isinstance(raw, dict):
@@ -90,12 +125,24 @@ def critic_review(provider: TextProvider, exam: CanonicalExam, source_text: str,
             question_number = int(question_number) if question_number is not None else None
         except (TypeError, ValueError):
             question_number = None
+        if focus_question_number is not None:
+            if question_number not in {None, focus_question_number}:
+                issues.append(ValidationIssue(
+                    "FAIL", "CRITIC_SCOPE_INVALID", "Visual critic returned an issue for another question.",
+                    focus_question_number, stage="CRITIC_REVIEW",
+                ))
+                continue
+            question_number = focus_question_number
         issues.append(ValidationIssue(
             severity,
             str(raw.get("code") or "CRITIC").upper(),
             str(raw.get("message") or "Critic reported an issue."),
             question_number,
+            stage="CRITIC_REVIEW",
         ))
+    if not issues:
+        return [ValidationIssue("FAIL", "CRITIC_SCHEMA_INVALID", "Critic returned no explicit review result.",
+                                focus_question_number, stage="CRITIC_REVIEW")]
     return issues
 
 

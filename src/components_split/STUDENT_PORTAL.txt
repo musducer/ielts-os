@@ -1005,6 +1005,9 @@
               </div>
             </div>
           </div>
+
+          {/* ERROR DNA & WEAKNESS DIAGNOSTIC ENGINE */}
+          {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
           </>)}
 
           {/* ===== TAB: PHẦN THƯỞNG ===== */}

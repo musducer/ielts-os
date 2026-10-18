@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 555" width="1200" height="740" style="max-width: 100%; height: auto; display: block; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <defs>
+    <style>
+      .chart-title { font-size: 26px; font-weight: 800; fill: #0f172a; }
+      .axis-title { font-size: 20px; font-weight: 700; fill: #0f172a; }
+      .tick-label { font-size: 18px; font-weight: 600; fill: #334155; }
+      .grid-line { stroke: #f1f5f9; stroke-width: 1.8; }
+      .axis-line { stroke: #cbd5e1; stroke-width: 2.2; }
+      .tick-mark { stroke: #94a3b8; stroke-width: 2; stroke-linecap: round; }
+      .line-summer { fill: none; stroke: #0f172a; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+      .line-winter { fill: none; stroke: #475569; stroke-width: 4.5; stroke-dasharray: 10 7; stroke-linecap: round; stroke-linejoin: round; }
+      .legend-text { font-size: 19px; font-weight: 700; fill: #0f172a; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="465" y="44" text-anchor="middle" class="chart-title">Visitor Number</text>
+
+  <!-- Y-Axis Label -->
+  <text x="-250" y="28" transform="rotate(-90)" text-anchor="middle" class="axis-title">Visitors</text>
+
+  <!-- Horizontal Grid Lines -->
+  <g class="grid-line">
+    <line x1="85" y1="80.0" x2="845" y2="80.0" />
+    <line x1="85" y1="122.5" x2="845" y2="122.5" />
+    <line x1="85" y1="165.0" x2="845" y2="165.0" />
+    <line x1="85" y1="207.5" x2="845" y2="207.5" />
+    <line x1="85" y1="250.0" x2="845" y2="250.0" />
+    <line x1="85" y1="292.5" x2="845" y2="292.5" />
+    <line x1="85" y1="335.0" x2="845" y2="335.0" />
+    <line x1="85" y1="377.5" x2="845" y2="377.5" />
+  </g>
+
+  <!-- Baseline (X-Axis line at Value 0) -->
+  <line x1="85" y1="420.0" x2="845" y2="420.0" class="axis-line" />
+
+  <!-- X-Axis Tick Marks -->
+  <g class="tick-mark">
+    <line x1="85.0" y1="420" x2="85.0" y2="428" />
+    <line x1="169.4" y1="420" x2="169.4" y2="428" />
+    <line x1="253.9" y1="420" x2="253.9" y2="428" />
+    <line x1="338.3" y1="420" x2="338.3" y2="428" />
+    <line x1="422.8" y1="420" x2="422.8" y2="428" />
+    <line x1="507.2" y1="420" x2="507.2" y2="428" />
+    <line x1="591.7" y1="420" x2="591.7" y2="428" />
+    <line x1="676.1" y1="420" x2="676.1" y2="428" />
+    <line x1="760.6" y1="420" x2="760.6" y2="428" />
+    <line x1="845.0" y1="420" x2="845.0" y2="428" />
+  </g>
+
+  <!-- Y-Axis Values -->
+  <g class="tick-label" text-anchor="end">
+    <text x="70" y="86">1600</text>
+    <text x="70" y="128">1400</text>
+    <text x="70" y="171">1200</text>
+    <text x="70" y="213">1000</text>
+    <text x="70" y="256">800</text>
+    <text x="70" y="298">600</text>
+    <text x="70" y="341">400</text>
+    <text x="70" y="383">200</text>
+    <text x="70" y="426">0</text>
+  </g>
+
+  <!-- X-Axis Values -->
+  <g class="tick-label" text-anchor="middle">
+    <text x="85.0" y="452">9</text>
+    <text x="169.4" y="452">10</text>
+    <text x="253.9" y="452">11</text>
+    <text x="338.3" y="452">12</text>
+    <text x="422.8" y="452">13</text>
+    <text x="507.2" y="452">14</text>
+    <text x="591.7" y="452">15</text>
+    <text x="676.1" y="452">16</text>
+    <text x="760.6" y="452">17</text>
+    <text x="845.0" y="452">18</text>
+  </g>
+
+  <!-- X-Axis Label -->
+  <text x="465" y="492" text-anchor="middle" class="axis-title">Time (o'clock)</text>
+
+  <!-- Winter Line (Dashed Slate) -->
+  <polyline
+    class="line-winter"
+    points="
+      85.0,420.0
+      169.4,337.1
+      253.9,347.8
+      338.3,292.5
+      422.8,335.0
+      507.2,377.5
+      591.7,420.0
+      676.1,420.0
+      760.6,420.0
+      845.0,420.0
+    "
+  />
+
+  <!-- Summer Line (Solid Dark) -->
+  <polyline
+    class="line-summer"
+    points="
+      85.0,420.0
+      169.4,275.5
+      253.9,143.8
+      338.3,101.2
+      422.8,143.8
+      507.2,175.6
+      591.7,228.8
+      676.1,250.0
+      760.6,335.0
+      845.0,420.0
+    "
+  />
+
+  <!-- Legend -->
+  <g transform="translate(315, 532)">
+    <!-- Summer -->
+    <line x1="0" y1="0" x2="60" y2="0" class="line-summer" />
+    <text x="70" y="6" class="legend-text">Summer</text>
+
+    <!-- Winter -->
+    <line x1="185" y1="0" x2="245" y2="0" class="line-winter" />
+    <text x="255" y="6" class="legend-text">Winter</text>
+  </g>
+</svg>

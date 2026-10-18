@@ -5,7 +5,7 @@
           // Đã fix: Chỉ Part 1 (index 0) của Integrated mới full màn hình như Listening, các Part còn lại tự động chia 2 cột.
           const isListening = String(activeExam.type).toLowerCase().includes("listen") || (isIntegrated && currentSectionIndex === 0);
           const isTimeRunningOut = examTimeLeft < 300; 
-          const cleanMediaUrl = (url: any) => String(url || "").replace(/&amp;/gi, "&").trim();
+          const cleanMediaUrl = (url: any) => normalizeImageUrl(String(url || "").replace(/&amp;/gi, "&").trim());
           const formatExamRemaining = (seconds: number) => {
               const safe = Math.max(0, Math.floor(seconds || 0));
               const mins = Math.floor(safe / 60);
@@ -542,64 +542,32 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           };
 
           return (
-              <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
-                   onDragOverCapture={feedbackAnswerDrag}
-                   onDragEndCapture={() => { endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null); }}
-                   onDropCapture={(event: any) => {
-                       if (!feedbackAnswerDrag(event)) return;
-                       if (!answerBankAt(event.target as HTMLElement)) return;
-                       event.preventDefault(); event.stopPropagation();
-                       if (event.dataTransfer?.getData('application/x-ielts-heading-id')) {
-                           const heading = readDroppedHeading(event);
-                           if (heading.sourceQid) clearHeading(heading.sourceQid);
-                       } else {
-                           const sourceQid = readDraggedSource(event);
-                           if (sourceQid) handleAnswerChange(sourceQid, '', 'DRAG_DROP');
-                       }
-                       endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null);
-                   }}
-                   onContextMenu={(e: any) => {
-                       if (isPractice) return;
-                       if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
-                           openHighlightDeleteMenu(e, e.target as HTMLElement);
-                       } else {
-                           e.preventDefault(); 
-                       }
-                   }}>
-                  
-                  {(String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated") && (
-                      <audio key={activeExam.audioUrl || "no-audio"} ref={audioRef} preload="metadata" playsInline src={activeExam.audioUrl || ""} controlsList="nodownload noremoteplayback"
-                          onContextMenu={(event: any) => event.preventDefault()}
-                          onDragStart={(event: any) => event.preventDefault()}
-                          onEnded={handleExamAudioEnded}
-                          onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
-                          onPlaying={handleExamAudioPlaying}
-                          onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
-                          onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
-                          onCanPlay={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; recordAudioDiagnostic("canplay", audio); if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio); }}
-                          onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
-                          onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
-                          onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
-                          onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
-                          onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
-                          onLoadedMetadata={(e: any) => {
-                              const audio = e.currentTarget as HTMLAudioElement;
-                              audio.muted = false;
-                              audio.defaultMuted = false;
-                              audio.volume = Math.max(0, Math.min(1, _audioVolume));
-                              setAudioDur(audio.duration || 0);
-                              updateExamMediaSessionPosition(audio);
-                              if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
-                                  audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
-                                  setAudioCur(audio.currentTime);
-                                  updateExamMediaSessionPosition(audio);
-                                  setPendingAudioResume(null);
-                              }
-                          }}
-                          onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
-                          onTimeUpdate={(e: any) => publishAudioProgress(e.currentTarget as HTMLAudioElement)}
-                          style={{position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none'}} />
-                  )}
+              <>
+                  {persistentAudioNode}
+                  <div className={`exam-content-block notranslate theme-${examTheme} text-${examTextSize}`} translate="no" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--ebg)', color: 'var(--etext)', display: "flex", flexDirection: "column", filter: !isWindowFocused && !isPreview && !isPractice ? 'blur(10px) grayscale(50%)' : 'none', transition: 'filter 0.3s', fontFamily: "Arial, Helvetica, sans-serif" }}
+                       onDragOverCapture={feedbackAnswerDrag}
+                       onDragEndCapture={() => { endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null); }}
+                       onDropCapture={(event: any) => {
+                           if (!feedbackAnswerDrag(event)) return;
+                           if (!answerBankAt(event.target as HTMLElement)) return;
+                           event.preventDefault(); event.stopPropagation();
+                           if (event.dataTransfer?.getData('application/x-ielts-heading-id')) {
+                               const heading = readDroppedHeading(event);
+                               if (heading.sourceQid) clearHeading(heading.sourceQid);
+                           } else {
+                               const sourceQid = readDraggedSource(event);
+                               if (sourceQid) handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                           }
+                           endAnswerDrag(); dragSourceQuestionRef.current = ''; setSelectedDragAnswer(''); setSelectedHeadingDrag(null);
+                       }}
+                       onContextMenu={(e: any) => {
+                           if (isPractice) return;
+                           if (e.target && (e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.student-highlight')) {
+                               openHighlightDeleteMenu(e, e.target as HTMLElement);
+                           } else {
+                               e.preventDefault(); 
+                           }
+                       }}>
 
                   {globalStyles}
                   {/* HIDDEN DIV DỌN DẸP TS WARNING */}
@@ -806,23 +774,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { width:min(100%, 610px); margin:0 0 18px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 420px) max-content; gap:18px; align-items:start; }
-                      .idp-flowchart-panel { width:min(100%, 420px); margin:0; padding:0; background:transparent; border:0; }
+                      .idp-flowchart-wrap { width:min(100%, 720px); margin:0 0 18px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) max-content; gap:20px; align-items:start; }
+                      .idp-flowchart-panel { width:100%; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:center; }
                       .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
                       .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
                       .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
                       .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:26px; box-sizing:border-box; margin:0; padding:4px 8px; text-align:left; justify-content:flex-start; font:700 13px/1.2 Arial,sans-serif; }
-                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:1px; background:#fff; padding:5px 7px; line-height:1.42; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; }
-                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:left !important; }
-                      .idp-flowchart-arrow { width:100%; height:22px; margin:0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
-                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
+                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; line-height:1.5; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
+                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:center !important; }
+                      .idp-flowchart-arrow { width:100%; height:22px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
+                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
                       .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; background:#f5f5f5 !important; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
-                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 3px; padding:1px 7px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; }
-                      .idp-flowchart-title, .idp-flowchart-title * { text-align:left !important; }
-                      .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; }
-                      .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 10px auto !important; }
+                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
+                      .idp-flowchart-title, .idp-flowchart-title * { text-align:center !important; }
+                      .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; display: inline; }
+                      .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 8px auto !important; }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
                       .writing-pane { min-width:0; height:100%; overflow:auto; box-sizing:border-box; }
                       .writing-prompt { padding:28px 36px 44px; line-height:1.62; color:var(--etext); }
@@ -1031,7 +999,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-match2-empty { color: var(--esub); font-size: 12px; padding: 4px 0; }
                       .idp-match2-name { font-size: var(--efont); line-height: 1.3; }
                       /* Match the option-bank typography. The column width stays locked, while long answers wrap in full. */
-                      .idp-match2-items .idp-dropzone { width: 100%; height: 28px; min-height: 28px; max-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; font-size: 13px; font-weight: 400; line-height: 1.25; white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+                      .idp-match2-items .idp-dropzone { width: 100%; min-height: 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: visible; margin: 0; padding: 2px 10px; border: 1px dashed #4b5563; border-radius: 4px; background: #fff; font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--etext); text-align: center; }
+                      .idp-match2-items .idp-dropzone.filled { border-style: solid; background: #f8fafc; font-weight: 500; }
+                      .idp-match2-items .idp-dropzone:not(.filled):hover { border-color: #0969da; background: #f0f7ff; }
                       @media (max-width: 767px) { .idp-match2 { grid-template-columns: 1fr !important; gap: 24px; } .idp-match2-bank { order: -1; } .idp-match2-items { grid-template-columns: minmax(0, 1fr) minmax(112px, 42%); } }
                       .idp-sentence-ending { max-width:780px; text-align:left; }
                       .idp-sentence-ending-list { display:grid; gap:12px; margin-bottom:14px; }
@@ -1388,12 +1358,207 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       onMouseUp={() => setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter(false)}>
                       <div className="writing-test-prompt exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 280, overflowY: 'auto', padding: '30px 18px', boxSizing: 'border-box', lineHeight: 1.55, fontSize: 15, color: '#111', background: '#fff' }}>
                           <StaticHtmlBlock className="highlightable-content writing-test-prompt-html" dataField="text" dataQid={question?.id} html={renderSafeHTML(question?.text || task?.prompt || '')} style={{ lineHeight: 1.55 }} />
-                          {task?.mediaUrl && <img src={cleanMediaUrl(task.mediaUrl)} alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
+                          {task?.mediaUrl && <img src={cleanMediaUrl(task.mediaUrl)} referrerPolicy="no-referrer" loading="lazy" alt={`Writing Part ${task.taskNumber} visual`} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'min(48vh, 430px)', width: 'auto', height: 'auto', objectFit: 'contain', margin: '24px auto 0' }} />}
                       </div>
                       <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'ew-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center', touchAction: 'none' }}>
                           <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
                       <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
+                          {Boolean(activeExam?.allowWritingSandbox) && !activeExam?.realExamContext && (
+                              <div style={{ width: '90%', marginBottom: 14 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                      <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>
+                                          Part {task?.taskNumber || 1} Answer
+                                      </span>
+                                      <button
+                                          type="button"
+                                          onClick={() => setShowWritingSandbox(!showWritingSandbox)}
+                                          style={{
+                                              background: showWritingSandbox ? 'rgba(79, 70, 229, 0.1)' : '#f3f4f6',
+                                              color: showWritingSandbox ? '#4f46e5' : '#4b5563',
+                                              border: `1px solid ${showWritingSandbox ? '#c7d2fe' : '#d1d5db'}`,
+                                              padding: '5px 12px',
+                                              borderRadius: 6,
+                                              fontSize: 12,
+                                              fontWeight: 700,
+                                              cursor: 'pointer',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: 6
+                                          }}
+                                      >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                                          <span>{showWritingSandbox ? tx("Đóng AI Sandbox", "Close AI Sandbox") : tx("Mở AI Sandbox (Ý tưởng & Dàn bài)", "Open AI Sandbox")}</span>
+                                      </button>
+                                  </div>
+
+                                  {showWritingSandbox && (
+                                      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                                          {/* Tabs */}
+                                          <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: 12, gap: 8 }}>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setWritingSandboxTab("brainstorm")}
+                                                  style={{
+                                                      background: 'transparent',
+                                                      border: 'none',
+                                                      borderBottom: writingSandboxTab === "brainstorm" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                      color: writingSandboxTab === "brainstorm" ? '#4f46e5' : '#6b7280',
+                                                      fontWeight: 700,
+                                                      fontSize: 12,
+                                                      padding: '6px 10px',
+                                                      cursor: 'pointer'
+                                                  }}
+                                              >
+                                                  {tx("Góc nhìn & C1/C2 Collocations", "Perspectives & Collocations")}
+                                              </button>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setWritingSandboxTab("critique")}
+                                                  style={{
+                                                      background: 'transparent',
+                                                      border: 'none',
+                                                      borderBottom: writingSandboxTab === "critique" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                      color: writingSandboxTab === "critique" ? '#4f46e5' : '#6b7280',
+                                                      fontWeight: 700,
+                                                      fontSize: 12,
+                                                      padding: '6px 10px',
+                                                      cursor: 'pointer'
+                                                  }}
+                                              >
+                                                  {tx("Kiểm tra Logic dàn bài", "Outline Logic Check")}
+                                              </button>
+                                          </div>
+
+                                          {/* Tab 1: Brainstorm */}
+                                          {writingSandboxTab === "brainstorm" && (
+                                              <div style={{ display: 'grid', gap: 10 }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                      <span style={{ fontSize: 11.5, color: '#4b5563' }}>
+                                                          {tx("Gợi ý các góc nhìn phản biện và collocations học thuật Band 8+ phù hợp với đề bài.", "AI perspectives and Band 8+ academic collocations tailored to this prompt.")}
+                                                      </span>
+                                                      <button
+                                                          type="button"
+                                                          disabled={writingSandboxLoading}
+                                                          onClick={() => void handleWritingSandboxAction(task, "brainstorm")}
+                                                          style={{
+                                                              background: '#4f46e5',
+                                                              color: '#fff',
+                                                              border: 'none',
+                                                              padding: '5px 12px',
+                                                              borderRadius: 6,
+                                                              fontSize: 11.5,
+                                                              fontWeight: 700,
+                                                              cursor: writingSandboxLoading ? 'default' : 'pointer',
+                                                              opacity: writingSandboxLoading ? 0.6 : 1,
+                                                              display: 'inline-flex',
+                                                              alignItems: 'center',
+                                                              gap: 5
+                                                          }}
+                                                      >
+                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                          <span>{writingSandboxLoading ? tx("Đang phân tích đề...", "Brainstorming...") : tx("Gợi ý ý tưởng & từ vựng", "Brainstorm Ideas")}</span>
+                                                      </button>
+                                                  </div>
+
+                                                  {writingSandboxBrainstormData && (
+                                                      <div style={{ display: 'grid', gap: 10, marginTop: 4 }}>
+                                                          {/* Perspectives */}
+                                                          {Array.isArray(writingSandboxBrainstormData.perspectives) && writingSandboxBrainstormData.perspectives.length > 0 && (
+                                                              <div style={{ display: 'grid', gap: 6 }}>
+                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
+                                                                      {tx("Góc nhìn phản biện (Perspectives)", "Critical Perspectives")}
+                                                                  </div>
+                                                                  {writingSandboxBrainstormData.perspectives.map((p: any, pIdx: number) => (
+                                                                      <div key={pIdx} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
+                                                                          <b style={{ color: '#1e3a8a' }}>{p.nameVi || p.nameEn}:</b> <span style={{ color: '#374151' }}>{p.argumentVi || p.argumentEn}</span>
+                                                                      </div>
+                                                                  ))}
+                                                              </div>
+                                                          )}
+
+                                                          {/* Collocations */}
+                                                          {Array.isArray(writingSandboxBrainstormData.collocations) && writingSandboxBrainstormData.collocations.length > 0 && (
+                                                              <div style={{ display: 'grid', gap: 6 }}>
+                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
+                                                                      {tx("C1/C2 Academic Collocations", "Band 8+ Academic Collocations")}
+                                                                  </div>
+                                                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                                      {writingSandboxBrainstormData.collocations.map((c: any, cIdx: number) => (
+                                                                          <span key={cIdx} style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '4px 8px', borderRadius: 4, fontSize: 11.5, fontWeight: 600 }} title={c.meaningVi || c.usage}>
+                                                                              {c.phrase}
+                                                                          </span>
+                                                                      ))}
+                                                                  </div>
+                                                              </div>
+                                                          )}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          )}
+
+                                          {/* Tab 2: Outline Critique */}
+                                          {writingSandboxTab === "critique" && (
+                                              <div style={{ display: 'grid', gap: 8 }}>
+                                                  <div style={{ fontSize: 11.5, color: '#4b5563' }}>
+                                                      {tx("Viết 3-5 gạch đầu dòng dàn ý bài viết của bạn. Huấn luyện viên AI sẽ đánh giá tính mạch lạc và cảnh báo thiếu ý:", "Write 3-5 bullet points of your planned outline. AI coach will check coherence and task coverage:")}
+                                                  </div>
+                                                  <textarea
+                                                      value={writingSandboxOutline}
+                                                      onChange={e => setWritingSandboxOutline(e.target.value)}
+                                                      placeholder={tx("Ví dụ:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...", "e.g.:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...")}
+                                                      style={{ width: '100%', height: 75, resize: 'vertical', padding: '8px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#111', boxSizing: 'border-box' }}
+                                                  />
+                                                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                                      <button
+                                                          type="button"
+                                                          disabled={writingSandboxLoading || !writingSandboxOutline.trim()}
+                                                          onClick={() => void handleWritingSandboxAction(task, "critique_outline")}
+                                                          style={{
+                                                              background: '#4f46e5',
+                                                              color: '#fff',
+                                                              border: 'none',
+                                                              padding: '5px 12px',
+                                                              borderRadius: 6,
+                                                              fontSize: 11.5,
+                                                              fontWeight: 700,
+                                                              cursor: writingSandboxLoading || !writingSandboxOutline.trim() ? 'default' : 'pointer',
+                                                              opacity: writingSandboxLoading || !writingSandboxOutline.trim() ? 0.5 : 1,
+                                                              display: 'inline-flex',
+                                                              alignItems: 'center',
+                                                              gap: 5
+                                                          }}
+                                                      >
+                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                          <span>{writingSandboxLoading ? tx("Đang kiểm tra dàn bài...", "Evaluating...") : tx("Kiểm tra logic dàn bài", "Check Outline Logic")}</span>
+                                                      </button>
+                                                  </div>
+
+                                                  {writingSandboxCritiqueData && (
+                                                      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', display: 'grid', gap: 6, marginTop: 4 }}>
+                                                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#111' }}>
+                                                              <span style={{ padding: '2px 8px', borderRadius: 4, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                                                                  {tx("Độ bao quát", "Coverage")}: {writingSandboxCritiqueData.coverageRating || "Good"}
+                                                              </span>
+                                                          </div>
+                                                          <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.45 }}>
+                                                              <b>{tx("Nhận xét mạch lạc: ", "Logic & Coherence: ")}</b>
+                                                              {tx(writingSandboxCritiqueData.progressionFeedbackVi, writingSandboxCritiqueData.progressionFeedbackEn) || writingSandboxCritiqueData.progressionFeedbackEn}
+                                                          </div>
+                                                          {Array.isArray(writingSandboxCritiqueData.socraticQuestions) && writingSandboxCritiqueData.socraticQuestions.length > 0 && (
+                                                              <div style={{ fontSize: 11.5, color: '#4338ca', background: '#eef2ff', padding: '6px 10px', borderRadius: 6 }}>
+                                                                  <b>{tx("Gợi ý nâng cao Band: ", "Socratic prompt: ")}</b>
+                                                                  {writingSandboxCritiqueData.socraticQuestions[0]}
+                                                              </div>
+                                                          )}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          )}
+                                      </div>
+                                  )}
+                              </div>
+                          )}
                           <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
                           <div style={{ width: '90%', textAlign: 'right', marginTop: 7, fontSize: 14, color: '#111' }}>Words: {countWritingWords(answer)}</div>
                           <div style={{ position: 'absolute', right: '4%', bottom: 30, display: 'flex', gap: 5 }}>
@@ -1423,11 +1588,53 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           </div>
                           <div style={{ fontSize: 15, marginBottom: 22 }}>To continue, click Play.</div>
                           {renderMeetAudioNotice()}
-                          <button onClick={() => { void requestExamAudioPlayback(); }}
-                              style={{ background: '#fff', color: '#111', border: 'none', padding: '10px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-                              <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
-                              Play
-                          </button>
+                          {(() => {
+                              const isBuffering = !isAudioReadyToPlay;
+                              const isStarting = audioStatus === "LOADING";
+                              const isDisabled = isBuffering || isStarting;
+                              return (
+                                  <button
+                                      type="button"
+                                      disabled={isDisabled}
+                                      onClick={() => { if (!isDisabled) void requestExamAudioPlayback(); }}
+                                      style={{
+                                          background: isDisabled ? '#9ca3af' : '#fff',
+                                          color: isDisabled ? '#374151' : '#111',
+                                          border: 'none',
+                                          padding: '10px 24px',
+                                          fontSize: 15,
+                                          fontWeight: 600,
+                                          cursor: isDisabled ? 'not-allowed' : 'pointer',
+                                          borderRadius: 4,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 9,
+                                          opacity: isDisabled ? 0.85 : 1,
+                                          transition: 'background 0.15s, opacity 0.15s'
+                                      }}>
+                                      {isBuffering ? (
+                                          <>
+                                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'idp-spin 0.8s linear infinite' }}>
+                                                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                                              </svg>
+                                              <span>Preparing audio...</span>
+                                          </>
+                                      ) : isStarting ? (
+                                          <>
+                                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'idp-spin 0.8s linear infinite' }}>
+                                                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                                              </svg>
+                                              <span>Starting...</span>
+                                          </>
+                                      ) : (
+                                          <>
+                                              <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#111"/><polygon points="10 8 16.5 12 10 16" fill="#fff"/></svg>
+                                              <span>Play</span>
+                                          </>
+                                      )}
+                                  </button>
+                              );
+                          })()}
                       </div>
                   </div>
               )}
@@ -1691,7 +1898,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const isFlowChartGroup = group.questions.length > 0 && group.questions.every((q: any) =>
                       q.subType === "FLOWCHART" || q.subType === "FLOWCHART_DRAG"
                   );
-                  const dragOptions = isDragDropGroup ? (group.questions.find(q => q.options && q.options.length > 0)?.options || []) : [];
+                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
+                  const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
+                  const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
+                  const hasMapPlanVisual = (value: string) => /<img\b|https?:\/\/[^\s<>"']+/i.test(value || "");
+                  const stripMapPlanVisual = (value: string) => String(value || "")
+                      .replace(/<img\b[^>]*>/gi, "")
+                      .replace(/(?:IMAGE|Url)\s*:\s*https?:\/\/[^\s<>"']+/gi, "")
+                      .replace(/https?:\/\/[^\s<>"']+/gi, "")
+                      .replace(/<p>\s*<\/p>/gi, "")
+                      .trim();
+                  const mapPlanSourceField = hasMapPlanVisual(group.context) ? "groupContext" : (hasMapPlanVisual(group.instruction) ? "instruction" : "");
+                  const isMapPlanMatching = isListeningLayout && isMatchingGroup && !!mapPlanSourceField;
+                  const isListeningColumnMatching =
+                      isListeningLayout
+                      && isMatchingGroup
+                      && !isMapPlanMatching
+                      && !isInfoMatching
+                      && group.questions.every((q: any) => String(q.subType || "").toUpperCase() !== "MAP_LABELLING");
+                  const rawDragOptions = (isDragDropGroup || isListeningColumnMatching)
+                      ? (group.questions.find(q => q.options && q.options.length > 0)?.options || [])
+                      : [];
+                  const dragOptions = isListeningColumnMatching
+                      ? rawDragOptions.map((opt: any) => cleanOptionAnswerText(opt) || String(opt)).filter(Boolean)
+                      : rawDragOptions;
                   // Nhãn 2 cột kéo-thả: rút các dòng nhãn ngắn trong instruction (vd "Attractions", "Areas of the festival").
                   const dragLabels = (() => {
                       // Bóc span highlight/note/temp + thẻ inline TRƯỚC khi tách dòng — nếu không, học sinh highlight
@@ -1709,9 +1939,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   // sẽ serialize bản-thiếu-nhãn ghi đè state -> nhãn mất VĨNH VIỄN (bug "Attractions" về "Options").
                   let dragCleanInstruction = group.instruction || "";
                   dragLabels.forEach(l => { dragCleanInstruction = dragCleanInstruction.split(`<div>${l}</div>`).join(`<div class="idp-draglabel-hide">${l}</div>`); });
-                  const isMatchingGroup = group.questions.every(q => q.type === "MATCHING") && !isSentenceEndingMatching;
-                  // Matching INFORMATION (option chỉ là chữ cái A-F = nhãn đoạn văn) -> KHÔNG cần legend nhỏ.
-                  const isInfoMatching = isMatchingGroup && (group.questions[0]?.options || []).length > 0 && (group.questions[0]?.options || []).every((o: any) => /^[A-Za-z]$/.test(String(o).trim()));
                   const isDragDropHeadingGroup = group.questions.every(q => q.type === "DRAG_DROP_HEADING");
                   // A heading answer persists as its Roman id, so the tray must be
                   // built from the same rich catalog as the passage slot. Imports
@@ -1763,26 +1990,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   
                   const isHtmlEmpty = (htmlStr: string) => !htmlStr || (!htmlStr.includes('<img') && htmlStr.replace(/<[^>]*>?/gm, '').replace(/ /g, '').trim() === '');
                    let showInstruction = !isHtmlEmpty(group.instruction);
-                   const hasMapPlanVisual = (value: string) => /<img\b|https?:\/\/[^\s<>"']+/i.test(value || "");
-                   const stripMapPlanVisual = (value: string) => String(value || "")
-                       .replace(/<img\b[^>]*>/gi, "")
-                       .replace(/https?:\/\/[^\s<>"']+/gi, "")
-                       .replace(/<p>\s*<\/p>/gi, "")
-                       .trim();
 
                   // CHỈ HIỂN THỊ CONTEXT Ở CỘT CU HỎI NẾU:
                   // 1. Đang ở layout 1 cột (Listening/Part 1) HOẶC
                   // 2. Form 2 cột nhưng câu hỏi có đoạn văn CONTEXT PHỤ (khác với bài đọc chính đã ở cột trái)
-                   const isListeningLayout = String(activeExam!.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0);
-                   const mapPlanSourceField = hasMapPlanVisual(group.context) ? "groupContext" : (hasMapPlanVisual(group.instruction) ? "instruction" : "");
-                   const isMapPlanMatching = isListeningLayout && isMatchingGroup && !!mapPlanSourceField;
                    const mapPlanSource = mapPlanSourceField === "groupContext" ? group.context : group.instruction;
                    const mapPlanImageHtml = (() => {
                        if (!isMapPlanMatching) return "";
-                       const imageTags = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
-                       if (imageTags.length) return sanitizeRichHtml(imageTags.join(""));
+                       const rawImgs = (renderSafeHTML(mapPlanSource).match(/<img\b[^>]*>/gi) || []);
+                       if (rawImgs.length) {
+                           const patchedImgs = rawImgs.map(tag => {
+                               if (/referrerpolicy\s*=/i.test(tag)) return tag;
+                               return tag.replace(/<img\b/i, '<img referrerpolicy="no-referrer" loading="lazy"');
+                           });
+                           return sanitizeRichHtml(patchedImgs.join(""));
+                       }
                        const url = String(mapPlanSource || "").match(/https?:\/\/[^\s<>"']+/i)?.[0];
-                       return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" alt="Map or plan" />` : "";
+                       return url ? `<img src="${cleanMediaUrl(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}" referrerpolicy="no-referrer" loading="lazy" alt="Map or plan" />` : "";
                    })();
                    const displayInstruction = isMapPlanMatching ? stripMapPlanVisual(group.instruction) : group.instruction;
                    showInstruction = !isHtmlEmpty(displayInstruction);
@@ -1823,8 +2047,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         const flowOptions: string[] = isDragFlow
                             ? (group.questions.find((q: any) => Array.isArray(q.options) && q.options.length)?.options || []).map((option: any) => String(option).trim()).filter(Boolean)
                             : [];
-                        const assigned = group.questions.map((q: any) => String(examAnswers[q.id] || "")).filter(Boolean);
-                        const reuseTags = group.questions.length > flowOptions.length;
+                        const normalizedGroupCorrectAnswers = group.questions
+                            .map((q: any) => normalizeComparableAnswer(resolveOptionAnswerText({ ...q, options: flowOptions }, q.correctAnswer)))
+                            .filter(Boolean);
+                        const hasDuplicateCorrectAnswers =
+                            normalizedGroupCorrectAnswers.length > 0 &&
+                            new Set(normalizedGroupCorrectAnswers).size < normalizedGroupCorrectAnswers.length;
+                        const instructionAllowsReuse =
+                            /\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b/i.test(
+                                `${group.instruction || ""} ${group.context || ""}`
+                            );
+                        const explicitReuse = group.questions.some((q: any) => Boolean(q.allowOptionReuse));
+                        const reuseTags =
+                            explicitReuse
+                            || instructionAllowsReuse
+                            || hasDuplicateCorrectAnswers
+                            || group.questions.length > flowOptions.length;
+                        const assigned = group.questions.map((q: any) => {
+                            const val = examAnswers[q.id];
+                            if (!val) return "";
+                            return resolveOptionAnswerText({ ...q, options: flowOptions }, val) || String(val);
+                        }).filter(Boolean);
                         return (
                         <div className="idp-flowchart-wrap">
                         <div className={isDragFlow ? "idp-flowchart-layout" : ""}>
@@ -1834,23 +2077,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               // DOCX paragraphs arrive wrapped in block tags. A flow node is one
                               // inline sentence, so unwrap paragraph containers before splitting
                               // the original marker into text + gap + text.
-                              const flowHtml = String(q.text || "").replace(/<\/?(?:div|p)\b[^>]*>/gi, "").replace(/&nbsp;/gi, " ");
-                              const flowMarker = flowHtml.match(/\[(\d+)\]/);
+                              const flowHtml = String(q.text || "")
+                                  .replace(/<br\s*\/?>/gi, " ")
+                                  .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
+                                  .replace(/&nbsp;/gi, " ")
+                                  .replace(/\s+/g, " ")
+                                  .trim();
+                              const flowMarker = flowHtml.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/);
                               const rawText = flowHtml;
-                              const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…|…/);
+                              const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…+/);
                               const hasFlowGap = Boolean(blankMatch);
                               const flowNumber = flowMarker?.[1] || String(qGlobalIdx);
-                              const beforeText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml;
-                              const afterText = blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "";
+                              const beforeText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml).trim();
+                              const afterText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "").trim();
                               const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
                               return (
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />
+                                           {beforeText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />}
                                            {hasFlowGap && (isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
                                                data-qid={q.id}
-                                              aria-label={`Question ${flowNumber}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
+                                               data-num={flowNumber}
+                                               data-placeholder={flowNumber}
+                                               aria-label={`Question ${flowNumber}${isAnsweredFlow ? `, ${String(examAnswers[q.id])}` : ''}`}
                                                draggable={isAnsweredFlow}
                                                onDragStart={(event: any) => { if (isAnsweredFlow) beginAnswerDrag(event, String(examAnswers[q.id]), String(examAnswers[q.id]), q.id); }}
                                                title={isAnsweredFlow ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
@@ -1876,17 +2126,28 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
                                               style={{ textAlign: 'center', minWidth: 88 }}
                                            />)}
-                                           <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />
+                                           {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
                                       </div>
                                       {flowIdx < group.questions.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                   </React.Fragment>
                               );
                           })}
                         </div>
-                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices">
+                        {isDragFlow && <aside className="idp-flowchart-bank" aria-label="Flow-chart answer choices"
+                            onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                            onDrop={(e: any) => {
+                                e.preventDefault();
+                                const sourceQid = readDraggedSource(e);
+                                if (sourceQid) {
+                                    handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                                    dragSourceQuestionRef.current = '';
+                                    setSelectedDragAnswer('');
+                                }
+                            }}
+                        >
                             <div className="idp-flowchart-bank-items">
                                 {flowOptions.map((option: string, index: number) => {
-                                    const used = !reuseTags && assigned.includes(option);
+                                    const used = !reuseTags && assigned.some((ans: string) => normalizeComparableAnswer(ans) === normalizeComparableAnswer(option));
                                     return <button type="button" key={`${option}-${index}`} draggable={!used}
                                         className={`idp-wordbank-item ${used ? 'used' : ''} ${selectedDragAnswer === option ? 'selected' : ''}`}
                                         onClick={() => { if (!used) selectBankAnswer(option); }}
@@ -2035,7 +2296,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            <div className="idp-map-drag-layout" style={{ "--idp-map-bank-w": `${mapBankWidth}px` } as React.CSSProperties}>
                                <div className="idp-map-drag-canvas" aria-label="Interactive map">
                                    {mapImageUrl ? <div className="idp-map-drag-stage">
-                                   <img src={cleanMediaUrl(mapImageUrl)} alt="Map labelling diagram" draggable={false} />
+                                   <img src={cleanMediaUrl(mapImageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" draggable={false} />
                                    {group.questions.map((question: any, index: number) => {
                                        const slot = getSlot(question, index);
                                        const answer = String(examAnswers[question.id] || "");
@@ -2113,7 +2374,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                        });
                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
-                               {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
+                               {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
                            </div>
                        </div>;
@@ -2161,6 +2422,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 <div className="idp-external-diagram-col-visual">
                                     <img
                                         src={cleanMediaUrl(externalDiagramImageUrl)}
+                                        referrerPolicy="no-referrer"
+                                        loading="lazy"
                                         alt="Diagram visual"
                                         draggable={false}
                                         style={{
@@ -2290,7 +2553,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   ghi đè ngay khi popup Note/Highlight mở (re-render) -> vùng quét tạm biến mất, không highlight được. */}
                               {shouldShowAutoHeader && <StaticHtmlBlock tagName="h3" className="scorableItemHeadline highlightable-content" html={groupTitle} />}
 
-                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML((isDragDropGroup && dragOptions.length > 0) ? dragCleanInstruction : displayInstruction)} />}
+                              {showInstruction && <StaticHtmlBlock tagName="section" className="idp-instruction highlightable-content" dataField="instruction" dataQid={group.questions[0]?.id} html={renderSafeHTML(((isDragDropGroup || isListeningColumnMatching) && dragOptions.length > 0) ? dragCleanInstruction : displayInstruction)} />}
                           </div>
                           
                           {showContext && !isWordBankDrag && (
@@ -2322,7 +2585,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               renderFlowChart()
                           ) : isSentenceEndingDrag && dragOptions.length > 0 ? (
                               renderSentenceEndingDrag()
-                          ) : isMatchingGroup && group.questions.length > 0 ? (
+                          ) : isMatchingGroup && !isListeningColumnMatching && group.questions.length > 0 ? (
                               isMapPlanMatching ? (
                                   <div className="idp-map-plan-layout">
                                       <div className="idp-map-plan-visual">
@@ -2372,35 +2635,84 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                           </div>
                                                         );
                                                       })()
-                                                  ) : isDragDropGroup && dragOptions.length > 0 ? (
+                                                  ) : (isDragDropGroup || isListeningColumnMatching) && dragOptions.length > 0 ? (
                                                       (() => {
-                                                          // Tái dùng tag khi số câu > số đáp án (vd 7 câu / 3 theorist) -> kho KHÔNG vơi.
-                                                          const reuseTags = group.questions.length > dragOptions.length;
-                                                          const usedWords = group.questions.map(q => examAnswers[q.id] as string).filter(Boolean);
-                                                          const bankWords = reuseTags ? dragOptions : dragOptions.filter((opt: string) => !usedWords.includes(opt));
+                                                          const normalizedGroupCorrectAnswers = group.questions
+                                                              .map((q: any) => normalizeComparableAnswer(resolveOptionAnswerText({ ...q, options: dragOptions }, q.correctAnswer)))
+                                                              .filter(Boolean);
+                                                          const hasDuplicateCorrectAnswers =
+                                                              normalizedGroupCorrectAnswers.length > 0 &&
+                                                              new Set(normalizedGroupCorrectAnswers).size < normalizedGroupCorrectAnswers.length;
+                                                          const instructionAllowsReuse =
+                                                              /\b(?:more\s+than\s+once|use\s+any\s+(?:letter|option|answer)\s+more\s+than\s+once|re-?use)\b/i.test(
+                                                                  `${group.instruction || ""} ${group.context || ""}`
+                                                              );
+                                                          const explicitReuse = group.questions.some((q: any) => Boolean(q.allowOptionReuse));
+                                                          const reuseTags =
+                                                              isListeningColumnMatching
+                                                              || explicitReuse
+                                                              || instructionAllowsReuse
+                                                              || hasDuplicateCorrectAnswers
+                                                              || group.questions.length > dragOptions.length;
+                                                          const bankWords = reuseTags
+                                                              ? dragOptions
+                                                              : dragOptions.filter((opt: string) => !group.questions.some(q => {
+                                                                  const val = examAnswers[q.id];
+                                                                  if (!val) return false;
+                                                                  const normVal = normalizeComparableAnswer(resolveMatchingAnswerText({ ...q, options: dragOptions }, val));
+                                                                  return normVal === normalizeComparableAnswer(opt);
+                                                              }));
                                                           return (
                                                           <div className="idp-match2" style={{ "--idp-drag-bank-w": `${dragBankW}px` } as React.CSSProperties}>
                                                               {/* CỘT TRÁI: các mục có ô thả (chuẩn hình 2: Fossil categories / Points made) */}
                                                               <div className="idp-match2-items" style={{gridTemplateColumns: `minmax(0, 1fr) ${groupZoneW}px`}}>
                                                                   {dragItemsLabel && <div className="idp-match2-h">{dragItemsLabel}</div>}
-                                                                  {group.questions.map((q:any) => {
+                                                                  {group.questions.map((q: any) => {
                                                                       const gi = groupQuestionNumbers[group.questions.indexOf(q)] || group.questions.indexOf(q) + 1;
-                                                                      const val = examAnswers[q.id] as string;
+                                                                      const rawVal = examAnswers[q.id] as string;
+                                                                      const val = rawVal ? (resolveOptionAnswerText({ ...q, options: rawDragOptions.length ? rawDragOptions : dragOptions }, rawVal) || rawVal) : "";
                                                                       return (
                                                                           <React.Fragment key={q.id}>
                                                                               <span id={`question-${q.id}`} className="idp-match2-name"><StaticHtmlBlock tagName="span" className="highlightable-content" dataField="text" dataQid={q.id} html={renderSafeHTML(q.text)} /></span>
-                                                                              <span className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`} data-qid={q.id} draggable={!!val} title={val || 'Drag an answer here'} aria-label={val || `Answer slot ${gi}`}>{val || gi}</span>
+                                                                              <span
+                                                                                  className={`idp-dropzone ${val ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
+                                                                                  data-qid={q.id}
+                                                                                  data-num={String(gi)}
+                                                                                  data-placeholder={String(gi)}
+                                                                                  draggable={!!val}
+                                                                                  onDragStart={(event: any) => { if (val) beginAnswerDrag(event, val, val, q.id); }}
+                                                                                  onDragOver={(event: any) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+                                                                                  onDrop={(event: any) => { event.preventDefault(); event.stopPropagation(); commitDraggedAnswer(q.id, readDroppedAnswer(event), true, readDraggedSource(event)); }}
+                                                                                  onClick={(event: any) => { event.stopPropagation(); if (val) { dragSourceQuestionRef.current = q.id; setSelectedDragAnswer(val); } else commitDraggedAnswer(q.id, selectedDragAnswer, true, dragSourceQuestionRef.current); }}
+                                                                                  onDoubleClick={(event: any) => { event.stopPropagation(); handleAnswerChange(q.id, "", "DRAG_DROP"); dragSourceQuestionRef.current = ""; setSelectedDragAnswer(""); }}
+                                                                                  title={val ? 'Drag or click, then choose another answer box' : selectedDragAnswer ? 'Click to place the selected answer' : 'Drag an answer here'}
+                                                                                  aria-label={val || `Answer slot ${gi}`}
+                                                                              >
+                                                                                  {val || gi}
+                                                                              </span>
                                                                           </React.Fragment>
                                                                       );
                                                                   })}
                                                               </div>
                                                               {/* CỘT PHẢI: kho tag (Features / Theorists) */}
-                                                              <div className="idp-match2-bank">
+                                                              <div
+                                                                  className="idp-match2-bank"
+                                                                  onDragOver={(e: any) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+                                                                  onDrop={(e: any) => {
+                                                                      e.preventDefault();
+                                                                      const sourceQid = readDraggedSource(e);
+                                                                      if (sourceQid) {
+                                                                          handleAnswerChange(sourceQid, '', 'DRAG_DROP');
+                                                                          dragSourceQuestionRef.current = '';
+                                                                          setSelectedDragAnswer('');
+                                                                      }
+                                                                  }}
+                                                              >
                                                                   {dragBankLabel && <div className="idp-match2-h">{dragBankLabel}</div>}
                                                                   {bankWords.map((opt: string, idx: number) => (
                                                                       <div key={idx} className={`idp-match2-tag ${selectedDragAnswer === String(opt) ? 'selected' : ''}`} draggable
                                                                           onClick={() => selectBankAnswer(String(opt))}
-                                                                          onDragStart={(e:any) => beginAnswerDrag(e, opt, opt)}>
+                                                                          onDragStart={(e: any) => beginAnswerDrag(e, opt, opt)}>
                                                                           <span>{opt}</span>
                                                                       </div>
                                                                   ))}
@@ -2840,5 +3152,6 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          )}
 
                   </div>
-              );
-          }
+              </>
+          );
+      }

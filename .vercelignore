@@ -7,3 +7,13 @@ dist-ssr/
 __pycache__/
 *.pyc
 *.pyo
+.venv/
+.venv*/
+.vercel_python_packages/
+.agents/
+skills/
+.claude/
+.codex/
+_vol9_test11_render/
+tests/
+*.docx

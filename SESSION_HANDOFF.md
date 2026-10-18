@@ -1,4 +1,255 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-16)
+# IELTS OS — Session Handoff (cập nhật 2026-10-18)
+
+## Khắc Phục Tái Sử Dụng Đáp Án Cho Dạng Matching 2 Cột Listening & Căn Giữa Sơ Đồ Quy Trình Flow-Chart Drag (Listening 2-Column Drag & Flow-Chart Layout) — 2026-10-18
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Listening 2-Column Matching hiển thị sai giao diện radio Reading*: Các câu hỏi ghép đôi trong đề Listening (như match DVD categories với decisions) khi lưu dưới type `MATCHING` bị render nhầm thành bảng radio Reading (`renderMatchingTable()`) kèm legend phía dưới, thay vì giao diện kéo thả 2 cột chuẩn IDP (`idp-match2`).
+  2. *Kho thẻ bị mất khi kéo thả nếu options.length >= questions.length*: Trong `idp-match2`, điều kiện cũ `reuseTags = group.questions.length > dragOptions.length` chỉ cho phép tái dùng phương án khi số câu nhiều hơn số đáp án. Trong thực tế, nhiều bài Listening cho phép dùng lại chữ cái ("You may use any letter more than once") hoặc đáp án đúng có lặp lại phương án dù `options.length >= questions.length`. Khi thí sinh kéo 1 thẻ, thẻ đó biến mất khỏi kho và không thể chọn lại cho câu khác.
+  3. *Mất số thứ tự câu hỏi trong ô dropzone khi bỏ trống*: `src/App.template.tsx` chạy effect khôi phục DOM cho `.idp-dropzone`: `const displayVal = stateVal || dz.getAttribute('data-placeholder') || ""`. Do các thẻ dropzone trong `idp-match2` và `renderFlowChart` thiếu thuộc tính `data-placeholder`, khi ô chưa có câu trả lời hoặc bị xóa, `textContent` bị ghi đè thành chuỗi rỗng `""`, làm biến mất hoàn toàn số thứ tự câu hỏi (ví dụ 16–20 hoặc 21–25).
+  4. *Khung Flow-Chart bị bè ngang 420px, chữ lệch trái và dropzone nhảy dòng riêng*:
+     - `q.text` import từ DOCX chứa các thẻ `<br/>`, `\n` và gạch dưới kéo dài (`[16] ________`) chưa được bóc tách triệt để, khiến thẻ `.idp-dropzone` bị ngắt thành 3 dòng riêng biệt (`Put` / `[ dropzone ]` / `on the back`).
+     - CSS `.idp-flowchart-layout` cố định `minmax(0, 420px)` và `.idp-flowchart-node` ép `text-align: left !important`, khiến hộp sơ đồ bè rộng thô kệch và văn bản bị lệch trái thay vì co giãn ôm sát nội dung (`fit-content`) và căn giữa trang nhã.
+
+- **Giải pháp triệt để**:
+  1. *Điều hướng tự động Listening Matching sang `idp-match2`*:
+     - Định nghĩa `isListeningColumnMatching` cho các nhóm câu hỏi Matching trong Listening không kèm hình vẽ map/plan và không phải info matching.
+     - Tự động bỏ qua `renderMatchingTable()` và render sang `idp-match2`.
+  2. *Cơ chế tái dùng phương án linh hoạt (`reuseTags`)*:
+     - Tính toán `reuseTags` đa điều kiện: `isListeningColumnMatching || explicitReuse || instructionAllowsReuse || hasDuplicateCorrectAnswers || group.questions.length > dragOptions.length`.
+     - Nhận diện chỉ thị cho phép dùng lại trong đề thi ("more than once", "re-use"), phát hiện đáp án trùng lặp trong answer key, hoặc cờ `allowOptionReuse` từ Builder/parser.
+     - Khi `reuseTags = true`, các thẻ trong kho không bị ẩn đi khi đã kéo thả.
+     - Hỗ trợ kéo thẻ từ dropzone ngược về kho (`.idp-match2-bank` / `.idp-flowchart-bank`) để hủy chọn câu hỏi.
+     - Bổ sung checkbox `Allow reusing options` trong `EXAM_BUILDER.txt` cho cả Column Drag và Flow-Chart Drag.
+     - Bổ sung parser trong `api/index.py` nhận diện thẻ `[REUSE_OPTIONS]`, câu chỉ dẫn "more than once", hoặc trùng đáp án để tự động bật `allowOptionReuse: True`.
+  3. *Bảo toàn số thứ tự câu hỏi khi trống*:
+     - Thêm `data-placeholder={...}` và `data-num={...}` vào tất cả `.idp-dropzone` trong `idp-match2` và `renderFlowChart`.
+     - Cập nhật effect khôi phục DOM trong `src/App.template.tsx` bỏ qua `.idp-summary-dropzone` để bảo vệ cấu trúc HTML bên trong.
+  4. *Chuẩn hóa sơ đồ quy trình Flow-Chart*:
+     - Làm sạch `flowHtml`: bóc sạch `<br/>`, `<p>`, `<div>`, `&nbsp;` và gạch chân đuôi marker `\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?`, đảm bảo văn bản trước - dropzone - văn bản sau hiển thị liền mạch trên cùng 1 dòng.
+     - Cập nhật CSS: `.idp-flowchart-node` co giãn linh hoạt (`width: fit-content; min-width: 200px; max-width: min(100%, 460px); margin: 0 auto;`), căn giữa chữ `text-align: center !important;`.
+     - Đồng bộ giao diện xem lại bài thi Review (`REVIEW_QUIZ.txt`) với cùng quy chuẩn bóc tách văn bản và căn giữa.
+  5. *Kiểm thử & Biên dịch*:
+     - Bổ sung unit test `tests/test_allow_option_reuse.py` kiểm thử 3 kịch bản: `[REUSE_OPTIONS]`, chỉ dẫn "more than once", và đáp án trùng lặp. 3/3 tests pass 100%.
+     - `compile_app.py`, `npx tsc -b`, `npx vite build` pass 100% không cảnh báo lỗi.
+
+## Chuẩn Hóa Phân Tích Bẫy Nhận Thức (AI Cognitive Trap Diagnosis) & Bảng Lựa Chọn Gây Nhiễu (Option Distractor Breakdown) — 2026-10-17
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Trùng lặp tiền tố phương án (`A. A.`, `B. B.`)*: Options từ DOCX imports đã sẵn có tiền tố chữ cái (`"A. "`, `"B. "`), việc ghép thêm `${String.fromCharCode(65 + idx)}. ` trong frontend và backend khiến chuỗi bị lặp thành `"A. A. used up all the resources..."`.
+  2. *Phương án đúng bị gán nhầm nhãn `ELIMINATE`*: `targetQ.correctAnswer` thường lưu dạng số (0, 1, 2) hoặc chuỗi số ("0", "1", "2"), hoặc mảng (`[0, 2]`), hoặc text thuần. Thuật toán so khớp cũ chỉ so khớp chuỗi chữ hoa với body hoặc prefix, bỏ sót việc đối chiếu index số hoặc định dạng mảng trắc nghiệm nhiều đáp án, khiến phương án đúng bị gán nhãn xám `ELIMINATE`.
+  3. *Bẫy giả `"TRAP: No Audio Provided"` & điệp từ lặp `"Without the audio..."`*:
+     - Chuỗi fallback lấy transcript cho câu Listening Part 2/3/4 bị đứt nếu `sections[qSectionIndex].passage` rỗng mà không kiểm tra `fullQuiz.passage`, `sections[0].passage` (nơi lưu full transcript của toàn bài nghe).
+     - Khi backend nhận chuỗi ngữ cảnh rỗng, prompt thiếu guardrail cấm dẫn chứng tiêu cực khiến Gemini 2.5 Flash xuất ra `"TRAP: No Audio Provided"` và lặp đi lặp lại `"Without the audio, it's impossible to confirm or deny this statement..."` trên mọi phương án.
+  4. *Xử lý câu học viên bỏ trống (Blank / Unanswered Questions)*: Khi học viên không chọn đáp án, AI xuất câu sáo rỗng vô dụng (`"The student's answer is blank, indicating they did not provide a response..."`) thay vì cung cấp hướng dẫn bắt nhịp từ khóa.
+
+- **Giải pháp triệt để**:
+  1. *Khử trùng lặp tiền tố phương án*:
+     - Viết hàm `cleanOptionText` (TypeScript) và `_clean_option_text` (Python) lặp xóa triệt để mọi tiền tố chữ cái, số, ngoặc đơn, hai chấm (`/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/`).
+     - Render duy nhất một tiền tố chuẩn `${optLetter}. ${optBody}` trên giao diện Review (`REVIEW_QUIZ.txt`) và trong payload gửi sang AI (`src/App.template.tsx`), loại bỏ vĩnh viễn hiện tượng `A. A.`.
+  2. *So khớp đa tầng chính xác 100% cho `CORRECT` và `ELIMINATE`*:
+     - Xử lý đồng thời cả `CHOICE` và `CHOICE_MULTIPLE` cho `targetQ.correctAnswer` dưới mọi biểu diễn: số nguyên (`0`, `1`, `2`), chuỗi số (`"0"`, `"1"`), chữ cái (`"A"`, `"B"`), mảng (`[0, 2]`, `["A", "C"]`), chuỗi phân tách (`"A, C"`, `"A / C"`), và so khớp văn bản thân phương án + bản đồ TFNG (`True/False/Not Given`).
+     - Phương án đúng: Luôn gắn badge xanh lá nổi bật `CORRECT` (`#dcfce7`, text `#15803d`, border `1px solid #86efac`) cùng viền và nền hàng dịu nhẹ (`#f0fdf4`, border `1px solid #bbf7d0`).
+     - Phương án sai: Gắn badge xám `ELIMINATE` (`#f1f5f9`, text `#475569`). Nếu học viên đã chọn phương án sai này, hiển thị badge cảnh báo đỏ `YOUR CHOICE · ELIMINATE` (`#fee2e2`, text `#b91c1c`, border `1px solid #fca5a5`) cùng nền `#fff5f5`.
+  3. *Chuỗi Fallback Transcript đa cấp & Guardrail chống "No Audio"*:
+     - `src/App.template.tsx`: Tự động tìm kiếm transcript theo thứ tự ưu tiên: `sections[qSectionIndex].passage` -> `sections[qSectionIndex].passageHtml` -> `fullQuiz.passage` -> `fullQuiz.passageHtml` -> `sections[0].passage` -> `fullQuiz.transcript`. Đảm bảo Part 2, 3, 4 luôn có transcript đầy đủ gửi lên backend.
+     - `api/index.py`: Thêm luật cấm tuyệt đối AI nhắc tới việc thiếu audio/transcript trong cả `sys_prompt` và `decon_sys`. Bắt buộc phân tích trực tiếp từ khóa và logic phương án.
+     - Bộ lọc hậu xử lý (Post-processor) ở backend và frontend tự động quét sạch mọi biến thể của `"no audio"` / `"without audio"` và thay thế bằng phân tích bẫy từ khóa sư phạm chuẩn.
+  4. *Nâng cấp sư phạm cho câu bỏ trống*:
+     - Nhận diện trạng thái `isUnanswered`, chuyển đổi khung lỗi thành thẻ chiến thuật làm bài màu hổ phách (`#fffbeb`, viền trái cam `#f59e0b`, chữ nâu đậm `#92400e`) với tiêu đề "Chiến thuật xử lý câu bỏ trống: ".
+     - AI hướng dẫn học viên cách bắt nhịp các từ chuyển tiếp (signpost markers) để không bị vuột mất thông tin khi nghe.
+  5. *Kiểm thử & Biên dịch*:
+     - Bổ sung 2 unit test trong `tests/test_ai_pedagogical_features.py`: `test_clean_option_text_helper` và `test_ai_explain_deconstruction_sanitization`. 8/8 tests pass 100%.
+     - `compile_app.py`, `npx tsc -b`, và `npx vite build` đều pass 100% không cảnh báo lỗi.
+
+## Phát mượt tức thì không trễ cho bài thi Listening (Zero-Latency Instant Audio Playback Engine) — 2026-10-17
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Unmount/Remount `<audio>` muộn & `preload="metadata"`*: Phần tử `<audio ref={audioRef}>` trước đây chỉ được mount khi đã vào `activeExam` và sử dụng `preload="metadata"`. Trong suốt giai đoạn thí sinh ở màn hình chờ `PENDING_EXAM` hoặc xem video hướng dẫn `realExamInstructionGate`, audio không hề được tải trước các khối dữ liệu phát được (`HAVE_FUTURE_DATA`).
+  2. *Range prewarm không hiệu quả*: Đoạn effect fetch 256 KB cũ kiểm tra `target.origin !== window.location.origin` (bỏ qua toàn bộ Firebase Storage và CDN ngoài) và dùng `cache: "no-store"`, khiến trình duyệt không thể tái sử dụng dữ liệu đã fetch cho thẻ `<audio>`.
+  3. *`isOfflineReady` bỏ quên audio*: Chỉ đợi ảnh tải xong mà không kiểm tra xem buffer của audio đã sẵn sàng phát hay chưa.
+  4. *Nghẽn click trong `requestManagedAudioPlayback`*: Gọi `warmAndroidAudioPath()` dạng `await` trước khi play trên desktop và gọi `.load()` làm reset decoder pipeline ngay khi thí sinh vừa click Play.
+
+- **Giải pháp triệt để**:
+  1. *Cột mốc `<audio ref={audioRef}>` bền vững (Persistent Hoisted Audio Portal)*:
+     - Tính toán `preloadOrActiveAudioUrl` thống nhất xuyên suốt các trạng thái: `activeExam` (Listening/Integrated), `pendingExamState.quiz`, `realExamInstructionGate`, và `realExamSession`.
+     - Render duy nhất một phần tử `<audio ref={audioRef}>` bền vững qua `createPortal(..., document.body)` với `key={preloadOrActiveAudioUrl}`, cấu hình `preload="auto"` để trình duyệt tự động buffer các chunk âm thanh ngay khi đang ở màn hướng dẫn/video.
+     - Loại bỏ thẻ `<audio>` trùng lặp trong `ACTIVE_EXAM.txt`, loại trừ việc unmount/remount khi chuyển trạng thái làm mất buffer.
+     - Tự động chèn dynamic `<link rel="preconnect">` và `<link rel="dns-prefetch">` vào `document.head` cho origin của file audio ngay khi biết URL.
+  2. *Theo dõi trạng thái đệm thực tế (`isAudioReadyToPlay`)*:
+     - Lắng nghe các sự kiện `onCanPlay`, `onCanPlayThrough`, `onProgress`, `onLoadedData`, `onLoadedMetadata`, `onTimeUpdate` kết hợp kiểm tra `audio.readyState >= 3` hoặc `audio.buffered.end(0) >= min(5, duration)`.
+     - Fallback safety timer 6000ms chống treo trên các trình duyệt di động khắt khe (như iOS Safari).
+     - Gỡ bỏ effect fetch 256 KB range vô dụng cũ.
+  3. *Mồi luồng âm thanh trên cử chỉ người dùng trước overlay (Pre-Overlay Gesture Priming)*:
+     - `PENDING_EXAM.txt`: Ràng buộc `isReadyToStart = isOfflineReady && isAudioReadyToPlay` trước khi hiện tích xanh và bật nút Start Test.
+     - Khi thí sinh bấm "Start Test" (hoặc "Confirm and start Listening" trong Real Exam Gate), tận dụng gesture này để gọi `warmAndroidAudioPath()` và mồi `a.preload = "auto"; if (a.networkState === EMPTY) a.load();`.
+  4. *Khởi phát Play tức thì (<50ms) & Nâng cấp UI Overlay*:
+     - `requestManagedAudioPlayback`: Không bao giờ gọi `audio.load()` nếu `audio.readyState >= 1`. Chạy `void warmAndroidAudioPath()` non-blocking trên touch host, gọi `audio.play()` lập tức và set `setAudioStatus("PLAYING")` ngay khi promise resolve.
+     - Màn hình chờ Inspera (`ACTIVE_EXAM.txt`): Phản ánh trạng thái trực quan — hiện spinner nhỏ `"Preparing audio..."` nếu buffer chưa đầy, hiện `"Starting..."` chống double click, và hiện nút Play trắng sắc nét khi audio đã sẵn sàng trong RAM, bấm là phát ngay lập tức.
+  5. *Biên dịch & Kiểm thử*:
+     - `python compile_app.py`, `npx tsc -b`, và `npx vite build` đều pass 100% không lỗi.
+
+## Xử Lý Lỗi Vercel Deploy Quá Dung Lượng (Oversized Files & Deployment Payload Block) — 2026-10-17
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Thiếu cấu hình `.vercelignore` & `.gitignore` cho môi trường Python*: Các thư mục môi trường ảo `.venv/` (334.69 MB), `.venv-1/` (36.36 MB), `.vercel_python_packages/` (55.73 MB) và agent tools `skills/` (14.84 MB) không được liệt kê trong `.vercelignore`. Khi deploy qua Vercel CLI (`vercel` / `vercel --prod`), toàn bộ payload hơn 490 MB bị đóng gói gửi lên Vercel, vượt xa ngưỡng 100 MB của Vercel dẫn đến lỗi từ chối upload (Payload Too Large).
+  2. *Các file binary khổng lồ trong `.venv`*: `.venv/Lib/site-packages/playwright/driver/node.exe` (88.02 MB) và `.venv/Lib/site-packages/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe` (83.58 MB) tiệm cận giới hạn dung lượng file đơn của Vercel.
+  3. *Video hướng dẫn cũ không còn dùng trong `public/instruction-videos/`*: `reading-tutorial-v1.mp4` (19.41 MB) và `listening-tutorial-v1.mp4` (11.04 MB) là phiên bản cũ v1 không còn được import/sử dụng trong `App.template.tsx` (hiện đã dùng `v2` và `writing-tutorial-v1`), nhưng vẫn bị Vite bundle đẩy lên CDN làm phình dung lượng.
+
+- **Giải pháp triệt để**:
+  1. *Cập nhật `.vercelignore`*: Bổ sung loại trừ `.venv/`, `.venv*/`, `.vercel_python_packages/`, `.agents/`, `skills/`, `.claude/`, `.codex/`, `_vol9_test11_render/`, `tests/`, `*.docx`. Giảm ngay payload từ ~500 MB xuống < 10 MB mã nguồn thực tế.
+  2. *Cập nhật `.gitignore`*: Bổ sung `.venv/` và `.venv*/` để tránh commit nhầm môi trường ảo local.
+  3. *Dọn dẹp static assets*: Nhận diện các file video `v1` dư thừa để gỡ bỏ hoặc chuyển sang lưu trữ đám mây.
+
+## Khắc Phục Lỗi Hiển Thị Ảnh Đề Thi & Vượt Rào Chặn Hotlink (Exam Image Rendering & Hotlink Bypass) — 2026-10-17
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Cắt cụt query string trong `formatContent`*: Regex phân tích ảnh trước đây dừng đột ngột ngay sau đuôi file (`.png`, `.jpg`...), làm đứt query param `?alt=media&token=...` của Firebase Storage hoặc `?w=...` của CDN. Firebase Storage từ chối URL mất token với mã lỗi 403 Forbidden, khiến ảnh bị vỡ thành icon Visual Content.
+  2. *Chặn Hotlink từ Host ngoài*: Các trang ảnh bên thứ ba (WordPress, Blogspot, Imgur, CDNs) kiểm tra HTTP `Referer` và từ chối cung cấp ảnh qua cross-origin hotlink nếu không có `referrerpolicy="no-referrer"`.
+  3. *DOMPurify thanh trừng thuộc tính*: Danh sách `ALLOWED_ATTR` trong `sanitizeRichHtml` thiếu `"referrerpolicy"` và `"loading"`, dẫn tới việc các thuộc tính này bị xóa bỏ khi sanitize HTML.
+  4. *Tiền tố định dạng và link Google Drive*: Các tiền tố `IMAGE: https://...` hoặc `Url: https://...` từ DOCX import cần được bóc tách sạch sẽ; các link xem trước Google Drive (`drive.google.com/file/d/.../view` hoặc `open?id=...`) cần được tự động chuyển đổi thành luồng ảnh trực tiếp (`drive.google.com/uc?export=view&id=...`).
+
+- **Giải pháp triệt để**:
+  1. *`src/App.template.tsx`*:
+     - Bổ sung hàm chuẩn hóa `normalizeImageUrl` tự động chuyển đổi các link Google Drive dạng view/share thành direct image stream `https://drive.google.com/uc?export=view&id={id}`.
+     - Cập nhật regex trong `formatContent` bảo toàn nguyên vẹn query string (`\?(?:[^\s<"']*)?` và `/o/...alt=media...`), đồng thời hỗ trợ nhận diện các tiền tố `IMAGE:` / `Url:` và sinh thẻ `<img>` kèm `referrerpolicy="no-referrer"` và `loading="lazy"`.
+     - Bổ sung `"referrerpolicy"` và `"loading"` vào `ALLOWED_ATTR` của `sanitizeRichHtml` (DOMPurify).
+     - Cập nhật `isSupportedRemoteImageUrl` và `renderRemoteImageHtml` hỗ trợ Google Drive và Firebase Storage URLs bảo đảm an toàn.
+  2. *`src/components_split/ACTIVE_EXAM.txt`*:
+     - Cập nhật `mapPlanImageHtml` tự động chèn `referrerpolicy="no-referrer"` và `loading="lazy"` vào mọi thẻ `<img>` trích xuất hoặc URL map/plan.
+     - Cập nhật `stripMapPlanVisual` loại bỏ sạch tiền tố `(?:IMAGE|Url)\s*:\s*https?://...` tránh sót chữ thừa.
+     - Bọc `cleanMediaUrl` với `normalizeImageUrl` và bổ sung `referrerPolicy="no-referrer"` `loading="lazy"` cho các thẻ `<img>` Map Labelling, Diagram và External Diagram visual.
+  3. *`src/components_split/REVIEW_QUIZ.txt`*:
+     - Đồng bộ `cleanMediaUrl` với `normalizeImageUrl` và bổ sung `referrerPolicy="no-referrer"` `loading="lazy"` cho các thẻ `<img>` trong chế độ xem lại bài thi.
+  4. *Biên dịch & Kiểm thử*:
+     - Biên dịch thành công qua `python compile_app.py`.
+     - Kiểm tra `npx tsc -b` vượt qua 100% với 0 lỗi.
+
+
+- **Khắc phục lỗi phương án Incorrect bị gắn nhãn nhầm thành CORRECT trong Why AI**:
+  - *Nguyên nhân cốt lõi*: Trong `api/index.py` và `REVIEW_QUIZ.txt`, logic kiểm tra ban đầu sử dụng `is_corr = "CORRECT" in raw_status.upper() or "CORRECT" in raw_reason.upper()`. Tuy nhiên, từ tiếng Anh `"INCORRECT"` chứa nguyên vẹn chuỗi con `"CORRECT"`, hoặc đoạn giải thích lý do có chứa chữ "...not correct..." khiến mọi phương án sai đều bị đánh giá nhầm thành `true` và hiển thị huy hiệu `CORRECT` màu xanh.
+  - *Giải pháp triệt để*:
+    - Backend `api/index.py`: Kiểm tra loại trừ rõ ràng `is_elim = any(k in status_upper for k in ["ELIMINATE", "INCORRECT", "WRONG", "FALSE", "TRAP", "DISTRACTOR"])`, chỉ chấp nhận `is_corr = ("CORRECT" in status_upper and not is_elim)`. Đồng thời bổ sung bước đối chiếu xác định trực tiếp với đáp án chính thức (`correct`), đảm bảo nếu ký tự phương án (ví dụ `G`) khác với đáp án đúng (ví dụ `C`) thì 100% bắt buộc là `ELIMINATE`.
+    - Phân tích tiền tố & thân phương án cho dạng True/False/Not Given & Yes/No/Not Given: Tách chuỗi dạng `C. NOT GIVEN` thành prefix `C` và body `NOT GIVEN`. Ánh xạ từ điển chuẩn hóa `tfngMap` (`T/TRUE`, `F/FALSE`, `NG/NOT GIVEN`, `Y/YES`, `N/NO`) để so khớp chính xác với đáp án của câu hỏi, chấm dứt hoàn toàn tình trạng cả 3 phương án TFNG đều bị ép thành `ELIMINATE`.
+    - Frontend `REVIEW_QUIZ.txt`: Triển khai đồng bộ parser tiền tố và thân phương án kèm từ điển canonical `tfngMap`.
+    - Unit test tự động: Bổ sung `test_distractor_breakdown_incorrect_never_marked_correct` và `test_distractor_breakdown_tfng_identifies_correct_option` trong `tests/test_manual_explanations.py`.
+
+- **Khắc phục lỗi không thể cuộn lên (Scroll Up) trong Chat Copilot khi đang bật nghe Audio**:
+  - *Nguyên nhân cốt lõi*: Khung chat sử dụng inline ref callback `ref={el => { if (el) { el.scrollTop = el.scrollHeight; } }}`. Khi audio bài nghe phát, sự kiện `timeupdate` kích hoạt 4 lần/giây (mỗi 250ms), làm `rvAudioCur` thay đổi và component cha re-render. Mỗi lần re-render, inline callback ref bị React gọi lại và cưỡng chế cuộn `el.scrollTop = el.scrollHeight;`, giật mạnh thanh cuộn xuống đáy khiến học sinh không thể cuộn lên xem tin nhắn trước đó.
+  - *Giải pháp triệt để*: Chuyển sang `useRef` cố định (`copilotChatBoxRef` tại `App.template.tsx`), chỉ kích hoạt cuộn đáy trong `useEffect` khi có tin nhắn mới (`copilotMessages.length` tăng) hoặc khi mở hộp chat (`copilotOpen`), bảo toàn tuyệt đối vị trí cuộn thủ công của học sinh trong lúc nghe audio.
+
+- **Tinh Gọn & Chuẩn Hóa Hiển Thị Markdown, Khắc Phục Lỗi Nhảy Transcript**:
+  - *Khử vỡ dấu sao `**` và dẹp bỏ biển nút bấm tím*: Trước đây regex token chia tách chuỗi thô xung quanh ngoặc kép, cắt đứt các cụm in đậm (như `2. **"Problem" and "Suggestion" Pattern:**`) thành các mảnh rời không khép dấu `**`. Đồng thời mọi từ trong ngoặc kép độ dài >= 4 ký tự đều biến thành nút bấm tím khổng lồ, khiến các từ thông thường như `"Problem"`, `"Suggestion"` bị gán nhầm thành nút dẫn chứng.
+  - *Parser Markdown phân tầng*:
+    - Xử lý khối: Nhận diện chính xác tiêu đề (`###`), danh sách có thứ tự (`1.`, `2.`), danh sách dấu gạch đầu dòng (`-`, `*`) và đoạn văn bản.
+    - Xử lý nội tuyến: Phân tách in đậm `**bold**` trước, đảm bảo markdown không bao giờ bị rách vỡ ký tự asterisks.
+    - Bộ lọc dẫn chứng thông minh (`matchesSource`): Chỉ những trích dẫn văn bản thực tế từ bài đọc/transcript (độ dài >= 10 ký tự, >= 2 từ, không phải nhãn generic và có xuất hiện trong `rvSourceTextNormalized`) mới được chuyển đổi thành nút bấm dẫn chứng. Các từ ngữ giải thích thông thường được hiển thị dưới dạng dấu ngoặc kép typographic thanh lịch `“...”`.
+    - Sửa lỗi nhảy vị trí transcript (`rvJumpToTranscript`): Loại bỏ việc vô cớ fallback về `blocks[0]` khi không tìm thấy trích dẫn, ngăn chặn triệt để tình trạng click vào từ ngữ bất kỳ bị cuộn giật về đầu bài nghe. Đồng thời đồng bộ `rvSeek` với `rvJumpToTranscript` để khi click mốc thời gian `[mm:ss]` vừa tua audio vừa cuộn transcript tới đúng dòng tương ứng.
+
+## Tinh Gọn Giao Diện Why (AI) & Gia Sư IELTS AI Master Trò Chuyện Tự Do — 2026-10-16
+
+- **Tinh Gọn Giao Diện Why (AI) Khắc Phục Lỗi Vỡ Layout**:
+  - *Khử trùng lặp nội dung*: `rvCleanExplainText` tự động lọc bỏ các gạch đầu dòng liệt kê phương án (`* A. ...`, `* B. ...`) khỏi đoạn văn giải thích tổng quan khi đã có khối Distractor Breakdown, loại bỏ tình trạng giải thích bị nhân đôi quá dài.
+  - *Sửa triệt để lỗi thẻ Option Distractor*: Chuẩn hóa dữ liệu phía backend (`api/index.py`) và frontend (`REVIEW_QUIZ.txt`) để huy hiệu trạng thái chỉ chứa nhãn súc tích `CORRECT` / `ELIMINATE` (thay vì nhồi nhét cả câu giải thích dài 20 từ vào huy hiệu nhỏ gây kéo giãn giao diện).
+  - *Thay thế bảng Paraphrase bằng Tag Chips*: Chuyển đổi bảng HTML 3 cột cồng kềnh thành dàn thẻ chip flex bento bo góc tinh tế `[ Question Keyword ➔ Passage/Audio Clue | Note ]`, loại bỏ hiện tượng ô trống `--` và tiết kiệm 70% chiều cao màn hình.
+  - *Chẩn đoán bẫy nhận thức sắc nét*: Badge `TRAP: ...` tông màu pastel đỏ nhạt kèm hộp nhận định lỗi tư duy có viền nhấn `borderLeft: 3px solid #ef4444`.
+
+- **Nâng Cấp Gia Sư IELTS AI Master Độc Lập & Animation Mượt Mà**:
+  - *Trò chuyện tự do không bắt buộc chọn câu*: Gỡ bỏ rào cản `if (!q) return;`. Học sinh có thể bấm nút nổi "Gia sư IELTS AI" bất kỳ lúc nào để trò chuyện tổng quan về toàn bộ bài thi, hỏi chiến thuật làm bài, phân tích bẫy đề lớn nhất, hoặc tra cứu từ vựng Band 8+.
+  - *Ngữ cảnh toàn năng (Omniscient Exam Context)*: Backend `POST /api/review_copilot` tự động nạp toàn bộ danh sách câu hỏi làm sai, đáp án học sinh, đáp án đúng và bài đọc/transcript. Khi học sinh hỏi về bất kỳ câu nào trong chat (ví dụ: "giải thích câu 15"), AI tự động định vị và giải đáp chuẩn xác.
+  - *Chuyển đổi ngữ cảnh linh hoạt*: Ghim câu hỏi (`[Q12]`) kèm nút `[✕ Bỏ ghim]` để quay lại chế độ toàn bài; dropdown chọn nhanh câu hỏi ngay tại thanh tiêu đề.
+  - *Tương tác dẫn chứng & Audio trực tiếp*:
+    - Trích dẫn văn bản dạng ngoặc kép `"..."` tự động trở thành nút bấm tương tác, click vào sẽ cuộn và highlight dẫn chứng trong bài đọc hoặc audio transcript.
+    - Mốc thời gian `[mm:ss]` tự động trở thành nút phát audio trực tiếp từ giây tương ứng.
+  - *Trải nghiệm cao cấp & Animation mượt mà*:
+    - Hiệu ứng trượt nổi spring animation (`copilotPanelIn`, `copilotMsgIn`, `copilotWave` 3-dot typing).
+    - Nút mở rộng cửa sổ (Expand/Collapse từ 425px lên 680px) để đọc phân tích sâu thoải mái trên màn hình lớn.
+    - Đèn tín hiệu trạng thái trực tuyến (pulsing green beacon dot).
+
+## Hệ Thống Điều Hướng URL Đa Tầng (Hierarchical URL Routing Engine) — 2026-10-16
+
+- **Mục tiêu & Yêu cầu**:
+  - Chuyển đổi mô hình URL phẳng (`/`) thành cấu trúc URL phân cấp rõ ràng theo từng phân hệ (Auth, System, Exam, Review, Student, Teacher), hỗ trợ deep linking, bookmark, chia sẻ link trực tiếp và nút Back/Forward của trình duyệt mà không làm mất trạng thái làm bài hoặc gián đoạn luồng thi cử.
+  - Zero-dependency routing: Đồng bộ 2 chiều (Bidirectional Synchronization) hoàn toàn qua HTML5 History API (`pushState`, `popstate`), tương thích 100% với React 19 và SPA fallback của Vercel (`vercel.json`) cũng như Service Worker (`public/sw.js`).
+- **Cấu trúc URL Chuẩn Hóa**:
+  - **Auth & Public**:
+    - `/login`: Đăng nhập hệ thống.
+    - `/seb-guide`: Hướng dẫn cấu hình Safe Exam Browser (SEB).
+  - **Phòng thi & Chấm thi**:
+    - `/exam/:quizId`: Phòng thi IELTS máy tính (Listening, Reading, Writing, Integrated).
+    - `/exam/:quizId/real-mock`: Chế độ thi thử Real Exam có kiểm soát nghiêm ngặt.
+    - `/exam/review/:resultId`: Màn hình xem lại kết quả chi tiết của học sinh.
+    - `/exam/writing-feedback/:resultId`: Học sinh xem bài chấm và phân tích lỗi Writing.
+    - `/teacher/grading/:resultId`: Bàn chấm bài Writing của Giáo viên (Manuscript Editorial Desk).
+  - **Phân hệ Học sinh (Student Portal)**:
+    - `/student/dashboard`: Tổng quan bàn học, chuỗi ngày, OS Coins, Expression of the day.
+    - `/student/exams`: Danh sách bài thi, bộ lọc kỹ năng, lịch sử làm bài.
+    - `/student/quests`: Nhiệm vụ học tập theo chủ đề.
+    - `/student/vocab`: Sổ tay từ vựng cá nhân (`vocabNotebook`).
+    - `/student/rewards`: Cửa hàng đổi thưởng OS Coins.
+    - `/student/progress`: Biểu đồ tiến độ và phân tích Error DNA.
+  - **Phân hệ Giáo viên (Teacher Workspace)**:
+    - `/teacher/dashboard`: Trung tâm điều hành & thống kê giáo viên.
+    - `/teacher/exams`: Thư viện đề thi IELTS.
+    - `/teacher/exams/:quizId`: Soạn/chỉnh sửa đề thi trong Exam Builder.
+    - `/teacher/students`: Danh sách và quản lý học sinh.
+    - `/teacher/students/:studentId`: Hồ sơ chi tiết học sinh và bản đồ Error DNA.
+    - `/teacher/classes`: Quản lý lớp học và xếp chỗ.
+    - `/teacher/arena`: Đấu trường trực tiếp Live Arena.
+    - `/teacher/finances`: Quản lý học phí và sổ quỹ.
+    - `/teacher/drive`: Lưu trữ tài liệu học tập.
+    - `/teacher/quests`: Quản trị chuỗi bài tập và giao bài.
+    - `/teacher/academics`: Quản lý giáo trình và học liệu.
+    - `/teacher/history`: Nhật ký hoạt động hệ thống.
+- **Cơ chế Kỹ thuật Triệt để**:
+  - *Ánh xạ trạng thái -> URL (`computeCurrentPath`)*: Chuyển đổi trạng thái thực tế (`userRole`, `currentUser`, `activeExam`, `reviewQuiz`, `sebGuideQuiz`, `portalTab`, `activeTab`, `profileId`, `editingQuiz`) thành đường dẫn URL hợp lệ.
+  - *Bộ phân tích & Áp dụng URL -> State (`applyRouteFromPath`)*: Tự động phân giải pathname khi tải trang hoặc popstate, khôi phục đúng tab, đề thi, hoặc hồ sơ tương ứng. Tích hợp Route Guards ngăn chặn học sinh truy cập `/teacher/*` (tự động điều hướng về `/student/dashboard`) và ngược lại.
+  - *Bảo vệ Thí sinh Đang Thi (Exam In-Flight Guard)*: Khi thí sinh đang trong phòng thi (`activeExam`), nếu bấm nút Back trình duyệt, hệ thống chặn việc thoát vô tình và cảnh báo xác nhận `confirm(...)`, bảo toàn 100% câu trả lời và timer.
+  - *Chống Vòng Lặp Vô Hạn (Loop Prevention)*: Kết hợp cờ `isRoutingPopStateRef` với so sánh nghiêm ngặt `window.location.pathname !== targetPath`, chỉ đẩy `history.pushState` khi pathname thực sự thay đổi.
+  - *Khởi tạo An toàn (Initial Route Hydration)*: Cờ `initialRouteAppliedRef` chỉ cho phép hydrate pathname lần đầu sau khi dữ liệu (`loaded`, `currentUser`) đã sẵn sàng.
+
+## 4 Tính Năng Sư Phạm AI Đột Phá (AI Pedagogical Core) — 2026-10-16
+
+- **Feature 1: Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy Tự động 100% (Error DNA & Weakness Diagnostic Engine)**:
+  - *Cơ chế vận hành*: Tự động kích hoạt khi học sinh/giáo viên mở app hoặc khi nộp bài thi (`submitExam`), không cần bất kỳ thao tác click nút nào.
+  - *Quét xác định 0ms (Deterministic Scanner)*: Hệ thống gom toàn bộ kết quả làm bài của học sinh, phân loại câu sai theo 8 dạng câu hỏi IELTS chuẩn (`CANONICAL_IELTS_TYPES`) và tạo signature duy nhất `${attempts}_${latestDate}_${totalQuestions}`.
+  - *Chẩn đoán Nhận thức AI (`POST /api/analyze_error_dna`)*: Phân tích 15 lỗi sai thực tế gần nhất qua Vertex AI `gemini-2.5-flash` (fallback AI Studio/Groq/Cerebras), bóc tách 3 nhóm nguyên nhân nhận thức (Lexical Gap %, Distractor Trap %, Scope Misread % tổng 100%), định vị bẫy đề kinh niên kèm mức độ nghiêm trọng và kế hoạch hành động 7 ngày.
+  - *Hiển thị đồng bộ*: Render thẻ chẩn đoán trực quan trong Hồ sơ học sinh của Giáo viên (`STUDENTS.txt`) và Bàn học cá nhân của Học sinh (`STUDENT_PORTAL.txt`), zero emoji, 100% song ngữ (`tx(vi, en)`).
+
+- **Feature 2: Bộ Phân Tích Bẫy Đề 2.0 (Distractor Deconstructor 2.0 in Why AI)**:
+  - *Nâng cấp Backend (`/api/ai_explain`)*: Bổ sung payload `deconstruction` có cấu trúc JSON mà vẫn giữ nguyên 100% tính tương thích ngược của `explanation` và `audioEvidence`.
+  - *Frontend Review (`REVIEW_QUIZ.txt`)*:
+    - Huy hiệu bẫy đề chuyên sâu (`TRAP: ...`) kèm chẩn đoán lý do chọn sai (`whyStudentWrong`).
+    - Bảng ma trận đối chiếu từ khóa Paraphrase (Question Term <-> Passage/Transcript Term <-> Giải nghĩa).
+    - Danh sách loại trừ từng phương án sai (Option Distractor Breakdown) gắn tag `CORRECT` / `ELIMINATE` và lý do bẫy.
+
+- **Feature 3: Gia Sư AI 1-1 Cá Nhân Hóa (Interactive Review Copilot)**:
+  - *Backend Endpoint (`POST /api/review_copilot`)*: Nhận câu hỏi đang review, ngữ cảnh bài đọc/transcript, bài làm học sinh, lịch sử chat và câu hỏi của học sinh. Trả về phản hồi sư phạm chính xác, trích dẫn văn bản bằng ngoặc kép `"...quote..."` hoặc mốc thời gian `[mm:ss]`.
+  - *Frontend Dockable Drawer (`REVIEW_QUIZ.txt`)*: Nút nổi góc phải dưới màn hình xem lại + nút "Hỏi AI" ở từng câu hỏi. Hỗ trợ 3 prompt chip nhanh, cuộn chat mượt mà, và liên kết tương tác trực tiếp tới vị trí dẫn chứng trong bài đọc hoặc audio transcript.
+
+- **Feature 4: Huấn Luyện Viên Dàn Bài & Ý Tưởng Writing Sandbox**:
+  - *Kiểm soát thi cử chặt chẽ*: Toggle `allowWritingSandbox` trong Exam Builder (`EXAM_BUILDER.txt`). Tự động vô hiệu hóa tuyệt đối trong chế độ thi thật Real Exam.
+  - *Backend Endpoint (`POST /api/writing_sandbox_coach`)*:
+    - Tab 1 `mode: "brainstorm"`: Gợi ý các góc nhìn lập luận phản biện và 6-8 collocations học thuật C1/C2 Band 8+ theo ngữ cảnh đề bài.
+    - Tab 2 `mode: "critique_outline"`: Kiểm tra tính mạch lạc và độ bao quát đề bài cho dàn ý 3-5 dòng của học sinh, cảnh báo suy diễn quá đà và đưa ra câu hỏi gợi mở Socratic.
+  - *Frontend Drawer (`ACTIVE_EXAM.txt`)*: Thanh công cụ collapsible phía trên khung soạn thảo Writing Task 1 & Task 2.
+
+- **Khắc phục lỗi Vercel Deploy (`Command "npm run build" exited with 2`)**:
+  - *Nguyên nhân*: Lệnh build trên Vercel chạy `python3 compile_app.py && tsc -b && vite build`. `tsc -b` biên dịch theo `tsconfig.app.json` với chế độ Project References nghiêm ngặt. Khi tích hợp 4 tính năng AI, xuất hiện 5 điểm không khớp kiểu dữ liệu:
+    1. `src/App.template.tsx` (dòng 4135–4137): `reviewQuiz.quiz` thiếu các thuộc tính động `readingPassages`, `transcript` -> fix bằng ép kiểu `(reviewQuiz.quiz as any)`.
+    2. `src/App.template.tsx` (dòng 9221): `quiz.skill` là thuộc tính mở rộng không có trong `interface Quiz` chuẩn -> fix bằng `(quiz as any).skill`.
+    3. `src/App.template.tsx` (dòng 11011): Biến `currentLang` chưa được khai báo ở scope hàm -> fix bằng `i18n.language === "vi"`.
+    4. `src/components_split/REVIEW_QUIZ.txt` (dòng 450–520): Thuộc tính lồng nhau của `deconstruction` gây cảnh báo TS18048 (`possibly undefined`) -> bọc IIFE với fallback an toàn `const pPairs = Array.isArray(...) ? ... : []`.
+    5. `src/components_split/ACTIVE_EXAM.txt` (dòng 1397): Tham chiếu biến không tồn tại `activeRealExamSession` -> fix bằng `!activeExam?.realExamContext`.
+  - *Kết quả*: `compile_app.py`, `tsc -b`, và `vite build` đều vượt qua 100% với exit code 0 (`npm run build` pass sạch trên mọi môi trường CI/CD Vercel).
+
+- **Khắc phục lỗi CORS/Network Upload Audio trong Exam Builder ("The browser could not reach secure audio storage")**:
+  - *Nguyên nhân*: Trình duyệt thực hiện `PUT` trực tiếp lên GCS signed URL V4 (`storage.googleapis.com/...`). Request preflight `OPTIONS` bị chặn bởi CORS do Storage bucket chưa được áp dụng cấu hình CORS, và V4 signed URL không tự gắn header `Origin` của client.
+  - *Giải pháp triệt để*:
+    1. **Auto-Patch Bucket CORS (`_ensure_storage_bucket_cors`)**: Tự động cấu hình CORS trên bucket với các methods `GET, HEAD, PUT, POST, DELETE, OPTIONS` và headers `Content-Type, Content-Length, Content-Range, Range, ETag, x-goog-resumable, x-goog-meta-*`, lưu cache process-level an toàn qua `_BUCKET_CORS_CONFIGURED`.
+    2. **GCS Resumable Upload Session với Origin Binding**: Trích xuất `request_origin` từ caller headers trong `POST /api/exam-audio/uploads`, tạo upload session trực tiếp qua `blob.create_resumable_upload_session(content_type, size, origin=request_origin)`. GCS tự động nhúng header `Access-Control-Allow-Origin: <origin>` cho preflight `OPTIONS` và `PUT` tức thì mà không phụ thuộc độ trễ cấu hình bucket. Tự động fallback sang `blob.generate_signed_url` nếu môi trường test/mock không hỗ trợ resumable session.
+    3. **Lược bỏ Header thừa ở Client**: Chỉ gửi duy nhất header `Content-Type` khi gọi `xhr.setRequestHeader`, loại bỏ việc gửi các header tùy biến gây kích hoạt preflight kiểm tra khắt khe.
+    4. **Tự động Fallback sang Firebase Client SDK (`uploadBytesResumable`)**: Khi trực tiếp `PUT` gặp lỗi CORS/network (`xhr.status === 0`), hệ thống tự động fallback tức thì sang `uploadBytesResumable(storageRef(storage, storagePath), file, { contentType })`, duy trì thanh tiến trình mượt mà và gọi endpoint `/complete` để cấp proxy URL `/api/audio/...` bảo mật.
+    5. **Mở rộng `storage.rules`**: Cập nhật `match /exam-audio/{allPaths=**}` hỗ trợ đường dẫn đa phân đoạn `exam-audio/{uid_hash}/{upload_id}/{fileName}`.
 
 ## Tích hợp Tín dụng Google Cloud Platform (GCP Blaze Trial) & Triển khai Scale-to-Zero Cloud Run — 2026-10-16
 

@@ -29,6 +29,12 @@ SUPPORTED_EXAM_TYPES = {"Reading", "Listening", "Writing", "Integrated"}
 class CanonicalSchemaError(ValueError):
     """Raised before a provider response reaches DOCX rendering."""
 
+    def __init__(self, message: str, raw_response: str = ""):
+        super().__init__(message)
+        # The generation adapter only attaches this for valid JSON that then
+        # fails schema validation. It is kept in a private durable artifact.
+        self.raw_response = str(raw_response or "")
+
 
 def _reject_unknown(value: Dict[str, Any], allowed: set[str], scope: str) -> None:
     unknown = sorted(set(value) - allowed)
@@ -64,9 +70,14 @@ class RichParagraph:
     runs: List[RichRun]
     alignment: str = "left"
     list_item: bool = False
+    table: Optional[Dict[str, Any]] = None
+    media: Optional[Dict[str, Any]] = None
 
     @property
     def text(self) -> str:
+        if self.table:
+            return " ".join(RichParagraph.from_value(p).text for row in self.table["rows"]
+                            for cell in row["cells"] for p in cell["paragraphs"])
         return "".join(run.text for run in self.runs)
 
     @classmethod
@@ -77,7 +88,74 @@ class RichParagraph:
             return cls(runs=[RichRun(text=str(value))])
         if not isinstance(value, dict):
             raise CanonicalSchemaError("A rich paragraph must be text or an object.")
-        _reject_unknown(value, {"runs", "text", "bold", "italic", "underline", "alignment", "list_item"}, "rich paragraph")
+        _reject_unknown(value, {"runs", "text", "bold", "italic", "underline", "alignment", "list_item", "table", "media"}, "rich paragraph")
+        if value.get("media") is not None:
+            media = value["media"]
+            if not isinstance(media, dict):
+                raise CanonicalSchemaError("rich media must be an object.")
+            _reject_unknown(media, {
+                "asset_id", "occurrence_id", "url", "width_emu", "height_emu",
+                "alt_text", "title", "sha256", "mime_type", "association",
+            }, "rich media")
+            if not all(isinstance(media.get(key), str) and media[key].strip() for key in ("asset_id", "occurrence_id")):
+                raise CanonicalSchemaError("rich media requires exact asset_id and occurrence_id.")
+            if value.get("table") is not None or value.get("text") or value.get("runs"):
+                raise CanonicalSchemaError("A rich media block cannot also contain a table or text.")
+            alignment = str(value.get("alignment") or "left").lower()
+            if alignment not in {"left", "center", "right", "justify"}:
+                raise CanonicalSchemaError("paragraph.alignment must be left, center, right, or justify.")
+            url = media.get("url") or ""
+            if not isinstance(url, str):
+                raise CanonicalSchemaError("rich media url must be text.")
+            if url and not url.startswith("https://"):
+                raise CanonicalSchemaError("rich media url must be public HTTPS.")
+            dimensions: Dict[str, Optional[int]] = {}
+            for key in ("width_emu", "height_emu"):
+                raw_dimension = media.get(key)
+                if raw_dimension in (None, ""):
+                    dimensions[key] = None
+                    continue
+                if isinstance(raw_dimension, bool):
+                    raise CanonicalSchemaError(f"rich media {key} must be a positive integer.")
+                try:
+                    dimension = int(raw_dimension)
+                except (TypeError, ValueError) as exc:
+                    raise CanonicalSchemaError(f"rich media {key} must be a positive integer.") from exc
+                if not 0 < dimension <= 100_000_000:
+                    raise CanonicalSchemaError(f"rich media {key} is outside the supported range.")
+                dimensions[key] = dimension
+            clean_media: Dict[str, Any] = {
+                key: str(media.get(key) or "").strip()
+                for key in ("asset_id", "occurrence_id", "url", "alt_text", "title", "sha256", "mime_type", "association")
+            }
+            clean_media.update(dimensions)
+            return cls(runs=[], alignment=alignment, media=clean_media)
+        if value.get("table") is not None:
+            table = value["table"]
+            if not isinstance(table, dict) or set(table) != {"rows"} or not isinstance(table["rows"], list) or not table["rows"]:
+                raise CanonicalSchemaError("rich table requires non-empty rows.")
+            clean_rows = []
+            for row in table["rows"]:
+                if not isinstance(row, dict) or set(row) != {"cells"} or not isinstance(row["cells"], list):
+                    raise CanonicalSchemaError("rich table row requires cells.")
+                cells = []
+                for cell in row["cells"]:
+                    if not isinstance(cell, dict):
+                        raise CanonicalSchemaError("rich table cell must be an object.")
+                    _reject_unknown(cell, {"paragraphs", "colspan", "rowspan"}, "rich table cell")
+                    spans = [cell.get(key, 1) for key in ("colspan", "rowspan")]
+                    if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 or n > 100 for n in spans):
+                        raise CanonicalSchemaError("rich table spans must be positive bounded integers.")
+                    paragraphs = cell.get("paragraphs", [])
+                    if not isinstance(paragraphs, list):
+                        raise CanonicalSchemaError("rich table cell paragraphs must be a list.")
+                    cells.append({"paragraphs": [asdict(cls.from_value(p)) for p in paragraphs],
+                                  "colspan": spans[0], "rowspan": spans[1]})
+                clean_rows.append({"cells": cells})
+            alignment = str(value.get("alignment") or "left").lower()
+            if alignment not in {"left", "center", "right", "justify"}:
+                raise CanonicalSchemaError("paragraph.alignment must be left, center, right, or justify.")
+            return cls(runs=[], alignment=alignment, table={"rows": clean_rows})
         raw_runs = value.get("runs")
         if raw_runs is None:
             raw_runs = [{
@@ -104,7 +182,7 @@ def _paragraph_list(value: Any, field_name: str) -> List[RichParagraph]:
     if not isinstance(value, list):
         raise CanonicalSchemaError(f"{field_name} must be a list of rich paragraphs.")
     items = [RichParagraph.from_value(item) for item in value]
-    return [item for item in items if item.text.strip()]
+    return [item for item in items if item.text.strip() or item.media or item.table]
 
 
 def _string_list(value: Any, field_name: str) -> List[str]:
@@ -316,13 +394,18 @@ class WritingTask:
             task_number = int(value.get("task_number"))
         except (TypeError, ValueError) as exc:
             raise CanonicalSchemaError("writing task_number must be 1 or 2.") from exc
+        try:
+            minimum_words = int(value.get("minimum_words") or 0)
+            recommended_minutes = int(value.get("recommended_minutes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise CanonicalSchemaError("writing task minimum_words and recommended_minutes must be integers.") from exc
         return cls(
             task_number=task_number,
             prompt=_paragraph_list(value.get("prompt"), "writing_task.prompt"),
             title=str(value.get("title") or "").strip(),
             instructions=str(value.get("instructions") or "").strip(),
-            minimum_words=int(value.get("minimum_words") or 0),
-            recommended_minutes=int(value.get("recommended_minutes") or 0),
+            minimum_words=minimum_words,
+            recommended_minutes=recommended_minutes,
             media_url=str(value.get("media_url") or "").strip(),
             media_asset_id=str(value.get("media_asset_id") or "").strip(),
         )
@@ -356,10 +439,20 @@ class CanonicalExam:
         media_bindings = value.get("media_bindings") or []
         if not isinstance(media_bindings, list) or any(not isinstance(item, dict) for item in media_bindings):
             raise CanonicalSchemaError("media_bindings must be a list of objects.")
+        clean_media_bindings: List[Dict[str, Any]] = []
         for binding in media_bindings:
             _reject_unknown(binding, {"occurrence_id", "asset_id", "association", "required_for_solving"}, "media binding")
             if not all(str(binding.get(key) or "").strip() for key in ("occurrence_id", "asset_id", "association")):
                 raise CanonicalSchemaError("Each media binding needs occurrence_id, asset_id, and association.")
+            required = binding.get("required_for_solving", False)
+            if not isinstance(required, bool):
+                raise CanonicalSchemaError("media binding required_for_solving must be a boolean.")
+            clean_media_bindings.append({
+                "occurrence_id": str(binding["occurrence_id"]).strip(),
+                "asset_id": str(binding["asset_id"]).strip(),
+                "association": str(binding["association"]).strip().lower(),
+                "required_for_solving": required,
+            })
         return cls(
             title=str(value.get("title") or "").strip(),
             exam_type=str(value.get("exam_type") or "").strip().title(),
@@ -369,7 +462,7 @@ class CanonicalExam:
             audio_url=str(value.get("audio_url") or "").strip(),
             source_reference=str(value.get("source_reference") or "").strip(),
             schema_version=str(value.get("schema_version") or "2026-09-09"),
-            media_bindings=media_bindings,
+            media_bindings=clean_media_bindings,
         )
 
     def to_dict(self) -> Dict[str, Any]:

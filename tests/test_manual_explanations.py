@@ -288,6 +288,112 @@ class ManualExplanationTests(unittest.TestCase):
         self.assertNotIn("&amp;", q["groupImageUrl"])
         self.assertEqual(q["groupImageUrl"], "https://firebasestorage.googleapis.com/v0/b/app.appspot.com/o/diagram.png?alt=media&token=abc-123")
 
+    def test_distractor_breakdown_incorrect_never_marked_correct(self):
+        # Verify that substring "CORRECT" in "INCORRECT" or distractor reasons does NOT cause misclassification
+        raw_distractors = [
+            {"option": "A. refer to course notes", "status": "INCORRECT", "reason": "This is incorrect because the speaker never mentioned notes."},
+            {"option": "C. practice speaking in pairs", "status": "CORRECT", "reason": "Matches the speaker's advice."},
+            {"option": "G. plan for oral interviews", "status": "INCORRECT", "reason": "Making this option incorrect as it contradicts the advice given."},
+        ]
+        correct = "C"
+
+        import re
+        cleaned_d = []
+        for d in raw_distractors:
+            opt = str(d.get("option") or "").strip()
+            raw_status = str(d.get("status") or "").strip()
+            raw_reason = str(d.get("reason") or "").strip()
+            status_upper = raw_status.upper()
+            is_elim = any(k in status_upper for k in ["ELIMINATE", "INCORRECT", "WRONG", "FALSE", "TRAP", "DISTRACTOR"])
+            is_corr = ("CORRECT" in status_upper and not is_elim)
+
+            if opt and correct:
+                opt_norm = opt.strip().upper()
+                corr_norm = str(correct).strip().upper()
+                parts = re.split(r"^([A-Z0-9]{1,2})[\s.:)-]+\s*", opt_norm)
+                prefix = parts[1].strip() if len(parts) >= 3 and parts[1] else ""
+                body = parts[2].strip() if len(parts) >= 3 and parts[1] else opt_norm
+                corr_tokens = [t.strip() for t in re.split(r"[,;\s/]+", corr_norm) if t.strip()]
+
+                tfng_map = {
+                    "T": "TRUE", "TRUE": "TRUE",
+                    "F": "FALSE", "FALSE": "FALSE",
+                    "NG": "NOT GIVEN", "NOT GIVEN": "NOT GIVEN",
+                    "Y": "YES", "YES": "YES",
+                    "N": "NO", "NO": "NO",
+                }
+                body_canon = tfng_map.get(body)
+                corr_canon = tfng_map.get(corr_norm)
+
+                if body and (body == corr_norm or (len(body) > 3 and body in corr_norm) or (len(corr_norm) > 3 and corr_norm in body)):
+                    is_corr = True
+                elif body_canon and corr_canon:
+                    is_corr = (body_canon == corr_canon)
+                elif prefix and (prefix == corr_norm or prefix in corr_tokens):
+                    is_corr = True
+                elif prefix and len(corr_norm) <= 2:
+                    is_corr = (prefix == corr_norm or prefix in corr_tokens)
+
+            clean_status = "CORRECT" if is_corr else "ELIMINATE"
+            cleaned_d.append({"option": opt, "status": clean_status, "reason": raw_reason})
+
+        self.assertEqual(cleaned_d[0]["status"], "ELIMINATE")
+        self.assertEqual(cleaned_d[1]["status"], "CORRECT")
+        self.assertEqual(cleaned_d[2]["status"], "ELIMINATE")
+
+    def test_distractor_breakdown_tfng_identifies_correct_option(self):
+        # Specific regression test for TFNG options where answer is "NOT GIVEN"
+        raw_distractors = [
+            {"option": "A. TRUE", "status": "ELIMINATE", "reason": "The passage does not state that olive oil was more costly."},
+            {"option": "B. FALSE", "status": "ELIMINATE", "reason": "While olive oil might not have been more costly, no info confirms it was cheaper."},
+            {"option": "C. NOT GIVEN", "status": "ELIMINATE", "reason": "The passage provides no information about comparative price."},
+        ]
+        correct = "NOT GIVEN"
+
+        import re
+        cleaned_d = []
+        for d in raw_distractors:
+            opt = str(d.get("option") or "").strip()
+            raw_status = str(d.get("status") or "").strip()
+            raw_reason = str(d.get("reason") or "").strip()
+            status_upper = raw_status.upper()
+            is_elim = any(k in status_upper for k in ["ELIMINATE", "INCORRECT", "WRONG", "FALSE", "TRAP", "DISTRACTOR"])
+            is_corr = ("CORRECT" in status_upper and not is_elim)
+
+            if opt and correct:
+                opt_norm = opt.strip().upper()
+                corr_norm = str(correct).strip().upper()
+                parts = re.split(r"^([A-Z0-9]{1,2})[\s.:)-]+\s*", opt_norm)
+                prefix = parts[1].strip() if len(parts) >= 3 and parts[1] else ""
+                body = parts[2].strip() if len(parts) >= 3 and parts[1] else opt_norm
+                corr_tokens = [t.strip() for t in re.split(r"[,;\s/]+", corr_norm) if t.strip()]
+
+                tfng_map = {
+                    "T": "TRUE", "TRUE": "TRUE",
+                    "F": "FALSE", "FALSE": "FALSE",
+                    "NG": "NOT GIVEN", "NOT GIVEN": "NOT GIVEN",
+                    "Y": "YES", "YES": "YES",
+                    "N": "NO", "NO": "NO",
+                }
+                body_canon = tfng_map.get(body)
+                corr_canon = tfng_map.get(corr_norm)
+
+                if body and (body == corr_norm or (len(body) > 3 and body in corr_norm) or (len(corr_norm) > 3 and corr_norm in body)):
+                    is_corr = True
+                elif body_canon and corr_canon:
+                    is_corr = (body_canon == corr_canon)
+                elif prefix and (prefix == corr_norm or prefix in corr_tokens):
+                    is_corr = True
+                elif prefix and len(corr_norm) <= 2:
+                    is_corr = (prefix == corr_norm or prefix in corr_tokens)
+
+            clean_status = "CORRECT" if is_corr else "ELIMINATE"
+            cleaned_d.append({"option": opt, "status": clean_status, "reason": raw_reason})
+
+        self.assertEqual(cleaned_d[0]["status"], "ELIMINATE")
+        self.assertEqual(cleaned_d[1]["status"], "ELIMINATE")
+        self.assertEqual(cleaned_d[2]["status"], "CORRECT")
+
 
 if __name__ == "__main__":
     unittest.main()

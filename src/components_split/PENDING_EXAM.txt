@@ -1,9 +1,13 @@
       if (pendingExamState) {
           const q = pendingExamState.quiz;
           const isListeningExam = String(q.type).toLowerCase().includes("listen");
+          const hasAudio = isListeningExam || q.type === "Integrated";
           const isPractice = isPracticeQuiz(q);
+          const isReadyToStart = (hasAudio && q.audioUrl) ? (isOfflineReady && isAudioReadyToPlay) : isOfflineReady;
           return (
-              <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
+              <>
+                  {persistentAudioNode}
+                  <div style={{ height: "100vh", background: '#fff', color: '#24292f', display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: 'Arial, Helvetica, sans-serif' }}>
                   <style>{`
                       @keyframes idp-spin { to { transform: rotate(360deg); } }
                       .idp-spinner { width: 48px; height: 48px; border: 4px solid #e0e0e0; border-top-color: #111; border-radius: 50%; animation: idp-spin 0.8s linear infinite; margin: 0 auto 24px; }
@@ -26,7 +30,7 @@
                       {/* Body */}
                       <div className="instructions-content" style={{ padding: '32px', overflowY: 'auto', flex: 1, fontSize: 15, lineHeight: 1.7, color: '#24292f' }}>
                       <div style={{ textAlign: 'center', padding: '0 0 32px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                          {!isOfflineReady ? (
+                          {!isReadyToStart ? (
                               <>
                                   <div className="idp-spinner"></div>
                                   <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: '#24292f' }}>{t('pend_loading')}</div>
@@ -63,8 +67,14 @@
 
                   <div style={{ padding: '18px 32px', background: '#f4f5f7', borderTop: '1px solid #d1d5db', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
                       <button className="idp-back-btn" onClick={() => setPendingExamState(null)}>Back</button>
-                      <button className="idp-start-btn" disabled={!isOfflineReady} style={{ opacity: isOfflineReady ? 1 : 0.5, cursor: isOfflineReady ? 'pointer' : 'not-allowed' }} onClick={() => {
-                          if (!isOfflineReady) return;
+                      <button className="idp-start-btn" disabled={!isReadyToStart} style={{ opacity: isReadyToStart ? 1 : 0.5, cursor: isReadyToStart ? 'pointer' : 'not-allowed' }} onClick={() => {
+                          if (!isReadyToStart) return;
+                          if (isTouchAudioHost()) void warmAndroidAudioPath();
+                          const a = audioRef.current;
+                          if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+                              a.preload = "auto";
+                              if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+                          }
                           const { quiz, isPreview, isStudentTestUI } = pendingExamState;
                           setPendingExamState(null);
                           confirmStartExam(quiz, isPreview, isStudentTestUI);
@@ -74,5 +84,6 @@
                   </div>
                   </div>
               </div>
+              </>
           );
       }

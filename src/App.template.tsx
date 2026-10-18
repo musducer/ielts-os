@@ -8,6 +8,7 @@ import './answerDrag.css';
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, deleteDoc, doc, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, setDoc, writeBatch } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, type User } from "firebase/auth";
+import { getStorage, ref as storageRef, uploadBytesResumable } from "firebase/storage";
 import {
   deriveQuestProgress,
   emptyQuestProgress,
@@ -66,6 +67,7 @@ try {
   db = initializeFirestore(app, {});
 }
 const auth = getAuth(app);
+const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
@@ -1560,8 +1562,20 @@ const formatQuestReward = (reward: any) => {
   return String(reward?.rewardValue || reward?.description || type).trim();
 };
 
+export interface ErrorDnaProfile {
+  signature: string;
+  updatedAt: number;
+  totalAnalyzedAttempts: number;
+  totalQuestionsAnalyzed: number;
+  typeAccuracy: Array<{ label: string; correct: number; total: number; accuracy: number }>;
+  categoryBreakdown: { lexicalGap: number; distractorTrap: number; scopeMisread: number };
+  recurringTraps: Array<{ titleVi: string; titleEn: string; detailVi: string; detailEn: string; severity: "high" | "medium" }>;
+  actionPlanVi: string[];
+  actionPlanEn: string[];
+}
+
 interface VocabCard { id: string; word: string; phonetic?: string; pos?: string; meaning?: string; example?: string; cefr?: string; category?: string; evidence?: string; box: number; due: number; createdAt: number; }
-interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; }
+interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; errorDna?: ErrorDnaProfile; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
 interface Session { id: string | number; studentId: string; studentName: string; teacher: string; skills: string[]; date: string; duration: number; rate: number; earnings: number; notes: string; rubric: Rubric; isPaid: boolean; }
 interface ScheduleMaterial { id: string; url: string; label?: string; }
@@ -1637,7 +1651,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
 interface AiGenerationBatchState {
   batch_id: string;
@@ -2267,18 +2281,30 @@ const escapeHtmlAttribute = (value: any) => String(value ?? "")
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+const normalizeImageUrl = (rawUrl: string): string => {
+    let u = String(rawUrl || "").trim();
+    // Convert Google Drive view/share links into direct image streams
+    const gDriveMatch = u.match(/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]+)/i);
+    if (gDriveMatch) {
+        return `https://drive.google.com/uc?export=view&id=${gDriveMatch[1]}`;
+    }
+    return u;
+};
 const isSupportedRemoteImageUrl = (value: any) => {
     const url = String(value || "").trim();
     if (!/^https?:\/\//i.test(url)) return false;
+    if (/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)/i.test(url)) return true;
+    if (/\/o\/[^\s<"']+\?alt=media/i.test(url)) return true;
     try {
         return supportedImagePathRe.test(new URL(url).pathname);
     } catch {
         return false;
     }
 };
-const renderRemoteImageHtml = (url: string, alt = "Visual Content") => (
-    `<img src="${escapeHtmlAttribute(url)}" style="max-width: 100%; height: auto; object-fit: contain; border-radius: 8px; display: block; margin: 15px 0;" alt="${escapeHtmlAttribute(alt)}" />`
-);
+const renderRemoteImageHtml = (url: string, alt = "Visual Content") => {
+    const cleanUrl = normalizeImageUrl(url);
+    return `<img src="${escapeHtmlAttribute(cleanUrl)}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="${escapeHtmlAttribute(alt)}" />`;
+};
 const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
         "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup", "del", "div", "em", "figcaption", "figure",
@@ -2287,7 +2313,7 @@ const sanitizeRichHtml = (html: string) => annotationHTML(DOMPurify.sanitize(htm
     ],
     ALLOWED_ATTR: [
         "align", "alt", "class", "colspan", "data-field", "data-note", "data-note-id", "data-optindex", "data-qid", "dir", "height", "href", "lang",
-        "rel", "rowspan", "src", "style", "target", "title", "width"
+        "loading", "referrerpolicy", "rel", "rowspan", "src", "style", "target", "title", "width"
     ],
     ALLOW_DATA_ATTR: true,
 }));
@@ -2303,18 +2329,16 @@ const formatContent = (html: string) => {
     if (!html) return "";
     let res = html.replace(/\[Image\s*\d+\]/gi, '');
     
-    // BẢN VÁ 1: Thêm (src=["'])? để kiểm tra xem link đã nằm trong thẻ <img> chưa. Nếu có rồi thì BỎ QUA không bọc thêm nữa!
-    // Firebase Storage media URLs often end with .svg in the pathname but carry
-    // ?alt=media&token=... query params, so validate the URL pathname rather
-    // than using a raw url.endsWith(...) or a query-blind extension regex.
-    res = res.replace(/(src=["'])?(?:Url:\s*|<p>Url:\s*)?(https?:\/\/[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
-        if (p1) return _match; // Đã là hình ảnh, bỏ qua
-        if (!isSupportedRemoteImageUrl(p2)) return _match;
-        return renderRemoteImageHtml(p2);
+    // Match image URLs preserving query strings (?alt=media&token=..., ?w=..., etc.) and handle IMAGE: / Url: prefixes
+    res = res.replace(/(src=["'])?(?:(?:IMAGE|Url)\s*:\s*|<p>(?:IMAGE|Url)\s*:\s*)?(https?:\/\/[^\s<"']+(?:\.(?:jpg|jpeg|png|gif|webp|svg)(?:\?[^\s<"']*)?|\/o\/[^\s<"']+\?alt=media[^\s<"']*)|https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?)[^\s<"']+)(?:<\/p>)?/gi, (_match, p1, p2) => {
+        if (p1) return _match; // Already inside src="", skip
+        const cleanUrl = normalizeImageUrl(p2);
+        return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     
     res = res.replace(/\[IMAGE\]\s*(https?:\/\/[^\s<"']+)/gi, (_match, p1) => {
-        return renderRemoteImageHtml(p1);
+        const cleanUrl = normalizeImageUrl(p1);
+        return `<img src="${cleanUrl}" referrerpolicy="no-referrer" loading="lazy" style="max-width: 100%; border-radius: 8px; display: block; margin: 15px auto;" alt="Visual Content" />`;
     });
     
     // ==========================================
@@ -3994,7 +4018,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -4064,6 +4088,149 @@ export default function IeltsSupremeOS() {
   const [rvAudioPlaying, setRvAudioPlaying] = useState(false);
   const [pendingAudioResume, setPendingAudioResume] = useState<{time: number, status: string} | null>(null);
   const [gracePeriod, setGracePeriod] = useState<number | null>(null);
+
+  // AI Pedagogical Features States & Refs
+  const dnaInFlightRef = useRef<Set<string>>(new Set());
+  const [showWritingSandbox, setShowWritingSandbox] = useState(false);
+  const [writingSandboxTab, setWritingSandboxTab] = useState<"brainstorm" | "critique">("brainstorm");
+  const [writingSandboxLoading, setWritingSandboxLoading] = useState(false);
+  const [writingSandboxOutline, setWritingSandboxOutline] = useState("");
+  const [writingSandboxBrainstormData, setWritingSandboxBrainstormData] = useState<any>(null);
+  const [writingSandboxCritiqueData, setWritingSandboxCritiqueData] = useState<any>(null);
+
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotActiveQ, setCopilotActiveQ] = useState<any>(null);
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string }>>([]);
+  const [copilotInput, setCopilotInput] = useState("");
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotExpanded, setCopilotExpanded] = useState(false);
+  const copilotChatBoxRef = useRef<HTMLDivElement | null>(null);
+  const copilotMsgCountRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (copilotChatBoxRef.current && (copilotOpen || copilotMessages.length > copilotMsgCountRef.current)) {
+      copilotChatBoxRef.current.scrollTop = copilotChatBoxRef.current.scrollHeight;
+    }
+    copilotMsgCountRef.current = copilotMessages.length;
+  }, [copilotOpen, copilotMessages.length, copilotLoading]);
+
+  const handleWritingSandboxAction = async (task: any, mode: "brainstorm" | "critique_outline") => {
+    if (writingSandboxLoading) return;
+    setWritingSandboxLoading(true);
+    try {
+      const res = await fetch("/api/writing_sandbox_coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskPrompt: task?.prompt || task?.instructions || "",
+          taskType: task?.taskNumber === 1 ? "Task 1" : "Task 2",
+          mode,
+          outlineText: mode === "critique_outline" ? writingSandboxOutline : undefined
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (mode === "brainstorm") {
+        setWritingSandboxBrainstormData(data);
+      } else {
+        setWritingSandboxCritiqueData(data);
+      }
+    } catch (err: any) {
+      alert(tx("Lỗi hỗ trợ viết: ", "Writing coach error: ") + (err?.message || String(err)));
+    } finally {
+      setWritingSandboxLoading(false);
+    }
+  };
+
+  const handleSendCopilotMessage = async (customPrompt?: string) => {
+    const textToSend = String(customPrompt || copilotInput || "").trim();
+    if (!textToSend || copilotLoading) return;
+
+    const newMessages = [...copilotMessages, { role: "user" as const, text: textToSend }];
+    setCopilotMessages(newMessages);
+    setCopilotInput("");
+    setCopilotLoading(true);
+
+    try {
+      const rqQuiz = reviewQuiz?.quiz as any;
+      const rqResult = reviewQuiz?.result as any;
+      const isListening = Boolean(rqQuiz && (String(rqQuiz.type || "").toUpperCase().includes("LISTEN") || rqQuiz.skill === "Listening"));
+      const q = copilotActiveQ;
+
+      // Extract full passage or transcript
+      let passageText = "";
+      if (q && rqQuiz?.readingPassages && typeof q.passageIndex === "number") {
+        passageText = rqQuiz.readingPassages[q.passageIndex] || "";
+      } else if (Array.isArray(rqQuiz?.readingPassages) && rqQuiz.readingPassages.length) {
+        passageText = rqQuiz.readingPassages.join("\n\n--- NEXT PASSAGE ---\n\n");
+      } else {
+        passageText = rqQuiz?.readingPassage || "";
+      }
+      const transcriptText = rqQuiz?.transcript || rqQuiz?.audioTranscript || rqQuiz?.listeningTranscript || "";
+      const passageOrTranscript = isListening ? transcriptText : (passageText || transcriptText);
+
+      // Student mistakes and answers breakdown for omniscient context
+      const allQs: any[] = Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : [];
+      const userAnswers = rqResult?.answers || {};
+      const wrongList = allQs.filter((item: any) => {
+        const given = userAnswers[item.id];
+        const accepted = String(item.correctAnswer || item.correct || "").split("/").map((s: string) => s.trim().toLowerCase());
+        return !given || !accepted.includes(String(given).trim().toLowerCase());
+      }).slice(0, 15).map((item: any, idx: number) => ({
+        number: item.questionNumber || (idx + 1),
+        type: item.type || item.questionType || "",
+        text: (item.question || item.title || "").slice(0, 90),
+        studentAnswer: userAnswers[item.id] || "(blank)",
+        correctAnswer: item.correctAnswer || item.correct || ""
+      }));
+
+      const payloadQuestion = q ? {
+        id: q.id,
+        questionNumber: q.questionNumber || "",
+        type: q.type || "",
+        text: q.question || q.title || "",
+        options: q.options || [],
+        correctAnswer: q.correctAnswer || q.correct || "",
+        studentAnswer: userAnswers[q.id] || "(blank)",
+        manualExplanation: q.manualExplanation || "",
+        passage: passageText,
+        transcript: transcriptText,
+        skill: isListening ? "Listening" : "Reading"
+      } : null;
+
+      const res = await fetch("/api/review_copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lang: i18n.language === "vi" ? "vi" : "en",
+          quizTitle: rqQuiz?.title || "IELTS Practice Test",
+          quizType: isListening ? "Listening" : "Reading",
+          passageOrTranscript,
+          activeQuestion: payloadQuestion,
+          examOverview: {
+            totalQuestions: allQs.length,
+            wrongCount: wrongList.length,
+            wrongQuestions: wrongList
+          },
+          messages: newMessages.map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
+          // Backward compatibility
+          question: payloadQuestion,
+          studentAnswer: q ? userAnswers[q.id] : undefined,
+          chatHistory: newMessages.slice(0, -1),
+          userMessage: textToSend
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.reply) {
+        setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
+      }
+    } catch (err: any) {
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối gia sư AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Copilot. Please try again.") }]);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
 
   const [_isFocusMode, setIsFocusMode] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(true);
@@ -4297,7 +4464,7 @@ export default function IeltsSupremeOS() {
       });
       const dropzones = document.querySelectorAll('.idp-dropzone') as NodeListOf<HTMLElement>;
       dropzones.forEach(dz => {
-        if (dz.closest('.idp-heading-slot-render')) return;
+        if (dz.closest('.idp-heading-slot-render') || dz.classList.contains('idp-summary-dropzone')) return;
         const qId = dz.getAttribute('data-qid');
         if (!qId) return;
         const stateVal = examAnswers[qId] !== undefined ? String(examAnswers[qId]) : "";
@@ -4413,6 +4580,242 @@ export default function IeltsSupremeOS() {
   const [showDebtWarning, setShowDebtWarning] = useState(false);
   const [debtConfirmCountdown, setDebtConfirmCountdown] = useState(5);
   const [hasClaimedDaily, setHasClaimedDaily] = useState(false);
+
+  // ============================================================================
+  // HIERARCHICAL URL ROUTING ENGINE (Bidirectional URL <-> App State Sync)
+  // ============================================================================
+  const isRoutingPopStateRef = useRef(false);
+  const initialRouteAppliedRef = useRef(false);
+
+  // Computes the canonical hierarchical path for the current UI state
+  const computeCurrentPath = (): string => {
+    if (!currentUser) return "/login";
+    if (sebGuideQuiz) return "/seb-guide";
+    if (activeExam) {
+      if (activeExam.realExamContext) return `/exam/${encodeURIComponent(activeExam.id)}/real-mock`;
+      return `/exam/${encodeURIComponent(activeExam.id)}`;
+    }
+    if (reviewQuiz) {
+      const resId = reviewQuiz.result?.id || "latest";
+      if (isWritingQuiz(reviewQuiz.quiz)) {
+        return userRole === "TEACHER"
+          ? `/teacher/grading/${encodeURIComponent(resId)}`
+          : `/exam/writing-feedback/${encodeURIComponent(resId)}`;
+      }
+      return `/exam/review/${encodeURIComponent(resId)}`;
+    }
+
+    if (userRole === "STUDENT") {
+      if (portalTab === "exams") return "/student/exams";
+      if (portalTab === "quests") return "/student/quests";
+      if (portalTab === "vocab") return "/student/vocab";
+      if (portalTab === "rewards") return "/student/rewards";
+      if (portalTab === "progress") return "/student/progress";
+      return "/student/dashboard";
+    }
+
+    if (userRole === "TEACHER") {
+      if (activeTab === "STUDENTS") {
+        return profileId ? `/teacher/students/${encodeURIComponent(profileId)}` : "/teacher/students";
+      }
+      if (activeTab === "EXAM_BUILDER") {
+        return editingQuiz?.id ? `/teacher/exams/${encodeURIComponent(editingQuiz.id)}` : "/teacher/exams";
+      }
+      if (activeTab === "CLASSROOM") return "/teacher/classes";
+      if (activeTab === "LIVE_ARENA") return "/teacher/arena";
+      if (activeTab === "FINANCE") return "/teacher/finances";
+      if (activeTab === "DRIVE") return "/teacher/drive";
+      if (activeTab === "TOPIC_ASSIGNMENTS") return "/teacher/quests";
+      if (activeTab === "ACADEMICS") return "/teacher/academics";
+      if (activeTab === "HISTORY") return "/teacher/history";
+      return "/teacher/dashboard";
+    }
+
+    return "/";
+  };
+
+  // Parses a pathname and updates application state accordingly
+  const applyRouteFromPath = (pathname: string) => {
+    if (!pathname || pathname === "/" || pathname === "/login") {
+      if (!currentUser) return;
+      if (userRole === "TEACHER") {
+        setActiveTab("DASHBOARD");
+      } else if (userRole === "STUDENT") {
+        setPortalTab("home");
+      }
+      return;
+    }
+
+    // 1. /seb-guide
+    if (pathname === "/seb-guide") {
+      if (quizzes.length > 0 && !sebGuideQuiz) {
+        setSebGuideQuiz(quizzes[0]);
+      }
+      return;
+    }
+
+    // 2. /exam/:quizId or /exam/:quizId/real-mock
+    const examMatch = pathname.match(/^\/exam\/([^/]+)(\/real-mock)?$/);
+    if (examMatch) {
+      const qId = decodeURIComponent(examMatch[1]);
+      const targetQuiz = quizzes.find(q => q.id === qId);
+      if (targetQuiz) {
+        if (examMatch[2] && !targetQuiz.realExamContext) {
+          targetQuiz.realExamContext = {
+            packageId: 'standalone',
+            packageTitle: targetQuiz.title,
+            packageQuizIds: [targetQuiz.id],
+            packageAttemptId: 'attempt_' + Date.now(),
+            testTakerId: 'CANDIDATE',
+            orderIndex: 1,
+            total: 1,
+            isFinal: true,
+          };
+        }
+        setActiveExam(targetQuiz);
+        return;
+      }
+    }
+
+    // 3. /exam/review/:resultId or /exam/writing-feedback/:resultId or /teacher/grading/:resultId
+    const reviewMatch = pathname.match(/^\/(?:exam\/review|exam\/writing-feedback|teacher\/grading)\/([^/]+)$/);
+    if (reviewMatch) {
+      const rId = decodeURIComponent(reviewMatch[1]);
+      const targetResult = quizResults.find(r => r.id === rId);
+      if (targetResult) {
+        const targetQuiz = quizzes.find(q => q.id === targetResult.quizId);
+        if (targetQuiz) {
+          setReviewQuiz({ quiz: targetQuiz, result: targetResult });
+          return;
+        }
+      }
+    }
+
+    // 4. Student routes: /student/*
+    if (pathname.startsWith("/student")) {
+      // Guard: Teacher accessing student route redirects to teacher dashboard
+      if (userRole === "TEACHER") {
+        setActiveTab("DASHBOARD");
+        window.history.replaceState({ path: "/teacher/dashboard" }, "", "/teacher/dashboard");
+        return;
+      }
+      if (pathname === "/student/exams") setPortalTab("exams");
+      else if (pathname === "/student/quests" || pathname === "/student/assignments") setPortalTab("quests");
+      else if (pathname === "/student/vocab") setPortalTab("vocab");
+      else if (pathname === "/student/rewards") setPortalTab("rewards");
+      else if (pathname === "/student/progress") setPortalTab("progress");
+      else setPortalTab("home");
+
+      if (activeExam) setActiveExam(null);
+      if (reviewQuiz) setReviewQuiz(null);
+      if (sebGuideQuiz) setSebGuideQuiz(null);
+      return;
+    }
+
+    // 5. Teacher routes: /teacher/*
+    if (pathname.startsWith("/teacher")) {
+      // Guard: Student accessing teacher route redirects to student dashboard
+      if (userRole === "STUDENT") {
+        setPortalTab("home");
+        window.history.replaceState({ path: "/student/dashboard" }, "", "/student/dashboard");
+        return;
+      }
+
+      const studentDetailMatch = pathname.match(/^\/teacher\/students\/([^/]+)$/);
+      if (studentDetailMatch) {
+        setActiveTab("STUDENTS");
+        setProfileId(decodeURIComponent(studentDetailMatch[1]));
+      } else if (pathname === "/teacher/students") {
+        setActiveTab("STUDENTS");
+        setProfileId(null);
+      } else if (pathname.startsWith("/teacher/exams")) {
+        setActiveTab("EXAM_BUILDER");
+        const quizEditMatch = pathname.match(/^\/teacher\/exams\/([^/]+)$/);
+        if (quizEditMatch) {
+          const editId = decodeURIComponent(quizEditMatch[1]);
+          const found = quizzes.find(q => q.id === editId);
+          if (found) setEditingQuiz(found);
+        }
+      } else if (pathname === "/teacher/classes" || pathname === "/teacher/classroom") {
+        setActiveTab("CLASSROOM");
+      } else if (pathname === "/teacher/arena") {
+        setActiveTab("LIVE_ARENA");
+      } else if (pathname === "/teacher/finances" || pathname === "/teacher/finance") {
+        setActiveTab("FINANCE");
+      } else if (pathname === "/teacher/drive") {
+        setActiveTab("DRIVE");
+      } else if (pathname === "/teacher/quests" || pathname === "/teacher/assignments") {
+        setActiveTab("TOPIC_ASSIGNMENTS");
+      } else if (pathname === "/teacher/academics") {
+        setActiveTab("ACADEMICS");
+      } else if (pathname === "/teacher/history") {
+        setActiveTab("HISTORY");
+      } else {
+        setActiveTab("DASHBOARD");
+      }
+
+      if (activeExam) setActiveExam(null);
+      if (reviewQuiz) setReviewQuiz(null);
+      if (sebGuideQuiz) setSebGuideQuiz(null);
+      return;
+    }
+  };
+
+  // Synchronize State -> Browser URL
+  useEffect(() => {
+    if (authChecking) return;
+    if (isRoutingPopStateRef.current) {
+      isRoutingPopStateRef.current = false;
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const targetPath = computeCurrentPath();
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ path: targetPath }, "", targetPath);
+    }
+  }, [
+    authChecking,
+    currentUser,
+    userRole,
+    activeExam?.id,
+    activeExam?.realExamContext,
+    reviewQuiz?.result?.id,
+    sebGuideQuiz?.id,
+    editingQuiz?.id,
+    portalTab,
+    activeTab,
+    profileId,
+  ]);
+
+  // Handle Browser Back / Forward Button (popstate event)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => {
+      // If student is currently taking an exam, confirm exit to prevent accidental loss of work
+      if (activeExam) {
+        const confirmMsg = i18n.language === "vi"
+          ? "Bạn có chắc chắn muốn rời khỏi phòng thi? Bài làm chưa nộp sẽ không được lưu điểm."
+          : "Are you sure you want to leave the exam? Unsubmitted progress will not be graded.";
+        if (!window.confirm(confirmMsg)) {
+          window.history.pushState({ path: `/exam/${activeExam.id}` }, "", `/exam/${activeExam.id}`);
+          return;
+        }
+      }
+      isRoutingPopStateRef.current = true;
+      applyRouteFromPath(window.location.pathname);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [quizzes, quizResults, currentUser, userRole, activeExam]);
+
+  // Initial Route Hydration (apply route on initial page load once data is ready)
+  useEffect(() => {
+    if (!loaded || !currentUser || authChecking) return;
+    if (!initialRouteAppliedRef.current) {
+      initialRouteAppliedRef.current = true;
+      applyRouteFromPath(window.location.pathname);
+    }
+  }, [loaded, currentUser, authChecking, quizzes.length, quizResults.length]);
   
   const [pushTitle, setPushTitle] = useState("");
   const [pushBody, setPushBody] = useState("");
@@ -4836,6 +5239,50 @@ export default function IeltsSupremeOS() {
   const [_showQuestionMap, _setShowQuestionMap] = useState(false);
   const [enableTimerBeep, _setEnableTimerBeep] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isAudioReadyToPlay, setIsAudioReadyToPlay] = useState(false);
+
+  const preloadOrActiveAudioUrl = (() => {
+    if (activeExam) {
+      const isListening = String(activeExam.type).toLowerCase().includes("listen") || activeExam.type === "Integrated";
+      if (isListening && activeExam.audioUrl) return activeExam.audioUrl.trim();
+    }
+    if (pendingExamState?.quiz) {
+      const q = pendingExamState.quiz;
+      const isListening = String(q.type).toLowerCase().includes("listen") || q.type === "Integrated";
+      if (isListening && q.audioUrl) return q.audioUrl.trim();
+    }
+    if (realExamInstructionGate) {
+      const gateQuiz = (quizzesRef.current || quizzes || []).find(q => q.id === realExamInstructionGate.quizId);
+      const isListening = realExamInstructionGate.skill === "Listening" || (gateQuiz && (String(gateQuiz.type).toLowerCase().includes("listen") || gateQuiz.type === "Integrated"));
+      if (isListening && gateQuiz?.audioUrl) return gateQuiz.audioUrl.trim();
+    }
+    if (userRole === "STUDENT" && realExamSession) {
+      const pkg = realExamPackages.find(item => item.id === realExamSession.packageId);
+      if (pkg) {
+        const completed = new Set(realExamSession.completedQuizIds || []);
+        const nextQuizId = pkg.quizIds?.find(id => !completed.has(id));
+        if (nextQuizId) {
+          const nextQuiz = (quizzesRef.current || quizzes || []).find(q => q.id === nextQuizId);
+          const isListening = nextQuiz && (String(nextQuiz.type).toLowerCase().includes("listen") || nextQuiz.type === "Integrated" || (nextQuiz as any).skill === "Listening");
+          if (isListening && nextQuiz?.audioUrl) return nextQuiz.audioUrl.trim();
+        }
+      }
+    }
+    return "";
+  })();
+
+  const checkAndSetAudioReady = (audio: HTMLAudioElement | null) => {
+    if (!audio) return;
+    try {
+      const hasEnoughBuffered = audio.buffered && audio.buffered.length > 0 && audio.buffered.end(0) >= Math.min(5, audio.duration || 5);
+      if (audio.readyState >= 3 || hasEnoughBuffered) {
+        setIsAudioReadyToPlay(true);
+      }
+    } catch {
+      setIsAudioReadyToPlay(true);
+    }
+  };
+
   // Some Chromium/SEB builds strip custom DataTransfer MIME types at drop time.
   // Keep the source slot locally so an already-placed card can still be moved.
   const dragSourceQuestionRef = useRef<string>("");
@@ -5128,14 +5575,19 @@ export default function IeltsSupremeOS() {
     // gesture upgrades buffering, which preserves autoplay permission and lets the
     // browser's native range loader maintain a healthy playback buffer.
     audio.preload = "auto";
-    if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+    if (audio.readyState === 0 && (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
       audio.load();
     }
     setManagedAudioLoading();
+    if (isTouchAudioHost() && !androidAudioCtxRef.current) {
+      void warmAndroidAudioPath();
+    }
     try {
-      await warmAndroidAudioPath();
       recordAudioDiagnostic("user-play-attempt", audio);
       await audio.play();
+      if (!isListeningReviewAudio()) {
+        setAudioStatus("PLAYING");
+      }
     } catch (error) {
       recordAudioDiagnostic("user-play-failed", audio, error instanceof Error ? `${error.name}:${error.message}` : String(error));
       console.warn("Exam audio could not start:", error);
@@ -6229,92 +6681,64 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [activeExam?.id, activeExam?.audioUrl, reviewQuiz?.quiz?.id, reviewQuiz?.quiz?.audioUrl]);
 
   useEffect(() => {
-      // Warm only the first 256 KB while the Listening instruction screen is open.
-      // Native <audio preload="metadata"> remains authoritative for playback, Range,
-      // and the timer; this request never plays, reloads, or changes that element.
-      if (!activeExam?.audioUrl
-          || !isListeningExamAudio()
-          || examAudioShouldPlayRef.current
-          || !["IDLE", "LOADING", "PAUSED"].includes(audioStatus)) return;
+    if (!preloadOrActiveAudioUrl) {
+      setIsAudioReadyToPlay(true);
+      return;
+    }
+    setIsAudioReadyToPlay(false);
 
-      const connection = (navigator as any).connection as { saveData?: boolean; effectiveType?: string } | undefined;
-      const effectiveType = String(connection?.effectiveType || "").toLowerCase();
-      if (connection?.saveData || effectiveType === "slow-2g" || effectiveType === "2g") {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, connection?.saveData ? "save-data" : effectiveType);
-          return;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.preload = "auto";
+      if (audio.readyState === 0 && (audio.networkState === HTMLMediaElement.NETWORK_EMPTY || audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
+        try { audio.load(); } catch { }
       }
+      checkAndSetAudioReady(audio);
+    }
 
-      let target: URL;
-      try {
-          target = new URL(activeExam.audioUrl, window.location.href);
-      } catch {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "invalid-url");
-          return;
+    const fallbackTimer = window.setTimeout(() => {
+      setIsAudioReadyToPlay(true);
+    }, 6000);
+
+    return () => {
+      window.clearTimeout(fallbackTimer);
+    };
+  }, [preloadOrActiveAudioUrl]);
+
+  useEffect(() => {
+    if (!preloadOrActiveAudioUrl) return;
+    try {
+      const u = new URL(preloadOrActiveAudioUrl, window.location.href);
+      const origin = u.origin;
+      if (!origin || origin === window.location.origin) return;
+
+      let preconnect = document.querySelector(`link[rel="preconnect"][href="${origin}"]`) as HTMLLinkElement | null;
+      let dnsPrefetch = document.querySelector(`link[rel="dns-prefetch"][href="${origin}"]`) as HTMLLinkElement | null;
+      let createdPreconnect = false;
+      let createdDnsPrefetch = false;
+
+      if (!preconnect) {
+        preconnect = document.createElement("link");
+        preconnect.rel = "preconnect";
+        preconnect.href = origin;
+        preconnect.crossOrigin = "anonymous";
+        document.head.appendChild(preconnect);
+        createdPreconnect = true;
       }
-      if (target.origin !== window.location.origin) {
-          recordAudioDiagnostic("prewarm-skipped", audioRef.current, "cross-origin");
-          return;
+      if (!dnsPrefetch) {
+        dnsPrefetch = document.createElement("link");
+        dnsPrefetch.rel = "dns-prefetch";
+        dnsPrefetch.href = origin;
+        document.head.appendChild(dnsPrefetch);
+        createdDnsPrefetch = true;
       }
-
-      const key = target.href;
-      if (audioPrewarmUrlsRef.current.has(key)) return;
-      audioPrewarmUrlsRef.current.add(key);
-
-      const controller = new AbortController();
-      let disposed = false;
-      let timedOut = false;
-      const startedAt = performance.now();
-      const timeout = window.setTimeout(() => {
-          timedOut = true;
-          controller.abort();
-      }, 4500);
-
-      void (async () => {
-          let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-          try {
-              recordAudioDiagnostic("prewarm-start", audioRef.current, "bytes=0-262143");
-              const response = await fetch(key, {
-                  headers: { Range: "bytes=0-262143" },
-                  cache: "no-store",
-                  signal: controller.signal,
-              });
-              if (response.status !== 206 || !response.body) {
-                  await response.body?.cancel();
-                  if (!disposed) recordAudioDiagnostic("prewarm-unexpected-response", audioRef.current, `status=${response.status}`);
-                  return;
-              }
-
-              reader = response.body.getReader();
-              let bytesRead = 0;
-              while (bytesRead < 262144) {
-                  const { done, value } = await reader.read();
-                  if (done || !value) break;
-                  bytesRead += value.byteLength;
-              }
-              await reader.cancel();
-              reader = null;
-              if (!disposed) recordAudioDiagnostic("prewarm-complete", audioRef.current, `${Math.min(bytesRead, 262144)}B/${Math.round(performance.now() - startedAt)}ms`);
-          } catch (error) {
-              if (!disposed) {
-                  const detail = timedOut
-                      ? "timeout"
-                      : error instanceof Error ? error.name : String(error);
-                  recordAudioDiagnostic("prewarm-failed", audioRef.current, detail);
-              }
-          } finally {
-              window.clearTimeout(timeout);
-              if (reader) {
-                  try { await reader.cancel(); } catch { }
-              }
-          }
-      })();
 
       return () => {
-          disposed = true;
-          window.clearTimeout(timeout);
-          controller.abort();
+        if (createdPreconnect && preconnect?.parentNode) preconnect.parentNode.removeChild(preconnect);
+        if (createdDnsPrefetch && dnsPrefetch?.parentNode) dnsPrefetch.parentNode.removeChild(dnsPrefetch);
       };
-  }, [activeExam?.id, activeExam?.audioUrl, audioStatus]);
+    } catch { }
+  }, [preloadOrActiveAudioUrl]);
 
   useEffect(() => {
       const currentAudio = isListeningReviewAudio() ? reviewQuiz?.quiz : activeExam;
@@ -6374,7 +6798,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
   }, [activeExam?.id, (activeExam as any)?.audioMode, reviewQuiz?.quiz?.id, audioRate, playbackRate, meetAudioIssue]);
 
   useEffect(() => {
-      if (!activeExam) {
+      if (!activeExam && !pendingExamState && !realExamInstructionGate) {
           examAudioShouldPlayRef.current = false;
           clearExamAudioResumeTimer();
           if (audioRef.current) {
@@ -6396,7 +6820,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           setSelectedDragAnswer("");
           setSaveStatus("Saved");
       }
-  }, [activeExam]);
+  }, [activeExam, pendingExamState, realExamInstructionGate]);
 
   useEffect(() => {
     if (userRole !== "TEACHER") return;
@@ -7011,9 +7435,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
         .replace(/[^\S\r\n]+/g, " ")
         .replace(/\n{2,}/g, "\n")
         .trim();
+      const cleanOptText = (raw: any): string => {
+        let s = stripTags(raw);
+        while (/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/.test(s)) {
+          s = s.replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
+        }
+        return s;
+      };
       const optStr = q.type === 'MATCHING'
         ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
-        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${stripTags(o)}`).join(" | ");
+        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${cleanOptText(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
@@ -7032,8 +7463,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
       } else if (q.type === 'CHOICE') {
-        correctStr = stripTags(q.options?.[Number(q.correctAnswer)] ?? q.correctAnswer);
-        stuStr = blank ? "(trống)" : stripTags(q.options?.[Number(studentAnsRaw)] ?? studentAnsRaw);
+        const cNum = Number(q.correctAnswer);
+        const cRaw = (!isNaN(cNum) && q.options?.[cNum]) ? q.options[cNum] : q.correctAnswer;
+        const cLetter = !isNaN(cNum) ? `${String.fromCharCode(65 + cNum)}. ` : (/^[A-Za-z]$/.test(String(q.correctAnswer).trim()) ? `${String(q.correctAnswer).trim().toUpperCase()}. ` : "");
+        correctStr = `${cLetter}${cleanOptText(cRaw)}`;
+
+        const sNum = Number(studentAnsRaw);
+        const sRaw = (!isNaN(sNum) && q.options?.[sNum]) ? q.options[sNum] : studentAnsRaw;
+        const sLetter = !isNaN(sNum) ? `${String.fromCharCode(65 + sNum)}. ` : (/^[A-Za-z]$/.test(String(studentAnsRaw).trim()) ? `${String(studentAnsRaw).trim().toUpperCase()}. ` : "");
+        stuStr = blank ? "(trống)" : `${sLetter}${cleanOptText(sRaw)}`;
       } else if (q.type === 'MATCHING') {
         correctStr = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
         stuStr = blank ? "(trống)" : stripTags(resolveMatchingAnswerText(q, studentAnsRaw));
@@ -7047,15 +7485,35 @@ const applyWorkspaceSnapshot = (snap: any) => {
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
       const fullQuiz = (quizzes || []).find(x => x && x.id === quiz?.id) || quiz;
-      // FIX: câu thuộc Passage 2/3 phải lấy đúng bài đọc của section đó, KHÔNG dùng fullQuiz.passage
-      // (backend chỉ gán passage = sections[0] = Passage 1 -> AI nhận nhầm văn bản, báo "không tìm thấy").
-      let qPassage: string = fullQuiz?.passage || "";
-      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       const secs = (fullQuiz as any)?.sections;
+      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
       if (Array.isArray(secs) && secs.length) {
         if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-        if (qSectionIndex >= 0 && secs[qSectionIndex]) qPassage = secs[qSectionIndex].passage || qPassage;
       }
+      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
+      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
+
+      // Robust passage resolution with fallback chain
+      let qPassage: string = (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
+        || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passageHtml)
+        || fullQuiz?.passage
+        || (fullQuiz as any)?.passageHtml
+        || (isListeningQuestion && Array.isArray(secs) ? (secs[0]?.passage || secs[0]?.passageHtml || secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage) : "")
+        || "";
+
+      // Robust transcript resolution with fallback chain
+      const fullTranscript = stripTags(
+        fullQuiz?.transcript ||
+        (fullQuiz as any)?.transcriptHtml ||
+        (isListeningQuestion ? (
+          (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage) ||
+          secs?.[0]?.passage ||
+          secs?.[0]?.passageHtml ||
+          fullQuiz?.passage ||
+          (fullQuiz as any)?.passageHtml ||
+          (Array.isArray(secs) ? secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage : "")
+        ) : "")
+      );
       const matchingKind = (() => {
         if (q.type === 'DRAG_DROP_HEADING') return 'headings';
         if (q.type !== 'MATCHING') return '';
@@ -7072,8 +7530,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
           .filter((text) => text.length >= 30);
         return paragraphs[matchingTargetLabel.charCodeAt(0) - 65] || '';
       })();
-      const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
-      const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
       const timestampQuestions = isListeningQuestion
         ? (Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []))
         : [];
@@ -7096,7 +7552,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       // A full 30-minute transcript can exceed the model context. Keep the slice
       // belonging to this part/question, rather than always truncating at Part 1.
-      const fullTranscript = stripTags(fullQuiz?.transcript);
       const transcriptForQuestion = (() => {
         const limit = 23000;
         if (!isListeningQuestion || fullTranscript.length <= limit) return fullTranscript;
@@ -7115,9 +7570,16 @@ const applyWorkspaceSnapshot = (snap: any) => {
       })();
       // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
       const ctxParts = isListeningQuestion
-        ? [transcriptForQuestion, stripTags(q.groupContext), stripTags(qPassage)].filter(Boolean)
+        ? [transcriptForQuestion, stripTags(qPassage), stripTags(q.groupContext)].filter(Boolean)
         : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
-      const context = ctxParts.join("\n").trim().slice(0, 24000);
+      const seenCtx = new Set<string>();
+      const uniqueCtxParts = ctxParts.filter((part) => {
+        const trimmed = part.trim();
+        if (!trimmed || seenCtx.has(trimmed)) return false;
+        seenCtx.add(trimmed);
+        return true;
+      });
+      const context = uniqueCtxParts.join("\n\n").trim().slice(0, 24000);
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
         if (question.type === "CHOICE") {
@@ -7174,6 +7636,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
             ? { ...data.audioEvidence, segments: audioEvidenceSegments }
             : undefined,
           audioEvidenceSegments,
+          deconstruction: data.deconstruction || undefined,
         } }));
       }
       else {
@@ -7241,36 +7704,88 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (!initResponse.ok || !initData?.uploadUrl || !initData?.uploadId) {
         throw new Error(String(initData?.detail || initData?.error || "Could not prepare the audio upload."));
       }
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
-        Object.entries(initData.requiredHeaders || {}).forEach(([name, value]) => {
-          xhr.setRequestHeader(name, String(value));
+      const uploadContentType = initData.contentType || initData.requiredHeaders?.["Content-Type"] || file.type || "audio/mpeg";
+      let directPutFailed = false;
+      let directPutError: any = null;
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open(String(initData.method || "PUT"), String(initData.uploadUrl), true);
+          // Send ONLY the Content-Type header to avoid triggering extra CORS preflight checks
+          xhr.setRequestHeader("Content-Type", uploadContentType);
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && event.total > 0) {
+              setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
+            }
+          };
+          audioUploadAbortRef.current = () => {
+            audioUploadCancelledRef.current = true;
+            xhr.abort();
+          };
+          xhr.onerror = () => {
+            audioUploadAbortRef.current = null;
+            const err: any = new Error("The browser could not reach secure audio storage. Please try again.");
+            err.status = xhr.status;
+            reject(err);
+          };
+          xhr.onabort = () => {
+            audioUploadAbortRef.current = null;
+            reject(new Error("Audio upload was cancelled."));
+          };
+          xhr.onload = () => {
+            audioUploadAbortRef.current = null;
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+            } else {
+              const err: any = new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`);
+              err.status = xhr.status;
+              reject(err);
+            }
+          };
+          xhr.send(file);
         });
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable && event.total > 0) {
-            setAudioUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
-          }
-        };
+      } catch (putErr: any) {
+        if (audioUploadCancelledRef.current || putErr?.name === "AbortError" || String(putErr?.message || "").includes("cancelled")) {
+          throw putErr;
+        }
+        // If direct PUT encounters network/CORS error (xhr.status === 0), fall back to Firebase Client SDK
+        if (putErr?.status === 0 || String(putErr?.message || "").includes("could not reach secure audio storage")) {
+          directPutFailed = true;
+          directPutError = putErr;
+        } else {
+          throw putErr;
+        }
+      }
+
+      if (directPutFailed) {
+        console.warn("Direct Storage PUT failed due to CORS/network, falling back to Firebase Client SDK uploadBytesResumable...", directPutError);
+        const storagePath = initData.storagePath || `exam-audio/${user.uid}/${initData.uploadId}/${safeName}`;
+        const fileRef = storageRef(storage, storagePath);
+        const uploadTask = uploadBytesResumable(fileRef, file, { contentType: uploadContentType });
         audioUploadAbortRef.current = () => {
           audioUploadCancelledRef.current = true;
-          xhr.abort();
+          uploadTask.cancel();
         };
-        xhr.onerror = () => {
-          audioUploadAbortRef.current = null;
-          reject(new Error("The browser could not reach secure audio storage. Please try again."));
-        };
-        xhr.onabort = () => {
-          audioUploadAbortRef.current = null;
-          reject(new Error("Audio upload was cancelled."));
-        };
-        xhr.onload = () => {
-          audioUploadAbortRef.current = null;
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Secure audio storage rejected the upload (HTTP ${xhr.status}).`));
-        };
-        xhr.send(file);
-      });
+        await new Promise<void>((resolve, reject) => {
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              if (snapshot.totalBytes > 0) {
+                setAudioUploadProgress(Math.max(1, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)));
+              }
+            },
+            (err) => {
+              audioUploadAbortRef.current = null;
+              reject(err);
+            },
+            () => {
+              audioUploadAbortRef.current = null;
+              resolve();
+            }
+          );
+        });
+      }
       const completeController = new AbortController();
       audioUploadAbortRef.current = () => {
         audioUploadCancelledRef.current = true;
@@ -9057,6 +9572,144 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     }
   };
 
+  const CANONICAL_IELTS_TYPES = [
+    { key: "multiple_choice", labelVi: "Trắc nghiệm (Multiple Choice)", labelEn: "Multiple Choice" },
+    { key: "tfng_ynng", labelVi: "T/F/NG & Y/N/NG", labelEn: "True/False/Not Given & Yes/No/Not Given" },
+    { key: "matching_headings", labelVi: "Nối tiêu đề (Headings)", labelEn: "Matching Headings" },
+    { key: "matching_info_features", labelVi: "Nối thông tin / Đặc điểm", labelEn: "Matching Information / Features" },
+    { key: "completion_notes_summary", labelVi: "Điền từ (Notes/Summary/Sentence)", labelEn: "Fill in Blanks (Notes/Summary/Sentence)" },
+    { key: "diagram_flowchart_map", labelVi: "Sơ đồ / Bản đồ / Flowchart", labelEn: "Diagram / Map / Flowchart Labelling" },
+    { key: "short_answer", labelVi: "Câu hỏi ngắn (Short Answer)", labelEn: "Short Answer Questions" },
+    { key: "other", labelVi: "Dạng câu hỏi khác", labelEn: "Other Question Types" }
+  ];
+
+  const categorizeIeltsQuestionType = (q: any): { key: string; labelVi: string; labelEn: string } => {
+    const raw = `${q?.questionType || ""} ${q?.subType || ""} ${q?.type || ""}`.toLowerCase();
+    if (raw.includes("head")) return CANONICAL_IELTS_TYPES[2];
+    if (raw.includes("true") || raw.includes("false") || raw.includes("not given") || raw.includes("tfng") || raw.includes("yes") || raw.includes("no") || raw.includes("ynng")) return CANONICAL_IELTS_TYPES[1];
+    if (raw.includes("diagram") || raw.includes("map") || raw.includes("flow_chart") || raw.includes("flowchart") || raw.includes("external_diagram")) return CANONICAL_IELTS_TYPES[5];
+    if (raw.includes("summary") || raw.includes("note") || raw.includes("sentence") || raw.includes("table") || raw.includes("form") || raw.includes("completion") || raw.includes("blank")) return CANONICAL_IELTS_TYPES[4];
+    if (raw.includes("match")) return CANONICAL_IELTS_TYPES[3];
+    if (raw.includes("choice") || raw.includes("multiple") || raw.includes("mcq")) return CANONICAL_IELTS_TYPES[0];
+    if (raw.includes("short")) return CANONICAL_IELTS_TYPES[6];
+    return CANONICAL_IELTS_TYPES[7];
+  };
+
+  const triggerErrorDnaAnalysis = async (targetStudent: Student, force = false) => {
+    if (!targetStudent?.id) return;
+    const sid = targetStudent.id;
+    if (dnaInFlightRef.current.has(sid)) return;
+
+    const studentResults = (quizResults || []).filter(r => r && r.studentId === sid).sort((a, b) => safeString(b.date).localeCompare(safeString(a.date)));
+    if (studentResults.length === 0) return;
+
+    const typeMap: Record<string, { key: string; labelVi: string; labelEn: string; correct: number; total: number }> = {};
+    CANONICAL_IELTS_TYPES.forEach(t => {
+      typeMap[t.key] = { ...t, correct: 0, total: 0 };
+    });
+
+    const recentMistakes: Array<{ quizTitle: string; skill: string; questionType: string; subType: string; questionText: string; studentAnswer: string; correctAnswer: string }> = [];
+    let totalQuestionsAnalyzed = 0;
+
+    studentResults.forEach(r => {
+      if (!r || !r.answers) return;
+      const quiz = (quizzes || []).find(q => q && q.id === r.quizId);
+      if (!quiz || !Array.isArray(quiz.questions)) return;
+      const summary = getQuizScoreSummary(quiz, r.answers || {});
+      summary.groups.forEach((group: any) => {
+        const q = group.questions[0];
+        if (!q) return;
+        const cat = categorizeIeltsQuestionType(q);
+        totalQuestionsAnalyzed += group.total;
+        typeMap[cat.key].total += group.total;
+        typeMap[cat.key].correct += group.score;
+
+        if (group.score < group.total && recentMistakes.length < 15) {
+          const studentAns = r.answers[q.id];
+          const studentAnsStr = Array.isArray(studentAns) ? studentAns.join(", ") : String(studentAns ?? "(skipped)");
+          const correctStr = String(q.correctAnswer ?? q.correct ?? (Array.isArray(q.answers) ? q.answers.join(" / ") : "N/A"));
+          recentMistakes.push({
+            quizTitle: quiz.title || r.quizTitle || "Exam",
+            skill: (quiz as any).skill || (String(quiz.type).toUpperCase().includes("LISTEN") ? "Listening" : "Reading"),
+            questionType: cat.labelEn,
+            subType: q.subType || q.type || "",
+            questionText: String(q.question || q.text || q.prompt || "").slice(0, 160),
+            studentAnswer: studentAnsStr.slice(0, 100),
+            correctAnswer: correctStr.slice(0, 100)
+          });
+        }
+      });
+    });
+
+    if (totalQuestionsAnalyzed === 0) return;
+
+    const typeAccuracy = CANONICAL_IELTS_TYPES.map(t => {
+      const data = typeMap[t.key];
+      const acc = data.total > 0 ? Math.round((data.correct / data.total) * 100) : 0;
+      return {
+        key: t.key,
+        label: tx(t.labelVi, t.labelEn),
+        correct: data.correct,
+        total: data.total,
+        accuracy: acc
+      };
+    }).filter(item => item.total > 0);
+
+    const signature = `${studentResults.length}_${studentResults[0]?.date || ""}_${totalQuestionsAnalyzed}`;
+
+    if (!force && targetStudent.errorDna && targetStudent.errorDna.signature === signature && targetStudent.errorDna.categoryBreakdown) {
+      return;
+    }
+
+    dnaInFlightRef.current.add(sid);
+
+    try {
+      const res = await fetch("/api/analyze_error_dna", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentName: targetStudent.name || "Student",
+          targetBand: targetStudent.target || "7.0",
+          typeAccuracy,
+          recentMistakes
+        })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.success) {
+        const updatedDna: ErrorDnaProfile = {
+          signature,
+          updatedAt: Date.now(),
+          totalAnalyzedAttempts: studentResults.length,
+          totalQuestionsAnalyzed,
+          typeAccuracy,
+          categoryBreakdown: data.categoryBreakdown || { lexicalGap: 34, distractorTrap: 33, scopeMisread: 33 },
+          recurringTraps: data.recurringTraps || [],
+          actionPlanVi: data.actionPlanVi || [],
+          actionPlanEn: data.actionPlanEn || []
+        };
+
+        setStudents(prev => {
+          const next = prev.map(s => s.id === sid ? { ...s, errorDna: updatedDna } : s);
+          void syncData({ students: next });
+          return next;
+        });
+      }
+    } catch (err) {
+      console.warn("Error DNA diagnosis deferred:", err);
+    } finally {
+      dnaInFlightRef.current.delete(sid);
+    }
+  };
+
+  useEffect(() => {
+    if (!students || !students.length || !quizResults || !quizResults.length) return;
+    const currentSt = students.find(s => s.email && currentUser?.email && s.email.toLowerCase() === currentUser.email.toLowerCase());
+    if (currentSt && (!currentSt.errorDna || !currentSt.errorDna.categoryBreakdown)) {
+      void triggerErrorDnaAnalysis(currentSt);
+    }
+  }, [students, quizResults, currentUser]);
+
   const saveQuiz = async (quizToSave?: any): Promise<boolean> => {
       const isEvent = quizToSave && typeof quizToSave.preventDefault === 'function';
       const targetQuiz = isEvent ? undefined : quizToSave;
@@ -9708,6 +10361,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const confirmRealExamInstructionGate = () => {
     const gate = realExamInstructionGate;
     if (!gate?.ready) return;
+    if (isTouchAudioHost()) void warmAndroidAudioPath();
+    const a = audioRef.current;
+    if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      a.preload = "auto";
+      if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+    }
     const pkg = realExamPackages.find(item => item.id === gate.packageId);
     const quizId = gate.quizId;
     setRealExamInstructionGate(null);
@@ -9932,6 +10591,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
 
   const confirmStartExam = (quiz: Quiz, isTeacherPreview = false, isStudentTestUI = false) => {
+      if (isTouchAudioHost()) void warmAndroidAudioPath();
+      const a = audioRef.current;
+      if (a && a.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+          a.preload = "auto";
+          if (a.networkState === HTMLMediaElement.NETWORK_EMPTY) a.load();
+      }
       // isStudentTestUI: dùng đề mã hóa + đánh dấu isPreview để KHÔNG lưu kết quả thật
       const sourceQuiz = isStudentTestUI ? createTestUIQuiz(quiz) : quiz;
       const writingTasks = normalizeWritingTasks(sourceQuiz);
@@ -10269,6 +10934,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
       }
 
+      if (me) {
+          void triggerErrorDnaAnalysis(me, true);
+      }
+
       if (!state.isPreview) {
           setLiveSessions(prev => {
               const nx = prev.filter(x => x.id !== (currentUser?.email || "unknown"));
@@ -10583,6 +11252,202 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       // _C_BASE: bảng màu GỐC. Portal học viên phủ theme vĩnh viễn lên _C_BASE (shadow C cục bộ),
       // KHÔNG ảnh hưởng phòng thi vì phòng thi (activeExam) đã return TRƯỚC block học viên.
       const _C_BASE = C;
+
+      const renderErrorDnaSection = (student: Student | null | undefined, isAnalyzing = false, onRefresh?: () => void) => {
+        if (!student) return null;
+        const dna = student.errorDna;
+        const studentResults = (quizResults || []).filter(r => r && r.studentId === student.id);
+        const hasTests = studentResults.length > 0;
+
+        return (
+          <div className="card" style={{ padding: "22px 26px", border: `1px solid ${C.border}`, borderRadius: 14, background: C.card, marginTop: 18, marginBottom: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', padding: 6, borderRadius: 8, background: `${C.accent}14`, color: C.accent }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V6a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v14a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2h2"/></svg>
+                  </span>
+                  <h3 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 18, fontWeight: 700, color: C.text }}>
+                    {tx("Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy", "Error DNA & Weakness Diagnostic Engine")}
+                  </h3>
+                </div>
+                <p style={{ margin: '4px 0 0 0', fontSize: 12.5, color: C.sub }}>
+                  {tx("Hệ thống tự động phân tích đa chiều từ lịch sử làm bài để định vị chính xác lỗ hổng nhận thức.", "Automatically diagnosed from real exam submissions to pinpoint cognitive vulnerabilities.")}
+                </p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {dna && (
+                  <>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 10px', borderRadius: 20, color: C.sub }}>
+                      {dna.totalAnalyzedAttempts} {tx("bài thi", "tests")} ({dna.totalQuestionsAnalyzed} {tx("câu hỏi", "questions")})
+                    </span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, background: isAnalyzing ? `${C.warn}15` : `${C.succ}15`, border: `1px solid ${isAnalyzing ? C.warn : C.succ}35`, color: isAnalyzing ? C.warn : C.succ, padding: '4px 10px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      {isAnalyzing && <Ico name="refresh" size={12} />}
+                      {isAnalyzing ? tx("Đang cập nhật...", "Analyzing...") : tx("AI đã phân tích", "AI Diagnosed")}
+                    </span>
+                  </>
+                )}
+                {hasTests && (
+                  <button
+                    type="button"
+                    disabled={isAnalyzing}
+                    onClick={() => {
+                      if (onRefresh) onRefresh();
+                      else void triggerErrorDnaAnalysis(student, true);
+                    }}
+                    style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 600, color: C.sub, cursor: isAnalyzing ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title={tx("Phân tích lại DNA lỗi sai", "Re-diagnose Error DNA")}
+                  >
+                    <Ico name="refresh" size={12} />
+                    <span>{tx("Chẩn đoán lại", "Re-diagnose")}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!hasTests ? (
+              <div style={{ textAlign: 'center', padding: '24px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                {tx("Chưa có kết quả bài thi Reading/Listening nào để chẩn đoán. Hãy hoàn thành ít nhất 1 bài thi.", "No Reading or Listening exam results yet. Complete at least 1 test to generate your Error DNA profile.")}
+              </div>
+            ) : !dna ? (
+              <div style={{ textAlign: 'center', padding: '30px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                <Ico name="refresh" size={20} color={C.accent} />
+                <div>{tx("Đang tự động tính toán dữ liệu và phân tích DNA lỗi sai...", "Automatically calculating mistake patterns and diagnosing Error DNA...")}</div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 20 }}>
+                {/* 1. THREE COGNITIVE CATEGORIES */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                    {tx("1. Phân loại căn nguyên lỗi sai (Cognitive Error Breakdown)", "1. Cognitive Error Breakdown")}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                    {/* Lexical Gap */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#eef2ff', border: '1px solid #c7d2fe', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#3730a3' }}>
+                          {tx("Lỗ hổng Từ vựng / Paraphrase", "Lexical & Paraphrase Gap")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#4338ca' }}>
+                          {dna.categoryBreakdown?.lexicalGap ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Chưa nhận diện được từ đồng nghĩa hoặc thiếu vốn từ vựng học thuật.", "Unrecognized synonyms, collocations, or vocabulary deficit.")}
+                      </div>
+                    </div>
+
+                    {/* Distractor Trap */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#92400e' }}>
+                          {tx("Bẫy Nhiễu & Phủ định Ngầm", "Distractor & Negative Trap")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#b45309' }}>
+                          {dna.categoryBreakdown?.distractorTrap ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Mắc bẫy từ trùng lặp nguyên văn hoặc người nói tự đính chính sau đó.", "Fell for verbatim surface matches or speaker self-corrections.")}
+                      </div>
+                    </div>
+
+                    {/* Scope Misread */}
+                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fff1f2', border: '1px solid #fecdd3', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#9f1239' }}>
+                          {tx("Đọc sai Phạm vi & Chi tiết", "Scope Misread & Overgeneralization")}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#be123c' }}>
+                          {dna.categoryBreakdown?.scopeMisread ?? 0}%
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
+                        {tx("Suy diễn quá phạm vi, bỏ sót mạo từ hoặc từ hạn định giới hạn (only, all).", "Overgeneralization, extrapolation, or overlooked qualifiers.")}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. QUESTION TYPE ACCURACY BARS */}
+                {dna.typeAccuracy && dna.typeAccuracy.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("2. Độ chính xác theo dạng câu hỏi (Question Type Accuracy)", "2. Question Type Accuracy")}
+                    </div>
+                    <div style={{ display: 'grid', gap: 9 }}>
+                      {dna.typeAccuracy.map((ct: any) => {
+                        const barColor = ct.accuracy >= 70 ? C.succ : ct.accuracy >= 50 ? C.warn : C.err;
+                        return (
+                          <div key={ct.key || ct.label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
+                              <span style={{ color: C.text }}>{ct.label}</span>
+                              <span style={{ fontFamily: 'var(--mono)', color: barColor }}>
+                                {ct.accuracy}% <span style={{ color: C.sub, fontWeight: 400 }}>({ct.correct}/{ct.total})</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, ct.accuracy))}%`, background: barColor, borderRadius: 3, transition: 'width 0.4s ease' }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. RECURRING TRAPS IDENTIFIED */}
+                {dna.recurringTraps && dna.recurringTraps.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("3. Các bẫy đề học viên thường mắc (Recurring Traps Identified)", "3. Recurring Traps Identified")}
+                    </div>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {dna.recurringTraps.map((trap: any, index: number) => {
+                        const isHigh = trap.severity === "high";
+                        return (
+                          <div key={index} style={{ padding: '12px 16px', borderRadius: 10, background: isHigh ? '#fff5f5' : '#fffbeb', border: `1px solid ${isHigh ? '#fed7d7' : '#fef08a'}`, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                {tx(trap.titleVi, trap.titleEn)}
+                              </span>
+                              <span style={{ fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, padding: '2px 8px', borderRadius: 4, background: isHigh ? '#fed7d7' : '#fef08a', color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                {isHigh ? tx("Tần suất cao", "High Frequency") : tx("Thường gặp", "Moderate")}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.45 }}>
+                              {tx(trap.detailVi, trap.detailEn)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. 7-DAY ACTION PLAN */}
+                {((dna.actionPlanVi && dna.actionPlanVi.length > 0) || (dna.actionPlanEn && dna.actionPlanEn.length > 0)) && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
+                      {tx("4. Kế hoạch hành động 7 ngày từ AI (AI Action Plan)", "4. 7-Day AI Action Plan")}
+                    </div>
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 18px', display: 'grid', gap: 8 }}>
+                      {(i18n.language === "vi" ? (dna.actionPlanVi || dna.actionPlanEn || []) : (dna.actionPlanEn || dna.actionPlanVi || [])).map((step: string, index: number) => (
+                        <div key={index} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12.5, color: C.text, lineHeight: 1.5 }}>
+                          <span style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: `${C.accent}20`, color: C.accent, fontSize: 11, fontWeight: 800, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                            {index + 1}
+                          </span>
+                          <span>{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      };
 
   const globalStyles = useMemo(() => (
         <style>{`
@@ -11067,6 +11932,77 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     </div>
   ) : null;
 
+  const persistentAudioNode = (!reviewQuiz && preloadOrActiveAudioUrl && typeof document !== "undefined") ? (
+    createPortal(
+      <audio
+        key={preloadOrActiveAudioUrl}
+        ref={audioRef}
+        preload="auto"
+        playsInline
+        src={preloadOrActiveAudioUrl}
+        controlsList="nodownload noremoteplayback"
+        onContextMenu={(event: any) => event.preventDefault()}
+        onDragStart={(event: any) => event.preventDefault()}
+        onEnded={handleExamAudioEnded}
+        onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
+        onPlaying={handleExamAudioPlaying}
+        onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
+        onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
+        onCanPlay={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("canplay", audio);
+          checkAndSetAudioReady(audio);
+          if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio);
+        }}
+        onCanPlayThrough={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("canplaythrough", audio);
+          checkAndSetAudioReady(audio);
+        }}
+        onProgress={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          checkAndSetAudioReady(audio);
+        }}
+        onLoadedData={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          recordAudioDiagnostic("loadeddata", audio);
+          checkAndSetAudioReady(audio);
+        }}
+        onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
+        onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
+        onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
+        onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
+        onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
+        onLoadedMetadata={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          audio.muted = false;
+          audio.defaultMuted = false;
+          audio.volume = Math.max(0, Math.min(1, _audioVolume));
+          setAudioDur(audio.duration || 0);
+          updateExamMediaSessionPosition(audio);
+          checkAndSetAudioReady(audio);
+          if (pendingAudioResume && Number.isFinite(pendingAudioResume.time) && pendingAudioResume.time > 0) {
+            audio.currentTime = Math.min(pendingAudioResume.time, Math.max(0, (audio.duration || pendingAudioResume.time) - 0.1));
+            setAudioCur(audio.currentTime);
+            updateExamMediaSessionPosition(audio);
+            setPendingAudioResume(null);
+          }
+        }}
+        onDurationChange={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          setAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0);
+        }}
+        onTimeUpdate={(e: any) => {
+          const audio = e.currentTarget as HTMLAudioElement;
+          publishAudioProgress(audio);
+          checkAndSetAudioReady(audio);
+        }}
+        style={{ position: 'fixed', top: 0, left: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none', zIndex: -1 }}
+      />,
+      document.body
+    )
+  ) : null;
+
 /*INSERT_REVIEW_QUIZ*/
 
 /*INSERT_SEB_GUIDE*/
@@ -11145,7 +12081,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     );
     if (realExamInstructionGate && pkg && realExamInstructionGate.packageId === pkg.id) {
       return (
-        <div className="real-exam-shell">
+        <>
+          {persistentAudioNode}
+          <div className="real-exam-shell">
           <style>{`
             .real-exam-shell{min-height:100dvh;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
             .real-exam-top{height:48px;flex:none;border-bottom:1px solid #c9c9c9;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 12px;box-sizing:border-box;background:#fff}
@@ -11200,9 +12138,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           </main>
           {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
         </div>
-      );
-    }
-    return (
+      </>
+    );
+  }
+  return (
+    <>
+      {persistentAudioNode}
       <div className="real-exam-shell">
         <style>{`
           .real-exam-shell{min-height:100dvh;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column}
@@ -11305,8 +12246,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         {renderRealExamBottomBar(true)}
         {realExamFullscreenBlocked && <div className="real-exam-fullscreen-gate"><div><Ico name="expand" size={28} /><h2>Return to full screen</h2><p>The exam package is paused while full screen is off.</p><button type="button" className="real-exam-start" onClick={() => { requestRealExamFullscreen(true); window.setTimeout(() => { const viewH = Math.max(Number(window.innerHeight) || 0, Number(window.visualViewport?.height) || 0); setRealExamFullscreenBlocked(!document.fullscreenElement || ((Number(window.screen?.height) || 0) - viewH > 8)); }, 600); }}>Return to full screen</button></div></div>}
       </div>
-    );
-  }
+    </>
+  );
+}
 
       // ==========================================
       // VIEW: STUDENT DASHBOARD
@@ -11493,6 +12435,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         </div>,
         document.body
       )}
+      {persistentAudioNode}
     </div>
   );
 }
