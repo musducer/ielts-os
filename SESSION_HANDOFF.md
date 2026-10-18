@@ -1,14 +1,15 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-18)
 
-## Khắc Phục Tái Sử Dụng Đáp Án Cho Dạng Matching 2 Cột Listening & Căn Giữa Sơ Đồ Quy Trình Flow-Chart Drag (Listening 2-Column Drag & Flow-Chart Layout) — 2026-10-18
+## Khắc Phục Tái Sử Dụng Đáp Án Cho Dạng Matching 2 Cột Listening & Chuẩn Hóa 100% Giao Diện Sơ Đồ Quy Trình Flow-Chart Drag (IELTS CBT Parity) — 2026-10-18
 
 - **Vấn đề & Nguyên nhân gốc rễ**:
   1. *Listening 2-Column Matching hiển thị sai giao diện radio Reading*: Các câu hỏi ghép đôi trong đề Listening (như match DVD categories với decisions) khi lưu dưới type `MATCHING` bị render nhầm thành bảng radio Reading (`renderMatchingTable()`) kèm legend phía dưới, thay vì giao diện kéo thả 2 cột chuẩn IDP (`idp-match2`).
   2. *Kho thẻ bị mất khi kéo thả nếu options.length >= questions.length*: Trong `idp-match2`, điều kiện cũ `reuseTags = group.questions.length > dragOptions.length` chỉ cho phép tái dùng phương án khi số câu nhiều hơn số đáp án. Trong thực tế, nhiều bài Listening cho phép dùng lại chữ cái ("You may use any letter more than once") hoặc đáp án đúng có lặp lại phương án dù `options.length >= questions.length`. Khi thí sinh kéo 1 thẻ, thẻ đó biến mất khỏi kho và không thể chọn lại cho câu khác.
   3. *Mất số thứ tự câu hỏi trong ô dropzone khi bỏ trống*: `src/App.template.tsx` chạy effect khôi phục DOM cho `.idp-dropzone`: `const displayVal = stateVal || dz.getAttribute('data-placeholder') || ""`. Do các thẻ dropzone trong `idp-match2` và `renderFlowChart` thiếu thuộc tính `data-placeholder`, khi ô chưa có câu trả lời hoặc bị xóa, `textContent` bị ghi đè thành chuỗi rỗng `""`, làm biến mất hoàn toàn số thứ tự câu hỏi (ví dụ 16–20 hoặc 21–25).
-  4. *Khung Flow-Chart bị bè ngang 420px, chữ lệch trái và dropzone nhảy dòng riêng*:
-     - `q.text` import từ DOCX chứa các thẻ `<br/>`, `\n` và gạch dưới kéo dài (`[16] ________`) chưa được bóc tách triệt để, khiến thẻ `.idp-dropzone` bị ngắt thành 3 dòng riêng biệt (`Put` / `[ dropzone ]` / `on the back`).
-     - CSS `.idp-flowchart-layout` cố định `minmax(0, 420px)` và `.idp-flowchart-node` ép `text-align: left !important`, khiến hộp sơ đồ bè rộng thô kệch và văn bản bị lệch trái thay vì co giãn ôm sát nội dung (`fit-content`) và căn giữa trang nhã.
+  4. *Khung Flow-Chart bị co giật kích thước không đồng đều và ô nhận đáp án bị ép nhảy dòng riêng*:
+     - Khi dùng `width: fit-content`, mỗi hộp trong sơ đồ tự co theo độ dài câu văn dẫn tới kích thước các hộp lồi lõm không đồng đều (hộp 207px, hộp 157px).
+     - Với hộp hẹp 157px, câu chứa ô điền như `Put [18] on the back` bị ép ngắt thành 3 dòng (`Put` / `[ 18 ]` / `on the back`), khiến ô dropzone trơ trọi một dòng.
+     - `q.text` import từ DOCX chứa các thẻ `<br/>`, `\n` và gạch dưới kéo dài (`[16] ________`) chưa được bóc tách triệt để.
 
 - **Giải pháp triệt để**:
   1. *Điều hướng tự động Listening Matching sang `idp-match2`*:
@@ -24,10 +25,13 @@
   3. *Bảo toàn số thứ tự câu hỏi khi trống*:
      - Thêm `data-placeholder={...}` và `data-num={...}` vào tất cả `.idp-dropzone` trong `idp-match2` và `renderFlowChart`.
      - Cập nhật effect khôi phục DOM trong `src/App.template.tsx` bỏ qua `.idp-summary-dropzone` để bảo vệ cấu trúc HTML bên trong.
-  4. *Chuẩn hóa sơ đồ quy trình Flow-Chart*:
-     - Làm sạch `flowHtml`: bóc sạch `<br/>`, `<p>`, `<div>`, `&nbsp;` và gạch chân đuôi marker `\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?`, đảm bảo văn bản trước - dropzone - văn bản sau hiển thị liền mạch trên cùng 1 dòng.
-     - Cập nhật CSS: `.idp-flowchart-node` co giãn linh hoạt (`width: fit-content; min-width: 200px; max-width: min(100%, 460px); margin: 0 auto;`), căn giữa chữ `text-align: center !important;`.
-     - Đồng bộ giao diện xem lại bài thi Review (`REVIEW_QUIZ.txt`) với cùng quy chuẩn bóc tách văn bản và căn giữa.
+  4. *Đồng bộ 100% quy chuẩn giao diện Flow-Chart chuẩn IELTS Computer-Delivered (Ảnh mẫu CD IELTS)*:
+     - **Kích thước hộp đồng đều 100%**: `.idp-flowchart-panel` cố định `max-width: 500px; align-items: stretch;`, `.idp-flowchart-node` đặt `width: 100%; border: 1px solid #000; border-radius: 2px; padding: 10px 14px;` — toàn bộ các bước trong chuỗi sơ đồ có cùng chiều rộng chuẩn xác 500px, mép trái và mép phải gióng hàng thẳng tắp.
+     - **Căn lề trái toàn bộ văn bản và tiêu đề**: `.idp-flowchart-title` và `.idp-flowchart-node` áp dụng `text-align: left !important; font-weight: 700 !important;` theo đúng thiết kế đề thi thật.
+     - **Ô điền inline nằm trên cùng 1 dòng với chữ**: Bóc sạch `<br/>`, `<div>`, `<p>` và gạch chân đuôi; `.idp-dropzone` và `.idp-inline-input` đặt `min-width: 100px; height: 28px; border: 1px dashed #000; border-radius: 3px; display: inline-flex; vertical-align: middle;` nằm liền khối tự nhiên giữa các cụm từ (ví dụ `Put [ 18 ] on the back`).
+     - **Mũi tên liên kết chuẩn**: `.idp-flowchart-arrow` dùng SVG mũi tên đen đặc (`24px x 28px`) căn giữa nối các hộp.
+     - **Kho từ kéo thả bên phải**: `.idp-flowchart-bank .idp-wordbank-item` căn lề trái (`align-items: flex-start`), bo góc nhẹ `4px`, viền `1px solid #777`, chiều rộng `fit-content` theo độ dài từng từ.
+     - Đồng bộ giao diện xem lại bài thi Review (`REVIEW_QUIZ.txt`) với cùng cấu trúc 500px, viền đen, căn lề trái và badge inline.
   5. *Kiểm thử & Biên dịch*:
      - Bổ sung unit test `tests/test_allow_option_reuse.py` kiểm thử 3 kịch bản: `[REUSE_OPTIONS]`, chỉ dẫn "more than once", và đáp án trùng lặp. 3/3 tests pass 100%.
      - `compile_app.py`, `npx tsc -b`, `npx vite build` pass 100% không cảnh báo lỗi.

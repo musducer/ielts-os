@@ -895,14 +895,14 @@
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
-                  .rv-flowchart-review { width:min(100%, 720px); margin:0; display:flex; flex-direction:column; align-items:center; }
-                  .rv-flowchart-review .rv-flowchart-node { border:1.5px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.5 Arial,sans-serif; text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
-                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 8px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
+                  .rv-flowchart-review { width:100%; max-width:500px; margin:0 0 20px; display:flex; flex-direction:column; align-items:stretch; }
+                  .rv-flowchart-review .rv-flowchart-node { width:100%; box-sizing:border-box; border:1.5px solid #000; border-radius:2px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.6 Arial,sans-serif; text-align:left !important; margin:0; }
+                  .rv-flowchart-review .rv-completion-badge { min-width:100px; min-height:28px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 10px; border-radius:3px; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; white-space:normal; }
                   .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
-                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:2px 0; font-size:0; line-height:1; }
-                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
-                  .rv-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
-                  .rv-flowchart-correction { margin:4px auto; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:center !important; }
+                  .rv-flowchart-arrow { position:relative; width:100%; height:26px; margin:3px 0; font-size:0; line-height:1; }
+                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2.5px); width:5px; height:14px; background:#000; }
+                  .rv-flowchart-arrow::after { content:""; position:absolute; top:12px; left:calc(50% - 9px); border:9px solid transparent; border-top:14px solid #000; }
+                  .rv-flowchart-correction { margin:4px 0 0 0; color:#047857; font:700 12.5px/1.35 Arial,sans-serif; text-align:left !important; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
                   .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }

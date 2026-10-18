@@ -12900,14 +12900,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
                   .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
                   .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
-                  .rv-flowchart-review { width:min(100%, 720px); margin:0; display:flex; flex-direction:column; align-items:center; }
-                  .rv-flowchart-review .rv-flowchart-node { border:1.5px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.5 Arial,sans-serif; text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
-                  .rv-flowchart-review .rv-completion-badge { min-width:88px; min-height:26px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 8px; border-radius:2px; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; }
+                  .rv-flowchart-review { width:100%; max-width:500px; margin:0 0 20px; display:flex; flex-direction:column; align-items:stretch; }
+                  .rv-flowchart-review .rv-flowchart-node { width:100%; box-sizing:border-box; border:1.5px solid #000; border-radius:2px; background:#fff; padding:10px 14px; color:#111827; font:400 15px/1.6 Arial,sans-serif; text-align:left !important; margin:0; }
+                  .rv-flowchart-review .rv-completion-badge { min-width:100px; min-height:28px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 10px; border-radius:3px; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; white-space:normal; }
                   .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
-                  .rv-flowchart-arrow { position:relative; width:100%; height:22px; margin:2px 0; font-size:0; line-height:1; }
-                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2px); width:4px; height:12px; background:#111; }
-                  .rv-flowchart-arrow::after { content:""; position:absolute; top:10px; left:calc(50% - 8px); border:8px solid transparent; border-top:10px solid #111; }
-                  .rv-flowchart-correction { margin:4px auto; color:#047857; font:700 12px/1.35 Arial,sans-serif; text-align:center !important; }
+                  .rv-flowchart-arrow { position:relative; width:100%; height:26px; margin:3px 0; font-size:0; line-height:1; }
+                  .rv-flowchart-arrow::before { content:""; position:absolute; top:0; left:calc(50% - 2.5px); width:5px; height:14px; background:#000; }
+                  .rv-flowchart-arrow::after { content:""; position:absolute; top:12px; left:calc(50% - 9px); border:9px solid transparent; border-top:14px solid #000; }
+                  .rv-flowchart-correction { margin:4px 0 0 0; color:#047857; font:700 12.5px/1.35 Arial,sans-serif; text-align:left !important; }
                   .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
                   .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
                   .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
@@ -15345,21 +15345,24 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                       .idp-q-card { padding: 0 0 10px 0; margin-bottom: 10px; border-bottom: 1px solid #eaeaea; transition: 0.2s; }
                       .idp-q-card:last-child { border-bottom: none; }
-                      .idp-flowchart-wrap { width:min(100%, 720px); margin:0 0 18px; }
-                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 1fr) max-content; gap:20px; align-items:start; }
-                      .idp-flowchart-panel { width:100%; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:center; }
-                      .idp-flowchart-layout .idp-flowchart-panel { max-width:none; width:100%; margin:0; }
+                      .idp-flowchart-wrap { width:100%; max-width:820px; margin:0 0 20px; }
+                      .idp-flowchart-layout { display:grid; grid-template-columns:minmax(0, 500px) max-content; gap:36px; align-items:start; }
+                      .idp-flowchart-panel { width:100%; max-width:500px; margin:0; padding:0; background:transparent; border:0; display:flex; flex-direction:column; align-items:stretch; }
+                      .idp-flowchart-layout .idp-flowchart-panel { width:100%; max-width:500px; margin:0; }
                       .idp-flowchart-bank { margin:0; padding:0; border:0; border-radius:0; background:transparent; position:static; }
-                      .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
-                      .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:26px; box-sizing:border-box; margin:0; padding:4px 8px; text-align:left; justify-content:flex-start; font:700 13px/1.2 Arial,sans-serif; }
-                      .idp-flowchart-node { border:1px solid #4b5563; border-radius:3px; background:#fff; padding:10px 14px; line-height:1.5; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:center !important; width:fit-content; min-width:200px; max-width:min(100%, 460px); box-sizing:border-box; margin:0 auto; }
-                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:center !important; }
-                      .idp-flowchart-arrow { width:100%; height:22px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
-                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:88px; height:26px; min-height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563 !important; border-radius:2px; background:#fff !important; color:#111 !important; font:700 12.5px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; }
-                      .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; background:#f5f5f5 !important; }
+                      .idp-flowchart-bank-items { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+                      .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:28px; box-sizing:border-box; margin:0; padding:5px 12px; text-align:left; justify-content:flex-start; font:400 13.5px/1.25 Arial,sans-serif; border:1px solid #777; border-radius:4px; background:#fff; color:#000; box-shadow:none; cursor:grab; }
+                      .idp-flowchart-bank .idp-wordbank-item:hover:not(.used) { border-color:#0969da; background:#f0f7ff; }
+                      .idp-flowchart-bank .idp-wordbank-item.selected { border-color:#0969da; background:#e8f2ff; outline:1px solid #0969da; }
+                      .idp-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #000; border-radius:2px; background:#fff; padding:10px 14px; line-height:1.6; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left !important; margin:0; }
+                      .idp-flowchart-node > .idp-flowchart-text, .idp-flowchart-node > .idp-flowchart-text * { text-align:left !important; }
+                      .idp-flowchart-arrow { width:100%; height:26px; margin:3px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 28'%3E%3Cpath fill='%23000' d='M10 0h4v14h6L12 28 4 14h6z'/%3E%3C/svg%3E") center/24px 28px no-repeat; }
+                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:100px; height:28px; min-height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000 !important; border-radius:3px; background:#fff !important; color:#000 !important; font:700 13px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; white-space:normal; }
+                      .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; border-color:#000 !important; background:#f8fafc !important; font-weight:600; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
-                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:88px !important; height:26px; margin:0 4px; padding:1px 8px; border:1px dashed #4b5563; border-radius:2px; background:#fff; color:#111; font:700 12.5px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
-                      .idp-flowchart-title, .idp-flowchart-title * { text-align:center !important; }
+                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:100px !important; height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000; border-radius:3px; background:#fff; color:#000; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
+                      .idp-flowchart-title, .idp-flowchart-title * { text-align:left !important; font-weight:700 !important; }
+                      .idp-flowchart-title { font-size:calc(var(--efont) + 3px); margin-bottom:14px; color:var(--etext); }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; display: inline; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 8px auto !important; }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
@@ -16695,7 +16698,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
                                               onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
-                                              style={{ textAlign: 'center', minWidth: 88 }}
+                                              style={{ textAlign: 'center', minWidth: 100 }}
                                            />)}
                                            {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
                                       </div>
