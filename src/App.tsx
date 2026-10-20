@@ -4156,6 +4156,7 @@ export default function IeltsSupremeOS() {
           taskPrompt: task?.prompt || task?.instructions || "",
           taskType: task?.taskNumber === 1 ? "Task 1" : "Task 2",
           mode,
+          lang: "en",
           outlineText: mode === "critique_outline" ? writingSandboxOutline : undefined
         })
       });
@@ -16064,9 +16065,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div className="exam-column-splitter" role="separator" aria-orientation="vertical" aria-label="Resize exam panes" onMouseDown={(event: any) => { event.preventDefault(); setIsDraggingSplitter(true); }} title="Drag to resize" style={{ width: 28, margin: '0 -9px', flexShrink: 0, cursor: 'ew-resize', position: 'relative', zIndex: 10, background: 'transparent', display: 'flex', alignItems: 'stretch', justifyContent: 'center', touchAction: 'none' }}>
                           <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}><div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg></div></div>
                       </div>
-                      <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, padding: '50px 4% 24px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111' }}>
+                      <div className="writing-test-answer exam-question-col" style={{ flex: 1, minWidth: 280, height: '100%', minHeight: 0, overflowY: 'auto', padding: '20px 24px 80px 18px', boxSizing: 'border-box', position: 'relative', background: '#fff', color: '#111', display: 'flex', flexDirection: 'column' }}>
                           {Boolean(activeExam?.allowWritingSandbox) && !activeExam?.realExamContext && (
-                              <div style={{ width: '90%', marginBottom: 14 }}>
+                              <div style={{ width: '100%', marginBottom: 14 }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                                       <span style={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>
                                           Part {task?.taskNumber || 1} Answer
@@ -16094,176 +16095,204 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   </div>
 
                                   {showWritingSandbox && (
-                                      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: 14, marginBottom: 12 }}>
-                                          {/* Tabs */}
-                                          <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: 12, gap: 8 }}>
-                                              <button
-                                                  type="button"
-                                                  onClick={() => setWritingSandboxTab("brainstorm")}
-                                                  style={{
-                                                      background: 'transparent',
-                                                      border: 'none',
-                                                      borderBottom: writingSandboxTab === "brainstorm" ? '2px solid #4f46e5' : '2px solid transparent',
-                                                      color: writingSandboxTab === "brainstorm" ? '#4f46e5' : '#6b7280',
-                                                      fontWeight: 700,
-                                                      fontSize: 12,
-                                                      padding: '6px 10px',
-                                                      cursor: 'pointer'
-                                                  }}
-                                              >
-                                                  {tx("Góc nhìn & C1/C2 Collocations", "Perspectives & Collocations")}
-                                              </button>
-                                              <button
-                                                  type="button"
-                                                  onClick={() => setWritingSandboxTab("critique")}
-                                                  style={{
-                                                      background: 'transparent',
-                                                      border: 'none',
-                                                      borderBottom: writingSandboxTab === "critique" ? '2px solid #4f46e5' : '2px solid transparent',
-                                                      color: writingSandboxTab === "critique" ? '#4f46e5' : '#6b7280',
-                                                      fontWeight: 700,
-                                                      fontSize: 12,
-                                                      padding: '6px 10px',
-                                                      cursor: 'pointer'
-                                                  }}
-                                              >
-                                                  {tx("Kiểm tra Logic dàn bài", "Outline Logic Check")}
-                                              </button>
+                                      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}>
+                                          {/* Single-Row Header Bar */}
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc' }}>
+                                              <div style={{ display: 'flex', gap: 6 }}>
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => setWritingSandboxTab("brainstorm")}
+                                                      style={{
+                                                          background: 'transparent',
+                                                          border: 'none',
+                                                          borderBottom: writingSandboxTab === "brainstorm" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                          color: writingSandboxTab === "brainstorm" ? '#4f46e5' : '#6b7280',
+                                                          fontWeight: 700,
+                                                          fontSize: 12,
+                                                          padding: '6px 8px',
+                                                          cursor: 'pointer'
+                                                      }}
+                                                  >
+                                                      {tx("Góc nhìn & Collocations", "Perspectives & Collocations")}
+                                                  </button>
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => setWritingSandboxTab("critique")}
+                                                      style={{
+                                                          background: 'transparent',
+                                                          border: 'none',
+                                                          borderBottom: writingSandboxTab === "critique" ? '2px solid #4f46e5' : '2px solid transparent',
+                                                          color: writingSandboxTab === "critique" ? '#4f46e5' : '#6b7280',
+                                                          fontWeight: 700,
+                                                          fontSize: 12,
+                                                          padding: '6px 8px',
+                                                          cursor: 'pointer'
+                                                      }}
+                                                  >
+                                                      {tx("Kiểm tra Logic dàn bài", "Outline Logic Check")}
+                                                  </button>
+                                              </div>
+                                              {writingSandboxTab === "brainstorm" ? (
+                                                  <button
+                                                      type="button"
+                                                      disabled={writingSandboxLoading}
+                                                      onClick={() => void handleWritingSandboxAction(task, "brainstorm")}
+                                                      style={{
+                                                          background: '#4f46e5',
+                                                          color: '#fff',
+                                                          border: 'none',
+                                                          padding: '5px 12px',
+                                                          borderRadius: 6,
+                                                          fontSize: 11.5,
+                                                          fontWeight: 700,
+                                                          cursor: writingSandboxLoading ? 'default' : 'pointer',
+                                                          opacity: writingSandboxLoading ? 0.6 : 1,
+                                                          display: 'inline-flex',
+                                                          alignItems: 'center',
+                                                          gap: 5
+                                                      }}
+                                                  >
+                                                      {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                      <span>{writingSandboxLoading ? tx("Đang phân tích...", "Brainstorming...") : tx("Gợi ý ý tưởng", "Brainstorm Ideas")}</span>
+                                                  </button>
+                                              ) : (
+                                                  <button
+                                                      type="button"
+                                                      disabled={writingSandboxLoading || !writingSandboxOutline.trim()}
+                                                      onClick={() => void handleWritingSandboxAction(task, "critique_outline")}
+                                                      style={{
+                                                          background: '#4f46e5',
+                                                          color: '#fff',
+                                                          border: 'none',
+                                                          padding: '5px 12px',
+                                                          borderRadius: 6,
+                                                          fontSize: 11.5,
+                                                          fontWeight: 700,
+                                                          cursor: writingSandboxLoading || !writingSandboxOutline.trim() ? 'default' : 'pointer',
+                                                          opacity: writingSandboxLoading || !writingSandboxOutline.trim() ? 0.5 : 1,
+                                                          display: 'inline-flex',
+                                                          alignItems: 'center',
+                                                          gap: 5
+                                                      }}
+                                                  >
+                                                      {writingSandboxLoading && <Ico name="refresh" size={11} />}
+                                                      <span>{writingSandboxLoading ? tx("Đang kiểm tra...", "Evaluating...") : tx("Kiểm tra logic", "Check Logic")}</span>
+                                                  </button>
+                                              )}
                                           </div>
 
-                                          {/* Tab 1: Brainstorm */}
-                                          {writingSandboxTab === "brainstorm" && (
-                                              <div style={{ display: 'grid', gap: 10 }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                      <span style={{ fontSize: 11.5, color: '#4b5563' }}>
-                                                          {tx("Gợi ý các góc nhìn phản biện và collocations học thuật Band 8+ phù hợp với đề bài.", "AI perspectives and Band 8+ academic collocations tailored to this prompt.")}
-                                                      </span>
-                                                      <button
-                                                          type="button"
-                                                          disabled={writingSandboxLoading}
-                                                          onClick={() => void handleWritingSandboxAction(task, "brainstorm")}
-                                                          style={{
-                                                              background: '#4f46e5',
-                                                              color: '#fff',
-                                                              border: 'none',
-                                                              padding: '5px 12px',
-                                                              borderRadius: 6,
-                                                              fontSize: 11.5,
-                                                              fontWeight: 700,
-                                                              cursor: writingSandboxLoading ? 'default' : 'pointer',
-                                                              opacity: writingSandboxLoading ? 0.6 : 1,
-                                                              display: 'inline-flex',
-                                                              alignItems: 'center',
-                                                              gap: 5
-                                                          }}
-                                                      >
-                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
-                                                          <span>{writingSandboxLoading ? tx("Đang phân tích đề...", "Brainstorming...") : tx("Gợi ý ý tưởng & từ vựng", "Brainstorm Ideas")}</span>
-                                                      </button>
-                                                  </div>
-
-                                                  {writingSandboxBrainstormData && (
-                                                      <div style={{ display: 'grid', gap: 10, marginTop: 4 }}>
-                                                          {/* Perspectives */}
-                                                          {Array.isArray(writingSandboxBrainstormData.perspectives) && writingSandboxBrainstormData.perspectives.length > 0 && (
-                                                              <div style={{ display: 'grid', gap: 6 }}>
-                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
-                                                                      {tx("Góc nhìn phản biện (Perspectives)", "Critical Perspectives")}
-                                                                  </div>
-                                                                  {writingSandboxBrainstormData.perspectives.map((p: any, pIdx: number) => (
-                                                                      <div key={pIdx} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-                                                                          <b style={{ color: '#1e3a8a' }}>{p.nameVi || p.nameEn}:</b> <span style={{ color: '#374151' }}>{p.argumentVi || p.argumentEn}</span>
+                                          {/* Scrollable Internal Body with Max-Height */}
+                                          <div style={{ maxHeight: '34vh', overflowY: 'auto', padding: '10px 12px', overscrollBehavior: 'contain' }}>
+                                              {/* Tab 1: Brainstorm */}
+                                              {writingSandboxTab === "brainstorm" && (
+                                                  <div style={{ display: 'grid', gap: 8 }}>
+                                                      {!writingSandboxBrainstormData && !writingSandboxLoading && (
+                                                          <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '12px 0' }}>
+                                                              {tx("Nhấn 'Gợi ý ý tưởng' để nhận góc nhìn phản biện và collocations học thuật Band 8+.", "Click 'Brainstorm Ideas' above to generate Band 8.5+ perspectives and academic collocations.")}
+                                                          </div>
+                                                      )}
+                                                      {writingSandboxBrainstormData && (
+                                                          <div style={{ display: 'grid', gap: 8 }}>
+                                                              {/* Perspectives */}
+                                                              {Array.isArray(writingSandboxBrainstormData.perspectives) && writingSandboxBrainstormData.perspectives.length > 0 && (
+                                                                  <div style={{ display: 'grid', gap: 6 }}>
+                                                                      <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#64748b', margin: '4px 0 2px' }}>
+                                                                          {tx("Góc nhìn phản biện", "CRITICAL PERSPECTIVES")}
                                                                       </div>
-                                                                  ))}
-                                                              </div>
-                                                          )}
-
-                                                          {/* Collocations */}
-                                                          {Array.isArray(writingSandboxBrainstormData.collocations) && writingSandboxBrainstormData.collocations.length > 0 && (
-                                                              <div style={{ display: 'grid', gap: 6 }}>
-                                                                  <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#6b7280' }}>
-                                                                      {tx("C1/C2 Academic Collocations", "Band 8+ Academic Collocations")}
-                                                                  </div>
-                                                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                                                      {writingSandboxBrainstormData.collocations.map((c: any, cIdx: number) => (
-                                                                          <span key={cIdx} style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '4px 8px', borderRadius: 4, fontSize: 11.5, fontWeight: 600 }} title={c.meaningVi || c.usage}>
-                                                                              {c.phrase}
-                                                                          </span>
+                                                                      {writingSandboxBrainstormData.perspectives.map((p: any, pIdx: number) => (
+                                                                          <div key={pIdx} style={{ padding: '8px 10px', marginBottom: 6, borderRadius: 6, fontSize: 13, lineHeight: 1.42, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                                                              <b style={{ color: '#1e3a8a' }}>{p.nameEn || p.angleTitle || p.nameVi}:</b> <span style={{ color: '#374151' }}>{p.argumentEn || p.coreArgument || p.argumentVi}</span>
+                                                                              {p.realWorldExampleHint && (
+                                                                                  <div style={{ marginTop: 4, fontSize: 12, color: '#475569', fontStyle: 'italic' }}>
+                                                                                      <span style={{ fontWeight: 600, fontStyle: 'normal', color: '#64748b' }}>Ex: </span>{p.realWorldExampleHint}
+                                                                                  </div>
+                                                                              )}
+                                                                          </div>
                                                                       ))}
                                                                   </div>
-                                                              </div>
-                                                          )}
-                                                      </div>
-                                                  )}
-                                              </div>
-                                          )}
+                                                              )}
 
-                                          {/* Tab 2: Outline Critique */}
-                                          {writingSandboxTab === "critique" && (
-                                              <div style={{ display: 'grid', gap: 8 }}>
-                                                  <div style={{ fontSize: 11.5, color: '#4b5563' }}>
-                                                      {tx("Viết 3-5 gạch đầu dòng dàn ý bài viết của bạn. Huấn luyện viên AI sẽ đánh giá tính mạch lạc và cảnh báo thiếu ý:", "Write 3-5 bullet points of your planned outline. AI coach will check coherence and task coverage:")}
+                                                              {/* Collocations */}
+                                                              {Array.isArray(writingSandboxBrainstormData.collocations) && writingSandboxBrainstormData.collocations.length > 0 && (
+                                                                  <div style={{ display: 'grid', gap: 6 }}>
+                                                                      <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#64748b', margin: '6px 0 4px' }}>
+                                                                          {tx("C1/C2 Academic Collocations", "BAND 8+ ACADEMIC COLLOCATIONS")}
+                                                                      </div>
+                                                                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                                          {writingSandboxBrainstormData.collocations.map((c: any, cIdx: number) => (
+                                                                              <span key={cIdx} style={{ background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', padding: '4px 9px', borderRadius: 5, fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }} title={c.meaningEn || c.meaningVi || c.usageHint || c.usage}>
+                                                                                  {c.phrase}
+                                                                              </span>
+                                                                          ))}
+                                                                      </div>
+                                                                  </div>
+                                                              )}
+                                                          </div>
+                                                      )}
                                                   </div>
-                                                  <textarea
-                                                      value={writingSandboxOutline}
-                                                      onChange={e => setWritingSandboxOutline(e.target.value)}
-                                                      placeholder={tx("Ví dụ:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...", "e.g.:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...")}
-                                                      style={{ width: '100%', height: 75, resize: 'vertical', padding: '8px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#111', boxSizing: 'border-box' }}
-                                                  />
-                                                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                                      <button
-                                                          type="button"
-                                                          disabled={writingSandboxLoading || !writingSandboxOutline.trim()}
-                                                          onClick={() => void handleWritingSandboxAction(task, "critique_outline")}
-                                                          style={{
-                                                              background: '#4f46e5',
-                                                              color: '#fff',
-                                                              border: 'none',
-                                                              padding: '5px 12px',
-                                                              borderRadius: 6,
-                                                              fontSize: 11.5,
-                                                              fontWeight: 700,
-                                                              cursor: writingSandboxLoading || !writingSandboxOutline.trim() ? 'default' : 'pointer',
-                                                              opacity: writingSandboxLoading || !writingSandboxOutline.trim() ? 0.5 : 1,
-                                                              display: 'inline-flex',
-                                                              alignItems: 'center',
-                                                              gap: 5
-                                                          }}
-                                                      >
-                                                          {writingSandboxLoading && <Ico name="refresh" size={11} />}
-                                                          <span>{writingSandboxLoading ? tx("Đang kiểm tra dàn bài...", "Evaluating...") : tx("Kiểm tra logic dàn bài", "Check Outline Logic")}</span>
-                                                      </button>
-                                                  </div>
+                                              )}
 
-                                                  {writingSandboxCritiqueData && (
-                                                      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', display: 'grid', gap: 6, marginTop: 4 }}>
-                                                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#111' }}>
-                                                              <span style={{ padding: '2px 8px', borderRadius: 4, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-                                                                  {tx("Độ bao quát", "Coverage")}: {writingSandboxCritiqueData.coverageRating || "Good"}
-                                                              </span>
-                                                          </div>
-                                                          <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.45 }}>
-                                                              <b>{tx("Nhận xét mạch lạc: ", "Logic & Coherence: ")}</b>
-                                                              {tx(writingSandboxCritiqueData.progressionFeedbackVi, writingSandboxCritiqueData.progressionFeedbackEn) || writingSandboxCritiqueData.progressionFeedbackEn}
-                                                          </div>
-                                                          {Array.isArray(writingSandboxCritiqueData.socraticQuestions) && writingSandboxCritiqueData.socraticQuestions.length > 0 && (
-                                                              <div style={{ fontSize: 11.5, color: '#4338ca', background: '#eef2ff', padding: '6px 10px', borderRadius: 6 }}>
-                                                                  <b>{tx("Gợi ý nâng cao Band: ", "Socratic prompt: ")}</b>
-                                                                  {writingSandboxCritiqueData.socraticQuestions[0]}
-                                                              </div>
-                                                          )}
+                                              {/* Tab 2: Outline Critique */}
+                                              {writingSandboxTab === "critique" && (
+                                                  <div style={{ display: 'grid', gap: 8 }}>
+                                                      <div style={{ fontSize: 11.5, color: '#4b5563' }}>
+                                                          {tx("Viết 3-5 gạch đầu dòng dàn ý bài viết của bạn. Huấn luyện viên AI sẽ đánh giá tính mạch lạc và cảnh báo thiếu ý:", "Write 3-5 bullet points of your planned outline. AI coach will check coherence and task coverage:")}
                                                       </div>
-                                                  )}
-                                              </div>
-                                          )}
+                                                      <textarea
+                                                          value={writingSandboxOutline}
+                                                          onChange={e => setWritingSandboxOutline(e.target.value)}
+                                                          placeholder={tx("Ví dụ:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...", "e.g.:\n- Body 1: Economic benefits (job creation, revenue)...\n- Body 2: Environmental concerns (pollution, habitat loss)...")}
+                                                          style={{ width: '100%', height: 68, resize: 'vertical', padding: '7px 9px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', color: '#111', boxSizing: 'border-box' }}
+                                                      />
+
+                                                      {writingSandboxCritiqueData && (
+                                                          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 6, padding: '9px 11px', display: 'grid', gap: 6, marginTop: 4 }}>
+                                                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#111' }}>
+                                                                  <span style={{ padding: '2px 8px', borderRadius: 4, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                                                                      {tx("Độ bao quát", "Coverage")}: {writingSandboxCritiqueData.coverageRating || "Good"}
+                                                                  </span>
+                                                              </div>
+                                                              <div style={{ fontSize: 12.5, color: '#374151', lineHeight: 1.42 }}>
+                                                                  <b>{tx("Nhận xét mạch lạc: ", "Logic & Coherence: ")}</b>
+                                                                  {writingSandboxCritiqueData.logicalProgression || writingSandboxCritiqueData.progressionFeedbackEn || writingSandboxCritiqueData.progressionFeedbackVi}
+                                                              </div>
+                                                              {Array.isArray(writingSandboxCritiqueData.warnings) && writingSandboxCritiqueData.warnings.length > 0 && (
+                                                                  <div style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', padding: '5px 8px', borderRadius: 5 }}>
+                                                                      <b>{tx("Lưu ý: ", "Caution: ")}</b>{writingSandboxCritiqueData.warnings.join(" ")}
+                                                                  </div>
+                                                              )}
+                                                              {Array.isArray(writingSandboxCritiqueData.suggestions) && writingSandboxCritiqueData.suggestions.length > 0 && (
+                                                                  <div style={{ fontSize: 12, color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', padding: '5px 8px', borderRadius: 5 }}>
+                                                                      <b>{tx("Gợi ý cải thiện: ", "Suggestions: ")}</b>{writingSandboxCritiqueData.suggestions.join(" ")}
+                                                                  </div>
+                                                              )}
+                                                              {Array.isArray(writingSandboxCritiqueData.socraticQuestions) && writingSandboxCritiqueData.socraticQuestions.length > 0 && (
+                                                                  <div style={{ fontSize: 12, color: '#4338ca', background: '#f5f3ff', border: '1px solid #ddd6fe', padding: '5px 8px', borderRadius: 5 }}>
+                                                                      <b>{tx("Gợi ý nâng cao Band: ", "Socratic prompt: ")}</b>{writingSandboxCritiqueData.socraticQuestions[0]}
+                                                                  </div>
+                                                              )}
+                                                          </div>
+                                                      )}
+                                                  </div>
+                                              )}
+                                          </div>
                                       </div>
                                   )}
                               </div>
                           )}
-                          <textarea aria-label={`Writing Part ${task?.taskNumber || 1} answer`} value={answer} onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')} onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)} spellCheck={false} autoCorrect="off" autoCapitalize="sentences" style={{ display: 'block', width: '90%', height: 168, resize: 'vertical', minHeight: 145, maxHeight: 330, padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }} />
-                          <div style={{ width: '90%', textAlign: 'right', marginTop: 7, fontSize: 14, color: '#111' }}>Words: {countWritingWords(answer)}</div>
-                          <div style={{ position: 'absolute', right: '4%', bottom: 30, display: 'flex', gap: 5 }}>
-                              <button disabled={partIndex === 0} onClick={() => switchWritingPart(0)} aria-label="Previous writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex === 0 ? '#e4e4e4' : '#1d1d26', color: partIndex === 0 ? '#fff' : '#fff', fontSize: 28, cursor: partIndex === 0 ? 'default' : 'pointer' }}>←</button>
+                          <textarea
+                              aria-label={`Writing Part ${task?.taskNumber || 1} answer`}
+                              value={answer}
+                              onChange={event => handleAnswerChange(task.id, event.target.value, 'WRITING')}
+                              onBlur={() => void queueWritingDraftSave(activeExam, latestExamState.current.examAnswers, true)}
+                              spellCheck={false}
+                              autoCorrect="off"
+                              autoCapitalize="sentences"
+                              style={{ display: 'block', width: '100%', minHeight: 220, height: 260, flexShrink: 0, resize: 'vertical', padding: '11px 12px', boxSizing: 'border-box', background: '#fff', color: '#111', border: '1px solid #777', borderRadius: 1, outline: 'none', fontFamily: 'Arial, Helvetica, sans-serif', fontSize: 15, lineHeight: 1.45 }}
+                          />
+                          <div style={{ width: '100%', textAlign: 'right', marginTop: 7, fontSize: 14, color: '#111' }}>Words: {countWritingWords(answer)}</div>
+                          <div style={{ position: 'sticky', bottom: 16, alignSelf: 'flex-end', marginTop: 'auto', paddingTop: 16, display: 'flex', gap: 5, zIndex: 10 }}>
+                              <button disabled={partIndex === 0} onClick={() => switchWritingPart(0)} aria-label="Previous writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex === 0 ? '#e4e4e4' : '#1d1d26', color: '#fff', fontSize: 28, cursor: partIndex === 0 ? 'default' : 'pointer' }}>←</button>
                               <button disabled={partIndex >= writingTasks.length - 1} onClick={() => switchWritingPart(1)} aria-label="Next writing part" style={{ width: 50, height: 50, border: '1px solid #d8d8d8', borderRadius: 1, background: partIndex >= writingTasks.length - 1 ? '#e4e4e4' : '#111', color: '#fff', fontSize: 28, cursor: partIndex >= writingTasks.length - 1 ? 'default' : 'pointer' }}>→</button>
                           </div>
                       </div>

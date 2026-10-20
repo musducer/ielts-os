@@ -5327,50 +5327,56 @@ async def review_copilot(payload: Dict[str, Any] = Body(...)):
 async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
     """Writing Brainstorm & Outline Sandbox.
     Supports two modes: 'brainstorm' (Socratic angles + C1/C2 topic collocations) and 'critique_outline' (logic check).
+    Always generates output strictly in 100% natural, idiomatic Band 8.5+ Academic English.
     """
     mode = str(payload.get("mode") or "brainstorm").strip().lower()
     task_number = 1 if "1" in str(payload.get("taskType") or payload.get("taskNumber") or "") else 2
     prompt_text = str(payload.get("promptText") or payload.get("taskPrompt") or "")
-    lang = str(payload.get("lang") or "vi").lower()
 
     if mode == "brainstorm":
+        task_guidance = (
+            "- If the prompt is IELTS Academic Writing Task 1 (chart, graph, table, map, or process diagram): provide 2–3 sharp analytical angles covering the overall trend (Overview) and logical data groupings/comparisons (e.g., \"**Dominance & Shift in Key Partners:** Japan and China remained the primary export markets throughout the period, though China's share surged dramatically while Japan's declined.\").\n"
+            if task_number == 1 else
+            "- If the prompt is Writing Task 2 (essay): provide 2–3 well-reasoned argument angles with clear topic-sentence logic and concrete supporting mechanisms (max 2 sentences per perspective; avoid wordy filler).\n"
+        )
         sys_prompt = (
             "You are a Senior IELTS Writing Examiner and Master Coach (Band 9.0). "
             f"You are providing Socratic brainstorming scaffolding for IELTS Writing Task {task_number}.\n"
-            "CRITICAL INSTRUCTION: Do NOT write full essay paragraphs or model answers! Provide thought-provoking angles and vocabulary tools to empower the student to write their own essay.\n"
+            "CRITICAL INSTRUCTION: Do NOT write full essay paragraphs or model answers! Provide thought-provoking angles and vocabulary tools to empower the student to write their own response.\n"
+            "LANGUAGE MANDATE: Write ALL perspectives, analytical angles, titles, and explanations strictly in natural, concise Band 8.5–9.0 Academic English (NEVER in Vietnamese).\n"
+            f"{task_guidance}"
+            "- Provide 6–8 natural, topic-specific Band 8+ academic collocations or lexical chunks in English that can be directly used in the response.\n\n"
             "Return ONLY a JSON object with this exact structure:\n"
             "{\n"
             '  "perspectives": [\n'
             '    {\n'
-            '      "angleTitle": "<Concise title of angle/thesis 1>",\n'
-            '      "coreArgument": "<1-2 sentence core reasoning>",\n'
-            '      "realWorldExampleHint": "<A real-world case/scenario they could develop>"\n'
+            '      "angleTitle": "<Concise title of angle/thesis 1 in English>",\n'
+            '      "coreArgument": "<1-2 sentence core reasoning or analytical observation in English>",\n'
+            '      "realWorldExampleHint": "<A concrete real-world example, data grouping, or scenario to develop in English>"\n'
             '    },\n'
             '    {\n'
-            '      "angleTitle": "<Concise title of contrasting angle/thesis 2>",\n'
-            '      "coreArgument": "<1-2 sentence core reasoning>",\n'
-            '      "realWorldExampleHint": "<A real-world case/scenario they could develop>"\n'
+            '      "angleTitle": "<Concise title of contrasting angle/thesis 2 in English>",\n'
+            '      "coreArgument": "<1-2 sentence core reasoning or analytical observation in English>",\n'
+            '      "realWorldExampleHint": "<A concrete real-world example, data grouping, or scenario to develop in English>"\n'
             '    }\n'
             '  ],\n'
             '  "collocations": [\n'
             '    {\n'
-            '      "phrase": "<C1/C2 collocations/idiomatic phrase 1>",\n'
-            '      "meaningVi": "<Meaning in Vietnamese>",\n'
-            '      "meaningEn": "<Meaning in English>",\n'
-            '      "usageHint": "<Brief grammatical or contextual usage tip>"\n'
+            '      "phrase": "<Band 8+ collocation or lexical chunk in English>",\n'
+            '      "meaningEn": "<Brief definition or nuance in English>",\n'
+            '      "meaningVi": "<Meaning in English (strictly English)>",\n'
+            '      "usageHint": "<Brief grammatical or contextual usage tip in English>"\n'
             '    }\n'
             '  ],\n'
             '  "structureChecklist": [\n'
-            '    "<Key Task Response/Achievement requirement 1>",\n'
-            '    "<Key requirement 2>",\n'
-            '    "<Key requirement 3>"\n'
+            '    "<Key Task Response/Achievement requirement 1 in English>",\n'
+            '    "<Key requirement 2 in English>"\n'
             '  ]\n'
             "}\n"
             "Rules:\n"
-            "1. perspectives must contain exactly 2 distinct, strong thesis angles.\n"
-            "2. collocations must contain 6 to 8 sophisticated, topic-specific C1/C2 collocations.\n"
-            "3. structureChecklist must provide 3-4 concrete structural checks.\n"
-            f"4. angleTitle, coreArgument, and structureChecklist should be in {'Vietnamese' if lang == 'vi' else 'English'}."
+            "1. perspectives must contain 2 to 3 distinct, high-scoring analytical angles or thesis positions.\n"
+            "2. collocations must contain 6 to 8 sophisticated, topic-specific Band 8+ collocations in English.\n"
+            "3. All text must be in natural, idiomatic Academic English. Do not include any Vietnamese text."
         )
         user_prompt = f"IELTS Writing Task {task_number} Prompt:\n{prompt_text}\n\nGenerate brainstorming sandbox tools in JSON."
         text, err = await asyncio.to_thread(
@@ -5391,21 +5397,34 @@ async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
         raw_perspectives = parsed.get("perspectives") or []
         normalized_perspectives = []
         for p in raw_perspectives:
-            title = str(p.get("angleTitle") or p.get("nameVi") or p.get("nameEn") or "")
-            arg = str(p.get("coreArgument") or p.get("argumentVi") or p.get("argumentEn") or "")
+            title = str(p.get("angleTitle") or p.get("nameEn") or p.get("nameVi") or "")
+            arg = str(p.get("coreArgument") or p.get("argumentEn") or p.get("argumentVi") or "")
             normalized_perspectives.append({
                 "angleTitle": title,
-                "nameVi": p.get("nameVi") or title,
-                "nameEn": p.get("nameEn") or title,
+                "nameVi": title,
+                "nameEn": title,
                 "coreArgument": arg,
-                "argumentVi": p.get("argumentVi") or arg,
-                "argumentEn": p.get("argumentEn") or arg,
+                "argumentVi": arg,
+                "argumentEn": arg,
                 "realWorldExampleHint": str(p.get("realWorldExampleHint") or "")
+            })
+        raw_collocations = parsed.get("collocations") or []
+        normalized_collocations = []
+        for c in raw_collocations:
+            phrase = str(c.get("phrase") or "").strip()
+            meaning = str(c.get("meaningEn") or c.get("meaningVi") or c.get("meaning") or "").strip()
+            usage = str(c.get("usageHint") or c.get("usage") or "").strip()
+            normalized_collocations.append({
+                "phrase": phrase,
+                "meaningEn": meaning,
+                "meaningVi": meaning,
+                "usageHint": usage,
+                "usage": usage,
             })
         return {
             "success": True,
             "perspectives": normalized_perspectives,
-            "collocations": parsed.get("collocations") or [],
+            "collocations": normalized_collocations,
             "structureChecklist": parsed.get("structureChecklist") or [],
         }
 
@@ -5417,28 +5436,28 @@ async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
         body2 = str(student_outline.get("body2") or "")
 
         sys_prompt = (
-            "You are a Senior IELTS Writing Examiner and Socratic Tutor. "
+            "You are a Senior IELTS Writing Examiner and Socratic Tutor (Band 9.0). "
             f"Evaluate the student's essay outline for IELTS Writing Task {task_number}.\n"
+            "LANGUAGE MANDATE: Write all outline feedback, coherence checks, thesis/overview evaluation, and improvement suggestions strictly in clear, concise, constructive Academic English (NEVER in Vietnamese). Keep each point brief, direct, and actionable.\n"
             "Evaluate:\n"
             "- Prompt coverage: Did they address all parts of the question prompt?\n"
-            "- Logical progression & coherence: Do body paragraphs flow logically from the thesis?\n"
+            "- Logical progression & coherence: Do body paragraphs flow logically from the thesis/overview?\n"
             "- Warnings against overgeneralization, sweeping claims, or off-topic drift.\n"
             "- 2-3 concrete Socratic suggestions/questions to sharpen their arguments.\n\n"
             "Return ONLY a JSON object with this exact structure:\n"
             "{\n"
-            '  "promptCoverage": "<1-2 sentences assessing how fully the outline covers the prompt>",\n'
+            '  "promptCoverage": "<1-2 sentences assessing how fully the outline covers the prompt in English>",\n'
             '  "coverageRating": "<Good | Adequate | Incomplete>",\n'
-            '  "logicalProgression": "<1-2 sentences on coherence between thesis and body arguments>",\n'
+            '  "logicalProgression": "<1-2 sentences on coherence between thesis and body arguments in English>",\n'
             '  "warnings": [\n'
-            '    "<Concrete risk or overgeneralization to avoid 1>",\n'
-            '    "<Risk 2>"\n'
+            '    "<Concrete risk, logic gap, or overgeneralization to avoid in English 1>"\n'
             '  ],\n'
             '  "suggestions": [\n'
-            '    "<Socratic question or constructive argument improvement 1>",\n'
-            '    "<Suggestion 2>"\n'
+            '    "<Socratic question or constructive argument improvement in English 1>"\n'
             '  ]\n'
             "}\n"
-            f"Language: {'Vietnamese' if lang == 'vi' else 'English'}."
+            "Rules:\n"
+            "1. All feedback must be in natural, idiomatic Academic English. Do not include any Vietnamese text."
         )
 
         outline_display = outline_text if outline_text else (
@@ -5471,16 +5490,17 @@ async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
         cov = parsed.get("promptCoverage") or ""
         prog = parsed.get("logicalProgression") or ""
         sug = parsed.get("suggestions") or []
+        warn = parsed.get("warnings") or []
         return {
             "success": True,
             "promptCoverage": cov,
             "coverageRating": parsed.get("coverageRating") or "Good",
-            "coverageFeedbackVi": parsed.get("coverageFeedbackVi") or cov,
-            "coverageFeedbackEn": parsed.get("coverageFeedbackEn") or cov,
+            "coverageFeedbackVi": cov,
+            "coverageFeedbackEn": cov,
             "logicalProgression": prog,
-            "progressionFeedbackVi": parsed.get("progressionFeedbackVi") or prog,
-            "progressionFeedbackEn": parsed.get("progressionFeedbackEn") or prog,
-            "warnings": parsed.get("warnings") or [],
+            "progressionFeedbackVi": prog,
+            "progressionFeedbackEn": prog,
+            "warnings": warn,
             "suggestions": sug,
             "socraticQuestions": parsed.get("socraticQuestions") or sug,
         }

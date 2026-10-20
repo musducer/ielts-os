@@ -1,4 +1,32 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-18)
+# IELTS OS — Session Handoff (cập nhật 2026-10-20)
+
+## Nâng Cấp Writing AI Sandbox: Mở Khóa Cuộn Dọc, Tinh Gọn UI & Chuẩn Hóa 100% Academic English Band 8.5+ — 2026-10-20
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Khóa cuộn dọc (Scroll Lock) khi mở AI Sandbox*:
+     - Container cha `.writing-test-workspace` có `minHeight: 0, overflow: 'hidden'`, trong khi cột bên phải `.writing-test-answer` thiếu `overflowY: 'auto'`, `height: '100%'`, và `minHeight: 0`. Khi AI Sandbox mở ra và nở rộng nội dung, giao diện bị tràn khung nhìn và học sinh hoàn toàn không thể cuộn xuống để xem hoặc soạn bài.
+     - Ô soạn thảo `<textarea>` thiếu `flexShrink: 0` và có `minHeight` thấp, dễ bị co rút khi AI Sandbox chiếm diện tích.
+     - Nút chuyển Part (`←` / `→`) dùng `position: 'absolute', bottom: 30` dễ trôi lệch hoặc đè lên nội dung khi chiều cao thay đổi.
+  2. *Giao diện AI Sandbox chiếm nhiều diện tích dọc (UI Bloat)*:
+     - Hàng tab chuyển đổi và nút hành động nằm tách biệt trên nhiều dòng, kèm câu hướng dẫn dư thừa khiến thẻ AI chiếm hết nửa trên màn hình trước khi kịp hiển thị nội dung.
+     - Nội dung AI phản hồi không giới hạn chiều cao, đẩy `<textarea>` xuống đáy trang.
+  3. *Ngôn ngữ phản hồi tiếng Việt cứng nhắc trong AI Sandbox*:
+     - Prompt trong `api/index.py` ép dịch sang tiếng Việt (`lang === 'vi'`) với câu chữ dịch máy thiếu tự nhiên, không phù hợp với ngữ cảnh luyện viết học thuật IELTS.
+
+- **Giải pháp triệt để**:
+  1. *Mở khóa cuộn dọc & chống đè giao diện (`src/components_split/ACTIVE_EXAM.txt`)*:
+     - Cập nhật `.writing-test-answer`: `flex: 1, minWidth: 280, height: '100%', minHeight: 0, overflowY: 'auto', padding: '20px 24px 80px 18px', boxSizing: 'border-box', position: 'relative', display: 'flex', flexDirection: 'column'`.
+     - Cập nhật `<textarea>`: `width: '100%', minHeight: 220, height: 260, flexShrink: 0, resize: 'vertical'`.
+     - Cập nhật nút chuyển Part: `position: 'sticky', bottom: 16, alignSelf: 'flex-end', marginTop: 'auto', paddingTop: 16, zIndex: 10`, luôn ghim gọn gàng ở góc dưới phải và không bao giờ đè lên nội dung bài viết nhờ padding đáy 80px.
+  2. *Thiết kế AI Sandbox siêu gọn gàng (Ergonomic & Compact UI)*:
+     - Gộp tab chọn tính năng (`Perspectives & Collocations` | `Outline Logic Check`) và nút hành động chính (`Brainstorm Ideas` / `Check Logic`) trên cùng một hàng header duy nhất (`padding: '6px 10px', borderBottom: '1px solid #e5e7eb'`).
+     - Lược bỏ hoàn toàn câu mô tả dư thừa để tối ưu không gian hiển thị.
+     - Khung chứa nội dung có `maxHeight: '34vh'`, `overflowY: 'auto'`, và `overscrollBehavior: 'contain'`, cho phép cuộn độc lập mượt mà trong khi `<textarea>` của học sinh luôn hiện hữu ngay bên dưới.
+     - Thẻ perspective thẻ hóa scannable: `padding: '8px 10px', marginBottom: 6, fontSize: 13, lineHeight: 1.42`, nhãn danh mục `10.5px`, pills collocations `padding: '4px 9px', fontSize: 12`.
+  3. *Chuẩn hóa 100% Academic English Band 8.5+ (`api/index.py` & `src/App.template.tsx`)*:
+     - Loại bỏ toàn bộ cờ ngôn ngữ tiếng Việt trong prompt Writing AI Sandbox. Yêu cầu mô hình sinh 100% tiếng Anh học thuật Band 8.5–9.0 tự nhiên, sắc sảo.
+     - Phân định rõ ràng: Task 1 (tổng quan Overview sắc bén & gom nhóm dữ liệu logic), Task 2 (2–3 góc nhìn phản biện logic, topic sentence chuẩn mực và cơ chế chứng minh thực tế ngắn gọn), cùng 6–8 collocations/lexical chunks học thuật cao cấp.
+     - Kiểm tra dàn ý (`critique_outline`): Đánh giá tính bao quát (Prompt coverage), độ mạch lạc (Logical progression), cảnh báo ngụy biện/khái quát hóa quá mức, và câu hỏi gợi mở tư duy (Socratic suggestions) hoàn toàn bằng tiếng Anh súc tích, mang tính xây dựng.
 
 ## Khắc Phục Lỗi Hiển Thị Ảnh Firebase Storage & SVG Thu Nhỏ 0x0 Trong Dạng Bài Map Labelling (`MAP_DRAG`) — 2026-10-18
 

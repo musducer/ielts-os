@@ -4156,6 +4156,7 @@ export default function IeltsSupremeOS() {
           taskPrompt: task?.prompt || task?.instructions || "",
           taskType: task?.taskNumber === 1 ? "Task 1" : "Task 2",
           mode,
+          lang: "en",
           outlineText: mode === "critique_outline" ? writingSandboxOutline : undefined
         })
       });
