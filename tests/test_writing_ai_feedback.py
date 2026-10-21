@@ -221,6 +221,64 @@ class TestWritingAiFeedback(unittest.TestCase):
                     self.assertTrue(len(groq_calls) > 0)
                     self.assertNotIn("llama-3.1-8b-instant", [c[2] for c in groq_calls])
 
+    def test_ai_critique_endpoint_and_aliases(self):
+        from api.index import ai_critique
+        mock_critique_json = {
+            "criterion": "GRA",
+            "category": "error",
+            "replacement": "has played a pivotal role",
+            "highBandRewrite": "has assumed a profoundly pivotal role",
+            "comment": "Subject-verb agreement error with singular noun."
+        }
+        with patch("api.index._writing_eval_chat", return_value=(json.dumps(mock_critique_json), "")):
+            payload = {
+                "selectedText": "have play a pivotal role",
+                "essayText": "Technology have play a pivotal role in education.",
+                "taskPrompt": "Discuss the impact of technology.",
+                "taskNumber": 2,
+                "lang": "en"
+            }
+            res = asyncio.run(ai_critique(payload))
+            self.assertTrue(res.get("success"))
+            self.assertEqual(res.get("criterion"), "GRA")
+            self.assertEqual(res.get("category"), "error")
+            self.assertEqual(res.get("replacement"), "has played a pivotal role")
+            self.assertEqual(res.get("suggestedText"), "has played a pivotal role")
+            self.assertEqual(res.get("revisedText"), "has played a pivotal role")
+            self.assertEqual(res.get("label"), "Correction")
+            self.assertEqual(res.get("comment"), "Subject-verb agreement error with singular noun.")
+            self.assertEqual(res.get("critique"), "Subject-verb agreement error with singular noun.")
+
+    def test_ai_critique_fallback_without_json_mode(self):
+        from api.index import ai_critique
+        calls = []
+        def mock_eval_chat(sys_p, user_p, max_tokens=1024, temperature=0.15, json_mode=True):
+            calls.append(json_mode)
+            if json_mode:
+                return ("", "Groq 400: json_validate_failed")
+            # Return markdown code fenced JSON on non-json_mode retry
+            return ("```json\n{\n  \"criterion\": \"LR\",\n  \"category\": \"upgrade\",\n  \"replacement\": \"exerts an adverse influence\",\n  \"comment\": \"Upgraded to C1 academic collocation.\"\n}\n```", "")
+
+        with patch("api.index._writing_eval_chat", side_effect=mock_eval_chat):
+            payload = {
+                "selected_text": "has bad effect",
+                "essay_text": "Pollution has bad effect on health.",
+                "lang": "en"
+            }
+            res = asyncio.run(ai_critique(payload))
+            self.assertTrue(res.get("success"))
+            self.assertEqual(calls, [True, False])
+            self.assertEqual(res.get("criterion"), "LR")
+            self.assertEqual(res.get("category"), "upgrade")
+            self.assertEqual(res.get("replacement"), "exerts an adverse influence")
+            self.assertEqual(res.get("label"), "Band 8.0+ Upgrade")
+
+    def test_ai_critique_empty_selection_error(self):
+        from api.index import ai_critique
+        res = asyncio.run(ai_critique({"selected_text": ""}))
+        self.assertFalse(res.get("success"))
+        self.assertIn("error", res)
+
 if __name__ == '__main__':
     unittest.main()
 

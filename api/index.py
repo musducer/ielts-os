@@ -4275,6 +4275,276 @@ def _friendly_err(err: str, lang: str) -> str:
     return err
 
 
+def _clean_and_parse_critique_json(raw_text: str) -> Optional[Dict[str, Any]]:
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+    cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.S).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = cleaned.strip()
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    match = re.search(r"\{.*\}", cleaned, flags=re.S)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    match_ng = re.search(r"\{.*?\}", cleaned, flags=re.S)
+    if match_ng:
+        try:
+            data = json.loads(match_ng.group(0))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    return None
+
+
+async def _execute_selection_critique(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute bulletproof per-sentence AI selection critique for Writing Grading Studio.
+    Defensively extracts all parameter aliases, retries multi-provider LLM without json_mode on failure,
+    and returns a normalized schema supporting all frontend variants.
+    """
+    selected_text = str(
+        payload.get("selectedText")
+        or payload.get("selected_text")
+        or payload.get("quote")
+        or payload.get("anchorQuote")
+        or payload.get("sentence")
+        or payload.get("text")
+        or ""
+    ).strip()
+    full_essay = str(
+        payload.get("essayText")
+        or payload.get("essay_text")
+        or payload.get("fullText")
+        or payload.get("essay")
+        or payload.get("response")
+        or payload.get("context")
+        or payload.get("context_text")
+        or payload.get("contextText")
+        or ""
+    ).strip()
+    task_prompt = str(
+        payload.get("taskPrompt")
+        or payload.get("prompt")
+        or payload.get("question")
+        or ""
+    ).strip()
+    task_number = int(payload.get("taskNumber") or payload.get("task_number") or payload.get("task") or 1)
+    requested_category = str(
+        payload.get("category")
+        or payload.get("tag")
+        or payload.get("type")
+        or ""
+    ).strip().lower()
+    target_band = str(payload.get("targetBand") or payload.get("band") or "8.0").strip()
+    lang = str(payload.get("lang") or "vi").lower()
+
+    if not selected_text:
+        return {
+            "success": False,
+            "error": "Vui lòng chọn một câu hoặc đoạn văn để AI nhận xét." if lang == "vi" else "Please select a sentence or phrase to critique."
+        }
+
+    target_lang = "Vietnamese" if lang == "vi" else "English"
+    sys_prompt = (
+        "You are an expert official IELTS Writing Examiner and master pedagogical coach adhering strictly to the Official IELTS Public Band Descriptors (May 2023 update).\n"
+        f"Analyze ONLY the selected text excerpt from an IELTS Writing Task {task_number} essay in context.\n"
+        "Evaluate this specific excerpt according to the 4 official criteria:\n"
+        "- Grammatical Range & Accuracy (GRA)\n"
+        "- Lexical Resource (LR)\n"
+        "- Coherence & Cohesion (CC)\n"
+        "- Task Achievement (Task 1) / Task Response (Task 2) (TA_TR)\n\n"
+        "STRICT TAXONOMY & ANTI-DEFLATION RULES:\n"
+        "1. 'criterion': MUST be strictly one of: 'GRA', 'LR', 'CC', 'TA_TR'.\n"
+        "2. 'category': MUST be strictly one of:\n"
+        "   - 'error': ONLY for objective errors (grammar, subject-verb agreement, verb tense, preposition, spelling, wrong word formation, false collocation, or false data claim).\n"
+        "   - 'awkward': grammatically acceptable and understandable, but slightly wordy, clumsy, unnatural, or non-idiomatic.\n"
+        "   - 'upgrade': the candidate's original phrasing is ALREADY CORRECT and acceptable; the rewrite is an optional stylistic elevation to Band 8.0-8.5.\n"
+        "   - 'praise': highlights high-level lexical or structural excellence.\n"
+        "3. 'replacement': concise minimal English correction preserving the student's voice and intended meaning.\n"
+        "4. 'highBandRewrite': natural Band 8.0-8.5 native academic English phrasing.\n"
+        f"5. 'comment': 1-2 concise, clear sentences in {target_lang} explaining the feedback and rule to the student.\n\n"
+        "Return ONLY a JSON object with this exact structure:\n"
+        "{\n"
+        '  "criterion": "GRA" | "LR" | "CC" | "TA_TR",\n'
+        '  "category": "error" | "awkward" | "upgrade" | "praise",\n'
+        '  "replacement": "<concise English correction>",\n'
+        '  "highBandRewrite": "<Band 8.0-8.5 native academic phrasing>",\n'
+        '  "comment": "<concise explanation in requested language>"\n'
+        "}"
+    )
+
+    user_prompt = (
+        f"--- TASK PROMPT ---\n{task_prompt or '(IELTS Writing task)'}\n\n"
+        f"--- SURROUNDING ESSAY CONTEXT ---\n{full_essay or selected_text}\n\n"
+        f"--- SELECTED EXCERPT TO CRITIQUE ---\n{selected_text}\n\n"
+        "Provide critique in JSON format."
+    )
+
+    raw_text = ""
+    err_msg = ""
+    # 1. Primary Attempt: _writing_eval_chat with json_mode=True
+    text, err = await asyncio.to_thread(
+        _writing_eval_chat, sys_prompt, user_prompt, max_tokens=1024, temperature=0.15, json_mode=True
+    )
+    if text and not err:
+        raw_text = text
+    else:
+        err_msg = err or "Primary router returned empty text"
+        # 2. Critical Fallback 1: _writing_eval_chat with json_mode=False
+        text_fb, err_fb = await asyncio.to_thread(
+            _writing_eval_chat, sys_prompt, user_prompt, max_tokens=1024, temperature=0.2, json_mode=False
+        )
+        if text_fb and not err_fb:
+            raw_text = text_fb
+        else:
+            # 3. Critical Fallback 2: _groq_chat with json_mode=False
+            text_groq, err_groq = await asyncio.to_thread(
+                _groq_chat, sys_prompt, user_prompt, max_tokens=1024, temperature=0.3, json_mode=False
+            )
+            if text_groq and not err_groq:
+                raw_text = text_groq
+            else:
+                err_msg = err_groq or err_fb or err_msg
+
+    data = _clean_and_parse_critique_json(raw_text) if raw_text else None
+
+    # Fallback heuristic parsing if JSON extraction failed but raw text exists
+    if not data and raw_text:
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        rep_candidate = ""
+        cmt_candidate = ""
+        for line in lines:
+            lower = line.lower()
+            if any(k in lower for k in ("replacement:", "rewrite:", "correction:", "suggested:")):
+                rep_candidate = re.sub(r"^[^:]+:\s*", "", line).strip(' "')
+            elif any(k in lower for k in ("comment:", "critique:", "explanation:", "feedback:")):
+                cmt_candidate = re.sub(r"^[^:]+:\s*", "", line).strip(' "')
+        data = {
+            "criterion": "GRA",
+            "category": requested_category or "awkward",
+            "replacement": rep_candidate or selected_text,
+            "comment": cmt_candidate or raw_text[:200].strip(),
+        }
+
+    if not data:
+        return {
+            "success": False,
+            "error": _friendly_err(err_msg or "AI model did not return output", lang),
+            "raw": (raw_text or err_msg)[:300],
+        }
+
+    # Normalize criterion
+    crit_raw = str(data.get("criterion") or data.get("criteria") or "GRA").upper().strip()
+    if any(k in crit_raw for k in ("TA", "TR", "TASK")):
+        norm_crit = "TA_TR"
+    elif any(k in crit_raw for k in ("CC", "COHER", "COHES")):
+        norm_crit = "CC"
+    elif any(k in crit_raw for k in ("LR", "LEXIC", "VOCAB")):
+        norm_crit = "LR"
+    else:
+        norm_crit = "GRA"
+
+    # Normalize category
+    cat_raw = str(data.get("category") or data.get("type") or data.get("label") or "").lower().strip()
+    req_norm = requested_category
+    if "error" in req_norm or "correct" in req_norm:
+        req_norm = "error"
+    elif "awkward" in req_norm or "natural" in req_norm:
+        req_norm = "awkward"
+    elif "upgrade" in req_norm or "band" in req_norm:
+        req_norm = "upgrade"
+    elif "praise" in req_norm or "strength" in req_norm:
+        req_norm = "praise"
+    else:
+        req_norm = ""
+
+    if any(k in cat_raw for k in ("error", "correct", "sai", "lỗi")):
+        norm_cat = "error"
+    elif any(k in cat_raw for k in ("awkward", "natural", "clumsy", "chưa tự nhiên")):
+        norm_cat = "awkward"
+    elif any(k in cat_raw for k in ("upgrade", "nâng", "improve", "better", "band")):
+        norm_cat = "upgrade"
+    elif any(k in cat_raw for k in ("praise", "khen", "strength", "sáng")):
+        norm_cat = "praise"
+    else:
+        norm_cat = req_norm or "awkward"
+
+    replacement = str(
+        data.get("replacement")
+        or data.get("suggestedText")
+        or data.get("revisedText")
+        or data.get("revised")
+        or data.get("fix")
+        or data.get("highBandRewrite")
+        or ""
+    ).strip()
+    if not replacement:
+        replacement = selected_text
+
+    high_band = str(
+        data.get("highBandRewrite")
+        or data.get("highBand")
+        or data.get("advancedRewrite")
+        or replacement
+    ).strip()
+
+    comment = str(
+        data.get("comment")
+        or data.get("critique")
+        or data.get("explanation")
+        or data.get("reason")
+        or data.get("feedback")
+        or data.get("note")
+        or ""
+    ).strip()
+    if not comment:
+        comment = "Đã chỉnh sửa để câu văn tự nhiên và chuẩn học thuật hơn." if lang == "vi" else "Revised for clarity, natural flow, and academic precision."
+
+    cat_label = "Correction" if norm_cat == "error" else ("Less Natural" if norm_cat == "awkward" else ("Band 8.0+ Upgrade" if norm_cat == "upgrade" else "Praise"))
+
+    return {
+        "success": True,
+        "criterion": norm_crit,
+        "category": norm_cat,
+        "type": norm_cat,
+        "label": cat_label,
+        "tag": norm_cat,
+        "original": selected_text,
+        "anchorQuote": selected_text,
+        "replacement": replacement,
+        "suggestedText": replacement,
+        "revisedText": replacement,
+        "highBandRewrite": high_band,
+        "comment": comment,
+        "critique": comment,
+        "explanation": comment,
+        "note": comment,
+        "tags": data.get("tags") if isinstance(data.get("tags"), list) else [],
+    }
+
+
+@app.post("/api/ai_critique")
+@app.post("/api/writing/critique")
+@app.post("/api/writing_critique")
+async def ai_critique(payload: Dict[str, Any] = Body(...)):
+    """Dedicated endpoint for per-sentence AI selection critique in Writing Grading Studio."""
+    return await _execute_selection_critique(payload)
+
+
 @app.post("/api/ai_feedback")
 async def ai_feedback(
     payload: Dict[str, Any] = Body(...),
@@ -4284,98 +4554,20 @@ async def ai_feedback(
     1. Structured Writing Grading (AI Co-pilot cho Writing Task 1 & 2): khi payload có structured=True hoặc (task_number và essay).
     2. Legacy Reading/Listening/General feedback text cho học sinh.
     """
+    lang = str(payload.get("lang") or "vi").lower()
     mode = str(payload.get("mode") or "").strip().lower()
-    selected_text = str(payload.get("selected_text") or payload.get("selectedText") or "").strip()
-    is_selection_critique = mode == "selection_critique" or (selected_text and not payload.get("structured"))
-    lang = (payload.get("lang") or "vi").lower()
+    selected_text = str(
+        payload.get("selectedText")
+        or payload.get("selected_text")
+        or payload.get("quote")
+        or payload.get("anchorQuote")
+        or payload.get("sentence")
+        or ""
+    ).strip()
+    is_selection_critique = mode in ("selection_critique", "critique") or (bool(selected_text) and not payload.get("structured"))
 
     if is_selection_critique:
-        task_num = int(payload.get("task_number") or payload.get("taskNumber") or 2)
-        prompt = str(payload.get("prompt") or payload.get("taskPrompt") or "").strip()
-        context_text = str(payload.get("context_text") or payload.get("contextText") or "").strip()
-
-        if not selected_text:
-            return {
-                "success": False,
-                "error": "Chưa có đoạn văn bản được chọn." if lang == "vi" else "No selected text provided."
-            }
-
-        target_lang = "Vietnamese" if lang == "vi" else "English"
-        sys_prompt = (
-            "You are an expert official IELTS Writing Examiner and master pedagogical coach adhering strictly to the Official IELTS Public Band Descriptors (May 2023 update).\n"
-            f"Analyze ONLY the selected text excerpt from an IELTS Writing Task {task_num} essay in context.\n"
-            "Evaluate this specific excerpt according to the 4 official criteria:\n"
-            "- Grammatical Range & Accuracy (GRA)\n"
-            "- Lexical Resource (LR)\n"
-            "- Coherence & Cohesion (CC)\n"
-            "- Task Achievement (Task 1) / Task Response (Task 2) (TA_TR)\n\n"
-            "STRICT TAXONOMY & ANTI-DEFLATION RULES:\n"
-            "1. 'criterion': MUST be strictly one of: 'GRA', 'LR', 'CC', 'TA_TR'.\n"
-            "2. 'category': MUST be strictly one of:\n"
-            "   - 'error': ONLY for objective errors (grammar, subject-verb agreement, verb tense, preposition, spelling, wrong word formation, false collocation, or false data claim).\n"
-            "   - 'awkward': grammatically acceptable and understandable, but slightly wordy, clumsy, unnatural, or non-idiomatic.\n"
-            "   - 'upgrade': the candidate's original phrasing is ALREADY CORRECT and acceptable; the rewrite is an optional stylistic elevation to Band 8.0-8.5.\n"
-            "   - 'praise': highlights high-level lexical or structural excellence.\n"
-            "3. 'replacement': concise minimal English correction preserving the student's voice and intended meaning.\n"
-            "4. 'highBandRewrite': natural Band 8.0-8.5 native academic English phrasing.\n"
-            f"5. 'comment': 1-2 concise, clear sentences in {target_lang} explaining the feedback and rule to the student.\n"
-            "6. Respond with pure JSON matching this schema:\n"
-            "{\n"
-            '  "criterion": "GRA" | "LR" | "CC" | "TA_TR",\n'
-            '  "category": "error" | "awkward" | "upgrade" | "praise",\n'
-            '  "replacement": "...",\n'
-            '  "highBandRewrite": "...",\n'
-            '  "comment": "..."\n'
-            "}"
-        )
-
-        user_prompt = (
-            f"--- TASK PROMPT ---\n{prompt or '(IELTS Writing task)'}\n\n"
-            f"--- SURROUNDING CONTEXT ---\n{context_text or selected_text}\n\n"
-            f"--- SELECTED EXCERPT TO CRITIQUE ---\n{selected_text}\n\n"
-            "Return JSON."
-        )
-
-        text, err = _writing_eval_chat(sys_prompt, user_prompt, max_tokens=1024, temperature=0.15, json_mode=True)
-        if err:
-            return {"success": False, "error": _friendly_err(err, lang)}
-
-        try:
-            clean_text = text.strip()
-            if clean_text.startswith("```json"):
-                clean_text = clean_text[7:]
-            elif clean_text.startswith("```"):
-                clean_text = clean_text[3:]
-            if clean_text.endswith("```"):
-                clean_text = clean_text[:-3]
-            clean_text = clean_text.strip()
-            data = json.loads(clean_text)
-        except Exception:
-            first_brace = text.find("{")
-            last_brace = text.rfind("}")
-            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-                try:
-                    data = json.loads(text[first_brace:last_brace + 1])
-                except Exception:
-                    return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
-            else:
-                return {"success": False, "error": "Không thể phân tích dữ liệu AI trả về.", "raw": text[:500]}
-
-        criterion = str(data.get("criterion") or "GRA").upper()
-        if criterion not in ("GRA", "LR", "CC", "TA_TR"):
-            criterion = "GRA"
-        category = str(data.get("category") or "awkward").lower()
-        if category not in ("error", "awkward", "upgrade", "praise"):
-            category = "awkward"
-
-        return {
-            "success": True,
-            "criterion": criterion,
-            "category": category,
-            "replacement": str(data.get("replacement") or "").strip(),
-            "highBandRewrite": str(data.get("highBandRewrite") or "").strip(),
-            "comment": str(data.get("comment") or "").strip()
-        }
+        return await _execute_selection_critique(payload)
 
     is_structured = bool(payload.get("structured")) or bool(payload.get("writing")) or ("task_number" in payload and "essay" in payload)
 

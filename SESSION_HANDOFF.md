@@ -1,4 +1,31 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-20)
+# IELTS OS — Session Handoff (cập nhật 2026-10-21)
+
+## Sửa Lỗi Tê Liệt Tính Năng "AI Critique" Từng Câu Trong Bàn Chấm Writing (`Unable to generate AI critique: AI critique request failed:`) — 2026-10-21
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  1. *Lỗi chuỗi rỗng `res.statusText` trên HTTP/2 (Vercel) che giấu lỗi thực tế*:
+     - Trên giao thức HTTP/2 (mặc định trên Vercel Functions), thuộc tính `res.statusText` luôn trả về chuỗi rỗng `""`. Khi backend trả về lỗi non-2xx (400, 404, 422, 500), hàm frontend ném `throw new Error('AI critique request failed: ' + res.statusText)` khiến thông báo hiển thị cho người dùng bị cụt lửng thành `Unable to generate AI critique: AI critique request failed:`, hoàn toàn giấu nhẹm mã HTTP và nội dung lỗi từ backend.
+  2. *Thiếu đồng bộ key dữ liệu giữa Frontend và Backend*:
+     - `src/WritingFeedback.tsx` gửi payload với key `essay_text: originalEssay`, trong khi parser cũ trong `ai_feedback` chỉ tìm `context_text` hoặc `contextText`, khiến ngữ cảnh toàn bài văn bị rỗng `""`.
+  3. *Lỗi JSON Mode trên các mô hình Groq/Cerebras*:
+     - Khi gọi `_writing_eval_chat` hoặc `_groq_chat` với `json_mode=True`, các provider Groq/Cerebras thường trả về lỗi 400 `json_validate_failed` hoặc bọc output trong markdown code fences (` ```json ... ``` `) kèm thẻ `<think>...</think>`, khiến `json.loads` văng lỗi ngoại lệ mà không có cơ chế retry fallback.
+  4. *Thiếu endpoint chuyên dụng `/api/ai_critique`*:
+     - Hệ thống chỉ có route `/api/ai_feedback` tích hợp chung, thiếu các alias URL chuyên dụng như `/api/ai_critique`, `/api/writing/critique`.
+
+- **Giải pháp triệt để**:
+  1. *Backend endpoint chuyên dụng & fallback đa tầng (`api/index.py`)*:
+     - Tạo hàm dùng chung `_execute_selection_critique(payload)` và đăng ký các routes: `@app.post("/api/ai_critique")`, `@app.post("/api/writing/critique")`, `@app.post("/api/writing_critique")`, đồng thời tích hợp vào nhánh `is_selection_critique` của `@app.post("/api/ai_feedback")`.
+     - Trích xuất dữ liệu phòng vệ (defensive extraction) chấp nhận mọi biến thể key: `selectedText`/`selected_text`/`quote`/`anchorQuote`/`sentence`, `essayText`/`essay_text`/`fullText`/`essay`/`context`, `taskPrompt`/`prompt`/`question`, `taskNumber`/`task_number`, v.v.
+     - Cơ chế retry 3 cấp độ: Cấp 1 gọi `_writing_eval_chat(..., json_mode=True)`; nếu lỗi lập tức thử Cấp 2 `_writing_eval_chat(..., json_mode=False)` và Cấp 3 `_groq_chat(..., json_mode=False)`.
+     - Bộ phân giải `_clean_and_parse_critique_json`: bóc sạch `<think>`, gỡ markdown fences, trích xuất regex JSON an toàn kèm bộ phân tích ngữ pháp dự phòng (heuristic fallback), tuyệt đối không để crash 500.
+     - Trả về payload đầy đủ chuẩn hóa: `criterion`, `category`, `type`, `label` ("Correction", "Less Natural", "Band 8.0+ Upgrade", "Praise"), `replacement`, `suggestedText`, `revisedText`, `highBandRewrite`, `comment`, `critique`, `explanation`, `note`, `tags`.
+  2. *Frontend bắt lỗi an toàn & tự động lưu bản nháp (`src/WritingFeedback.tsx`)*:
+     - Bóc tách `await res.json().catch(() => null)` trước khi kiểm tra `!res.ok || data?.success === false`, trích xuất thông tin lỗi chi tiết `data?.error || data?.detail || data?.message || "HTTP " + res.status`.
+     - Gọi ưu tiên endpoint `/api/ai_critique` (với fallback sang `/api/ai_feedback` nếu 404).
+     - Khi người dùng nhấn nút "Lưu ngay" (`autoSave=true`), tự động lưu comment vào `writingGrading` và kích hoạt `saveWritingGrade(false, nextGrading)` lưu ngay bản nháp vào hệ thống.
+  3. *Kiểm thử & Biên dịch*:
+     - Bổ sung 3 unit tests mới trong `tests/test_writing_ai_feedback.py` (`test_ai_critique_endpoint_and_aliases`, `test_ai_critique_fallback_without_json_mode`, `test_ai_critique_empty_selection_error`). 10/10 tests pass 100%.
+     - `compile_app.py`, `tsc -b`, `vite build` pass 100% không cảnh báo lỗi.
 
 ## Nâng Cấp Writing AI Sandbox: Mở Khóa Cuộn Dọc, Tinh Gọn UI & Chuẩn Hóa 100% Academic English Band 8.5+ — 2026-10-20
 

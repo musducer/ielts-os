@@ -1517,9 +1517,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     });
   };
 
-  const saveWritingGrade = async (publish: boolean) => {
+  const saveWritingGrade = async (publish: boolean, overrideGrading?: WritingGrading) => {
+    const baseGrading = overrideGrading || writingGrading;
     const rubricKeys: Array<keyof WritingCriterionScore> = ['taskAchievement', 'coherence', 'lexical', 'grammar'];
-    if (publish && writingTasks.some(task => !rubricKeys.every(k => scoreIsValid(writingGrading.taskScores[task.id]?.[k])))) {
+    if (publish && writingTasks.some(task => !rubricKeys.every(k => scoreIsValid(baseGrading.taskScores[task.id]?.[k])))) {
       setActionStatus('error');
       setStatusMessage(tx('Vui lòng chấm đủ 4 tiêu chí cho cả Task 1 và Task 2 trước khi Publish cho học sinh.', 'Please score all 4 criteria for both Task 1 and Task 2 before publishing to student.'));
       setTimeout(() => setActionStatus('idle'), 4000);
@@ -1530,10 +1531,10 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     setStatusMessage(publish ? tx('Đang lưu và publish bài chấm cho học sinh...', 'Saving and publishing assessment...') : tx('Đang lưu bản nháp bài chấm...', 'Saving assessment draft...'));
 
     try {
-      const finalBand = publish ? calculatedFinalBand : writingGrading.finalBand;
+      const finalBand = publish ? calculatedFinalBand : baseGrading.finalBand;
       const now = Date.now();
       const nextGrading: WritingGrading = {
-        ...writingGrading,
+        ...baseGrading,
         status: publish ? 'published' : 'draft',
         finalBand,
         updatedAt: now,
@@ -1645,28 +1646,49 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     if (!selectionBox || aiCritiqueLoading) return;
     setAiCritiqueLoading(true);
     try {
-      const res = await fetch('/api/ai_feedback', {
+      const payload = {
+        mode: 'selection_critique',
+        selected_text: selectionBox.text,
+        selectedText: selectionBox.text,
+        essay_text: originalEssay,
+        essayText: originalEssay,
+        task_number: taskNumber,
+        taskNumber: taskNumber,
+        prompt: activeTask.prompt || activeTask.instructions || '',
+        taskPrompt: activeTask.prompt || activeTask.instructions || '',
+        media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
+        lang: isVi ? 'vi' : 'en',
+      };
+      let res = await fetch('/api/ai_critique', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'selection_critique',
-          selected_text: selectionBox.text,
-          essay_text: originalEssay,
-          task_number: taskNumber,
-          prompt: activeTask.prompt || activeTask.instructions || '',
-          media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
-          lang: isVi ? 'vi' : 'en',
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('AI critique request failed: ' + res.statusText);
-      const data = await res.json();
-      if (!data.success && !data.criterion) throw new Error(data.error || tx('AI không trả về kết quả hợp lệ', 'AI did not return a valid result'));
+      if (res.status === 404) {
+        res = await fetch('/api/ai_feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.success === false) {
+        const detail = data?.error || data?.detail || data?.message || (res.status ? `HTTP ${res.status}` : res.statusText) || 'Unknown error';
+        throw new Error(`AI critique request failed (${detail})`);
+      }
+      if (!data) throw new Error(tx('AI không trả về kết quả hợp lệ', 'AI did not return a valid result'));
 
       const nextCrit: CriterionKey = (data.criterion as CriterionKey) || selectionBox.criterion || 'GRA';
-      const nextCat: CommentCategory = (data.category as CommentCategory) || 'error';
-      const nextReplacement = (data.replacement ?? selectionBox.replacement ?? '').trim();
-      const nextHighBand = (data.highBandRewrite ?? '').trim();
-      const nextComment = (data.comment ?? '').trim();
+      let nextCat: CommentCategory = (data.category as CommentCategory) || 'error';
+      const rawCatStr = String(data.category || data.type || '').toLowerCase();
+      if (rawCatStr.includes('error') || rawCatStr.includes('correct') || rawCatStr.includes('lỗi')) nextCat = 'error';
+      else if (rawCatStr.includes('awkward') || rawCatStr.includes('natural')) nextCat = 'awkward';
+      else if (rawCatStr.includes('upgrade') || rawCatStr.includes('band')) nextCat = 'upgrade';
+      else if (rawCatStr.includes('praise') || rawCatStr.includes('strength')) nextCat = 'praise';
+
+      const nextReplacement = String(data.replacement ?? data.suggestedText ?? data.revisedText ?? selectionBox.replacement ?? '').trim();
+      const nextHighBand = String(data.highBandRewrite ?? data.advancedRewrite ?? '').trim();
+      const nextComment = String(data.comment ?? data.critique ?? data.explanation ?? data.note ?? '').trim();
       const nextTags: string[] = Array.isArray(data.tags) ? data.tags : [];
 
       if (autoSave) {
@@ -1684,8 +1706,14 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           comment: nextComment || tx('Nhận xét từ AI.', 'AI critique comment.'),
           createdAt: Date.now(),
         };
+        const nextComments = [...writingGrading.comments, newComment];
         updateWritingGrading({
-          comments: [...writingGrading.comments, newComment],
+          comments: nextComments,
+        });
+        void saveWritingGrade(false, {
+          ...writingGrading,
+          comments: nextComments,
+          updatedAt: Date.now(),
         });
         setSelectionBox(null);
         window.getSelection()?.removeAllRanges();
