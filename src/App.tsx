@@ -4277,12 +4277,48 @@ export default function IeltsSupremeOS() {
         ? resolved.secs.flatMap((s: any) => s?.questions || [])
         : (Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : []);
       const userAnswers = rqResult?.answers || {};
+      const formatCopilotAns = (item: any, val: any): string => {
+        if (val === undefined || val === null || val === "" || (Array.isArray(val) && val.length === 0)) return "(bỏ trống)";
+        const strip = (s: any) => String(s ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const cleanOpt = (raw: any) => strip(raw).replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
+        if (item?.type === "CHOICE") {
+          const n = Number(val);
+          if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+            return `${String.fromCharCode(65 + n)}. ${cleanOpt(item.options[n])}`;
+          }
+        }
+        if (item?.type === "MATCHING") {
+          const resolvedTxt = strip(resolveMatchingAnswerText(item, val));
+          const rawTrim = String(val).trim();
+          if (/^[A-Za-z]$/.test(rawTrim)) {
+            const letter = rawTrim.toUpperCase();
+            return resolvedTxt && resolvedTxt.toUpperCase() !== letter ? `${letter}. ${cleanOpt(resolvedTxt)}` : letter;
+          }
+          const n = Number(rawTrim);
+          if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+            const letter = String.fromCharCode(65 + n);
+            return `${letter}. ${cleanOpt(item.options[n])}`;
+          }
+          return resolvedTxt || rawTrim;
+        }
+        if (item?.type === "CHOICE_MULTIPLE") {
+          const arr = Array.isArray(val) ? val : String(val).split(/[,\s/]+/).filter(Boolean);
+          return arr.map((v: any) => {
+            const n = Number(v);
+            if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+              return `${String.fromCharCode(65 + n)}. ${cleanOpt(item.options[n])}`;
+            }
+            return strip(v);
+          }).join(" / ");
+        }
+        return strip(val);
+      };
       const questionsSummary = allQs.map((item: any, idx: number) => {
         const ctx = resolveReviewQuestionContext(item, rqQuiz, idx);
         const given = userAnswers[item.id];
-        const givenStr = given === undefined || given === null || given === "" ? "(bỏ trống)" : String(given);
-        const corrStr = String(item.correctAnswer ?? item.correct ?? "");
-        return `Q${idx + 1}: ${ctx.effectiveQuestionText} | Student='${givenStr}' | Correct='${corrStr}'`;
+        const givenStr = formatCopilotAns(item, given);
+        const corrStr = formatCopilotAns(item, item.correctAnswer ?? item.correct ?? "");
+        return `Câu ${idx + 1}: ${ctx.effectiveQuestionText} | Học viên chọn: ${givenStr} | Đáp án đúng: ${corrStr}`;
       }).join("\n");
 
       const API_BASE = getApiBase();
@@ -12129,10 +12165,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       };
 
       const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
-      const rvEffectiveAnswers = rvRetryMode
-          ? { ...(reviewQuiz.result.answers || {}), ...rvRetryAnswers }
-          : (reviewQuiz.result.answers || {});
-      const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, rvEffectiveAnswers);
+      const rvSubmittedAnswers = reviewQuiz.result.answers || {};
+      const rvEffectiveAnswers = rvSubmittedAnswers;
+      const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, rvSubmittedAnswers);
       const rvGroupByQuestionId = new Map<string, any>();
       rvScoreSummary.groups.forEach((group: any) => group.questions.forEach((question: any) => rvGroupByQuestionId.set(question.id, group)));
 
@@ -12428,8 +12463,33 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           };
       };
 
-      const rvFormatDisplayAnswers = (q: any) => {
-          const raw = rvEffectiveAnswers?.[q?.id];
+      const rvFormatOptionWithLetter = (q: any, rawValue: any): string => {
+          const rawStr = String(rawValue ?? "").trim();
+          if (!rawStr) return "";
+          const options = Array.isArray(q?.options) ? q.options : [];
+          if (!options.length) return rawStr;
+          let idx = -1;
+          if (/^[A-Za-z]$/.test(rawStr)) {
+              idx = rawStr.toUpperCase().charCodeAt(0) - 65;
+          } else if (/^\d+$/.test(rawStr) && Number(rawStr) < options.length) {
+              idx = Number(rawStr);
+          } else {
+              idx = options.findIndex((opt: any, oIdx: number) =>
+                  normalizeComparableAnswer(opt) === normalizeComparableAnswer(rawStr)
+                  || matchingOptionLabel(opt, oIdx).toLowerCase() === rawStr.toLowerCase()
+              );
+          }
+          if (idx >= 0 && idx < options.length) {
+              const letter = matchingOptionLabel(options[idx], idx);
+              const text = cleanOptionAnswerText(options[idx]);
+              if (!text || text.toUpperCase() === letter) return letter;
+              return `${letter}. ${text}`;
+          }
+          return resolveMatchingAnswerText(q, rawValue) || rawStr;
+      };
+
+      const rvFormatDisplayAnswers = (q: any, answerMap: Record<string, any> = rvSubmittedAnswers) => {
+          const raw = answerMap?.[q?.id];
           const blank = raw === undefined || raw === null || String(raw).trim() === "" || (Array.isArray(raw) && raw.length === 0);
           if (q?.type === "CHOICE") {
               const cIdx = Number(q.correctAnswer);
@@ -12437,23 +12497,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               const cText = (!isNaN(cIdx) && q.options?.[cIdx]) ? cleanOptionAnswerText(q.options[cIdx]) : "";
               const sIdx = Number(raw);
               const sLetter = !blank && !isNaN(sIdx) ? String.fromCharCode(65 + sIdx) : (!blank ? String(raw).trim().toUpperCase() : "");
+              const isCorr = !blank && (sLetter === cLetter || isSingleQuestionCorrect(q, raw));
               return {
                   blank,
                   given: blank ? "(bỏ trống)" : sLetter,
-                  expected: cText ? `${cLetter}. ${cText}` : cLetter,
+                  expected: cLetter,
+                  expectedFull: cText ? `${cLetter}. ${cText}` : cLetter,
                   expectedShort: cLetter,
-                  correct: rvQuestionStatus(q) === "correct",
+                  correct: isCorr,
               };
           }
           if (q?.type === "CHOICE_MULTIPLE") {
-              const group = rvGroupByQuestionId.get(q.id);
-              const multi = group?.multiple || getChoiceMultipleOutcome([q], { [q.id]: raw });
+              const multi = getChoiceMultipleOutcome([q], { [q.id]: raw });
               const sLetters = (multi.selected || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
               const cLetters = (multi.correct || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
               return {
                   blank: !sLetters,
                   given: sLetters || "(bỏ trống)",
                   expected: cLetters,
+                  expectedFull: cLetters,
                   expectedShort: cLetters,
                   correct: Boolean(multi.isFullyCorrect),
               };
@@ -12475,28 +12537,33 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   blank,
                   given: blank ? "(bỏ trống)" : givenId,
                   expected: expectedFull,
+                  expectedFull,
                   expectedShort: expectedId,
                   correct: !blank && isSingleQuestionCorrect({ ...q, options: headingOptions }, raw),
               };
           }
-          if (q?.type === "MATCHING") {
-              const givenStr = blank ? "(bỏ trống)" : resolveMatchingAnswerText(q, raw);
-              const expectedStr = resolveMatchingAnswerText(q, q.correctAnswer);
+          if (q?.type === "MATCHING" || (Array.isArray(q?.options) && q.options.length > 0 && /^(?:DRAG_DROP|MAP_DRAG)$/i.test(String(q?.type || "")))) {
+              const givenStr = blank ? "(bỏ trống)" : rvFormatOptionWithLetter(q, raw);
+              const expectedStr = rvFormatOptionWithLetter(q, q.correctAnswer);
               return {
                   blank,
                   given: givenStr,
                   expected: expectedStr,
+                  expectedFull: expectedStr,
                   expectedShort: expectedStr,
                   correct: !blank && isSingleQuestionCorrect(q, raw),
               };
           }
-          const comp = rvCompletionAnswer(q);
+          const rawStr = blank ? "" : String(raw).trim();
+          const accepted = String(q?.correctAnswer ?? "").split("/").map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
+          const expectedClean = String(q?.correctAnswer ?? "").split("/")[0].trim();
           return {
-              blank: comp.blank,
-              given: comp.blank ? "(bỏ trống)" : comp.given,
-              expected: comp.expected,
-              expectedShort: comp.expected,
-              correct: comp.correct,
+              blank,
+              given: blank ? "(bỏ trống)" : rawStr,
+              expected: expectedClean,
+              expectedFull: expectedClean,
+              expectedShort: expectedClean,
+              correct: !blank && accepted.includes(rawStr.toLocaleLowerCase()),
           };
       };
 
@@ -12610,6 +12677,122 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           );
       };
 
+      // Rich Text & Markdown Renderer (supports **bold**, *italic*, "quotes", [MM:SS] timestamps, and nested bullet lists)
+      const rvRenderInlineTokens = (textStr: string, keyPrefix: string, question?: any): React.ReactNode[] => {
+          const tokenRegex = /(\*\*[^*\n]+\*\*|\*(?!\s)[^*\n]+(?<!\s)\*|_(?!\s)[^_\n]+(?<!\s)_|\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?\]|"[^"\n]{2,260}"|“[^”\n]{2,260}”)/g;
+          const nodes: React.ReactNode[] = [];
+          let lastIdx = 0;
+          let match: RegExpExecArray | null;
+
+          while ((match = tokenRegex.exec(textStr)) !== null) {
+              if (match.index > lastIdx) {
+                  nodes.push(textStr.slice(lastIdx, match.index));
+              }
+              const tok = match[0];
+              const k = `${keyPrefix}-${match.index}`;
+              if (tok.startsWith("**") && tok.endsWith("**")) {
+                  const inner = tok.slice(2, -2);
+                  nodes.push(<strong key={k} className="rv-md-bold">{rvRenderInlineTokens(inner, `${k}-b`, question)}</strong>);
+              } else if ((tok.startsWith("*") && tok.endsWith("*")) || (tok.startsWith("_") && tok.endsWith("_"))) {
+                  const inner = tok.slice(1, -1);
+                  nodes.push(<em key={k} className="rv-md-italic">{inner}</em>);
+              } else if (tok.startsWith("[") && tok.endsWith("]")) {
+                  const tsLabel = tok.slice(1, -1).trim();
+                  nodes.push(
+                      <button
+                          key={k}
+                          type="button"
+                          className="micro-btn-audio"
+                          style={{ margin: "0 3px", verticalAlign: "baseline", height: 22, padding: "0 6px", fontSize: 11 }}
+                          onClick={() => {
+                              const { start, end } = rvTimestampRangeSeconds(tsLabel);
+                              if (question) rvSeekManualTimestamp({ startTime: start, endTime: end, label: tsLabel }, question);
+                              else rvSeek(tsLabel);
+                          }}
+                          title={`Phát audio tại ${tsLabel}`}
+                      >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
+                          <span>{tsLabel}</span>
+                      </button>
+                  );
+              } else if ((tok.startsWith('"') && tok.endsWith('"')) || (tok.startsWith("“") && tok.endsWith("”"))) {
+                  const quoteInner = tok.slice(1, -1).replace(/^"+|"+$/g, "").trim();
+                  const canJump = quoteInner.length >= 12 && quoteInner.split(/\s+/).length >= 3;
+                  if (canJump) {
+                      nodes.push(
+                          <em
+                              key={k}
+                              className="rv-md-quote is-clickable"
+                              onClick={() => {
+                                  if (rvActiveIsListening) rvJumpToTranscript("", quoteInner);
+                                  else rvJumpToEvidence(quoteInner);
+                              }}
+                              title="Nhấn để định vị câu trích dẫn trong bài"
+                          >
+                              “{quoteInner}”
+                          </em>
+                      );
+                  } else {
+                      nodes.push(<em key={k} className="rv-md-quote">“{quoteInner}”</em>);
+                  }
+              } else {
+                  nodes.push(tok);
+              }
+              lastIdx = tokenRegex.lastIndex;
+          }
+          if (lastIdx < textStr.length) {
+              nodes.push(textStr.slice(lastIdx));
+          }
+          return nodes;
+      };
+
+      const rvRenderRichText = (rawText: string, question?: any) => {
+          const cleaned = String(rawText || "")
+              .replace(/\s*\[\[EVIDENCE:\s*"?([\s\S]*?)"?\s*\]\]\s*/gi, ' "$1" ')
+              .replace(/""+/g, '"')
+              .trim();
+          if (!cleaned) return null;
+
+          const rawLines = cleaned
+              .split(/\r?\n/)
+              .filter(line => !/^\s*Q\d+:\s*.*\|\s*(?:Student|Correct)=/i.test(line));
+
+          return (
+              <div className="rv-drawer-body">
+                  {rawLines.map((rawLine, idx) => {
+                      if (!rawLine.trim()) return null;
+                      const indentMatch = rawLine.match(/^(\s*)([*•-]\s+)?([\s\S]*)$/);
+                      const leadingSpaces = (indentMatch?.[1] || "").length;
+                      const hasBullet = Boolean(indentMatch?.[2]);
+                      const isSubBullet = hasBullet && leadingSpaces >= 2;
+                      let bodyStr = (indentMatch?.[3] || rawLine).trim();
+
+                      // Ensure leading pedagogical labels (Bản chất:, Dẫn chứng:, Kết luận:, Core logic:, Evidence:, Conclusion:) are bolded even if AI omitted **
+                      bodyStr = bodyStr.replace(
+                          /^(?!\*\*)(Bản chất|Dẫn chứng(?:\s*&\s*Paraphrase)?|Kết luận|Core logic|Evidence|Conclusion|Giải thích|Lưu ý)(\s*:)/i,
+                          "**$1$2**"
+                      );
+
+                      return (
+                          <div
+                              key={idx}
+                              className={`rv-drawer-line ${isSubBullet ? "is-sub-bullet" : hasBullet ? "is-bullet" : ""}`}
+                          >
+                              {hasBullet && (
+                                  <span className="rv-bullet-dot" aria-hidden="true">
+                                      {isSubBullet ? "–" : "•"}
+                                  </span>
+                              )}
+                              <div className="rv-bullet-content">
+                                  {rvRenderInlineTokens(bodyStr, `ln-${idx}`, question)}
+                              </div>
+                          </div>
+                      );
+                  })}
+              </div>
+          );
+      };
+
       // Render Expandable Inline Drawer (Teacher or AI) directly below the question line/row
       const rvRenderInlineDrawer = (question: any, studentAnswer?: any, aiQuestion?: any) => {
           if (!question?.id) return null;
@@ -12652,11 +12835,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           </div>
                       </div>
                       {manual?.rawText ? (
-                          <div className="rv-drawer-body">
-                              {String(manual.rawText).split(/\n+/).filter(Boolean).map((line, idx) => (
-                                  <div key={idx} className="rv-drawer-line">{line}</div>
-                              ))}
-                          </div>
+                          rvRenderRichText(manual.rawText, question)
                       ) : (
                           <div className="rv-drawer-empty">
                               <span>Chưa có ghi chú thủ công của Giáo viên cho câu này.</span>
@@ -12672,15 +12851,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   </div>
               );
           }
-
-          // openMode === "ai"
-          const rawAiText = String(aiState?.text || "")
-              .replace(/\s*\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]\s*/gi, ' "$1" ')
-              .trim();
-          const aiLines = rawAiText
-              .split(/\n+/)
-              .map(l => l.trim())
-              .filter(Boolean);
 
           return (
               <div className="inline-explain-drawer ai" onClick={e => e.stopPropagation()}>
@@ -12713,12 +12883,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   </div>
                   {aiState?.loading ? (
                       <div className="rv-drawer-loading">Đang trích xuất dẫn chứng và phân tích câu {qNum}...</div>
-                  ) : aiLines.length > 0 ? (
-                      <div className="rv-drawer-body">
-                          {aiLines.map((line, idx) => (
-                              <div key={idx} className="rv-drawer-line">{line}</div>
-                          ))}
-                      </div>
+                  ) : aiState?.text ? (
+                      rvRenderRichText(aiState.text, question)
                   ) : (
                       <div className="rv-drawer-empty">
                           <span>Nhấn để tạo phân tích 3 dòng súc tích từ văn bản nguồn.</span>
@@ -12736,122 +12902,215 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       };
 
       // Render an inline answer slot ([num] wrong -> correct + micro-action cluster)
-      const rvRenderInlineSlotBox = (question: any, isDashedDrag = false) => {
+      const rvRenderInlineSlotBox = (question: any, isDashedDrag = false, showNumberBadge = true) => {
           if (!question) return null;
           const qNum = rvQuestionNumber(question);
-          const disp = rvFormatDisplayAnswers(question);
+          const disp = rvFormatDisplayAnswers(question, rvSubmittedAnswers);
           const isFlashed = rvFlashQuestionNum === qNum;
+          const retryRaw = rvRetryAnswers[question.id];
+          const hasRetryVal = retryRaw !== undefined && retryRaw !== null && String(retryRaw).trim() !== "" && !(Array.isArray(retryRaw) && retryRaw.length === 0);
+          const retryDisp = hasRetryVal ? rvFormatDisplayAnswers(question, { [question.id]: retryRaw }) : null;
 
           if (rvRetryMode && !disp.correct) {
-              const retryVal = rvRetryAnswers[question.id] ?? "";
+              const retryVal = retryRaw ?? "";
+              const qType = String(question?.type || "").toUpperCase();
+              const hasOptionBank = Array.isArray(question?.options) && question.options.length > 0;
+
               return (
-                  <span id={`q-row-${qNum}`} className={`rv-inline-slot-wrap ${isFlashed ? "rv-flash-ring" : ""}`}>
+                  <span id={showNumberBadge ? `q-row-${qNum}` : undefined} className={`rv-inline-slot-wrap ${showNumberBadge && isFlashed ? "rv-flash-ring" : ""}`}>
                       <span className={isDashedDrag ? "dashed-drag-slot" : "inline-ans-box"}>
-                          <span className="rv-qnum-badge">{qNum}</span>
-                          <input
-                              type="text"
-                              value={retryVal}
-                              onChange={e => setRvRetryAnswers(prev => ({ ...prev, [question.id]: e.target.value }))}
-                              placeholder="Nhập lại..."
-                              className="rv-retry-inline-input"
-                          />
+                          {showNumberBadge && <span className="rv-qnum-badge">{qNum}</span>}
+                          {qType === "DRAG_DROP_HEADING" && hasOptionBank ? (
+                              <select
+                                  value={String(retryVal)}
+                                  onChange={e => setRvRetryAnswers(prev => ({ ...prev, [question.id]: e.target.value }))}
+                                  className="rv-retry-inline-select"
+                              >
+                                  <option value="">-- Chọn Heading --</option>
+                                  {question.options.map((h: any, hIdx: number) => {
+                                      const hId = normalizeHeadingId(h?.id || h);
+                                      const hText = headingPlainText(h?.text || h);
+                                      return (
+                                          <option key={hIdx} value={hId}>
+                                              {hId}. {hText}
+                                          </option>
+                                      );
+                                  })}
+                              </select>
+                          ) : (qType === "MATCHING" || (hasOptionBank && /^(?:DRAG_DROP|MAP_DRAG)$/i.test(qType))) ? (
+                              <select
+                                  value={String(retryVal)}
+                                  onChange={e => setRvRetryAnswers(prev => ({ ...prev, [question.id]: e.target.value }))}
+                                  className="rv-retry-inline-select"
+                              >
+                                  <option value="">-- Chọn đáp án --</option>
+                                  {question.options.map((opt: any, oIdx: number) => {
+                                      const label = matchingOptionLabel(opt, oIdx);
+                                      const text = cleanOptionAnswerText(opt);
+                                      const val = text && text.toUpperCase() !== label ? text : label;
+                                      const display = text && text.toUpperCase() !== label ? `${label}. ${text}` : label;
+                                      return (
+                                          <option key={oIdx} value={val}>
+                                              {display}
+                                          </option>
+                                      );
+                                  })}
+                              </select>
+                          ) : (qType === "CHOICE" || qType === "CHOICE_MULTIPLE") ? (
+                              <span style={{ fontSize: 12.5, fontWeight: 700, color: "#92400E" }}>
+                                  {hasRetryVal && retryDisp ? `Đã chọn lại: ${retryDisp.given}` : "Chọn lại ở các phương án bên dưới"}
+                              </span>
+                          ) : (
+                              <input
+                                  type="text"
+                                  value={String(retryVal)}
+                                  onChange={e => setRvRetryAnswers(prev => ({ ...prev, [question.id]: e.target.value }))}
+                                  placeholder="Nhập lại..."
+                                  className="rv-retry-inline-input"
+                              />
+                          )}
                       </span>
-                      {rvRenderInlineMicroCluster(question, rvEffectiveAnswers?.[question.id], question)}
                   </span>
               );
           }
 
           return (
-              <span id={`q-row-${qNum}`} className={`rv-inline-slot-wrap ${isFlashed ? "rv-flash-ring" : ""}`}>
+              <span id={showNumberBadge ? `q-row-${qNum}` : undefined} className={`rv-inline-slot-wrap ${showNumberBadge && isFlashed ? "rv-flash-ring" : ""}`}>
                   <span className={`${isDashedDrag ? "dashed-drag-slot" : "inline-ans-box"} ${disp.correct ? "is-correct" : disp.blank ? "is-skipped" : "is-wrong"}`}>
-                      <span className="rv-qnum-badge">{qNum}</span>
+                      {showNumberBadge && <span className="rv-qnum-badge">{qNum}</span>}
                       {disp.correct ? (
                           <strong className="rv-ans-correct">{disp.given}</strong>
                       ) : (
                           <>
                               <span className={disp.blank ? "rv-ans-skipped" : "rv-ans-wrong"}>{disp.given}</span>
+                              {retryDisp && (
+                                  <span
+                                      className={`rv-retry-result-pill ${retryDisp.correct ? "is-right" : "is-wrong"}`}
+                                      title={retryDisp.correct ? "Làm lại: Đúng" : "Làm lại: Sai"}
+                                  >
+                                      Làm lại: {retryDisp.given} {retryDisp.correct ? "✓" : "✗"}
+                                  </span>
+                              )}
                               <span className="rv-ans-arrow">→</span>
                               <strong className="rv-ans-correct">{disp.expected}</strong>
                           </>
                       )}
                   </span>
-                  {rvRenderInlineMicroCluster(question, rvEffectiveAnswers?.[question.id], question)}
+                  {rvRenderInlineMicroCluster(question, rvSubmittedAnswers?.[question.id], question)}
               </span>
           );
       };
 
-      // Helper to render HTML lines with [N] tokens replaced by interactive React inline slot + drawer below
+      // Helper to render HTML (including <table>, <ul>, <ol>, <p>, <div>) with [N] tokens replaced by React inline slots + drawers
       const rvRenderHtmlWithInlineBlanks = (rawHtml: string, byNumber: Map<number, any>, isDashedDrag = false) => {
           const formatted = formatContent(rawHtml || "");
-          // Split by block boundaries (<p>, <div>, <li>, <tr>, <br>) so each line with a [N] blank can render its inline drawer directly underneath
-          const hasTable = /<table\b/i.test(formatted);
-          if (hasTable) {
-              const parts = formatted.split(/(\[\d+\])/g);
-              const questionsInTable: any[] = [];
-              return (
-                  <div className="rv-rich-context-block">
-                      <div className="rv-table-inline-flow">
-                          {parts.map((part, idx) => {
-                              const m = part.match(/^\[(\d+)\]$/);
-                              if (m) {
-                                  const q = byNumber.get(Number(m[1]));
-                                  if (q) {
-                                      questionsInTable.push(q);
-                                      return (
-                                          <span key={`tbl-slot-${idx}`} className="rv-inline-block-unit">
-                                              {rvRenderInlineSlotBox(q, isDashedDrag)}
-                                              {rvRenderInlineDrawer(q, rvEffectiveAnswers?.[q.id], q)}
-                                          </span>
-                                      );
-                                  }
-                              }
-                              return <span key={`tbl-html-${idx}`} dangerouslySetInnerHTML={{ __html: part }} />;
-                          })}
-                      </div>
-                  </div>
-              );
+          if (typeof DOMParser === "undefined") {
+              return <div className="rv-rich-context-block" dangerouslySetInnerHTML={{ __html: formatted }} />;
           }
 
-          const lines = formatted
-              .replace(/<\/(?:p|div|li|h[1-6])>/gi, "\n")
-              .replace(/<br\s*\/?>/gi, "\n")
-              .split(/\n+/)
-              .map(l => l.trim())
-              .filter(Boolean);
+          const doc = new DOMParser().parseFromString(formatted, "text/html");
+          const topLevelQuestions: any[] = [];
+          const claimedDrawerQuestionIds = new Set<string>();
+
+          const isDrawerHostElement = (el: HTMLElement): boolean => {
+              const tag = el.tagName.toLowerCase();
+              if (tag === "td" || tag === "th" || tag === "li" || tag === "p") return true;
+              if (tag === "div" && !el.querySelector("p, li, td, th, table, div")) return true;
+              return false;
+          };
+
+          const domNodeToReact = (node: Node, keyPrefix: string, hostQuestions?: any[]): React.ReactNode => {
+              if (node.nodeType === Node.TEXT_NODE) {
+                  const text = node.nodeValue || "";
+                  if (!/\[\d+\]/.test(text)) return text;
+                  const segments = text.split(/(\[\d+\](?:\s*(?:_{2,}|\.{3,}|…+))?)/g);
+                  return segments.map((seg, sIdx) => {
+                      const m = seg.match(/^\[(\d+)\]/);
+                      if (m) {
+                          const q = byNumber.get(Number(m[1]));
+                          if (q) {
+                              if (hostQuestions) {
+                                  if (!hostQuestions.some(item => item.id === q.id)) hostQuestions.push(q);
+                                  claimedDrawerQuestionIds.add(q.id);
+                              } else if (!topLevelQuestions.some(item => item.id === q.id)) {
+                                  topLevelQuestions.push(q);
+                              }
+                              return <React.Fragment key={`${keyPrefix}-slot-${sIdx}`}>{rvRenderInlineSlotBox(q, isDashedDrag, true)}</React.Fragment>;
+                          }
+                      }
+                      return seg;
+                  });
+              }
+
+              if (node.nodeType !== Node.ELEMENT_NODE) return null;
+              const el = node as HTMLElement;
+              const tag = el.tagName.toLowerCase();
+
+              if (tag === "br") return <br key={keyPrefix} />;
+              if (tag === "hr") return <hr key={keyPrefix} />;
+              if (tag === "img") {
+                  const src = cleanMediaUrl(el.getAttribute("src") || "");
+                  return (
+                      <img
+                          key={keyPrefix}
+                          src={src}
+                          alt={el.getAttribute("alt") || ""}
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
+                          style={{ maxWidth: "100%", height: "auto", borderRadius: 6 }}
+                      />
+                  );
+              }
+
+              const isHost = isDrawerHostElement(el);
+              const localQuestions: any[] = isHost ? [] : (hostQuestions || []);
+              const childNodes = Array.from(el.childNodes).map((child, cIdx) =>
+                  domNodeToReact(child, `${keyPrefix}-${cIdx}`, isHost ? localQuestions : hostQuestions)
+              );
+
+              if (isHost && localQuestions.length > 0) {
+                  localQuestions.forEach(q => {
+                      childNodes.push(
+                          <React.Fragment key={`${keyPrefix}-drawer-${q.id}`}>
+                              {rvRenderInlineDrawer(q, rvSubmittedAnswers?.[q.id], q)}
+                          </React.Fragment>
+                      );
+                  });
+              }
+
+              const props: Record<string, any> = { key: keyPrefix };
+              if (el.className) props.className = el.className;
+              const colSpan = el.getAttribute("colspan");
+              if (colSpan && Number(colSpan) > 1) props.colSpan = Number(colSpan);
+              const rowSpan = el.getAttribute("rowspan");
+              if (rowSpan && Number(rowSpan) > 1) props.rowSpan = Number(rowSpan);
+              const align = el.getAttribute("align");
+              if (align) props.align = align;
+
+              const allowedTags = new Set([
+                  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "colgroup", "col",
+                  "ul", "ol", "li", "p", "div", "span", "strong", "b", "em", "i", "u",
+                  "sub", "sup", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"
+              ]);
+              const safeTag = allowedTags.has(tag) ? tag : "span";
+              if (safeTag === "col") return React.createElement("col", props);
+              return React.createElement(safeTag, props, ...childNodes);
+          };
+
+          const renderedBody = Array.from(doc.body.childNodes).map((child, idx) =>
+              domNodeToReact(child, `ctx-${idx}`)
+          );
+
+          const unclaimedQuestions = topLevelQuestions.filter(q => !claimedDrawerQuestionIds.has(q.id));
 
           return (
               <div className="rv-rich-context-block">
-                  {lines.map((lineHtml, lineIdx) => {
-                      const tokenMatches = Array.from(lineHtml.matchAll(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/g));
-                      if (tokenMatches.length === 0) {
-                          const cleanLine = lineHtml.replace(/^<(?:p|div|li)[^>]*>/i, "");
-                          return <div key={lineIdx} className="rv-context-line" dangerouslySetInnerHTML={{ __html: cleanLine }} />;
-                      }
-                      const segments = lineHtml.replace(/^<(?:p|div|li)[^>]*>/i, "").split(/(\[\d+\](?:\s*(?:_{2,}|\.{3,}|…+))?)/g);
-                      const lineQuestions: any[] = [];
-                      return (
-                          <div key={lineIdx} className="rv-context-question-line">
-                              <div className="rv-context-line-content">
-                                  {segments.map((seg, sIdx) => {
-                                      const m = seg.match(/^\[(\d+)\]/);
-                                      if (m) {
-                                          const q = byNumber.get(Number(m[1]));
-                                          if (q) {
-                                              if (!lineQuestions.some(item => item.id === q.id)) lineQuestions.push(q);
-                                              return <React.Fragment key={sIdx}>{rvRenderInlineSlotBox(q, isDashedDrag)}</React.Fragment>;
-                                          }
-                                      }
-                                      return <span key={sIdx} dangerouslySetInnerHTML={{ __html: seg }} />;
-                                  })}
-                              </div>
-                              {lineQuestions.map(q => (
-                                  <React.Fragment key={`drawer-${q.id}`}>
-                                      {rvRenderInlineDrawer(q, rvEffectiveAnswers?.[q.id], q)}
-                                  </React.Fragment>
-                              ))}
-                          </div>
-                      );
-                  })}
+                  {renderedBody}
+                  {unclaimedQuestions.map(q => (
+                      <React.Fragment key={`top-drawer-${q.id}`}>
+                          {rvRenderInlineDrawer(q, rvSubmittedAnswers?.[q.id], q)}
+                      </React.Fragment>
+                  ))}
               </div>
           );
       };
@@ -13195,12 +13454,43 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-retry-inline-input {
                       border: 1px solid #D97706;
                       border-radius: 4px;
-                      padding: 2px 6px;
+                      padding: 2px 8px;
                       font-size: 13px;
-                      width: 120px;
+                      width: 140px;
                       background: #FFFFFF;
                       color: var(--rv-ink);
                       outline: none;
+                  }
+                  .rv-retry-inline-select {
+                      border: 1px solid #D97706;
+                      border-radius: 4px;
+                      padding: 2px 8px;
+                      font-size: 13px;
+                      width: auto;
+                      max-width: 280px;
+                      background: #FFFFFF;
+                      color: var(--rv-ink);
+                      outline: none;
+                      cursor: pointer;
+                  }
+                  .rv-retry-result-pill {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 4px;
+                      padding: 1px 7px;
+                      border-radius: 4px;
+                      font-size: 12px;
+                      font-weight: 700;
+                  }
+                  .rv-retry-result-pill.is-right {
+                      background: #DCFCE7;
+                      color: #15803D;
+                      border: 1px solid #86EFAC;
+                  }
+                  .rv-retry-result-pill.is-wrong {
+                      background: #FEE2E2;
+                      color: #B91C1C;
+                      border: 1px solid #FCA5A5;
                   }
                   /* Micro-Action Cluster */
                   .rv-micro-cluster {
@@ -13318,12 +13608,55 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   .rv-drawer-body {
                       display: flex;
                       flex-direction: column;
-                      gap: 4px;
+                      gap: 5px;
                   }
                   .rv-drawer-line {
                       color: var(--rv-ink);
                       font-size: 13.5px;
-                      line-height: 1.55;
+                      line-height: 1.58;
+                  }
+                  .rv-drawer-line.is-bullet {
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 7px;
+                  }
+                  .rv-drawer-line.is-sub-bullet {
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 7px;
+                      padding-left: 16px;
+                  }
+                  .rv-bullet-dot {
+                      font-weight: 800;
+                      color: #D97706;
+                      flex-shrink: 0;
+                      line-height: 1.58;
+                  }
+                  .rv-bullet-content {
+                      flex: 1;
+                      min-width: 0;
+                  }
+                  .rv-md-bold {
+                      font-weight: 800;
+                      color: #1C1917;
+                  }
+                  .rv-md-italic {
+                      font-style: italic;
+                      color: #44403C;
+                  }
+                  .rv-md-quote {
+                      font-style: italic;
+                      color: #854D0E;
+                      background: rgba(254, 240, 138, 0.5);
+                      padding: 0 4px;
+                      border-radius: 4px;
+                  }
+                  .rv-md-quote.is-clickable {
+                      cursor: pointer;
+                      text-decoration: underline dotted #D97706;
+                  }
+                  .rv-md-quote.is-clickable:hover {
+                      background: #FEF08A;
                   }
                   .rv-drawer-empty {
                       display: flex;
@@ -13354,7 +13687,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       border: 1px solid var(--rv-border);
                       border-radius: 10px;
                       padding: 18px 20px;
-                      margin-bottom: 16px;
+                      margin-bottom: 14px;
                   }
                   .rv-task-instruction {
                       font-size: 13.5px;
@@ -13362,13 +13695,89 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       padding-bottom: 12px;
                       margin-bottom: 14px;
                       border-bottom: 1px solid var(--rv-border);
-                      line-height: 1.5;
+                      line-height: 1.55;
                   }
                   .rv-context-line, .rv-context-question-line {
                       margin-bottom: 8px;
                       font-size: 14.5px;
                       line-height: 1.75;
                       color: var(--rv-ink);
+                  }
+                  .rv-rich-context-block {
+                      font-size: 14.5px;
+                      line-height: 1.75;
+                      color: var(--rv-ink);
+                      overflow-x: auto;
+                  }
+                  .rv-rich-context-block p, .rv-rich-context-block div {
+                      margin: 0 0 8px 0;
+                  }
+                  .rv-rich-context-block ul, .rv-rich-context-block ol {
+                      margin: 0 0 10px 0;
+                      padding-left: 22px;
+                  }
+                  .rv-rich-context-block li {
+                      margin-bottom: 6px;
+                  }
+                  .rv-rich-context-block table {
+                      width: 100%;
+                      border-collapse: collapse;
+                      border: 1px solid var(--rv-border-strong);
+                      margin: 8px 0 12px 0;
+                      background: var(--rv-surface);
+                      font-size: 14px;
+                      line-height: 1.6;
+                  }
+                  .rv-rich-context-block th, .rv-rich-context-block td {
+                      border: 1px solid var(--rv-border-strong);
+                      padding: 10px 12px;
+                      vertical-align: top;
+                      text-align: left;
+                  }
+                  .rv-rich-context-block th {
+                      background: var(--rv-subtle);
+                      font-weight: 800;
+                      color: var(--rv-ink);
+                  }
+                  /* Matching Features / Sentence Endings / Options Legend Box */
+                  .rv-matching-legend {
+                      background: var(--rv-bg);
+                      border: 1px solid var(--rv-border-strong);
+                      border-radius: 8px;
+                      padding: 12px 14px;
+                      margin-top: 4px;
+                  }
+                  .rv-matching-legend-title {
+                      font-size: 12px;
+                      font-weight: 800;
+                      text-transform: uppercase;
+                      letter-spacing: 0.04em;
+                      color: #92400E;
+                      margin-bottom: 8px;
+                  }
+                  .rv-matching-legend-table {
+                      width: 100%;
+                      border-collapse: collapse;
+                      background: var(--rv-surface);
+                      border: 1px solid var(--rv-border);
+                      border-radius: 6px;
+                      overflow: hidden;
+                      font-size: 13.5px;
+                  }
+                  .rv-matching-legend-table th, .rv-matching-legend-table td {
+                      border: 1px solid var(--rv-border);
+                      padding: 7px 11px;
+                      text-align: left;
+                      vertical-align: top;
+                      line-height: 1.45;
+                  }
+                  .rv-matching-legend-table th {
+                      width: 38px;
+                      text-align: center;
+                      background: var(--rv-subtle);
+                      font-family: 'JetBrains Mono', monospace;
+                      font-weight: 800;
+                      color: #92400E;
                   }
                   .rv-word-bank {
                       background: var(--rv-bg);
@@ -13410,16 +13819,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   }
                   .rv-q-card-head {
                       display: flex;
-                      align-items: flex-start;
-                      justify-content: space-between;
+                      flex-direction: column;
+                      align-items: stretch;
                       gap: 10px;
                   }
                   .rv-q-stem {
-                      flex: 1;
+                      width: 100%;
                       font-size: 14.5px;
                       font-weight: 600;
                       line-height: 1.55;
                       color: var(--rv-ink);
+                  }
+                  .rv-q-meta-bar {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                      padding-top: 8px;
+                      border-top: 1px dashed var(--rv-border);
                   }
                   .rv-mcq-list {
                       list-style: none;
@@ -14235,20 +14653,61 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           {/* RIGHT PANE: CONTEXTUAL QUESTIONS & INLINE MICRO-ACTIONS */}
                           <div className="rv-pane-right">
                               {/* Retry Mode Banner */}
-                              {rvRetryMode && (
-                                  <div style={{ background: "#FFFBEB", border: "1px solid #F59E0B", borderRadius: 10, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                              {rvRetryMode ? (
+                                  <div style={{ background: "#FFFBEB", border: "1px solid #F59E0B", borderRadius: 10, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
                                       <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E" }}>
                                           Chế độ Làm lại câu sai — Điền hoặc chọn lại đáp án trực tiếp bên dưới.
                                       </div>
-                                      <button
-                                          type="button"
-                                          onClick={() => setRvRetryMode(false)}
-                                          style={{ border: "1px solid #D97706", background: "#FFFFFF", color: "#92400E", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-                                      >
-                                          Hoàn tất & đối chiếu
-                                      </button>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                          <button
+                                              type="button"
+                                              onClick={() => setRvRetryMode(false)}
+                                              style={{ border: "none", background: "#D97706", color: "#FFFFFF", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                                          >
+                                              Chấm điểm làm lại
+                                          </button>
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  setRvRetryMode(false);
+                                                  setRvRetryAnswers({});
+                                              }}
+                                              style={{ border: "1px solid #D4CBB8", background: "#FFFFFF", color: "#57534E", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                                          >
+                                              Hủy
+                                          </button>
+                                      </div>
                                   </div>
-                              )}
+                              ) : Object.keys(rvRetryAnswers).length > 0 ? (() => {
+                                  const retriedQs = rvAllQuestions.filter((rq: any) => {
+                                      const v = rvRetryAnswers[rq.id];
+                                      return v !== undefined && v !== null && String(v).trim() !== "" && !(Array.isArray(v) && v.length === 0);
+                                  });
+                                  const retriedRight = retriedQs.filter((rq: any) => rvFormatDisplayAnswers(rq, { [rq.id]: rvRetryAnswers[rq.id] }).correct).length;
+                                  return (
+                                      <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 10, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+                                          <div style={{ fontSize: 13, fontWeight: 700, color: "#15803D" }}>
+                                              Kết quả làm lại: <span className="rv-mono">{retriedRight}/{retriedQs.length}</span> câu vừa thử lại chính xác.
+                                          </div>
+                                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setRvRetryMode(true)}
+                                                  style={{ border: "1px solid #16A34A", background: "#FFFFFF", color: "#15803D", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                                              >
+                                                  Sửa lại tiếp
+                                              </button>
+                                              <button
+                                                  type="button"
+                                                  onClick={() => setRvRetryAnswers({})}
+                                                  style={{ border: "1px solid #D4CBB8", background: "#FFFFFF", color: "#57534E", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                                              >
+                                                  Xóa kết quả làm lại
+                                              </button>
+                                          </div>
+                                      </div>
+                                  );
+                              })() : null}
 
                               {(() => {
                                   let currentContext = "";
@@ -14256,6 +14715,57 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   rvActiveQuestions.forEach((q: any) => {
                                       if (rvIsGroupedReviewQuestion(q)) groupedNumbers.add(String(rvQuestionNumber(q)));
                                   });
+
+                                  // Build contiguous task groups across rvActiveQuestions so instructions, option banks, and legends
+                                  // are preserved for EVERY question group (Questions 14-18, Questions 27-32, Questions 33-36, etc.)
+                                  const rvContiguousGroups: Array<{
+                                      groupId: string;
+                                      instruction: string;
+                                      context: string;
+                                      options: any[];
+                                      rightTitle: string;
+                                      leftTitle: string;
+                                      questions: any[];
+                                  }> = [];
+                                  let curGrp: typeof rvContiguousGroups[0] | null = null;
+                                  rvActiveQuestions.forEach((q: any) => {
+                                      const ctx = String(q.groupContext || "");
+                                      const ins = String(q.instruction || "");
+                                      const qType = String(q.type || "");
+                                      const qSub = String(q.subType || "");
+                                      const prevQ = curGrp?.questions[curGrp.questions.length - 1];
+                                      const sameType = Boolean(prevQ && String(prevQ.type || "") === qType && String(prevQ.subType || "") === qSub);
+                                      const sameCtx = !curGrp || ctx === "" || curGrp.context === ctx;
+                                      const sameIns = !curGrp || ins === curGrp.instruction || (ins === "" && curGrp.instruction !== "");
+                                      if (!curGrp || !sameType || !sameCtx || !sameIns) {
+                                          curGrp = {
+                                              groupId: `grp-${q.id}`,
+                                              instruction: ins,
+                                              context: ctx,
+                                              options: Array.isArray(q.options) && q.options.length ? q.options : [],
+                                              rightTitle: String(q.rightTitle || "").trim(),
+                                              leftTitle: String(q.leftTitle || "").trim(),
+                                              questions: [q],
+                                          };
+                                          rvContiguousGroups.push(curGrp);
+                                      } else {
+                                          if (!curGrp.instruction && ins) curGrp.instruction = ins;
+                                          if (!curGrp.context && ctx) curGrp.context = ctx;
+                                          if ((!curGrp.options || !curGrp.options.length) && Array.isArray(q.options) && q.options.length) {
+                                              curGrp.options = q.options;
+                                          }
+                                          if (!curGrp.rightTitle && String(q.rightTitle || "").trim()) {
+                                              curGrp.rightTitle = String(q.rightTitle || "").trim();
+                                          }
+                                          if (!curGrp.leftTitle && String(q.leftTitle || "").trim()) {
+                                              curGrp.leftTitle = String(q.leftTitle || "").trim();
+                                          }
+                                          curGrp.questions.push(q);
+                                      }
+                                  });
+                                  const rvContiguousGroupByQId = new Map<string, typeof rvContiguousGroups[0]>();
+                                  rvContiguousGroups.forEach(g => g.questions.forEach(gq => rvContiguousGroupByQId.set(gq.id, g)));
+                                  const renderedGroupHeaderIds = new Set<string>();
 
                                   return rvActiveQuestions.map((q: any, i: number) => {
                                       if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
@@ -14276,25 +14786,31 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           );
                                           if (rvFilterWrongOnly && groupQuestions.every((gq: any) => rvQuestionStatus(gq) === "correct")) return null;
 
-                                          const byNumber = new Map<number, any>();
-                                          groupQuestions.forEach((gq: any) => byNumber.set(rvQuestionNumber(gq), gq));
                                           const isSummaryDrag = q.type === "DRAG_DROP" && q.subType === "SUMMARY_DRAG";
-                                          const wordBankOptions = isSummaryDrag
-                                              ? (groupQuestions.find((gq: any) => Array.isArray(gq.options) && gq.options.length)?.options || q.options || [])
-                                              : [];
+                                          const wordBankOptions = (groupQuestions.find((gq: any) => Array.isArray(gq.options) && gq.options.length)?.options || q.options || []);
+                                          const grpIns = groupQuestions.find((gq: any) => String(gq.instruction || "").trim())?.instruction || q.instruction || "";
+                                          const byNumber = new Map<number, any>();
+                                          groupQuestions.forEach((gq: any) => byNumber.set(rvQuestionNumber(gq), wordBankOptions.length ? { ...gq, options: wordBankOptions } : gq));
 
                                           return (
                                               <section key={`inline-comp-${q.id}`} className="rv-task-group-card">
-                                                  {q.instruction && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  {grpIns && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
                                                   )}
                                                   {isSummaryDrag && wordBankOptions.length > 0 && (
                                                       <div className="rv-word-bank">
                                                           <div className="rv-word-bank-title">Word Bank</div>
                                                           <div className="rv-word-bank-chips">
-                                                              {wordBankOptions.map((opt: any, oIdx: number) => (
-                                                                  <span key={oIdx} className="rv-word-chip">{cleanOptionAnswerText(opt) || String(opt)}</span>
-                                                              ))}
+                                                              {wordBankOptions.map((opt: any, oIdx: number) => {
+                                                                  const label = matchingOptionLabel(opt, oIdx);
+                                                                  const text = cleanOptionAnswerText(opt) || String(opt);
+                                                                  return (
+                                                                      <span key={oIdx} className="rv-word-chip">
+                                                                          <strong className="rv-mono" style={{ color: "#92400E", marginRight: 4 }}>{label}.</strong>
+                                                                          {text}
+                                                                      </span>
+                                                                  );
+                                                              })}
                                                           </div>
                                                       </div>
                                                   )}
@@ -14305,30 +14821,24 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
                                       // 2. FLOW-CHART COMPLETION / DRAG-AND-DROP
                                       if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
-                                          const flowKey = `${rvSectionOf(q)}::${String(q.instruction || "")}`;
-                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                              ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
-                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === flowKey
-                                          );
-                                          if (alreadyRendered) return null;
-                                          const flowQuestions = rvActiveQuestions.filter((candidate: any) =>
-                                              ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
-                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === flowKey
-                                          );
+                                          const cGrp = rvContiguousGroupByQId.get(q.id);
+                                          const flowQuestions = cGrp ? cGrp.questions : [q];
+                                          if (flowQuestions[0]?.id !== q.id) return null;
                                           if (rvFilterWrongOnly && flowQuestions.every((fq: any) => rvQuestionStatus(fq) === "correct")) return null;
 
+                                          const options = (flowQuestions.find((fq: any) => Array.isArray(fq.options) && fq.options.length)?.options || q.options || []);
                                           const byNumber = new Map<number, any>();
-                                          flowQuestions.forEach((fq: any) => byNumber.set(rvQuestionNumber(fq), fq));
+                                          flowQuestions.forEach((fq: any) => byNumber.set(rvQuestionNumber(fq), options.length ? { ...fq, options } : fq));
                                           const firstQ: any = flowQuestions[0] || q;
                                           const flowSteps: any[] = Array.isArray(firstQ.flowSteps) && firstQ.flowSteps.length > 0
                                               ? firstQ.flowSteps
                                               : flowQuestions.map((fq: any) => ({ html: fq.text, questionNumber: rvQuestionNumber(fq), question: fq }));
-                                          const options = (flowQuestions.find((fq: any) => Array.isArray(fq.options) && fq.options.length)?.options || q.options || []);
+                                          const grpIns = cGrp?.instruction || q.instruction || "";
 
                                           return (
                                               <section key={`flow-${q.id}`} className="rv-task-group-card">
-                                                  {q.instruction && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  {grpIns && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
                                                   )}
                                                   {options.length > 0 && (
                                                       <div className="rv-word-bank">
@@ -14345,7 +14855,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                   )}
                                                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                                                       {flowSteps.map((step: any, sIdx: number) => {
-                                                          const stepQ = step.question || (step.questionNumber != null ? byNumber.get(Number(step.questionNumber)) : null);
+                                                          const rawStepQ = step.question || (step.questionNumber != null ? byNumber.get(Number(step.questionNumber)) : null);
+                                                          const stepQ = rawStepQ && options.length ? { ...rawStepQ, options } : rawStepQ;
                                                           const stepHtml = String(step.html || stepQ?.text || "");
                                                           return (
                                                               <React.Fragment key={sIdx}>
@@ -14358,7 +14869,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                                                       <span dangerouslySetInnerHTML={{ __html: formatContent(stepHtml) }} />
                                                                                       {" "}
                                                                                       {rvRenderInlineSlotBox(stepQ, true)}
-                                                                                      {rvRenderInlineDrawer(stepQ, rvEffectiveAnswers?.[stepQ.id], stepQ)}
+                                                                                      {rvRenderInlineDrawer(stepQ, rvSubmittedAnswers?.[stepQ.id], stepQ)}
                                                                                   </div>
                                                                               )
                                                                               : <div dangerouslySetInnerHTML={{ __html: formatContent(stepHtml) }} />
@@ -14379,16 +14890,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
                                       // 3. DRAG_DROP_HEADING (Matching Headings)
                                       if (q.type === "DRAG_DROP_HEADING") {
-                                          const headingKey = `${rvSectionOf(q)}::${String(q.instruction || "")}`;
-                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                              candidate.type === "DRAG_DROP_HEADING"
-                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === headingKey
-                                          );
-                                          if (alreadyRendered) return null;
-                                          const headingQuestions = rvActiveQuestions.filter((candidate: any) =>
-                                              candidate.type === "DRAG_DROP_HEADING"
-                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === headingKey
-                                          );
+                                          const cGrp = rvContiguousGroupByQId.get(q.id);
+                                          const headingQuestions = cGrp ? cGrp.questions : [q];
+                                          if (headingQuestions[0]?.id !== q.id) return null;
                                           if (rvFilterWrongOnly && headingQuestions.every((hq: any) => rvQuestionStatus(hq) === "correct")) return null;
 
                                           const headingCatalog = getHeadingCatalog([
@@ -14399,11 +14903,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                               ...rvAllQuestions,
                                           ]);
                                           const headingOptions = Array.from(headingCatalog.values());
+                                          const grpIns = cGrp?.instruction || q.instruction || "";
 
                                           return (
                                               <section key={`heading-${q.id}`} className="rv-task-group-card">
-                                                  {q.instruction && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  {grpIns && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
                                                   )}
                                                   {headingOptions.length > 0 && (
                                                       <div className="rv-word-bank">
@@ -14428,7 +14933,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                                       <strong style={{ fontSize: 13.5 }}>Paragraph {paraLabel}</strong>
                                                                       {rvRenderInlineSlotBox({ ...hq, options: headingOptions }, true)}
                                                                   </div>
-                                                                  {rvRenderInlineDrawer(hq, rvEffectiveAnswers?.[hq.id], { ...hq, options: headingOptions })}
+                                                                  {rvRenderInlineDrawer(hq, rvSubmittedAnswers?.[hq.id], { ...hq, options: headingOptions })}
                                                               </div>
                                                           );
                                                       })}
@@ -14453,11 +14958,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                               && rvSectionOf(candidate) === rvActiveIdx
                                           );
                                           if (rvFilterWrongOnly && visualQuestions.every((vq: any) => rvQuestionStatus(vq) === "correct")) return null;
+                                          const grpOpts = (visualQuestions.find((vq: any) => Array.isArray(vq.options) && vq.options.length)?.options || q.options || []);
+                                          const grpIns = visualQuestions.find((vq: any) => String(vq.instruction || "").trim())?.instruction || q.instruction || "";
 
                                           return (
                                               <section key={`visual-${q.id}`} className="rv-task-group-card">
-                                                  {q.instruction && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  {grpIns && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
                                                   )}
                                                   {mediaUrl && (
                                                       <div style={{ marginBottom: 14, border: "1px solid #E6DFD3", borderRadius: 8, overflow: "hidden", background: "#FFFFFF", padding: 10 }}>
@@ -14470,11 +14977,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                           />
                                                       </div>
                                                   )}
-                                                  {Array.isArray(q.options) && q.options.length > 0 && (
+                                                  {grpOpts.length > 0 && (
                                                       <div className="rv-word-bank">
                                                           <div className="rv-word-bank-title">Options</div>
                                                           <div className="rv-word-bank-chips">
-                                                              {q.options.map((opt: any, oIdx: number) => (
+                                                              {grpOpts.map((opt: any, oIdx: number) => (
                                                                   <span key={oIdx} className="rv-word-chip">{String.fromCharCode(65 + oIdx)}. {cleanOptionAnswerText(opt) || String(opt)}</span>
                                                               ))}
                                                           </div>
@@ -14484,13 +14991,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                       {visualQuestions.map((vq: any) => {
                                                           if (rvFilterWrongOnly && rvQuestionStatus(vq) === "correct") return null;
                                                           const bodyHtml = rvQuestionBodyHtml(vq.text);
+                                                          const vqWithOpts = grpOpts.length ? { ...vq, options: grpOpts } : vq;
                                                           return (
                                                               <div key={vq.id} style={{ padding: "8px 12px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
                                                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                                                                       <span style={{ fontSize: 14, fontWeight: 600 }} dangerouslySetInnerHTML={{ __html: bodyHtml || `Question ${rvQuestionNumber(vq)}` }} />
-                                                                      {rvRenderInlineSlotBox(vq, true)}
+                                                                      {rvRenderInlineSlotBox(vqWithOpts, true)}
                                                                   </div>
-                                                                  {rvRenderInlineDrawer(vq, rvEffectiveAnswers?.[vq.id], vq)}
+                                                                  {rvRenderInlineDrawer(vqWithOpts, rvSubmittedAnswers?.[vq.id], vqWithOpts)}
                                                               </div>
                                                           );
                                                       })}
@@ -14499,7 +15007,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           );
                                       }
 
-                                      // 5. STANDARD & MATCHING / MCQ / TFNG / SHORT ANSWER CARDS
+                                      // 5. STANDARD & MATCHING / SENTENCE-ENDING / COLUMN-DRAG / MCQ / TFNG / SHORT ANSWER CARDS
                                       const rvGroup = rvGroupByQuestionId.get(q.id);
                                       if (!rvIsGroupedReviewQuestion(q) && groupedNumbers.has(String(rvQuestionNumber(q)))) return null;
                                       if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
@@ -14507,43 +15015,118 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       const qStatus = rvQuestionStatus(q);
                                       if (rvFilterWrongOnly && qStatus === "correct") return null;
 
+                                      const cGrp = rvContiguousGroupByQId.get(q.id);
+                                      const groupOptions = (cGrp?.options && cGrp.options.length)
+                                          ? cGrp.options
+                                          : (Array.isArray(q.options) ? q.options : []);
+                                      const qWithOpts = groupOptions.length && (!Array.isArray(q.options) || !q.options.length)
+                                          ? { ...q, options: groupOptions }
+                                          : q;
+
+                                      const shouldRenderGroupHeader = Boolean(cGrp && !renderedGroupHeaderIds.has(cGrp.groupId));
+                                      if (cGrp && shouldRenderGroupHeader) {
+                                          renderedGroupHeaderIds.add(cGrp.groupId);
+                                      }
+
                                       const qNum = rvQuestionNumber(q);
                                       const isFlashed = rvFlashQuestionNum === qNum;
                                       const showContext = Boolean(q.groupContext && q.groupContext !== currentContext && !/\[\d+\]/.test(String(q.groupContext)));
                                       if (showContext) currentContext = String(q.groupContext);
 
-                                      const rvOpts = Array.isArray(q.options) ? q.options : [];
                                       const isMcq = q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE";
+                                      const isLegendGroup = Boolean(
+                                          groupOptions.length > 0 && (
+                                              (q.type === "MATCHING" && !isMatchingInfoOptionSet(groupOptions))
+                                              || (q.type === "DRAG_DROP" && ["SENTENCE_ENDING_DRAG", "COLUMN_DRAG"].includes(String(q.subType || "").toUpperCase()))
+                                          )
+                                      );
+
+                                      const grpFirstNum = cGrp ? rvQuestionNumber(cGrp.questions[0]) : qNum;
+                                      const grpLastQ = cGrp ? cGrp.questions[cGrp.questions.length - 1] : q;
+                                      const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
+                                      const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
+                                      const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
+                                      const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+
                                       const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
-                                      const studentAns = multiOutcome ? multiOutcome.selected : rvEffectiveAnswers?.[q.id];
+                                      const studentAns = multiOutcome ? multiOutcome.selected : rvSubmittedAnswers?.[q.id];
                                       const questionBodyHtml = rvQuestionBodyHtml(q.text);
+                                      const legendTitle = cGrp?.rightTitle
+                                          || String(q.rightTitle || "").trim()
+                                          || (String(q.subType || "").toUpperCase() === "SENTENCE_ENDING_DRAG"
+                                              ? "List of Sentence Endings"
+                                              : "List of Options / Legend");
 
                                       return (
                                           <React.Fragment key={q.id}>
-                                              {showContext && (
-                                                  <div className="rv-task-group-card">
-                                                      <div dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
+                                              {shouldRenderGroupHeader && (grpInstructionHtml || !hasQuestionsHeadingInIns || isLegendGroup) && (
+                                                  <div className="rv-task-group-card" style={{ marginBottom: 12, padding: "14px 18px" }}>
+                                                      {!hasQuestionsHeadingInIns && (
+                                                          <div style={{ fontWeight: 800, fontSize: 14.5, color: "#1C1917", marginBottom: grpInstructionHtml ? 6 : (isLegendGroup ? 10 : 0) }}>
+                                                              {grpRangeTitle}
+                                                          </div>
+                                                      )}
+                                                      {grpInstructionHtml && (
+                                                          <div
+                                                              className="rv-task-instruction"
+                                                              style={{
+                                                                  marginBottom: isLegendGroup ? 12 : 0,
+                                                                  paddingBottom: isLegendGroup ? 12 : 0,
+                                                                  borderBottom: isLegendGroup ? "1px solid #E6DFD3" : "none",
+                                                              }}
+                                                              dangerouslySetInnerHTML={{ __html: formatContent(grpInstructionHtml) }}
+                                                          />
+                                                      )}
+                                                      {isLegendGroup && (
+                                                          <div className="rv-matching-legend">
+                                                              <div className="rv-matching-legend-title" dangerouslySetInnerHTML={{ __html: formatContent(legendTitle) }} />
+                                                              <table className="rv-matching-legend-table">
+                                                                  <tbody>
+                                                                      {groupOptions.map((opt: any, oIdx: number) => {
+                                                                          const letter = matchingOptionLabel(opt, oIdx);
+                                                                          const text = cleanOptionAnswerText(opt) || String(opt);
+                                                                          return (
+                                                                              <tr key={oIdx}>
+                                                                                  <th>{letter}</th>
+                                                                                  <td dangerouslySetInnerHTML={{ __html: formatContent(text) }} />
+                                                                              </tr>
+                                                                          );
+                                                                      })}
+                                                                  </tbody>
+                                                              </table>
+                                                          </div>
+                                                      )}
                                                   </div>
                                               )}
+
+                                              {showContext && (
+                                                  <div className="rv-task-group-card">
+                                                      <div className="rv-rich-context-block" dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
+                                                  </div>
+                                              )}
+
                                               <div id={`q-row-${qNum}`} className={`rv-q-card ${isFlashed ? "rv-flash-ring" : ""}`}>
-                                                  {q.instruction && i === 0 && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
-                                                  )}
                                                   <div className="rv-q-card-head">
                                                       <div className="rv-q-stem">
-                                                          <span className="rv-qnum-badge" style={{ marginRight: 8 }}>{rvGroup && rvGroup.questions.length > 1 ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}` : qNum}</span>
+                                                          <span className="rv-qnum-badge" style={{ marginRight: 8 }}>
+                                                              {rvGroup && rvGroup.questions.length > 1
+                                                                  ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}`
+                                                                  : qNum}
+                                                          </span>
                                                           {questionBodyHtml ? (
                                                               <span dangerouslySetInnerHTML={{ __html: questionBodyHtml }} />
                                                           ) : (
                                                               <span>Question {qNum}</span>
                                                           )}
                                                       </div>
-                                                      {rvRenderInlineSlotBox(q, false)}
+                                                      <div className="rv-q-meta-bar">
+                                                          {rvRenderInlineSlotBox(qWithOpts, false, false)}
+                                                      </div>
                                                   </div>
 
-                                                  {isMcq && rvOpts.length > 0 && (
+                                                  {isMcq && groupOptions.length > 0 && (
                                                       <ul className="rv-mcq-list">
-                                                          {rvOpts.map((opt: any, oIdx: number) => {
+                                                          {groupOptions.map((opt: any, oIdx: number) => {
                                                               const optLetter = String.fromCharCode(65 + oIdx);
                                                               const cleanText = cleanOptionAnswerText(opt) || String(opt);
                                                               const isCorrectOpt = q.type === "CHOICE"
@@ -14552,31 +15135,44 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                                               const isChosenOpt = q.type === "CHOICE"
                                                                   ? (studentAns !== undefined && studentAns !== "" && (Number(studentAns) === oIdx || String(studentAns).trim().toUpperCase() === optLetter))
                                                                   : (Array.isArray(studentAns) && studentAns.map(Number).includes(oIdx));
+                                                              const retryChoice = rvRetryAnswers[q.id];
+                                                              const isRetrySelected = q.type === "CHOICE"
+                                                                  ? (retryChoice !== undefined && retryChoice !== "" && Number(retryChoice) === oIdx)
+                                                                  : (Array.isArray(retryChoice) && retryChoice.map(Number).includes(oIdx));
 
                                                               return (
                                                                   <li
                                                                       key={oIdx}
-                                                                      className={`rv-mcq-opt ${isCorrectOpt ? "is-correct" : isChosenOpt ? "is-wrong" : ""}`}
+                                                                      className={`rv-mcq-opt ${!rvRetryMode && isCorrectOpt ? "is-correct" : !rvRetryMode && isChosenOpt ? "is-wrong" : ""}`}
                                                                       onClick={() => {
-                                                                          if (rvRetryMode && q.type === "CHOICE") {
+                                                                          if (!rvRetryMode || qStatus === "correct") return;
+                                                                          if (q.type === "CHOICE") {
                                                                               setRvRetryAnswers(prev => ({ ...prev, [q.id]: oIdx }));
+                                                                          } else {
+                                                                              const curArr = Array.isArray(rvRetryAnswers[q.id]) ? rvRetryAnswers[q.id].map(Number) : [];
+                                                                              const nextArr = curArr.includes(oIdx) ? curArr.filter((x: number) => x !== oIdx) : [...curArr, oIdx];
+                                                                              setRvRetryAnswers(prev => ({ ...prev, [q.id]: nextArr }));
                                                                           }
                                                                       }}
-                                                                      style={{ cursor: rvRetryMode ? "pointer" : "default" }}
+                                                                      style={{
+                                                                          cursor: rvRetryMode && qStatus !== "correct" ? "pointer" : "default",
+                                                                          ...(rvRetryMode && isRetrySelected ? { borderColor: "#D97706", background: "#FEF3C7", fontWeight: 700 } : {}),
+                                                                      }}
                                                                   >
                                                                       <div>
                                                                           <strong className="rv-mono" style={{ marginRight: 8 }}>{optLetter}.</strong>
-                                                                          <span style={{ textDecoration: isChosenOpt && !isCorrectOpt ? "line-through" : "none" }} dangerouslySetInnerHTML={{ __html: formatContent(cleanText) }} />
+                                                                          <span style={{ textDecoration: !rvRetryMode && isChosenOpt && !isCorrectOpt ? "line-through" : "none" }} dangerouslySetInnerHTML={{ __html: formatContent(cleanText) }} />
                                                                       </div>
-                                                                      {isCorrectOpt && <span className="rv-mcq-tag">(Đáp án đúng)</span>}
-                                                                      {isChosenOpt && !isCorrectOpt && <span className="rv-mcq-tag">(Bạn chọn - Sai)</span>}
+                                                                      {!rvRetryMode && isCorrectOpt && <span className="rv-mcq-tag">(Đáp án đúng)</span>}
+                                                                      {!rvRetryMode && isChosenOpt && !isCorrectOpt && <span className="rv-mcq-tag">(Bạn chọn - Sai)</span>}
+                                                                      {rvRetryMode && isRetrySelected && <span className="rv-mcq-tag" style={{ color: "#92400E" }}>(Đang chọn lại)</span>}
                                                                   </li>
                                                               );
                                                           })}
                                                       </ul>
                                                   )}
 
-                                                  {rvRenderInlineDrawer(q, studentAns, multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q)}
+                                                  {rvRenderInlineDrawer(qWithOpts, studentAns, multiOutcome ? { ...qWithOpts, correctAnswer: multiOutcome.correct } : qWithOpts)}
                                               </div>
                                           </React.Fragment>
                                       );
@@ -14669,7 +15265,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       key={mIdx}
                                       style={{
                                           alignSelf: isUser ? "flex-end" : "flex-start",
-                                          maxWidth: "88%",
+                                          maxWidth: "90%",
                                           background: isUser ? "#1C1917" : "#F4EFE6",
                                           color: isUser ? "#FFFFFF" : "#1C1917",
                                           border: isUser ? "none" : "1px solid #E6DFD3",
@@ -14677,11 +15273,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           padding: "10px 13px",
                                           fontSize: 13.5,
                                           lineHeight: 1.55,
-                                          whiteSpace: "pre-wrap",
                                           wordBreak: "break-word",
                                       }}
                                   >
-                                      {msg.text}
+                                      {isUser ? msg.text : rvRenderRichText(msg.text)}
                                   </div>
                               );
                           })}

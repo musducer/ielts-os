@@ -147,8 +147,8 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 - **Thanh X-Ray & Radar lặp từ**: Theo dõi số từ (badge đạt/thiếu từ), số đoạn, số câu, mật độ từ trung bình, và radar tự động phát hiện các từ lặp lại từ 3 lần trở lên.
 - **AI Co-Pilot chấm nháp Writing**: Tích hợp `/api/ai_feedback` sinh bảng điểm 4 tiêu chí chuẩn IELTS 9-band, 3 trọng tâm khắc phục (bottlenecks), các điểm sáng, 6-10 chú thích chuẩn vị trí văn bản, bản sửa sạch và bài mẫu Band 8.5 cho giáo viên kiểm duyệt và áp dụng trong 1 click.
 - **Xuất Dossier PDF chuẩn học thuật**: Xuất file PDF/in ấn chuyên nghiệp gồm bảng điểm, ma trận tiêu chí, kế hoạch hành động, bài viết đánh số chú thích số mũ và bảng đối chiếu chi tiết sửa lỗi.
-- Review theo câu Reading/Listening, nghe lại audio và nhảy tới timestamp liên quan.
-- AI explain, AI feedback, transcription và trích xuất từ vựng.
+- **Academic Review Workbench (Reading, Listening & Integrated)**: Giao diện sửa bài chuyên sâu với tab `Tổng quan` (Error DNA, thống kê theo dạng bài & Part/Passage) và các tab chi tiết 2 cột. Bảo toàn đầy đủ bảng biểu HTML (`<table>`), tiêu đề/hướng dẫn nhóm câu (`Questions X–Y` & instructions), bảng chú thích `List of Options / Legend` cho Matching Features / Sentence Endings / Column Drag, trình hiển thị giải thích hỗ trợ Markdown (`**bold**`, `*italic*`, `"clickable quotes"`, `[MM:SS]`), chế độ `Làm lại câu sai` tách biệt trạng thái gốc và trạng thái làm lại, cùng ngăn kéo `Trợ lý AI` ngữ cảnh toàn bài.
+- AI explain, AI feedback, AI critique từng câu Writing, transcription và trích xuất từ vựng.
 - Chuỗi provider AI có xoay key và fallback giữa Groq, Cerebras, Gemini; OpenAI có thể được ưu tiên cho vocabulary khi được cấu hình.
 - Phân loại từ vựng thành single word, phrasal verb, collocation, idiom và fixed expression.
 

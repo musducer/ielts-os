@@ -4277,12 +4277,48 @@ export default function IeltsSupremeOS() {
         ? resolved.secs.flatMap((s: any) => s?.questions || [])
         : (Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : []);
       const userAnswers = rqResult?.answers || {};
+      const formatCopilotAns = (item: any, val: any): string => {
+        if (val === undefined || val === null || val === "" || (Array.isArray(val) && val.length === 0)) return "(bỏ trống)";
+        const strip = (s: any) => String(s ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const cleanOpt = (raw: any) => strip(raw).replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
+        if (item?.type === "CHOICE") {
+          const n = Number(val);
+          if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+            return `${String.fromCharCode(65 + n)}. ${cleanOpt(item.options[n])}`;
+          }
+        }
+        if (item?.type === "MATCHING") {
+          const resolvedTxt = strip(resolveMatchingAnswerText(item, val));
+          const rawTrim = String(val).trim();
+          if (/^[A-Za-z]$/.test(rawTrim)) {
+            const letter = rawTrim.toUpperCase();
+            return resolvedTxt && resolvedTxt.toUpperCase() !== letter ? `${letter}. ${cleanOpt(resolvedTxt)}` : letter;
+          }
+          const n = Number(rawTrim);
+          if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+            const letter = String.fromCharCode(65 + n);
+            return `${letter}. ${cleanOpt(item.options[n])}`;
+          }
+          return resolvedTxt || rawTrim;
+        }
+        if (item?.type === "CHOICE_MULTIPLE") {
+          const arr = Array.isArray(val) ? val : String(val).split(/[,\s/]+/).filter(Boolean);
+          return arr.map((v: any) => {
+            const n = Number(v);
+            if (!Number.isNaN(n) && Array.isArray(item.options) && item.options[n] !== undefined) {
+              return `${String.fromCharCode(65 + n)}. ${cleanOpt(item.options[n])}`;
+            }
+            return strip(v);
+          }).join(" / ");
+        }
+        return strip(val);
+      };
       const questionsSummary = allQs.map((item: any, idx: number) => {
         const ctx = resolveReviewQuestionContext(item, rqQuiz, idx);
         const given = userAnswers[item.id];
-        const givenStr = given === undefined || given === null || given === "" ? "(bỏ trống)" : String(given);
-        const corrStr = String(item.correctAnswer ?? item.correct ?? "");
-        return `Q${idx + 1}: ${ctx.effectiveQuestionText} | Student='${givenStr}' | Correct='${corrStr}'`;
+        const givenStr = formatCopilotAns(item, given);
+        const corrStr = formatCopilotAns(item, item.correctAnswer ?? item.correct ?? "");
+        return `Câu ${idx + 1}: ${ctx.effectiveQuestionText} | Học viên chọn: ${givenStr} | Đáp án đúng: ${corrStr}`;
       }).join("\n");
 
       const API_BASE = getApiBase();
