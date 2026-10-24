@@ -1,4 +1,14 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-21)
+# IELTS OS — Session Handoff (cập nhật 2026-10-24)
+
+## Sửa Lỗi Hiển Thị Chuỗi Thô `tx(...)` Trong Banner Gacha Mystery Box (Student Portal) — 2026-10-24
+
+- **Vấn đề & Nguyên nhân gốc rễ**:
+  - Trong `src/components_split/STUDENT_PORTAL.txt` (khối banner Lucky Gacha Spin), các lời gọi hàm đa ngôn ngữ `tx(...)` bị đặt trực tiếp như chuỗi văn bản tĩnh trong JSX mà thiếu cặp ngoặc nhọn `{...}` (ví dụ: `tx('Quay nhận ngẫu nhiên...', 'Roll for...')`, `tx('Chi phí', 'Cost')`, và `tx('Quay ngay', 'Roll Now')`).
+  - Do thuộc tính `textTransform: 'uppercase'`, trình duyệt đã render nguyên văn chuỗi mã nguồn `TX('CHI PHÍ', 'COST')`, `tx('Quay ngay', 'Roll Now')` và nội dung mô tả lên giao diện.
+
+- **Giải pháp**:
+  - Bao bọc toàn bộ các hàm `tx(...)` thành biểu thức JSX `{tx(...)}` trong `src/components_split/STUDENT_PORTAL.txt`.
+  - Chạy `python compile_app.py` ráp lại `src/App.tsx`, kiểm tra `tsc -b` và `vite build` 100% không lỗi.
 
 ## Sửa Lỗi Tê Liệt Tính Năng "AI Critique" Từng Câu Trong Bàn Chấm Writing (`Unable to generate AI critique: AI critique request failed:`) — 2026-10-21
 

@@ -19337,12 +19337,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {t('gacha_spin')}
               </h3>
               <p style={{ margin: '6px 0 0', color: C.sub, fontSize: 13, lineHeight: 1.5 }}>
-                tx('Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.', 'Roll for random themes, golden avatar frames, living companions, or gifts.')
+                {tx('Quay nhận ngẫu nhiên giao diện, khung avatar hoàng kim, linh thú sống động hoặc quà hiện vật.', 'Roll for random themes, golden avatar frames, living companions, or gifts.')}
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>tx('Chi phí', 'Cost')</div>
+                <div style={{ fontSize: 10.5, fontWeight: 800, color: C.sub, textTransform: 'uppercase' }}>{tx('Chi phí', 'Cost')}</div>
                 <div style={{ fontSize: 17, fontWeight: 900, color: C.warn, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                   <Ico name="coins" size={16} color={C.warn} />
                   <span>{gachaSpinCost.toLocaleString('en-US')}</span>
@@ -19368,7 +19368,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 }}
               >
                 <Ico name="sparkles" size={15} />
-                <span>tx('Quay ngay', 'Roll Now')</span>
+                <span>{tx('Quay ngay', 'Roll Now')}</span>
               </button>
             </div>
           </div>
