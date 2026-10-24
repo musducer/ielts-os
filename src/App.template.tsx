@@ -4108,7 +4108,12 @@ export default function IeltsSupremeOS() {
   const [scratchpadText, setScratchpadText] = useState("");
   const [showScratchpad, setShowScratchpad] = useState(false);
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
-  const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
+  const [reviewSectionIdx, setReviewSectionIdx] = useState(-1);
+  const [rvFilterWrongOnly, setRvFilterWrongOnly] = useState(false);
+  const [rvRetryMode, setRvRetryMode] = useState(false);
+  const [rvRetryAnswers, setRvRetryAnswers] = useState<Record<string, any>>({});
+  const [rvOpenDrawers, setRvOpenDrawers] = useState<Record<string, "teacher" | "ai" | null>>({});
+  const [rvFlashQuestionNum, setRvFlashQuestionNum] = useState<number | null>(null);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -4174,6 +4179,80 @@ export default function IeltsSupremeOS() {
     }
   };
 
+  const resolveReviewQuestionContext = (q: any, quiz: any, activeSectionIdx: number) => {
+    const stripTagsLocal = (s: any) => String(s ?? "")
+      .replace(/<(?:br)\s*\/?\s*>/gi, "\n")
+      .replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/[^\S\r\n]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+
+    const fullQuiz = (quizzes || []).find((x: any) => x && x.id === quiz?.id) || quiz;
+    const secs: any[] = Array.isArray(fullQuiz?.sections) ? fullQuiz.sections : (Array.isArray(quiz?.sections) ? quiz.sections : []);
+
+    // 1. Reliable section index resolution
+    let secIdx = typeof q?.passageIndex === "number" ? q.passageIndex : -1;
+    if (secs.length > 0 && (secIdx < 0 || secIdx >= secs.length) && q) {
+      secIdx = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && String(qq.id) === String(q.id)));
+    }
+    const qNumMatch = String(q?.text || q?.id || "").match(/(\d+)/);
+    const qNum = q?.questionNumber || (qNumMatch ? Number(qNumMatch[1]) : 0);
+    if (secs.length > 0 && (secIdx < 0 || secIdx >= secs.length) && qNum > 0) {
+      const byQNum = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => {
+        const m = String(qq?.text || qq?.id || "").match(/(\d+)/);
+        return (qq?.questionNumber || (m ? Number(m[1]) : -1)) === qNum;
+      }));
+      if (byQNum >= 0) secIdx = byQNum;
+      else if (secs.length >= 4) secIdx = Math.min(secs.length - 1, Math.floor((qNum - 1) / 10));
+    }
+    if (secIdx < 0 || (secs.length > 0 && secIdx >= secs.length)) {
+      secIdx = Math.max(0, activeSectionIdx);
+    }
+
+    // 2. 4-tier source text fallback
+    const tier1 = secs[secIdx]?.transcript || secs[secIdx]?.passage || secs[secIdx]?.passageHtml || "";
+    const passagesArr: any[] = Array.isArray((fullQuiz as any)?.passages) ? (fullQuiz as any).passages : (Array.isArray((fullQuiz as any)?.readingPassages) ? (fullQuiz as any).readingPassages : []);
+    const tier2 = typeof passagesArr[secIdx] === "string"
+      ? passagesArr[secIdx]
+      : (passagesArr[secIdx]?.transcript || passagesArr[secIdx]?.content || passagesArr[secIdx]?.passage || "");
+    const tier3 = fullQuiz?.transcript || fullQuiz?.passage || (fullQuiz as any)?.passageHtml || secs.map((s: any) => s?.transcript || s?.passage || s?.passageHtml || "").filter(Boolean).join("\n\n");
+    const tier4 = typeof document !== "undefined"
+      ? (document.getElementById("ielts-passage-content")?.innerText || (document.querySelector(".rv-transcript-panel") as HTMLElement)?.innerText || "")
+      : "";
+
+    const rawSourceHtml = tier1 || tier2 || tier3 || tier4 || "";
+    const resolvedSourceText = stripTagsLocal(rawSourceHtml) || stripTagsLocal(tier3) || stripTagsLocal(tier4);
+
+    // 3. Blank context extraction for [BLANK] questions where q.text is just "1." or "1"
+    const rawQText = stripTagsLocal(q?.text || q?.question || "");
+    let effectiveQuestionText = rawQText;
+    if (q && (/^\d+\.?$/.test(rawQText.trim()) || rawQText.trim().length <= 4) && q.groupContext) {
+      const groupLines = stripTagsLocal(q.groupContext).split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
+      const targetNum = qNum || Number(rawQText.replace(/\D/g, "")) || 1;
+      const lineIdx = groupLines.findIndex((l: string) =>
+        l.includes(`[${targetNum}]`) ||
+        new RegExp(`\\b${targetNum}\\s*[\\.\\)]\\s*_+|\\[\\s*${targetNum}\\s*\\]`).test(l)
+      );
+      if (lineIdx >= 0) {
+        const snippet = groupLines.slice(Math.max(0, lineIdx - 1), Math.min(groupLines.length, lineIdx + 2)).join(" / ");
+        effectiveQuestionText = `Blank [${targetNum}] in context: ${snippet}`;
+      } else if (groupLines.length > 0) {
+        effectiveQuestionText = `Blank [${targetNum}] in context: ${groupLines.slice(0, 6).join(" / ")}`;
+      }
+    }
+
+    return {
+      secIdx,
+      rawSourceHtml,
+      resolvedSourceText,
+      effectiveQuestionText,
+      fullQuiz,
+      secs
+    };
+  };
+
   const handleSendCopilotMessage = async (customPrompt?: string) => {
     const textToSend = String(customPrompt || copilotInput || "").trim();
     if (!textToSend || copilotLoading) return;
@@ -4187,69 +4266,37 @@ export default function IeltsSupremeOS() {
       const rqQuiz = reviewQuiz?.quiz as any;
       const rqResult = reviewQuiz?.result as any;
       const isListening = Boolean(rqQuiz && (String(rqQuiz.type || "").toUpperCase().includes("LISTEN") || rqQuiz.skill === "Listening"));
-      const q = copilotActiveQ;
+      const resolved = resolveReviewQuestionContext(copilotActiveQ, rqQuiz, reviewSectionIdx);
+      const allSecText = (resolved.secs || []).map((s: any, idx: number) => {
+        const txt = String(s?.transcript || s?.passage || s?.passageHtml || "").replace(/<[^>]+>/g, " ").trim();
+        return txt ? `[Part/Passage ${idx + 1}: ${s?.title || ""}]\n${txt}` : "";
+      }).filter(Boolean).join("\n\n");
+      const sourceText = allSecText || resolved.resolvedSourceText || "";
 
-      // Extract full passage or transcript
-      let passageText = "";
-      if (q && rqQuiz?.readingPassages && typeof q.passageIndex === "number") {
-        passageText = rqQuiz.readingPassages[q.passageIndex] || "";
-      } else if (Array.isArray(rqQuiz?.readingPassages) && rqQuiz.readingPassages.length) {
-        passageText = rqQuiz.readingPassages.join("\n\n--- NEXT PASSAGE ---\n\n");
-      } else {
-        passageText = rqQuiz?.readingPassage || "";
-      }
-      const transcriptText = rqQuiz?.transcript || rqQuiz?.audioTranscript || rqQuiz?.listeningTranscript || "";
-      const passageOrTranscript = isListening ? transcriptText : (passageText || transcriptText);
-
-      // Student mistakes and answers breakdown for omniscient context
-      const allQs: any[] = Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : [];
+      const allQs: any[] = (resolved.secs && resolved.secs.length > 0)
+        ? resolved.secs.flatMap((s: any) => s?.questions || [])
+        : (Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : []);
       const userAnswers = rqResult?.answers || {};
-      const wrongList = allQs.filter((item: any) => {
+      const questionsSummary = allQs.map((item: any, idx: number) => {
+        const ctx = resolveReviewQuestionContext(item, rqQuiz, idx);
         const given = userAnswers[item.id];
-        const accepted = String(item.correctAnswer || item.correct || "").split("/").map((s: string) => s.trim().toLowerCase());
-        return !given || !accepted.includes(String(given).trim().toLowerCase());
-      }).slice(0, 15).map((item: any, idx: number) => ({
-        number: item.questionNumber || (idx + 1),
-        type: item.type || item.questionType || "",
-        text: (item.question || item.title || "").slice(0, 90),
-        studentAnswer: userAnswers[item.id] || "(blank)",
-        correctAnswer: item.correctAnswer || item.correct || ""
-      }));
+        const givenStr = given === undefined || given === null || given === "" ? "(bỏ trống)" : String(given);
+        const corrStr = String(item.correctAnswer ?? item.correct ?? "");
+        return `Q${idx + 1}: ${ctx.effectiveQuestionText} | Student='${givenStr}' | Correct='${corrStr}'`;
+      }).join("\n");
 
-      const payloadQuestion = q ? {
-        id: q.id,
-        questionNumber: q.questionNumber || "",
-        type: q.type || "",
-        text: q.question || q.title || "",
-        options: q.options || [],
-        correctAnswer: q.correctAnswer || q.correct || "",
-        studentAnswer: userAnswers[q.id] || "(blank)",
-        manualExplanation: q.manualExplanation || "",
-        passage: passageText,
-        transcript: transcriptText,
-        skill: isListening ? "Listening" : "Reading"
-      } : null;
-
-      const res = await fetch("/api/review_copilot", {
+      const API_BASE = getApiBase();
+      const res = await fetch(`${API_BASE}/api/ai_review_chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
+          message: textToSend,
+          history: newMessages.slice(0, -1).map(m => ({ role: m.role === "user" ? "user" : "assistant", text: m.text })),
           quizTitle: rqQuiz?.title || "IELTS Practice Test",
           quizType: isListening ? "Listening" : "Reading",
-          passageOrTranscript,
-          activeQuestion: payloadQuestion,
-          examOverview: {
-            totalQuestions: allQs.length,
-            wrongCount: wrongList.length,
-            wrongQuestions: wrongList
-          },
-          messages: newMessages.map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
-          // Backward compatibility
-          question: payloadQuestion,
-          studentAnswer: q ? userAnswers[q.id] : undefined,
-          chatHistory: newMessages.slice(0, -1),
-          userMessage: textToSend
+          sourceText,
+          questionsSummary
         })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4258,7 +4305,7 @@ export default function IeltsSupremeOS() {
         setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
       }
     } catch (err: any) {
-      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối gia sư AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Copilot. Please try again.") }]);
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again.") }]);
     } finally {
       setCopilotLoading(false);
     }
@@ -4717,6 +4764,7 @@ export default function IeltsSupremeOS() {
       if (targetResult) {
         const targetQuiz = quizzes.find(q => q.id === targetResult.quizId);
         if (targetQuiz) {
+          setReviewSectionIdx(-1);
           setReviewQuiz({ quiz: targetQuiz, result: targetResult });
           return;
         }
@@ -7516,28 +7564,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
         correctStr = stripTags(q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
-      const fullQuiz = (quizzes || []).find(x => x && x.id === quiz?.id) || quiz;
-      const secs = (fullQuiz as any)?.sections;
-      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
-      if (Array.isArray(secs) && secs.length) {
-        if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-      }
+      const resolvedCtx = resolveReviewQuestionContext(q, quiz, reviewSectionIdx);
+      const fullQuiz = resolvedCtx.fullQuiz;
+      const secs = resolvedCtx.secs;
+      const qSectionIndex = resolvedCtx.secIdx;
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
 
       // Robust passage resolution with fallback chain
-      let qPassage: string = (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
+      let qPassage: string = resolvedCtx.rawSourceHtml
+        || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
         || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passageHtml)
         || fullQuiz?.passage
         || (fullQuiz as any)?.passageHtml
-        || (isListeningQuestion && Array.isArray(secs) ? (secs[0]?.passage || secs[0]?.passageHtml || secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage) : "")
         || "";
 
       // Robust transcript resolution with fallback chain
       const fullTranscript = stripTags(
+        (qSectionIndex >= 0 && secs?.[qSectionIndex]?.transcript) ||
         fullQuiz?.transcript ||
         (fullQuiz as any)?.transcriptHtml ||
         (isListeningQuestion ? (
+          resolvedCtx.resolvedSourceText ||
           (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage) ||
           secs?.[0]?.passage ||
           secs?.[0]?.passageHtml ||
@@ -7634,7 +7682,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
-          question: stripTags(q.text),
+          question: resolvedCtx.effectiveQuestionText || stripTags(q.text),
           options: optStr,
           correct: correctStr,
           studentAnswer: stuStr,
@@ -11008,7 +11056,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setActiveExam(null); setGracePeriod(null); setHardLocked(false);
           setManualExplanationQuestion(null);
           setReviewQuiz(null);
-          setReviewSectionIdx(0);
+          setReviewSectionIdx(-1);
           setReviewActiveQuestionId(null);
           if (isPackageDone) {
             setRealExamSession(null);
@@ -11028,7 +11076,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         }
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
-        setReviewSectionIdx(0);
+        setReviewSectionIdx(-1);
         setReviewActiveQuestionId(null);
         if (questContext) {
           setManualExplanationQuestion(null);

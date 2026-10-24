@@ -484,7 +484,7 @@
           ? normalizeExamSections({ ...catalogQuiz, questions: catalogQuiz.questions.filter(question => questionIds.has(question.id)) })
           : catalogQuiz;
         setReviewQuiz({quiz: quizForReview as Quiz, result: r});
-        setReviewSectionIdx(0);
+        setReviewSectionIdx(-1);
         setReviewActiveQuestionId(null);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {

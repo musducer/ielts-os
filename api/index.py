@@ -4974,16 +4974,12 @@ async def ai_explain(
 
     if lang == "en":
         sys_prompt = (
-            "You are an expert English-test tutor. Give a clear, precise and genuinely teachable explanation for one reviewed item. "
-            "First identify what the question is testing; do not pretend every item is a locate-and-quote reading question. "
-            "Use this teaching sequence: explain the key decision, prove why the correct answer fits, then account for EVERY remaining "
-            "option when options are provided. For each wrong option, name its specific flaw: wrong grammar/collocation, wrong reference, "
-            "too broad/narrow/absolute, only a true detail rather than the main point, reversed logic, unsupported inference, or incoherent "
-            "discourse order. For a gap without options, state the required grammar and lexical pattern and why the student's form fails. "
-            "Quote the source only when it is relevant and actually supports the point; never invent a quotation or claim that an answer must "
-            "appear word-for-word in the source. If the student was correct, still explain why the other options lose. "
-            "Be economical: write 3-5 short, high-information sentences (normally under 130 words); group similar distractors instead of repeating yourself. "
-            "For multiple choice, test each distractor against the exact condition, scope and speaker meaning. For map/diagram labels, explain the precise label, location or relationship supplied by the task; never invent a visual detail you cannot verify. For matching, name the exact target clue and why the other links fail. For completion, test grammar, word limit and meaning together. End with a solving habit only when it adds a concrete action. Plain text only; no markdown." + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
+            "You are an expert IELTS tutor. Give a sharp, concise, high-signal explanation for one reviewed question in strictly 3 short bullet lines (maximum 75-90 words total).\n"
+            "STRICT FORMAT (use these exact 3 bullet prefixes):\n"
+            "• Core logic: State the exact grammar requirement, collocation, spatial cue, or cognitive trap being tested.\n"
+            "• Evidence: Quote the exact key phrase from the passage/transcript (include [MM:SS] for Listening or [[EVIDENCE: \"...\"]] for Reading) and map the paraphrase (Question phrase = Source phrase).\n"
+            "• Conclusion: Explain concisely why the correct answer fits and why the student's chosen answer fails. NEVER list or explain untouched options (e.g., do NOT walk through A-H when the student only picked one option)."
+            + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
         source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
@@ -4993,19 +4989,15 @@ async def ai_explain(
             f"{matching_target_prompt_en}"
             f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
-            f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English."
+            f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English using the 3-bullet format."
         )
     else:
         sys_prompt = (
-            "Bạn là gia sư luyện thi tiếng Anh giàu kinh nghiệm. Hãy giải thích một câu trong phần Review theo cách dễ hiểu, chính xác "
-            "và thực sự giúp học viên tự làm được lần sau. Trước tiên nhận diện câu hỏi đang kiểm tra gì; không được giả vờ mọi dạng đều "
-            "là tìm câu trong bài rồi trích dẫn. Đi theo trình tự dạy học: nêu điểm mấu chốt để ra quyết định, chứng minh vì sao đáp án đúng "
-            "phù hợp, rồi phân tích TẤT CẢ phương án còn lại nếu có lựa chọn. Mỗi phương án sai phải nêu lỗi RIÊNG: sai ngữ pháp/collocation, "
-            "sai đối tượng tham chiếu, quá rộng/quá hẹp/quá tuyệt đối, chỉ đúng một chi tiết nhưng không phải ý chính, đảo quan hệ nguyên nhân-kết quả, "
-            "suy luận không được hỗ trợ, hoặc phá vỡ mạch hội thoại/văn bản. Với câu điền không có lựa chọn, nói rõ cấu trúc ngữ pháp và mẫu từ vựng "
-            "cần dùng, cũng như vì sao cách điền của học viên chưa đúng. Chỉ trích dẫn văn bản khi trích dẫn thực sự liên quan và chứng minh được ý; "
-            "tuyệt đối không bịa trích dẫn hoặc ép đáp án phải xuất hiện nguyên văn. Học viên làm đúng vẫn cần biết vì sao các đáp án khác bị loại. "
-            "Với trắc nghiệm, đối chiếu từng phương án nhiễu với đúng điều kiện, phạm vi và ý người nói/tác giả. Với map/diagram, chỉ giải thích nhãn, vị trí hoặc quan hệ có trong dữ liệu đề; tuyệt đối không bịa chi tiết thị giác. Với matching, chỉ ra manh mối gắn đúng đối tượng và vì sao các liên kết khác sai. Với completion, kiểm tra đồng thời ngữ pháp, giới hạn từ và nghĩa. Chỉ kết thúc bằng một mẹo làm bài khi mẹo đó đưa ra hành động cụ thể. Viết 3-5 câu ngắn, giàu thông tin (thường dưới 130 từ); gộp các bẫy giống nhau thay vì lặp lại. Văn xuôi thuần, không markdown." + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
+            "Bạn là gia sư IELTS 8.5+ sắc bén. Hãy giải thích câu hỏi này cực kỳ ngắn gọn, súc tích trong ĐÚNG 3 gạch đầu dòng (tối đa 75-90 từ, đi thẳng vào trọng tâm, tuyệt đối không chào hỏi hay viết lời dẫn rườm rà):\n"
+            "• Bản chất: Nêu rõ yêu cầu ngữ pháp (từ loại/thì), collocation, mốc vị trí (Map/Diagram) hoặc bẫy nhận thức của câu hỏi.\n"
+            "• Dẫn chứng: Trích dẫn chính xác cụm từ khóa trong bài đọc/transcript (kèm mốc [MM:SS] nếu là Listening hoặc [[EVIDENCE: \"...\"]] nếu là Reading) và chỉ rõ cặp paraphrase (Cụm trong đề = Cụm trong bài).\n"
+            "• Kết luận: Khẳng định vì sao đáp án đúng khớp hoàn toàn và chỉ ra lỗi sai trực tiếp trong đáp án của học viên. TUYỆT ĐỐI KHÔNG liệt kê hay phân tích lan man các phương án A-H mà học viên không chọn."
+            + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
         source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
@@ -5015,7 +5007,7 @@ async def ai_explain(
             f"{matching_target_prompt_vi}"
             f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
-            f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt."
+            f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt đúng 3 dòng (• Bản chất / • Dẫn chứng / • Kết luận)."
         )
 
     # Primary Route: Vertex AI Gemini 2.5 Flash (high quota, fast explanations)
@@ -5509,6 +5501,65 @@ async def review_copilot(payload: Dict[str, Any] = Body(...)):
             "Rất tiếc, gia sư AI đang bận xử lý dữ liệu. Em vui lòng thử lại sau ít giây nhé!"
             if lang == "vi" else
             "Sorry, the AI tutor is currently busy. Please try asking again in a moment!"
+        )
+        return {"success": False, "reply": fallback, "error": err}
+
+    return {"success": True, "reply": reply_text.strip()}
+
+
+@app.post("/api/ai_review_chat")
+async def ai_review_chat(payload: Dict[str, Any] = Body(...)):
+    """Minimalist free-form AI Review Assistant for the Review Workbench drawer."""
+    lang = str(payload.get("lang") or "vi").lower()
+    message = str(payload.get("message") or payload.get("userMessage") or "").strip()
+    history = payload.get("history") or payload.get("chatHistory") or []
+    quiz_title = str(payload.get("quizTitle") or "IELTS Practice Test").strip()
+    quiz_type = str(payload.get("quizType") or "Reading").strip()
+    source_text = str(payload.get("sourceText") or payload.get("passageOrTranscript") or payload.get("passage") or payload.get("transcript") or "")[:24000]
+    questions_summary = str(payload.get("questionsSummary") or "")[:12000]
+
+    if not message:
+        return {"success": False, "error": "Empty message"}
+
+    sys_prompt = (
+        "Bạn là Trợ lý AI học thuật chuyên sâu luyện thi IELTS 8.5+.\n"
+        f"Bạn đang hỗ trợ học viên sửa bài thi '{quiz_title}' ({quiz_type}).\n\n"
+        "QUY TẮC BẮT BUỘC:\n"
+        "1. Đi thẳng vào câu trả lời ngay dòng đầu tiên. TUYỆT ĐỐI KHÔNG mở đầu bằng lời chào rườm rà, không tự giới thiệu, không khoe 'Tôi đã đọc bài đọc/transcript và danh sách câu hỏi của bạn'.\n"
+        "2. Dựa hoàn toàn vào dữ liệu văn bản nguồn (Passage/Transcript) và bảng tóm tắt câu hỏi/đáp án bên dưới để giải thích chính xác từng câu học viên hỏi (ví dụ: 'câu 5 tại sao sai?', 'câu 12 dịch nghĩa là gì?').\n"
+        "3. Khi trích dẫn bằng chứng nguyên văn từ Passage/Transcript, đặt cụm từ tiếng Anh trong dấu ngoặc kép thẳng \"...\" (tối thiểu 3-4 từ). Nếu là bài Listening và có mốc thời gian trong transcript, luôn đính kèm [MM:SS] (ví dụ [02:15]).\n"
+        "4. Trình bày ngắn gọn, súc tích (tối đa 90-120 từ cho một câu hỏi đơn), gạch đầu dòng rõ ràng: Bản chất -> Dẫn chứng & Paraphrase -> Kết luận.\n"
+        f"5. Ngôn ngữ trả lời: {'Tiếng Anh' if lang == 'en' else 'Tiếng Việt'}.\n"
+    )
+
+    convo_parts = [
+        f"--- VĂN BẢN NGUỒN (PASSAGE / TRANSCRIPT) ---\n{source_text or '(Không có văn bản đính kèm)'}\n\n"
+        f"--- DANH SÁCH CÂU HỎI & BÀI LÀM CỦA HỌC VIÊN ---\n{questions_summary or '(Không có dữ liệu câu hỏi)'}\n"
+        "------------------------------------------------"
+    ]
+    for h in history[-8:]:
+        role = "Student" if h.get("role") in ("user", "student") else "Assistant"
+        content = str(h.get("text") or h.get("content") or "").strip()
+        if content:
+            convo_parts.append(f"{role}: {content}")
+    convo_parts.append(f"Student: {message}\n\nAssistant:")
+    user_prompt = "\n\n".join(convo_parts)
+
+    reply_text, err = await asyncio.to_thread(
+        _pedagogical_ai_call,
+        sys_prompt,
+        user_prompt,
+        max_tokens=900,
+        temperature=0.25,
+        json_mode=False,
+        model="gemini-2.5-flash",
+    )
+
+    if not reply_text:
+        fallback = (
+            "Hiện tại hệ thống AI đang bận, bạn vui lòng thử lại sau giây lát."
+            if lang == "vi" else
+            "The AI assistant is momentarily busy. Please try again shortly."
         )
         return {"success": False, "reply": fallback, "error": err}
 

@@ -4108,7 +4108,12 @@ export default function IeltsSupremeOS() {
   const [scratchpadText, setScratchpadText] = useState("");
   const [showScratchpad, setShowScratchpad] = useState(false);
   const [reviewQuiz, setReviewQuiz] = useState<{quiz: Quiz, result: QuizResult} | null>(null);
-  const [reviewSectionIdx, setReviewSectionIdx] = useState(0);
+  const [reviewSectionIdx, setReviewSectionIdx] = useState(-1);
+  const [rvFilterWrongOnly, setRvFilterWrongOnly] = useState(false);
+  const [rvRetryMode, setRvRetryMode] = useState(false);
+  const [rvRetryAnswers, setRvRetryAnswers] = useState<Record<string, any>>({});
+  const [rvOpenDrawers, setRvOpenDrawers] = useState<Record<string, "teacher" | "ai" | null>>({});
+  const [rvFlashQuestionNum, setRvFlashQuestionNum] = useState<number | null>(null);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -4174,6 +4179,80 @@ export default function IeltsSupremeOS() {
     }
   };
 
+  const resolveReviewQuestionContext = (q: any, quiz: any, activeSectionIdx: number) => {
+    const stripTagsLocal = (s: any) => String(s ?? "")
+      .replace(/<(?:br)\s*\/?\s*>/gi, "\n")
+      .replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/[^\S\r\n]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+
+    const fullQuiz = (quizzes || []).find((x: any) => x && x.id === quiz?.id) || quiz;
+    const secs: any[] = Array.isArray(fullQuiz?.sections) ? fullQuiz.sections : (Array.isArray(quiz?.sections) ? quiz.sections : []);
+
+    // 1. Reliable section index resolution
+    let secIdx = typeof q?.passageIndex === "number" ? q.passageIndex : -1;
+    if (secs.length > 0 && (secIdx < 0 || secIdx >= secs.length) && q) {
+      secIdx = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && String(qq.id) === String(q.id)));
+    }
+    const qNumMatch = String(q?.text || q?.id || "").match(/(\d+)/);
+    const qNum = q?.questionNumber || (qNumMatch ? Number(qNumMatch[1]) : 0);
+    if (secs.length > 0 && (secIdx < 0 || secIdx >= secs.length) && qNum > 0) {
+      const byQNum = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => {
+        const m = String(qq?.text || qq?.id || "").match(/(\d+)/);
+        return (qq?.questionNumber || (m ? Number(m[1]) : -1)) === qNum;
+      }));
+      if (byQNum >= 0) secIdx = byQNum;
+      else if (secs.length >= 4) secIdx = Math.min(secs.length - 1, Math.floor((qNum - 1) / 10));
+    }
+    if (secIdx < 0 || (secs.length > 0 && secIdx >= secs.length)) {
+      secIdx = Math.max(0, activeSectionIdx);
+    }
+
+    // 2. 4-tier source text fallback
+    const tier1 = secs[secIdx]?.transcript || secs[secIdx]?.passage || secs[secIdx]?.passageHtml || "";
+    const passagesArr: any[] = Array.isArray((fullQuiz as any)?.passages) ? (fullQuiz as any).passages : (Array.isArray((fullQuiz as any)?.readingPassages) ? (fullQuiz as any).readingPassages : []);
+    const tier2 = typeof passagesArr[secIdx] === "string"
+      ? passagesArr[secIdx]
+      : (passagesArr[secIdx]?.transcript || passagesArr[secIdx]?.content || passagesArr[secIdx]?.passage || "");
+    const tier3 = fullQuiz?.transcript || fullQuiz?.passage || (fullQuiz as any)?.passageHtml || secs.map((s: any) => s?.transcript || s?.passage || s?.passageHtml || "").filter(Boolean).join("\n\n");
+    const tier4 = typeof document !== "undefined"
+      ? (document.getElementById("ielts-passage-content")?.innerText || (document.querySelector(".rv-transcript-panel") as HTMLElement)?.innerText || "")
+      : "";
+
+    const rawSourceHtml = tier1 || tier2 || tier3 || tier4 || "";
+    const resolvedSourceText = stripTagsLocal(rawSourceHtml) || stripTagsLocal(tier3) || stripTagsLocal(tier4);
+
+    // 3. Blank context extraction for [BLANK] questions where q.text is just "1." or "1"
+    const rawQText = stripTagsLocal(q?.text || q?.question || "");
+    let effectiveQuestionText = rawQText;
+    if (q && (/^\d+\.?$/.test(rawQText.trim()) || rawQText.trim().length <= 4) && q.groupContext) {
+      const groupLines = stripTagsLocal(q.groupContext).split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean);
+      const targetNum = qNum || Number(rawQText.replace(/\D/g, "")) || 1;
+      const lineIdx = groupLines.findIndex((l: string) =>
+        l.includes(`[${targetNum}]`) ||
+        new RegExp(`\\b${targetNum}\\s*[\\.\\)]\\s*_+|\\[\\s*${targetNum}\\s*\\]`).test(l)
+      );
+      if (lineIdx >= 0) {
+        const snippet = groupLines.slice(Math.max(0, lineIdx - 1), Math.min(groupLines.length, lineIdx + 2)).join(" / ");
+        effectiveQuestionText = `Blank [${targetNum}] in context: ${snippet}`;
+      } else if (groupLines.length > 0) {
+        effectiveQuestionText = `Blank [${targetNum}] in context: ${groupLines.slice(0, 6).join(" / ")}`;
+      }
+    }
+
+    return {
+      secIdx,
+      rawSourceHtml,
+      resolvedSourceText,
+      effectiveQuestionText,
+      fullQuiz,
+      secs
+    };
+  };
+
   const handleSendCopilotMessage = async (customPrompt?: string) => {
     const textToSend = String(customPrompt || copilotInput || "").trim();
     if (!textToSend || copilotLoading) return;
@@ -4187,69 +4266,37 @@ export default function IeltsSupremeOS() {
       const rqQuiz = reviewQuiz?.quiz as any;
       const rqResult = reviewQuiz?.result as any;
       const isListening = Boolean(rqQuiz && (String(rqQuiz.type || "").toUpperCase().includes("LISTEN") || rqQuiz.skill === "Listening"));
-      const q = copilotActiveQ;
+      const resolved = resolveReviewQuestionContext(copilotActiveQ, rqQuiz, reviewSectionIdx);
+      const allSecText = (resolved.secs || []).map((s: any, idx: number) => {
+        const txt = String(s?.transcript || s?.passage || s?.passageHtml || "").replace(/<[^>]+>/g, " ").trim();
+        return txt ? `[Part/Passage ${idx + 1}: ${s?.title || ""}]\n${txt}` : "";
+      }).filter(Boolean).join("\n\n");
+      const sourceText = allSecText || resolved.resolvedSourceText || "";
 
-      // Extract full passage or transcript
-      let passageText = "";
-      if (q && rqQuiz?.readingPassages && typeof q.passageIndex === "number") {
-        passageText = rqQuiz.readingPassages[q.passageIndex] || "";
-      } else if (Array.isArray(rqQuiz?.readingPassages) && rqQuiz.readingPassages.length) {
-        passageText = rqQuiz.readingPassages.join("\n\n--- NEXT PASSAGE ---\n\n");
-      } else {
-        passageText = rqQuiz?.readingPassage || "";
-      }
-      const transcriptText = rqQuiz?.transcript || rqQuiz?.audioTranscript || rqQuiz?.listeningTranscript || "";
-      const passageOrTranscript = isListening ? transcriptText : (passageText || transcriptText);
-
-      // Student mistakes and answers breakdown for omniscient context
-      const allQs: any[] = Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : [];
+      const allQs: any[] = (resolved.secs && resolved.secs.length > 0)
+        ? resolved.secs.flatMap((s: any) => s?.questions || [])
+        : (Array.isArray(rqQuiz?.questions) ? rqQuiz.questions : []);
       const userAnswers = rqResult?.answers || {};
-      const wrongList = allQs.filter((item: any) => {
+      const questionsSummary = allQs.map((item: any, idx: number) => {
+        const ctx = resolveReviewQuestionContext(item, rqQuiz, idx);
         const given = userAnswers[item.id];
-        const accepted = String(item.correctAnswer || item.correct || "").split("/").map((s: string) => s.trim().toLowerCase());
-        return !given || !accepted.includes(String(given).trim().toLowerCase());
-      }).slice(0, 15).map((item: any, idx: number) => ({
-        number: item.questionNumber || (idx + 1),
-        type: item.type || item.questionType || "",
-        text: (item.question || item.title || "").slice(0, 90),
-        studentAnswer: userAnswers[item.id] || "(blank)",
-        correctAnswer: item.correctAnswer || item.correct || ""
-      }));
+        const givenStr = given === undefined || given === null || given === "" ? "(bỏ trống)" : String(given);
+        const corrStr = String(item.correctAnswer ?? item.correct ?? "");
+        return `Q${idx + 1}: ${ctx.effectiveQuestionText} | Student='${givenStr}' | Correct='${corrStr}'`;
+      }).join("\n");
 
-      const payloadQuestion = q ? {
-        id: q.id,
-        questionNumber: q.questionNumber || "",
-        type: q.type || "",
-        text: q.question || q.title || "",
-        options: q.options || [],
-        correctAnswer: q.correctAnswer || q.correct || "",
-        studentAnswer: userAnswers[q.id] || "(blank)",
-        manualExplanation: q.manualExplanation || "",
-        passage: passageText,
-        transcript: transcriptText,
-        skill: isListening ? "Listening" : "Reading"
-      } : null;
-
-      const res = await fetch("/api/review_copilot", {
+      const API_BASE = getApiBase();
+      const res = await fetch(`${API_BASE}/api/ai_review_chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
+          message: textToSend,
+          history: newMessages.slice(0, -1).map(m => ({ role: m.role === "user" ? "user" : "assistant", text: m.text })),
           quizTitle: rqQuiz?.title || "IELTS Practice Test",
           quizType: isListening ? "Listening" : "Reading",
-          passageOrTranscript,
-          activeQuestion: payloadQuestion,
-          examOverview: {
-            totalQuestions: allQs.length,
-            wrongCount: wrongList.length,
-            wrongQuestions: wrongList
-          },
-          messages: newMessages.map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text })),
-          // Backward compatibility
-          question: payloadQuestion,
-          studentAnswer: q ? userAnswers[q.id] : undefined,
-          chatHistory: newMessages.slice(0, -1),
-          userMessage: textToSend
+          sourceText,
+          questionsSummary
         })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4258,7 +4305,7 @@ export default function IeltsSupremeOS() {
         setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
       }
     } catch (err: any) {
-      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối gia sư AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Copilot. Please try again.") }]);
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again.") }]);
     } finally {
       setCopilotLoading(false);
     }
@@ -4717,6 +4764,7 @@ export default function IeltsSupremeOS() {
       if (targetResult) {
         const targetQuiz = quizzes.find(q => q.id === targetResult.quizId);
         if (targetQuiz) {
+          setReviewSectionIdx(-1);
           setReviewQuiz({ quiz: targetQuiz, result: targetResult });
           return;
         }
@@ -7516,28 +7564,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
         correctStr = stripTags(q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
-      const fullQuiz = (quizzes || []).find(x => x && x.id === quiz?.id) || quiz;
-      const secs = (fullQuiz as any)?.sections;
-      let qSectionIndex = (typeof (q as any).passageIndex === 'number') ? (q as any).passageIndex : -1;
-      if (Array.isArray(secs) && secs.length) {
-        if (qSectionIndex < 0 || qSectionIndex >= secs.length) qSectionIndex = secs.findIndex((sec: any) => (sec?.questions || []).some((qq: any) => qq && qq.id === q.id));
-      }
+      const resolvedCtx = resolveReviewQuestionContext(q, quiz, reviewSectionIdx);
+      const fullQuiz = resolvedCtx.fullQuiz;
+      const secs = resolvedCtx.secs;
+      const qSectionIndex = resolvedCtx.secIdx;
       const quizTypeLower = String(fullQuiz?.type || quiz?.type || "").toLowerCase();
       const isListeningQuestion = quizTypeLower.includes("listen") || (quizTypeLower.includes("integrated") && qSectionIndex === 0);
 
       // Robust passage resolution with fallback chain
-      let qPassage: string = (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
+      let qPassage: string = resolvedCtx.rawSourceHtml
+        || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage)
         || (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passageHtml)
         || fullQuiz?.passage
         || (fullQuiz as any)?.passageHtml
-        || (isListeningQuestion && Array.isArray(secs) ? (secs[0]?.passage || secs[0]?.passageHtml || secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage) : "")
         || "";
 
       // Robust transcript resolution with fallback chain
       const fullTranscript = stripTags(
+        (qSectionIndex >= 0 && secs?.[qSectionIndex]?.transcript) ||
         fullQuiz?.transcript ||
         (fullQuiz as any)?.transcriptHtml ||
         (isListeningQuestion ? (
+          resolvedCtx.resolvedSourceText ||
           (qSectionIndex >= 0 && secs?.[qSectionIndex]?.passage) ||
           secs?.[0]?.passage ||
           secs?.[0]?.passageHtml ||
@@ -7634,7 +7682,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
-          question: stripTags(q.text),
+          question: resolvedCtx.effectiveQuestionText || stripTags(q.text),
           options: optStr,
           correct: correctStr,
           studentAnswer: stuStr,
@@ -11008,7 +11056,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           setActiveExam(null); setGracePeriod(null); setHardLocked(false);
           setManualExplanationQuestion(null);
           setReviewQuiz(null);
-          setReviewSectionIdx(0);
+          setReviewSectionIdx(-1);
           setReviewActiveQuestionId(null);
           if (isPackageDone) {
             setRealExamSession(null);
@@ -11028,7 +11076,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         }
         alert(submissionMessage);
         setActiveExam(null); setGracePeriod(null); setHardLocked(false);
-        setReviewSectionIdx(0);
+        setReviewSectionIdx(-1);
         setReviewActiveQuestionId(null);
         if (questContext) {
           setManualExplanationQuestion(null);
@@ -12050,98 +12098,107 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               globalStyles={globalStyles}
           />;
       }
+
       const cleanMediaUrl = (url: any) => normalizeExternalMediaUrl(url);
-      let currentContext = "";
-      const rvSections = reviewQuiz.quiz.sections || [];
+      const rvRawSections = Array.isArray(reviewQuiz.quiz.sections) ? reviewQuiz.quiz.sections : [];
+      const rvAllQuestions: any[] = Array.isArray(reviewQuiz.quiz.questions) && reviewQuiz.quiz.questions.length > 0
+          ? reviewQuiz.quiz.questions
+          : rvRawSections.flatMap((s: any) => s?.questions || []);
+      const rvSections: any[] = rvRawSections.length > 0
+          ? rvRawSections
+          : [{ title: reviewQuiz.quiz.title || "Part 1", passage: reviewQuiz.quiz.passage || "", transcript: reviewQuiz.quiz.transcript || "", questions: rvAllQuestions }];
       const rvHasSections = rvSections.length > 1;
       const rvMemberOf: Record<string, number> = {};
-      rvSections.forEach((sec, i) => (sec.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
-      const rvSectionOf = (q: any) => (typeof q.passageIndex === 'number' ? q.passageIndex : (rvMemberOf[q.id] ?? 0));
-      const rvActiveIdx = rvHasSections ? Math.min(reviewSectionIdx, rvSections.length - 1) : 0;
-      const rvAllQuestions = Array.isArray(reviewQuiz.quiz.questions) ? reviewQuiz.quiz.questions : [];
-      const rvActiveQuestions = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : rvAllQuestions;
+      rvSections.forEach((sec: any, i: number) => (sec?.questions || []).forEach((q: any) => { if (q && q.id != null) rvMemberOf[q.id] = i; }));
+      const rvSectionOf = (q: any) => {
+          if (typeof q?.passageIndex === "number" && q.passageIndex >= 0 && q.passageIndex < rvSections.length) return q.passageIndex;
+          if (q?.id != null && rvMemberOf[q.id] !== undefined) return rvMemberOf[q.id];
+          return 0;
+      };
+      const rvIsOverview = reviewSectionIdx < 0;
+      const rvActiveIdx = rvIsOverview ? 0 : Math.min(Math.max(0, reviewSectionIdx), Math.max(0, rvSections.length - 1));
+      const rvActiveQuestions: any[] = rvHasSections
+          ? (rvSections[rvActiveIdx]?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === rvActiveIdx))
+          : rvAllQuestions;
+
       const rvQuestionNumber = (question: any, fallbackList: any[] = rvAllQuestions) => {
           const explicit = Number(question?.questionNumber);
           if (Number.isFinite(explicit) && explicit > 0) return explicit;
           const list = fallbackList.length ? fallbackList : (rvActiveQuestions.length ? rvActiveQuestions : rvAllQuestions);
           return getQuizQuestionNumber(list, question?.id);
       };
+
       const rvType = String(reviewQuiz.quiz.type || "").toLowerCase();
-      const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, reviewQuiz.result.answers || {});
+      const rvEffectiveAnswers = rvRetryMode
+          ? { ...(reviewQuiz.result.answers || {}), ...rvRetryAnswers }
+          : (reviewQuiz.result.answers || {});
+      const rvScoreSummary = getQuizScoreSummary(reviewQuiz.quiz, rvEffectiveAnswers);
       const rvGroupByQuestionId = new Map<string, any>();
       rvScoreSummary.groups.forEach((group: any) => group.questions.forEach((question: any) => rvGroupByQuestionId.set(question.id, group)));
-      const rvGroupQuestionLabel = (group: any) => {
-          const first = group.questions[0];
-          const last = group.questions[group.questions.length - 1];
-          const start = rvQuestionNumber(first);
-          const end = rvQuestionNumber(last) + getQuestionPointCount(last) - 1;
-          return end > start ? `${start}-${end}` : `${start}`;
-      };
+
       const rvIsListeningExam = rvType.includes("listen");
       const rvIsIntegrated = rvType.includes("integrated");
       const rvIsListeningPart = (idx: number) => rvIsListeningExam || (rvIsIntegrated && idx === 0);
       const rvActiveIsListening = rvIsListeningPart(rvActiveIdx);
       const rvUsePartLabels = rvIsListeningExam || rvIsIntegrated;
+
       const rvTimestampSeconds = (value: string) => {
-          const units = String(value || '').match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(':').map(Number) || [];
+          const units = String(value || "").match(/\d{1,2}:\d{2}(?::\d{2})?/)?.[0]?.split(":").map(Number) || [];
           return units.length === 3 ? units[0] * 3600 + units[1] * 60 + units[2] : units.length === 2 ? units[0] * 60 + units[1] : -1;
       };
+
       const rvTimestampRangeSeconds = (value: string | ManualExplanationTimestamp | any): { start: number; end?: number } => {
           if (!value) return { start: -1 };
-          if (typeof value === 'object' && typeof value.startTime === 'number') {
+          if (typeof value === "object" && typeof value.startTime === "number") {
               return {
                   start: value.startTime,
-                  end: typeof value.endTime === 'number' ? value.endTime : undefined,
+                  end: typeof value.endTime === "number" ? value.endTime : undefined,
               };
           }
-          const str = String(value || '').trim();
+          const str = String(value || "").trim();
           const match = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?/i);
           if (!match) return { start: -1 };
           const start = rvTimestampSeconds(match[1]);
           const end = match[2] ? rvTimestampSeconds(match[2]) : undefined;
           return { start, ...(end !== undefined && end >= 0 ? { end } : {}) };
       };
-      // Timestamp trong giải thích AI/thầy cô -> nút bấm tua audio review tới đúng mốc bắt đầu.
-      const rvSeek = (tstr: string) => {
-          const { start: secs } = rvTimestampRangeSeconds(tstr);
-          if (!Number.isFinite(secs) || secs < 0) return;
-          const el = document.getElementById('review-audio') as HTMLAudioElement | null;
-          if (!el) return;
-          // Chặn mốc vượt độ dài file (mốc rác) — không tua bậy
-          if (el.duration && isFinite(el.duration) && secs > el.duration) return;
-          el.currentTime = secs;
-          setRvAudioCur(secs);
-          rvJumpToTranscript(tstr);
-          void requestReviewAudioPlayback();
+
+      const rvNormalizeEvidenceText = (value: any) => String(value || "")
+          .replace(/[“”]/g, '"')
+          .replace(/[‘’]/g, "'")
+          .replace(/[–—]/g, "-")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLocaleLowerCase();
+
+      const rvSecondsToLabel = (seconds: number) => {
+          const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+          const mins = Math.floor(safe / 60);
+          const secs = safe % 60;
+          return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
       };
-      const rvJumpToTranscript = (timestamp: string, quote = '') => {
+
+      const rvJumpToTranscript = (timestamp: string, quote = "") => {
           const { start: requestedStart, end: requestedEnd } = rvTimestampRangeSeconds(timestamp);
-          const blocks = Array.from(document.querySelectorAll<HTMLElement>('.rv-transcript-block'));
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>(".rv-transcript-block"));
           if (!blocks.length) return;
 
           let target: HTMLElement | null = null;
-          const trimmedQuote = String(quote || '').replace(/\s+/g, ' ').trim();
+          const trimmedQuote = String(quote || "").replace(/\s+/g, " ").trim();
           const normalizedQuote = rvNormalizeEvidenceText(trimmedQuote);
 
-          // 1. If quote is provided (length >= 4), try finding the block whose normalized text contains it
           if (normalizedQuote.length >= 4) {
               target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote)) || null;
-              // If full quote doesn't match a single block, try the first 35 chars
               if (!target && normalizedQuote.length > 25) {
                   const subQuote = normalizedQuote.slice(0, 35).trim();
                   target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(subQuote)) || null;
               }
           }
 
-          // 2. Otherwise, find by timestamp: exact match, overlap with [requestedStart, requestedEnd], or closest preceding block
           if (!target && requestedStart >= 0) {
-              const timedBlocks = blocks.filter(b => b.hasAttribute('data-rv-transcript-start'));
+              const timedBlocks = blocks.filter(b => b.hasAttribute("data-rv-transcript-start"));
               const reqEnd = requestedEnd !== undefined && requestedEnd >= requestedStart ? requestedEnd : requestedStart;
-
-              // Exact match on start
               target = timedBlocks.find(b => Number(b.dataset.rvTranscriptStart) === requestedStart) || null;
-
-              // Overlapping range
               if (!target) {
                   target = timedBlocks.find(b => {
                       const bStart = Number(b.dataset.rvTranscriptStart);
@@ -12149,40 +12206,34 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       return Math.max(requestedStart, bStart) <= Math.min(reqEnd, bEnd);
                   }) || null;
               }
-
-              // Closest preceding block (start <= requestedStart)
               if (!target) {
                   target = timedBlocks.filter(b => Number(b.dataset.rvTranscriptStart) <= requestedStart).pop() || null;
               }
-
-              // Fallback to first timed block only if timestamp was provided
               if (!target && timedBlocks.length) {
                   target = timedBlocks[0];
               }
           }
 
-          // Fallback to first block ONLY if a valid timestamp was provided but no exact block matched
           if (!target && requestedStart >= 0) {
               target = blocks[0];
           }
           if (!target) return;
 
-          blocks.forEach(block => block.classList.remove('rv-transcript-evidence'));
-          document.querySelectorAll('.rv-transcript-quote').forEach(mark => {
+          blocks.forEach(block => block.classList.remove("rv-transcript-evidence"));
+          document.querySelectorAll(".rv-transcript-quote").forEach(mark => {
               const parent = mark.parentNode;
               if (parent) {
-                  parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+                  parent.replaceChild(document.createTextNode(mark.textContent || ""), mark);
                   parent.normalize();
               }
           });
-          target.classList.add('rv-transcript-evidence');
+          target.classList.add("rv-transcript-evidence");
 
           if (trimmedQuote && trimmedQuote.length >= 4) {
-              target.setAttribute('data-evidence-quote', trimmedQuote);
-              const copy = target.querySelector('.rv-transcript-copy') || target;
-              const escaped = trimmedQuote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-              const matcher = new RegExp(escaped, 'i');
-              const copyText = copy.textContent || '';
+              const copy = target.querySelector(".rv-transcript-copy") || target;
+              const escaped = trimmedQuote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+              const matcher = new RegExp(escaped, "i");
+              const copyText = copy.textContent || "";
               const match = copyText.match(matcher);
               if (match && match.index !== undefined) {
                   const walker = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
@@ -12203,8 +12254,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       const localStart = from - nodeStart;
                       const localEnd = to - nodeStart;
                       if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
-                      const mark = document.createElement('mark');
-                      mark.className = 'rv-transcript-quote';
+                      const mark = document.createElement("mark");
+                      mark.className = "rv-transcript-quote";
                       mark.textContent = node.data.slice(localStart, localEnd);
                       fragment.appendChild(mark);
                       if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
@@ -12212,50 +12263,49 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   });
               }
           }
-          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
       };
-      const rvNormalizeEvidenceText = (value: any) => String(value || '')
-          .replace(/[“”]/g, '"')
-          .replace(/[‘’]/g, "'")
-          .replace(/[–—]/g, '-')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .toLocaleLowerCase();
-      const rvQuizAny = reviewQuiz.quiz as any;
-      const rvSourceTextNormalized = rvNormalizeEvidenceText(
-          (rvQuizAny?.transcript || '') + ' ' +
-          (rvQuizAny?.audioTranscript || '') + ' ' +
-          (rvQuizAny?.listeningTranscript || '') + ' ' +
-          (rvQuizAny?.readingPassage || '') + ' ' +
-          (Array.isArray(rvQuizAny?.readingPassages) ? rvQuizAny.readingPassages.join(' ') : '')
-      );
+
+      const rvSeek = (tstr: string) => {
+          const { start: secs } = rvTimestampRangeSeconds(tstr);
+          if (!Number.isFinite(secs) || secs < 0) return;
+          const el = document.getElementById("review-audio") as HTMLAudioElement | null;
+          if (!el) return;
+          if (el.duration && isFinite(el.duration) && secs > el.duration) return;
+          el.currentTime = secs;
+          setRvAudioCur(secs);
+          rvJumpToTranscript(tstr);
+          void requestReviewAudioPlayback();
+      };
+
       const rvReadingEvidenceNodes = () => {
-          const root = document.getElementById('ielts-passage-content');
+          const root = document.getElementById("ielts-passage-content");
           if (!root) return [];
-          const nodes = Array.from(root.querySelectorAll<HTMLElement>('p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div'))
-              .filter(node => !node.closest('button') && (node.textContent || '').trim().length > 0)
-              .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
+          const nodes = Array.from(root.querySelectorAll<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div"))
+              .filter(node => !node.closest("button") && (node.textContent || "").trim().length > 0)
+              .sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
           return [...nodes, root];
       };
+
       const rvJumpToEvidence = (quote: string | string[]) => {
-          const root = document.getElementById('ielts-passage-content');
-          const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || '').replace(/\s+/g, ' ').trim()).filter(value => value.length >= 4);
+          const root = document.getElementById("ielts-passage-content");
+          const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || "").replace(/\s+/g, " ").trim()).filter(value => value.length >= 4);
           if (!root || !quotes.length) return;
-          root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-mark').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')));
-          root.querySelectorAll<HTMLElement>('.rv-reading-evidence-block').forEach(node => node.classList.remove('rv-reading-evidence-block', 'rv-reading-evidence-target', 'rv-reading-evidence-located'));
+          root.querySelectorAll<HTMLElement>("mark.rv-reading-evidence-mark").forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || "")));
+          root.querySelectorAll<HTMLElement>(".rv-reading-evidence-block").forEach(node => node.classList.remove("rv-reading-evidence-block", "rv-reading-evidence-target", "rv-reading-evidence-located"));
           root.normalize();
           let firstTarget: HTMLElement | null = null;
           quotes.forEach(needle => {
-              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-              const matcher = new RegExp(escaped, 'i');
+              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+              const matcher = new RegExp(escaped, "i");
               const normalizedNeedle = rvNormalizeEvidenceText(needle);
-              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ''))
+              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ""))
                   || rvReadingEvidenceNodes().find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
               if (!target) return;
               if (!firstTarget) firstTarget = target;
-              const match = (target.textContent || '').match(matcher);
+              const match = (target.textContent || "").match(matcher);
               if (!match || match.index === undefined) {
-                  target.classList.add('rv-reading-evidence-block', 'rv-reading-evidence-target');
+                  target.classList.add("rv-reading-evidence-block", "rv-reading-evidence-target");
                   return;
               }
               const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
@@ -12276,8 +12326,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   const localStart = from - nodeStart;
                   const localEnd = to - nodeStart;
                   if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
-                  const mark = document.createElement('mark');
-                  mark.className = 'rv-reading-evidence-mark rv-reading-evidence-target';
+                  const mark = document.createElement("mark");
+                  mark.className = "rv-reading-evidence-mark rv-reading-evidence-target";
                   mark.textContent = node.data.slice(localStart, localEnd);
                   fragment.appendChild(mark);
                   if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
@@ -12285,136 +12335,54 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               });
           });
           const scrollTarget = firstTarget as HTMLElement | null;
-          if (scrollTarget) scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-          window.setTimeout(() => root.querySelectorAll<HTMLElement>('mark.rv-reading-evidence-target').forEach(mark => {
-              mark.classList.remove('rv-reading-evidence-target');
-              mark.classList.add('rv-reading-evidence-located');
-          }), 1800);
-          window.setTimeout(() => root.querySelectorAll<HTMLElement>('.rv-reading-evidence-block.rv-reading-evidence-target').forEach(node => {
-              node.classList.remove('rv-reading-evidence-target');
-              node.classList.add('rv-reading-evidence-located');
-          }), 1800);
+          if (scrollTarget) scrollTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
       };
-      const rvCleanExplainText = (text: string, hasDecon: boolean) => {
-          if (!hasDecon || !text) return text;
-          const lines = text.split("\n");
-          const filtered: string[] = [];
-          let skippingOptions = false;
-          for (const line of lines) {
-              const trimmed = line.trim();
-              if (/^(let'?s look at (the )?other options|các phương án còn lại|xem xét các lựa chọn|phương án khác)/i.test(trimmed)) {
-                  skippingOptions = true;
-                  continue;
-              }
-              if (skippingOptions) {
-                  if (/^(\*|-|\d+\.|\([A-Za-z]\)|[A-Za-z]\.)\s+/i.test(trimmed)) {
-                      continue;
-                  }
-                  if (trimmed.length > 0 && !trimmed.startsWith("*") && !trimmed.startsWith("-")) {
-                      skippingOptions = false;
-                  }
-              }
-              if (!skippingOptions) filtered.push(line);
-          }
-          return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-      };
-      const rvRenderExplanationCopy = (value: string) => {
-          const text = String(value || '').trim();
-          if (!text) return null;
-          const paragraphs = text.split(/\n+/).map(part => part.trim()).filter(Boolean);
-          return <div className="rv-explanation-copy">{paragraphs.map((paragraph, index) => <p key={index} className="rv-explain-p">{paragraph}</p>)}</div>;
-      };
-      // Kept only for parsing legacy stored explanations below. New explanations
-      // never promote ordinary quoted prose to evidence controls.
-      const rvCanJumpToEvidence = (quote: string) => {
-          const root = document.getElementById('ielts-passage-content');
-          const needle = String(quote || '').replace(/\s+/g, ' ').trim();
-          if (!root || needle.length < 4) return false;
-          const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-          return rvReadingEvidenceNodes().some(node => new RegExp(escaped, 'i').test(node.textContent || ''));
-      };
-      const rvRenderExplain = (txt: string, audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }, audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>) => {
-          if (rvActiveIsListening) {
-              const cleanText = String(txt || '')
-                  .replace(/\s*[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/g, '')
-                  .replace(/[ \t]{2,}/g, ' ')
-                  .replace(/\n{3,}/g, '\n\n')
-                  .trim();
-              const segments: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> = (Array.isArray(audioEvidenceSegments) && audioEvidenceSegments.length
-                  ? audioEvidenceSegments
-                  : Array.isArray(audioEvidence?.segments) && audioEvidence.segments.length
-                  ? audioEvidence.segments
-                  : audioEvidence ? [audioEvidence] : [])
-                  .filter((segment, index, all) => segment?.timestamp && segment?.quote && all.findIndex(item => item.timestamp === segment.timestamp && item.quote === segment.quote) === index)
-                  .slice(0, 3);
-              const primary = segments.find(segment => /answer|exact/i.test(`${segment.role || ''} ${segment.focusCue || ''}`)) || segments[0];
-              return <>
-                  {rvRenderExplanationCopy(cleanText)}
-                  {!!primary && <div className="rv-audio-evidence">
-                      <div className="rv-audio-evidence-actions">
-                          <button type="button" className="rv-audio-evidence-jump" title="Locate this line in the transcript" aria-label="Locate this line in the transcript" onClick={() => rvJumpToTranscript(primary.timestamp, primary.quote)}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
-                              Transcript
-                          </button>
-                          <button type="button" className="rv-audio-evidence-jump" title={`Play audio from ${primary.timestamp}`} aria-label={`Play audio from ${primary.timestamp}`} onClick={() => rvSeek(primary.timestamp)}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>
-                              Audio
-                          </button>
-                      </div>
-                      <div className="rv-audio-evidence-copy"><span>{primary.formattedRange || (primary.endTimestamp ? `${primary.timestamp} - ${primary.endTimestamp}` : primary.timestamp)}</span> {primary.quote}</div>
-                  </div>}
-              </>;
-          }
-          // Prefer verified markers. Legacy explanations can still expose one
-          // quoted passage excerpt, but only after it is found in the rendered text.
-          const source = String(txt || '');
-          const verifiedQuotes = Array.from(source.matchAll(/\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]/gi)).map(match => match[1].trim()).filter(Boolean);
-          const legacyQuotes = verifiedQuotes.length ? [] : Array.from(source.matchAll(/"([^"\n]{4,500})"|'([^'\n]{4,500})'|“([^”\n]{4,500})”/g))
-              .map(match => (match[1] || match[2] || match[3] || '').trim())
-              .filter(quote => quote && rvCanJumpToEvidence(quote))
-              .slice(0, 1);
-          const evidenceQuotes = verifiedQuotes.length ? verifiedQuotes.slice(0, 1) : legacyQuotes;
-          const prose = source.replace(/\s*\[\[EVIDENCE:\s*[\s\S]*?\s*\]\]\s*/gi, ' ').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-          return <>
-              {rvRenderExplanationCopy(prose)}
-              {!!evidenceQuotes.length && <button type="button" onClick={() => rvJumpToEvidence(evidenceQuotes)} title="Locate the verified evidence in the reading passage" aria-label="Locate verified evidence" className="rv-reading-evidence-button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg> Locate evidence</button>}
-          </>;
 
-      };
       const rvManualExplanationOf = (question: any) => parseManualExplanation(question?.manualExplanation);
-      const rvSecondsToLabel = (seconds: number) => {
-          const safe = Math.max(0, Math.floor(Number(seconds) || 0));
-          const mins = Math.floor(safe / 60);
-          const secs = safe % 60;
-          return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-      };
+
       const rvJumpToTranscriptQuote = (quotes: string[]) => {
-          const blocks = Array.from(document.querySelectorAll<HTMLElement>('.rv-transcript-block'));
-          const targetQuote = quotes.map(quote => String(quote || '').replace(/\s+/g, ' ').trim()).find(quote => quote.length >= 4);
+          const blocks = Array.from(document.querySelectorAll<HTMLElement>(".rv-transcript-block"));
+          const targetQuote = quotes.map(quote => String(quote || "").replace(/\s+/g, " ").trim()).find(quote => quote.length >= 4);
           if (!blocks.length || !targetQuote) return false;
           const normalizedQuote = rvNormalizeEvidenceText(targetQuote);
           const target = blocks.find(block => rvNormalizeEvidenceText(block.textContent).includes(normalizedQuote));
           if (!target) return false;
           const startSecs = target.dataset.rvTranscriptStart ? Number(target.dataset.rvTranscriptStart) : -1;
-          rvJumpToTranscript(startSecs >= 0 ? rvSecondsToLabel(startSecs) : '', targetQuote);
+          rvJumpToTranscript(startSecs >= 0 ? rvSecondsToLabel(startSecs) : "", targetQuote);
           return true;
       };
-      const rvJumpToManualEvidence = (question: any) => {
+
+      const rvLocateQuestionEvidence = (question: any) => {
           const manual = rvManualExplanationOf(question);
-          const primaryQuote = (manual?.parsedQuotes || []).find((quote: string) => String(quote || '').trim().length >= 4);
-          if (!primaryQuote) return;
+          const aiState = explainMap[question?.id];
+          const aiQuotes = Array.from(String(aiState?.text || "").matchAll(/\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]|"([^"\n]{4,240})"/gi))
+              .map(m => (m[1] || m[2] || "").trim())
+              .filter(Boolean);
+          const quotes = [...(manual?.parsedQuotes || []), ...aiQuotes].filter(q => String(q || "").trim().length >= 4);
+          const tsLabel = manual?.parsedTimestamps?.[0]?.label || aiState?.audioEvidence?.timestamp || aiState?.audioEvidenceSegments?.[0]?.timestamp || "";
+
           if (rvActiveIsListening) {
-              if (rvJumpToTranscriptQuote([primaryQuote])) return;
-              const ts = manual?.parsedTimestamps?.[0];
-              if (ts?.label) rvJumpToTranscript(ts.label, primaryQuote);
+              if (quotes.length && rvJumpToTranscriptQuote(quotes)) return;
+              if (tsLabel) {
+                  rvJumpToTranscript(tsLabel, quotes[0] || aiState?.audioEvidence?.quote || "");
+                  return;
+              }
+              const expected = String(question?.correctAnswer || "").split("/")[0].trim();
+              if (expected.length >= 3) rvJumpToTranscriptQuote([expected]);
               return;
           }
-          rvJumpToEvidence(primaryQuote);
+          if (quotes.length) {
+              rvJumpToEvidence(quotes);
+              return;
+          }
+          const expected = String(question?.correctAnswer || "").split("/")[0].trim();
+          if (expected.length >= 4) rvJumpToEvidence([expected]);
       };
+
       const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
           const { start: secs } = rvTimestampRangeSeconds(ts);
           if (!Number.isFinite(secs) || secs < 0) return;
-          const el = document.getElementById('review-audio') as HTMLAudioElement | null;
+          const el = document.getElementById("review-audio") as HTMLAudioElement | null;
           if (!el) return;
           if (el.duration && isFinite(el.duration) && secs > el.duration) return;
           el.currentTime = secs;
@@ -12423,2148 +12391,2348 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (ts.label) rvJumpToTranscript(ts.label, quote);
           void requestReviewAudioPlayback();
       };
-      const rvRenderManualExplanationCopy = (manual: ManualExplanation, question?: any) => {
-          const raw = String(manual.rawText || '').trim();
-          const paras = raw.split(/\n+/).map(p => p.trim()).filter(Boolean);
-          const TOKEN_SPLIT_RE = /("[^"]+"|(?:\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?\]))/gi;
-          return <div className="rv-manual-copy">
-              {paras.map((para, pIdx) => {
-                  const parts = para.split(TOKEN_SPLIT_RE).filter(part => part.length > 0);
-                  return (
-                      <p key={pIdx} className="rv-explain-p" style={{ marginBottom: pIdx < paras.length - 1 ? 8 : 0 }}>
-                          {parts.map((part, index) => {
-                              if (part.startsWith('"') && part.endsWith('"')) {
-                                  return <span key={index} className="rv-manual-quote">{part}</span>;
-                              }
-                              if (/^\[\d{1,2}:\d{2}/i.test(part) && part.endsWith(']')) {
-                                  const cleanLabel = part.slice(1, -1).trim();
-                                  const { start, end } = rvTimestampRangeSeconds(cleanLabel);
-                                  const tsObj: ManualExplanationTimestamp = {
-                                      startTime: start,
-                                      endTime: end,
-                                      label: cleanLabel
-                                  };
-                                  return (
-                                      <button
-                                          key={index}
-                                          type="button"
-                                          className="rv-review-action rv-review-action-time"
-                                          style={{ display: 'inline-flex', padding: '2px 7px', margin: '0 4px', fontSize: 11, verticalAlign: 'baseline', minHeight: 22 }}
-                                          onClick={() => {
-                                              if (question) rvSeekManualTimestamp(tsObj, question);
-                                              else rvSeek(cleanLabel);
-                                          }}
-                                          title={`Play audio from ${cleanLabel}`}
-                                      >
-                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-                                          {cleanLabel}
-                                      </button>
-                                  );
-                              }
-                              return <React.Fragment key={index}>{part}</React.Fragment>;
-                          })}
-                      </p>
-                  );
-              })}
-          </div>;
+
+      const rvQuestionStatus = (q: any): "correct" | "wrong" | "skipped" => {
+          const group = rvGroupByQuestionId.get(q?.id);
+          if (group?.isChoiceMultiple) {
+              const sel = group.multiple?.selected || [];
+              if (!Array.isArray(sel) || sel.length === 0) return "skipped";
+              return group.multiple?.isFullyCorrect ? "correct" : "wrong";
+          }
+          const ans = rvEffectiveAnswers?.[q?.id];
+          const isBlank = ans === undefined || ans === null || String(ans).trim() === "" || (Array.isArray(ans) && ans.length === 0);
+          if (isBlank) return "skipped";
+          if (q?.type === "DRAG_DROP_HEADING") {
+              const headingCatalog = getHeadingCatalog([
+                  q,
+                  reviewQuiz.quiz,
+                  ...rvAllQuestions,
+                  ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
+              ]);
+              const headingOptions = Array.from(headingCatalog.values());
+              return isSingleQuestionCorrect({ ...q, options: headingOptions }, ans) ? "correct" : "wrong";
+          }
+          return isSingleQuestionCorrect(q, ans) ? "correct" : "wrong";
       };
-      const rvRenderReviewActions = (question: any, studentAnswer?: any, aiQuestion?: any) => {
+
+      const rvCompletionAnswer = (q: any) => {
+          const raw = rvEffectiveAnswers?.[q?.id];
+          const blank = raw === undefined || raw === null || String(raw).trim() === "";
+          const given = blank ? "" : String(raw).trim();
+          const accepted = String(q?.correctAnswer ?? "").split("/").map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
+          return {
+              blank,
+              given,
+              expected: String(q?.correctAnswer ?? "").split("/")[0].trim(),
+              correct: !blank && accepted.includes(given.toLocaleLowerCase()),
+          };
+      };
+
+      const rvFormatDisplayAnswers = (q: any) => {
+          const raw = rvEffectiveAnswers?.[q?.id];
+          const blank = raw === undefined || raw === null || String(raw).trim() === "" || (Array.isArray(raw) && raw.length === 0);
+          if (q?.type === "CHOICE") {
+              const cIdx = Number(q.correctAnswer);
+              const cLetter = !isNaN(cIdx) ? String.fromCharCode(65 + cIdx) : String(q.correctAnswer || "").trim().toUpperCase();
+              const cText = (!isNaN(cIdx) && q.options?.[cIdx]) ? cleanOptionAnswerText(q.options[cIdx]) : "";
+              const sIdx = Number(raw);
+              const sLetter = !blank && !isNaN(sIdx) ? String.fromCharCode(65 + sIdx) : (!blank ? String(raw).trim().toUpperCase() : "");
+              return {
+                  blank,
+                  given: blank ? "(bỏ trống)" : sLetter,
+                  expected: cText ? `${cLetter}. ${cText}` : cLetter,
+                  expectedShort: cLetter,
+                  correct: rvQuestionStatus(q) === "correct",
+              };
+          }
+          if (q?.type === "CHOICE_MULTIPLE") {
+              const group = rvGroupByQuestionId.get(q.id);
+              const multi = group?.multiple || getChoiceMultipleOutcome([q], { [q.id]: raw });
+              const sLetters = (multi.selected || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
+              const cLetters = (multi.correct || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
+              return {
+                  blank: !sLetters,
+                  given: sLetters || "(bỏ trống)",
+                  expected: cLetters,
+                  expectedShort: cLetters,
+                  correct: Boolean(multi.isFullyCorrect),
+              };
+          }
+          if (q?.type === "DRAG_DROP_HEADING") {
+              const headingCatalog = getHeadingCatalog([
+                  q,
+                  reviewQuiz.quiz,
+                  ...rvAllQuestions,
+                  ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
+              ]);
+              const headingOptions = Array.from(headingCatalog.values());
+              const givenMeta = blank ? { id: "", text: "" } : resolveHeadingAnswerMeta({ ...q, options: headingOptions }, raw);
+              const expectedMeta = resolveHeadingAnswerMeta({ ...q, options: headingOptions }, q.correctAnswer);
+              const givenId = normalizeHeadingId(givenMeta.id) || String(raw || "");
+              const expectedId = normalizeHeadingId(expectedMeta.id) || String(q.correctAnswer || "");
+              const expectedFull = expectedMeta.text ? `${expectedId}. ${headingPlainText(expectedMeta.text)}` : expectedId;
+              return {
+                  blank,
+                  given: blank ? "(bỏ trống)" : givenId,
+                  expected: expectedFull,
+                  expectedShort: expectedId,
+                  correct: !blank && isSingleQuestionCorrect({ ...q, options: headingOptions }, raw),
+              };
+          }
+          if (q?.type === "MATCHING") {
+              const givenStr = blank ? "(bỏ trống)" : resolveMatchingAnswerText(q, raw);
+              const expectedStr = resolveMatchingAnswerText(q, q.correctAnswer);
+              return {
+                  blank,
+                  given: givenStr,
+                  expected: expectedStr,
+                  expectedShort: expectedStr,
+                  correct: !blank && isSingleQuestionCorrect(q, raw),
+              };
+          }
+          const comp = rvCompletionAnswer(q);
+          return {
+              blank: comp.blank,
+              given: comp.blank ? "(bỏ trống)" : comp.given,
+              expected: comp.expected,
+              expectedShort: comp.expected,
+              correct: comp.correct,
+          };
+      };
+
+      const rvToggleDrawer = (qId: string, mode: "teacher" | "ai", qObj?: any, studentAns?: any) => {
+          const current = rvOpenDrawers[qId] || null;
+          const next = current === mode ? null : mode;
+          setRvOpenDrawers(prev => ({ ...prev, [qId]: next }));
+          if (next === "ai" && qObj && !explainMap[qId]?.text && !explainMap[qId]?.loading) {
+              void handleAiExplain(qObj, studentAns, reviewQuiz.quiz);
+          }
+      };
+
+      const rvJumpToQuestionFromMatrix = (q: any, qNum: number) => {
+          const targetSec = rvSectionOf(q);
+          setReviewSectionIdx(targetSec);
+          setReviewActiveQuestionId(q.id);
+          setRvFlashQuestionNum(qNum);
+          window.setTimeout(() => {
+              const rowEl = document.getElementById(`q-row-${qNum}`);
+              if (rowEl) {
+                  rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
+              }
+          }, 90);
+          window.setTimeout(() => {
+              setRvFlashQuestionNum(prev => (prev === qNum ? null : prev));
+          }, 1800);
+      };
+
+      // Counts across entire exam
+      let rvCorrectTotal = 0;
+      let rvWrongTotal = 0;
+      let rvSkippedTotal = 0;
+      rvAllQuestions.forEach((q: any) => {
+          const st = rvQuestionStatus(q);
+          const pts = getQuestionPointCount(q) || 1;
+          if (st === "correct") rvCorrectTotal += pts;
+          else if (st === "skipped") rvSkippedTotal += pts;
+          else rvWrongTotal += pts;
+      });
+      const rvTotalCount = rvScoreSummary.total || rvAllQuestions.length || 1;
+      const rvLiveBand = rvIsIntegrated
+          ? ((rvScoreSummary.score / Math.max(1, rvTotalCount)) * 10).toFixed(1)
+          : getIeltsBand(rvScoreSummary.score, rvTotalCount, reviewQuiz.quiz.type);
+      const rvAccuracyPct = Math.round((rvScoreSummary.score / Math.max(1, rvTotalCount)) * 100);
+      const rvTimeSpentSecs = Number(reviewQuiz.result.durationSeconds || (reviewQuiz.result as any).timeSpent || 0);
+      const rvFormattedTimeSpent = rvTimeSpentSecs > 0
+          ? `${String(Math.floor(rvTimeSpentSecs / 60)).padStart(2, "0")}:${String(rvTimeSpentSecs % 60).padStart(2, "0")}`
+          : "--:--";
+
+      // Render Inline Micro-Action Cluster (4 compact buttons right next to each question/answer)
+      const rvRenderInlineMicroCluster = (question: any, studentAnswer?: any, aiQuestion?: any) => {
           if (!question?.id) return null;
           const manual = rvManualExplanationOf(question);
-          const quotes = manual?.parsedQuotes || [];
-          const timestamps = (manual?.parsedTimestamps || []).filter((ts: ManualExplanationTimestamp) => Number.isFinite(Number(ts.startTime)));
           const aiState = explainMap[question.id];
+          const openMode = rvOpenDrawers[question.id] || null;
+          const timestamps = (manual?.parsedTimestamps || []).filter((ts: ManualExplanationTimestamp) => Number.isFinite(Number(ts.startTime)));
+          const aiTs = aiState?.audioEvidence?.timestamp || aiState?.audioEvidenceSegments?.[0]?.timestamp || "";
+          const primaryTsLabel = timestamps[0]?.label || aiTs || "";
+
           return (
-              <div className="rv-review-action-wrap">
-                  <div className="rv-review-actions">
-                      {!!manual?.rawText && (
-                          <button type="button" className="rv-review-action rv-review-action-teacher" onClick={() => setManualExplanationQuestion(question)} title="Teacher explanation">
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-.8.6-1.3 1.4-1.5 2.5h-4c-.2-1.1-.7-1.9-1.5-2.5Z"/></svg>
-                              Why
-                          </button>
+              <span className="rv-micro-cluster" onClick={e => e.stopPropagation()}>
+                  <button
+                      type="button"
+                      className={`micro-btn-bulb ${openMode === "teacher" ? "is-active" : ""}`}
+                      onClick={() => rvToggleDrawer(question.id, "teacher", aiQuestion || question, studentAnswer)}
+                      title="Giải thích của Giáo viên"
+                  >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 18h6" />
+                          <path d="M10 22h4" />
+                          <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                      </svg>
+                  </button>
+                  <button
+                      type="button"
+                      className="micro-btn-loc"
+                      onClick={() => rvLocateQuestionEvidence(question)}
+                      title={rvActiveIsListening ? "Định vị dẫn chứng trong Transcript" : "Định vị dẫn chứng trong Passage"}
+                  >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                          <circle cx="12" cy="10" r="3" />
+                      </svg>
+                  </button>
+                  {rvActiveIsListening && primaryTsLabel && (
+                      <button
+                          type="button"
+                          className="micro-btn-audio"
+                          onClick={() => {
+                              if (timestamps[0]) rvSeekManualTimestamp(timestamps[0], question);
+                              else rvSeek(primaryTsLabel);
+                          }}
+                          title={`Nghe dẫn chứng tại ${primaryTsLabel}`}
+                      >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                          </svg>
+                          <span>{primaryTsLabel}</span>
+                      </button>
+                  )}
+                  <button
+                      type="button"
+                      className={`micro-btn-ai ${openMode === "ai" ? "is-active" : ""}`}
+                      onClick={() => rvToggleDrawer(question.id, "ai", aiQuestion || question, studentAnswer)}
+                      title="Giải thích AI (3 dòng súc tích)"
+                  >
+                      {aiState?.loading ? "..." : "AI"}
+                  </button>
+              </span>
+          );
+      };
+
+      // Render Expandable Inline Drawer (Teacher or AI) directly below the question line/row
+      const rvRenderInlineDrawer = (question: any, studentAnswer?: any, aiQuestion?: any) => {
+          if (!question?.id) return null;
+          const openMode = rvOpenDrawers[question.id] || null;
+          if (!openMode) return null;
+          const manual = rvManualExplanationOf(question);
+          const aiState = explainMap[question.id];
+          const qNum = rvQuestionNumber(question);
+
+          if (openMode === "teacher") {
+              return (
+                  <div className="inline-explain-drawer teacher" onClick={e => e.stopPropagation()}>
+                      <div className="rv-drawer-head">
+                          <span className="rv-drawer-title">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M9 18h6" />
+                                  <path d="M10 22h4" />
+                                  <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                              </svg>
+                              Giải thích Giáo viên — Câu {qNum}
+                          </span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              {userRole === "TEACHER" && (
+                                  <button
+                                      type="button"
+                                      className="rv-drawer-link-btn"
+                                      onClick={() => setManualExplanationQuestion(question)}
+                                  >
+                                      Sửa giải thích
+                                  </button>
+                              )}
+                              <button
+                                  type="button"
+                                  className="rv-drawer-close"
+                                  onClick={() => setRvOpenDrawers(prev => ({ ...prev, [question.id]: null }))}
+                                  aria-label="Đóng"
+                              >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                              </button>
+                          </div>
+                      </div>
+                      {manual?.rawText ? (
+                          <div className="rv-drawer-body">
+                              {String(manual.rawText).split(/\n+/).filter(Boolean).map((line, idx) => (
+                                  <div key={idx} className="rv-drawer-line">{line}</div>
+                              ))}
+                          </div>
+                      ) : (
+                          <div className="rv-drawer-empty">
+                              <span>Chưa có ghi chú thủ công của Giáo viên cho câu này.</span>
+                              <button
+                                  type="button"
+                                  className="rv-drawer-switch-ai"
+                                  onClick={() => rvToggleDrawer(question.id, "ai", aiQuestion || question, studentAnswer)}
+                              >
+                                  Xem giải thích AI ngay
+                              </button>
+                          </div>
                       )}
-                      <button type="button" className="rv-review-action rv-review-action-ai" disabled={!!aiState?.loading} onClick={() => handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)} title="AI explanation">
-                          {aiState?.loading ? <Ico name="refresh" size={14} /> : <Ico name="bulb" size={14} />}
-                          Why (AI)
+                  </div>
+              );
+          }
+
+          // openMode === "ai"
+          const rawAiText = String(aiState?.text || "")
+              .replace(/\s*\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]\s*/gi, ' "$1" ')
+              .trim();
+          const aiLines = rawAiText
+              .split(/\n+/)
+              .map(l => l.trim())
+              .filter(Boolean);
+
+          return (
+              <div className="inline-explain-drawer ai" onClick={e => e.stopPropagation()}>
+                  <div className="rv-drawer-head">
+                      <span className="rv-drawer-title">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1" />
+                          </svg>
+                          Phân tích AI — Câu {qNum}
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {!aiState?.loading && (
+                              <button
+                                  type="button"
+                                  className="rv-drawer-link-btn"
+                                  onClick={() => void handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)}
+                              >
+                                  Phân tích lại
+                              </button>
+                          )}
+                          <button
+                              type="button"
+                              className="rv-drawer-close"
+                              onClick={() => setRvOpenDrawers(prev => ({ ...prev, [question.id]: null }))}
+                              aria-label="Đóng"
+                          >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                          </button>
+                      </div>
+                  </div>
+                  {aiState?.loading ? (
+                      <div className="rv-drawer-loading">Đang trích xuất dẫn chứng và phân tích câu {qNum}...</div>
+                  ) : aiLines.length > 0 ? (
+                      <div className="rv-drawer-body">
+                          {aiLines.map((line, idx) => (
+                              <div key={idx} className="rv-drawer-line">{line}</div>
+                          ))}
+                      </div>
+                  ) : (
+                      <div className="rv-drawer-empty">
+                          <span>Nhấn để tạo phân tích 3 dòng súc tích từ văn bản nguồn.</span>
+                          <button
+                              type="button"
+                              className="rv-drawer-switch-ai"
+                              onClick={() => void handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)}
+                          >
+                              Tạo phân tích AI
+                          </button>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
+      // Render an inline answer slot ([num] wrong -> correct + micro-action cluster)
+      const rvRenderInlineSlotBox = (question: any, isDashedDrag = false) => {
+          if (!question) return null;
+          const qNum = rvQuestionNumber(question);
+          const disp = rvFormatDisplayAnswers(question);
+          const isFlashed = rvFlashQuestionNum === qNum;
+
+          if (rvRetryMode && !disp.correct) {
+              const retryVal = rvRetryAnswers[question.id] ?? "";
+              return (
+                  <span id={`q-row-${qNum}`} className={`rv-inline-slot-wrap ${isFlashed ? "rv-flash-ring" : ""}`}>
+                      <span className={isDashedDrag ? "dashed-drag-slot" : "inline-ans-box"}>
+                          <span className="rv-qnum-badge">{qNum}</span>
+                          <input
+                              type="text"
+                              value={retryVal}
+                              onChange={e => setRvRetryAnswers(prev => ({ ...prev, [question.id]: e.target.value }))}
+                              placeholder="Nhập lại..."
+                              className="rv-retry-inline-input"
+                          />
+                      </span>
+                      {rvRenderInlineMicroCluster(question, rvEffectiveAnswers?.[question.id], question)}
+                  </span>
+              );
+          }
+
+          return (
+              <span id={`q-row-${qNum}`} className={`rv-inline-slot-wrap ${isFlashed ? "rv-flash-ring" : ""}`}>
+                  <span className={`${isDashedDrag ? "dashed-drag-slot" : "inline-ans-box"} ${disp.correct ? "is-correct" : disp.blank ? "is-skipped" : "is-wrong"}`}>
+                      <span className="rv-qnum-badge">{qNum}</span>
+                      {disp.correct ? (
+                          <strong className="rv-ans-correct">{disp.given}</strong>
+                      ) : (
+                          <>
+                              <span className={disp.blank ? "rv-ans-skipped" : "rv-ans-wrong"}>{disp.given}</span>
+                              <span className="rv-ans-arrow">→</span>
+                              <strong className="rv-ans-correct">{disp.expected}</strong>
+                          </>
+                      )}
+                  </span>
+                  {rvRenderInlineMicroCluster(question, rvEffectiveAnswers?.[question.id], question)}
+              </span>
+          );
+      };
+
+      // Helper to render HTML lines with [N] tokens replaced by interactive React inline slot + drawer below
+      const rvRenderHtmlWithInlineBlanks = (rawHtml: string, byNumber: Map<number, any>, isDashedDrag = false) => {
+          const formatted = formatContent(rawHtml || "");
+          // Split by block boundaries (<p>, <div>, <li>, <tr>, <br>) so each line with a [N] blank can render its inline drawer directly underneath
+          const hasTable = /<table\b/i.test(formatted);
+          if (hasTable) {
+              const parts = formatted.split(/(\[\d+\])/g);
+              const questionsInTable: any[] = [];
+              return (
+                  <div className="rv-rich-context-block">
+                      <div className="rv-table-inline-flow">
+                          {parts.map((part, idx) => {
+                              const m = part.match(/^\[(\d+)\]$/);
+                              if (m) {
+                                  const q = byNumber.get(Number(m[1]));
+                                  if (q) {
+                                      questionsInTable.push(q);
+                                      return (
+                                          <span key={`tbl-slot-${idx}`} className="rv-inline-block-unit">
+                                              {rvRenderInlineSlotBox(q, isDashedDrag)}
+                                              {rvRenderInlineDrawer(q, rvEffectiveAnswers?.[q.id], q)}
+                                          </span>
+                                      );
+                                  }
+                              }
+                              return <span key={`tbl-html-${idx}`} dangerouslySetInnerHTML={{ __html: part }} />;
+                          })}
+                      </div>
+                  </div>
+              );
+          }
+
+          const lines = formatted
+              .replace(/<\/(?:p|div|li|h[1-6])>/gi, "\n")
+              .replace(/<br\s*\/?>/gi, "\n")
+              .split(/\n+/)
+              .map(l => l.trim())
+              .filter(Boolean);
+
+          return (
+              <div className="rv-rich-context-block">
+                  {lines.map((lineHtml, lineIdx) => {
+                      const tokenMatches = Array.from(lineHtml.matchAll(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/g));
+                      if (tokenMatches.length === 0) {
+                          const cleanLine = lineHtml.replace(/^<(?:p|div|li)[^>]*>/i, "");
+                          return <div key={lineIdx} className="rv-context-line" dangerouslySetInnerHTML={{ __html: cleanLine }} />;
+                      }
+                      const segments = lineHtml.replace(/^<(?:p|div|li)[^>]*>/i, "").split(/(\[\d+\](?:\s*(?:_{2,}|\.{3,}|…+))?)/g);
+                      const lineQuestions: any[] = [];
+                      return (
+                          <div key={lineIdx} className="rv-context-question-line">
+                              <div className="rv-context-line-content">
+                                  {segments.map((seg, sIdx) => {
+                                      const m = seg.match(/^\[(\d+)\]/);
+                                      if (m) {
+                                          const q = byNumber.get(Number(m[1]));
+                                          if (q) {
+                                              if (!lineQuestions.some(item => item.id === q.id)) lineQuestions.push(q);
+                                              return <React.Fragment key={sIdx}>{rvRenderInlineSlotBox(q, isDashedDrag)}</React.Fragment>;
+                                          }
+                                      }
+                                      return <span key={sIdx} dangerouslySetInnerHTML={{ __html: seg }} />;
+                                  })}
+                              </div>
+                              {lineQuestions.map(q => (
+                                  <React.Fragment key={`drawer-${q.id}`}>
+                                      {rvRenderInlineDrawer(q, rvEffectiveAnswers?.[q.id], q)}
+                                  </React.Fragment>
+                              ))}
+                          </div>
+                      );
+                  })}
+              </div>
+          );
+      };
+
+      const rvCompletionContext = (q: any) => String(q?.groupContext || "");
+      const rvIsInlineCompletion = (q: any) => (["BLANK", "SHORT_ANSWER"].includes(String(q?.type || "").toUpperCase())
+          || (q?.type === "DRAG_DROP" && q?.subType === "SUMMARY_DRAG"))
+          && /\[\d+\]/.test(rvCompletionContext(q));
+
+      const rvIsGroupedReviewQuestion = (question: any) => {
+          const type = String(question?.type || "").toUpperCase();
+          const subType = String(question?.subType || "").toUpperCase();
+          return type === "MATCHING"
+              || type === "DRAG_DROP_HEADING"
+              || type === "MAP_DRAG"
+              || type === "DIAGRAM_LABEL"
+              || (type === "DRAG_DROP" && ["COLUMN_DRAG", "FLOWCHART_DRAG", "SENTENCE_ENDING_DRAG"].includes(subType))
+              || subType === "FLOWCHART"
+              || rvIsInlineCompletion(question);
+      };
+
+      const rvQuestionBodyHtml = (value: any) => {
+          const plain = headingPlainText(value);
+          if (!plain || /^(?:question\s*)?\d+[.)]?$/i.test(plain)) return "";
+          return formatContent(value || "");
+      };
+
+      // Persistent hidden audio element so playback works seamlessly across tabs
+      const rvAudioSrc = reviewQuiz.quiz.audioUrl || "";
+
+      return (
+          <div className="rv-workbench-root">
+              {globalStyles}
+              <style>{`
+                  .rv-workbench-root {
+                      --rv-bg: #FAF7F2;
+                      --rv-surface: #FFFFFF;
+                      --rv-subtle: #F4EFE6;
+                      --rv-border: #E6DFD3;
+                      --rv-border-strong: #D4CBB8;
+                      --rv-ink: #1C1917;
+                      --rv-muted: #57534E;
+                      --rv-soft: #78716C;
+                      height: 100vh;
+                      width: 100vw;
+                      background: var(--rv-bg);
+                      color: var(--rv-ink);
+                      display: flex;
+                      flex-direction: column;
+                      overflow: hidden;
+                      font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+                  }
+                  .rv-mono {
+                      font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+                      font-variant-numeric: tabular-nums;
+                  }
+                  /* Top Header */
+                  .rv-topbar {
+                      height: 56px;
+                      flex-shrink: 0;
+                      background: var(--rv-surface);
+                      border-bottom: 1px solid var(--rv-border);
+                      padding: 0 20px;
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 16px;
+                      z-index: 60;
+                  }
+                  .rv-back-btn {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      height: 34px;
+                      padding: 0 12px;
+                      border-radius: 8px;
+                      border: 1px solid var(--rv-border-strong);
+                      background: var(--rv-surface);
+                      color: var(--rv-ink);
+                      font-size: 13px;
+                      font-weight: 700;
+                      cursor: pointer;
+                      transition: background 0.15s ease;
+                  }
+                  .rv-back-btn:hover { background: var(--rv-subtle); }
+                  .rv-tab-strip {
+                      display: flex;
+                      align-items: center;
+                      gap: 4px;
+                      background: var(--rv-subtle);
+                      padding: 4px;
+                      border-radius: 10px;
+                      border: 1px solid var(--rv-border);
+                      overflow-x: auto;
+                      max-width: 100%;
+                  }
+                  .rv-tab-pill {
+                      border: none;
+                      background: transparent;
+                      color: var(--rv-muted);
+                      font-size: 12.5px;
+                      font-weight: 700;
+                      padding: 5px 12px;
+                      border-radius: 7px;
+                      cursor: pointer;
+                      white-space: nowrap;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      transition: all 0.15s ease;
+                  }
+                  .rv-tab-pill.is-active {
+                      background: var(--rv-ink);
+                      color: #FFFFFF;
+                  }
+                  .rv-tab-count {
+                      font-family: 'JetBrains Mono', monospace;
+                      font-size: 11px;
+                      opacity: 0.85;
+                  }
+                  .rv-filter-btn {
+                      height: 34px;
+                      padding: 0 12px;
+                      border-radius: 8px;
+                      border: 1px solid var(--rv-border-strong);
+                      background: var(--rv-surface);
+                      color: var(--rv-ink);
+                      font-size: 12.5px;
+                      font-weight: 700;
+                      cursor: pointer;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                  }
+                  .rv-filter-btn.is-active {
+                      background: #FEE2E2;
+                      border-color: #FCA5A5;
+                      color: #B91C1C;
+                  }
+                  .rv-ai-assistant-btn {
+                      height: 34px;
+                      padding: 0 13px;
+                      border-radius: 8px;
+                      border: 1px solid #FDE68A;
+                      background: #FFFBEB;
+                      color: #92400E;
+                      font-size: 12.5px;
+                      font-weight: 800;
+                      cursor: pointer;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 7px;
+                  }
+                  .rv-ai-assistant-btn:hover { background: #FEF3C7; }
+                  /* Overview Dashboard */
+                  .rv-overview-scroll {
+                      flex: 1;
+                      overflow-y: auto;
+                      padding: 28px 24px 64px;
+                  }
+                  .rv-overview-container {
+                      max-width: 1040px;
+                      margin: 0 auto;
+                      display: flex;
+                      flex-direction: column;
+                      gap: 20px;
+                  }
+                  .rv-ed-card {
+                      background: var(--rv-surface);
+                      border: 1px solid var(--rv-border);
+                      border-radius: 12px;
+                      padding: 24px;
+                      box-shadow: 0 1px 2px rgba(28, 25, 23, 0.03);
+                  }
+                  .rv-ed-card-title {
+                      font-size: 15px;
+                      font-weight: 800;
+                      color: var(--rv-ink);
+                      margin: 0 0 16px 0;
+                  }
+                  /* Sticky Audio Bar */
+                  .rv-audio-bar {
+                      height: 44px;
+                      flex-shrink: 0;
+                      background: var(--rv-surface);
+                      border-bottom: 1px solid var(--rv-border);
+                      padding: 0 20px;
+                      display: flex;
+                      align-items: center;
+                      gap: 12px;
+                      z-index: 50;
+                  }
+                  /* Split Workbench */
+                  .rv-split-body {
+                      flex: 1;
+                      display: flex;
+                      overflow: hidden;
+                      position: relative;
+                  }
+                  .rv-pane-left {
+                      height: 100%;
+                      display: flex;
+                      flex-direction: column;
+                      background: var(--rv-surface);
+                      border-right: 1px solid var(--rv-border);
+                      min-width: 280px;
+                  }
+                  .rv-pane-subhead {
+                      height: 40px;
+                      flex-shrink: 0;
+                      background: var(--rv-bg);
+                      border-bottom: 1px solid var(--rv-border);
+                      padding: 0 20px;
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      font-size: 12px;
+                      font-weight: 800;
+                      color: var(--rv-muted);
+                      text-transform: uppercase;
+                      letter-spacing: 0.04em;
+                  }
+                  .rv-pane-left-scroll {
+                      flex: 1;
+                      overflow-y: auto;
+                      padding: 28px 32px 48px;
+                      font-family: 'Newsreader', Georgia, 'Times New Roman', serif;
+                      font-size: 16px;
+                      line-height: 1.75;
+                      color: var(--rv-ink);
+                  }
+                  .rv-pane-right {
+                      flex: 1;
+                      height: 100%;
+                      overflow-y: auto;
+                      padding: 24px 28px 64px;
+                      background: var(--rv-bg);
+                      min-width: 320px;
+                  }
+                  .rv-splitter {
+                      width: 6px;
+                      cursor: col-resize;
+                      background: transparent;
+                      flex-shrink: 0;
+                      position: relative;
+                      z-index: 10;
+                  }
+                  .rv-splitter:hover { background: rgba(217, 119, 6, 0.25); }
+                  /* Inline Answer Slot & Micro-Action Cluster */
+                  .rv-inline-slot-wrap {
+                      display: inline-flex;
+                      align-items: center;
+                      flex-wrap: wrap;
+                      gap: 4px;
+                      margin: 2px 4px;
+                      vertical-align: middle;
+                      scroll-margin-top: 80px;
+                  }
+                  .rv-flash-ring {
+                      outline: 3px solid #F59E0B;
+                      outline-offset: 3px;
+                      border-radius: 8px;
+                      transition: outline 0.2s ease;
+                  }
+                  .inline-ans-box {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      padding: 2px 9px;
+                      border-radius: 6px;
+                      background: #FFFFFF;
+                      border: 1px solid var(--rv-border-strong);
+                      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+                      font-size: 13.5px;
+                      line-height: 1.45;
+                  }
+                  .inline-ans-box.is-correct {
+                      background: #DCFCE7;
+                      border-color: #BBF7D0;
+                  }
+                  .inline-ans-box.is-wrong {
+                      background: #FFFDF9;
+                      border-color: #FECACA;
+                  }
+                  .inline-ans-box.is-skipped {
+                      background: #FFFBEB;
+                      border-color: #FDE68A;
+                  }
+                  .dashed-drag-slot {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      padding: 3px 10px;
+                      border-radius: 6px;
+                      border: 1.5px dashed #94A3B8;
+                      background: #F8FAFC;
+                      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+                      font-size: 13.5px;
+                      line-height: 1.45;
+                  }
+                  .dashed-drag-slot.is-correct {
+                      border-color: #16A34A;
+                      background: #DCFCE7;
+                  }
+                  .dashed-drag-slot.is-wrong {
+                      border-color: #DC2626;
+                      background: #FFF5F5;
+                  }
+                  .rv-qnum-badge {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      min-width: 20px;
+                      height: 20px;
+                      padding: 0 5px;
+                      border-radius: 4px;
+                      background: var(--rv-ink);
+                      color: #FFFFFF;
+                      font-family: 'JetBrains Mono', monospace;
+                      font-size: 11px;
+                      font-weight: 700;
+                  }
+                  .rv-ans-wrong {
+                      color: #B91C1C;
+                      text-decoration: line-through;
+                      font-weight: 600;
+                  }
+                  .rv-ans-skipped {
+                      color: #B45309;
+                      font-style: italic;
+                      font-weight: 600;
+                  }
+                  .rv-ans-arrow {
+                      color: var(--rv-soft);
+                      font-weight: 700;
+                  }
+                  .rv-ans-correct {
+                      color: #15803D;
+                      font-weight: 800;
+                  }
+                  .rv-retry-inline-input {
+                      border: 1px solid #D97706;
+                      border-radius: 4px;
+                      padding: 2px 6px;
+                      font-size: 13px;
+                      width: 120px;
+                      background: #FFFFFF;
+                      color: var(--rv-ink);
+                      outline: none;
+                  }
+                  /* Micro-Action Cluster */
+                  .rv-micro-cluster {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 4px;
+                      margin-left: 4px;
+                      vertical-align: middle;
+                  }
+                  .micro-btn-bulb, .micro-btn-loc {
+                      height: 26px;
+                      width: 26px;
+                      padding: 0;
+                      border-radius: 6px;
+                      background: #FEF08A;
+                      border: 1px solid #FACC15;
+                      color: #854D0E;
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      cursor: pointer;
+                      transition: transform 0.12s ease, background 0.12s ease;
+                  }
+                  .micro-btn-bulb:hover, .micro-btn-loc:hover, .micro-btn-bulb.is-active {
+                      background: #FDE047;
+                      transform: translateY(-1px);
+                  }
+                  .micro-btn-audio {
+                      height: 26px;
+                      padding: 0 7px;
+                      border-radius: 6px;
+                      background: #DBEAFE;
+                      border: 1px solid #BFDBFE;
+                      color: #1E3A8A;
+                      font-family: 'JetBrains Mono', monospace;
+                      font-size: 11px;
+                      font-weight: 700;
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 4px;
+                      cursor: pointer;
+                  }
+                  .micro-btn-audio:hover { background: #BFDBFE; }
+                  .micro-btn-ai {
+                      height: 26px;
+                      padding: 0 8px;
+                      border-radius: 6px;
+                      background: #FEF3C7;
+                      border: 1px solid #F59E0B;
+                      color: #92400E;
+                      font-size: 11px;
+                      font-weight: 800;
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      cursor: pointer;
+                  }
+                  .micro-btn-ai:hover, .micro-btn-ai.is-active {
+                      background: #FDE68A;
+                  }
+                  /* Expandable Inline Explanation Drawer */
+                  .inline-explain-drawer {
+                      margin: 8px 0 10px 0;
+                      padding: 11px 14px;
+                      border-radius: 8px;
+                      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+                      font-size: 13.5px;
+                      line-height: 1.55;
+                      color: var(--rv-ink);
+                  }
+                  .inline-explain-drawer.teacher {
+                      background: #FEFCE8;
+                      border: 1px solid #FEF08A;
+                      border-left: 3px solid #EAB308;
+                  }
+                  .inline-explain-drawer.ai {
+                      background: #FFFBEB;
+                      border: 1px solid #FDE68A;
+                      border-left: 3px solid #D97706;
+                  }
+                  .rv-drawer-head {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      margin-bottom: 6px;
+                  }
+                  .rv-drawer-title {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      font-size: 12px;
+                      font-weight: 800;
+                      color: #854D0E;
+                      text-transform: uppercase;
+                      letter-spacing: 0.03em;
+                  }
+                  .rv-drawer-link-btn {
+                      border: none;
+                      background: transparent;
+                      color: #92400E;
+                      font-size: 11.5px;
+                      font-weight: 700;
+                      text-decoration: underline;
+                      cursor: pointer;
+                      padding: 0;
+                  }
+                  .rv-drawer-close {
+                      border: none;
+                      background: transparent;
+                      color: var(--rv-muted);
+                      cursor: pointer;
+                      padding: 2px;
+                      display: inline-flex;
+                  }
+                  .rv-drawer-body {
+                      display: flex;
+                      flex-direction: column;
+                      gap: 4px;
+                  }
+                  .rv-drawer-line {
+                      color: var(--rv-ink);
+                      font-size: 13.5px;
+                      line-height: 1.55;
+                  }
+                  .rv-drawer-empty {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 10px;
+                      color: var(--rv-muted);
+                      font-size: 12.5px;
+                  }
+                  .rv-drawer-switch-ai {
+                      border: 1px solid #F59E0B;
+                      background: #FEF3C7;
+                      color: #92400E;
+                      border-radius: 6px;
+                      padding: 3px 9px;
+                      font-size: 11.5px;
+                      font-weight: 700;
+                      cursor: pointer;
+                  }
+                  .rv-drawer-loading {
+                      color: #92400E;
+                      font-size: 12.5px;
+                      font-style: italic;
+                  }
+                  /* Context Cards & Task Containers */
+                  .rv-task-group-card {
+                      background: var(--rv-surface);
+                      border: 1px solid var(--rv-border);
+                      border-radius: 10px;
+                      padding: 18px 20px;
+                      margin-bottom: 16px;
+                  }
+                  .rv-task-instruction {
+                      font-size: 13.5px;
+                      color: var(--rv-muted);
+                      padding-bottom: 12px;
+                      margin-bottom: 14px;
+                      border-bottom: 1px solid var(--rv-border);
+                      line-height: 1.5;
+                  }
+                  .rv-context-line, .rv-context-question-line {
+                      margin-bottom: 8px;
+                      font-size: 14.5px;
+                      line-height: 1.75;
+                      color: var(--rv-ink);
+                  }
+                  .rv-word-bank {
+                      background: var(--rv-bg);
+                      border: 1px solid var(--rv-border-strong);
+                      border-radius: 8px;
+                      padding: 12px 14px;
+                      margin-bottom: 14px;
+                  }
+                  .rv-word-bank-title {
+                      font-size: 11px;
+                      font-weight: 800;
+                      text-transform: uppercase;
+                      letter-spacing: 0.05em;
+                      color: var(--rv-muted);
+                      margin-bottom: 8px;
+                  }
+                  .rv-word-bank-chips {
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 8px;
+                  }
+                  .rv-word-chip {
+                      background: var(--rv-surface);
+                      border: 1px solid var(--rv-border-strong);
+                      border-radius: 6px;
+                      padding: 4px 10px;
+                      font-size: 13px;
+                      font-weight: 600;
+                      color: var(--rv-ink);
+                  }
+                  /* Question Item Card (MCQ / TFNG / Matching / Short) */
+                  .rv-q-card {
+                      background: var(--rv-surface);
+                      border: 1px solid var(--rv-border);
+                      border-radius: 10px;
+                      padding: 14px 16px;
+                      margin-bottom: 12px;
+                      scroll-margin-top: 80px;
+                  }
+                  .rv-q-card-head {
+                      display: flex;
+                      align-items: flex-start;
+                      justify-content: space-between;
+                      gap: 10px;
+                  }
+                  .rv-q-stem {
+                      flex: 1;
+                      font-size: 14.5px;
+                      font-weight: 600;
+                      line-height: 1.55;
+                      color: var(--rv-ink);
+                  }
+                  .rv-mcq-list {
+                      list-style: none;
+                      padding: 0;
+                      margin: 10px 0 0 0;
+                      display: grid;
+                      gap: 6px;
+                  }
+                  .rv-mcq-opt {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 10px;
+                      padding: 8px 12px;
+                      border-radius: 8px;
+                      border: 1px solid var(--rv-border);
+                      background: var(--rv-bg);
+                      font-size: 13.5px;
+                      color: var(--rv-ink);
+                  }
+                  .rv-mcq-opt.is-correct {
+                      background: #DCFCE7;
+                      border-color: #16A34A;
+                      color: #15803D;
+                      font-weight: 700;
+                  }
+                  .rv-mcq-opt.is-wrong {
+                      background: #FEE2E2;
+                      border-color: #DC2626;
+                      color: #B91C1C;
+                  }
+                  .rv-mcq-tag {
+                      font-size: 11px;
+                      font-weight: 800;
+                      white-space: nowrap;
+                  }
+                  /* Transcript & Passage Evidence Highlighting */
+                  .rv-transcript-block {
+                      scroll-margin-top: 20px;
+                      border-left: 3px solid transparent;
+                      padding: 10px 14px;
+                      border-radius: 8px;
+                      margin-bottom: 8px;
+                      transition: background 0.2s ease, border-color 0.2s ease;
+                  }
+                  .rv-transcript-block.rv-transcript-evidence {
+                      border-left-color: #D97706;
+                      background: #FEF3C7;
+                  }
+                  .rv-transcript-quote, .rv-reading-evidence-mark {
+                      background: #FEF08A;
+                      color: var(--rv-ink);
+                      border-radius: 3px;
+                      padding: 0 3px;
+                      box-shadow: inset 0 -2px 0 #EAB308;
+                  }
+                  .rv-transcript-time {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 4px;
+                      font-family: 'JetBrains Mono', monospace;
+                      font-size: 11.5px;
+                      font-weight: 700;
+                      color: #1E3A8A;
+                      background: #DBEAFE;
+                      border: 1px solid #BFDBFE;
+                      border-radius: 6px;
+                      padding: 2px 8px;
+                      margin-bottom: 6px;
+                      cursor: pointer;
+                  }
+                  /* Bottom Question Palette */
+                  .rv-footer-palette {
+                      height: 44px;
+                      flex-shrink: 0;
+                      background: var(--rv-surface);
+                      border-top: 1px solid var(--rv-border);
+                      padding: 0 20px;
+                      display: flex;
+                      align-items: center;
+                      gap: 14px;
+                      overflow-x: auto;
+                      z-index: 50;
+                  }
+                  .rv-palette-btn {
+                      width: 26px;
+                      height: 26px;
+                      border-radius: 6px;
+                      font-family: 'JetBrains Mono', monospace;
+                      font-size: 11.5px;
+                      font-weight: 700;
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      cursor: pointer;
+                      border: 1px solid var(--rv-border-strong);
+                      background: var(--rv-surface);
+                      color: var(--rv-ink);
+                  }
+                  .rv-palette-btn.correct { background: #DCFCE7; border-color: #BBF7D0; color: #15803D; }
+                  .rv-palette-btn.wrong { background: #FEE2E2; border-color: #FECACA; color: #B91C1C; }
+                  .rv-palette-btn.skipped { background: #FEF3C7; border-color: #FDE68A; color: #B45309; }
+              `}</style>
+
+              {/* Hidden persistent audio player */}
+              {rvAudioSrc && (
+                  <audio
+                      key={rvAudioSrc}
+                      id="review-audio"
+                      ref={audioRef}
+                      preload="metadata"
+                      playsInline
+                      src={rvAudioSrc}
+                      onContextMenu={(e) => e.preventDefault()}
+                      onLoadedMetadata={(e: any) => {
+                          const audio = e.currentTarget as HTMLAudioElement;
+                          audio.muted = false;
+                          audio.defaultMuted = false;
+                          audio.volume = Math.max(0, Math.min(1, _audioVolume));
+                          setRvAudioDur(audio.duration || 0);
+                          updateExamMediaSessionPosition(audio);
+                      }}
+                      onDurationChange={(e: any) => {
+                          const audio = e.currentTarget as HTMLAudioElement;
+                          setRvAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0);
+                      }}
+                      onTimeUpdate={(e: any) => publishAudioProgress(e.currentTarget as HTMLAudioElement, true)}
+                      onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
+                      onPlaying={handleExamAudioPlaying}
+                      onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
+                      onEnded={handleExamAudioEnded}
+                      onCanPlay={(e: any) => {
+                          const audio = e.currentTarget as HTMLAudioElement;
+                          recordAudioDiagnostic("canplay", audio);
+                          if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio);
+                      }}
+                      onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
+                      style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+                  />
+              )}
+
+              {/* Teacher manual explanation editor modal (if opened by teacher) */}
+              {manualExplanationQuestion && (() => {
+                  const manual = rvManualExplanationOf(manualExplanationQuestion);
+                  const number = rvQuestionNumber(manualExplanationQuestion);
+                  return (
+                      <div
+                          style={{ position: "fixed", inset: 0, zIndex: 250, background: "rgba(28,25,23,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+                          onMouseDown={(event) => { if (event.target === event.currentTarget) setManualExplanationQuestion(null); }}
+                      >
+                          <div style={{ width: "min(560px, 95vw)", maxHeight: "85vh", overflow: "auto", background: "#FFFFFF", border: "1px solid #E6DFD3", borderRadius: 12, padding: 20 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                                  <strong style={{ fontSize: 15 }}>Giải thích Giáo viên — Câu {number}</strong>
+                                  <button type="button" onClick={() => setManualExplanationQuestion(null)} style={{ border: "1px solid #D4CBB8", background: "#FFF", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>Đóng</button>
+                              </div>
+                              <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.6, color: "#1C1917" }}>
+                                  {manual?.rawText || "Chưa có giải thích."}
+                              </div>
+                          </div>
+                      </div>
+                  );
+              })()}
+
+              {/* TOP HEADER BAR */}
+              <header className="rv-topbar">
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                      <button
+                          type="button"
+                          className="rv-back-btn"
+                          onClick={() => {
+                              pauseExamAudioPlayback();
+                              setManualExplanationQuestion(null);
+                              setReviewActiveQuestionId(null);
+                              setRvRetryMode(false);
+                              setRvRetryAnswers({});
+                              setRvOpenDrawers({});
+                              setReviewQuiz(null);
+                          }}
+                      >
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="19" y1="12" x2="5" y2="12" />
+                              <polyline points="12 19 5 12 12 5" />
+                          </svg>
+                          <span>Quay lại</span>
+                      </button>
+                      <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#78716C", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                              {reviewQuiz.quiz.type} / REVIEW
+                          </div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: "#1C1917", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 320 }}>
+                              {reviewQuiz.quiz.title}
+                          </div>
+                      </div>
+                  </div>
+
+                  {/* Center Segmented Tab Bar */}
+                  <nav className="rv-tab-strip" aria-label="Review Sections">
+                      <button
+                          type="button"
+                          className={`rv-tab-pill ${rvIsOverview ? "is-active" : ""}`}
+                          onClick={() => setReviewSectionIdx(-1)}
+                      >
+                          <span>Tổng quan</span>
+                      </button>
+                      {rvSections.map((sec: any, idx: number) => {
+                          const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === idx)) : rvAllQuestions;
+                          const secCorrect = secQs.filter((q: any) => rvQuestionStatus(q) === "correct").length;
+                          const label = rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`;
+                          return (
+                              <button
+                                  key={idx}
+                                  type="button"
+                                  className={`rv-tab-pill ${!rvIsOverview && rvActiveIdx === idx ? "is-active" : ""}`}
+                                  onClick={() => {
+                                      setReviewSectionIdx(idx);
+                                      setReviewActiveQuestionId(null);
+                                  }}
+                              >
+                                  <span>{label}</span>
+                                  <span className="rv-tab-count">({secCorrect}/{secQs.length})</span>
+                              </button>
+                          );
+                      })}
+                  </nav>
+
+                  {/* Right Actions */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button
+                          type="button"
+                          className={`rv-filter-btn ${rvFilterWrongOnly ? "is-active" : ""}`}
+                          onClick={() => setRvFilterWrongOnly(!rvFilterWrongOnly)}
+                      >
+                          <span>{rvFilterWrongOnly ? `Chỉ câu sai (${rvWrongTotal + rvSkippedTotal})` : `Hiện tất cả (${rvTotalCount})`}</span>
                       </button>
                       <button
                           type="button"
-                          className="rv-review-action"
-                          style={{ background: 'rgba(99, 102, 241, 0.08)', color: '#4f46e5', borderColor: 'rgba(99, 102, 241, 0.25)' }}
+                          className="rv-ai-assistant-btn"
                           onClick={() => {
-                              setCopilotActiveQ(aiQuestion || question);
-                              setCopilotOpen(true);
-                          }}
-                          title={tx("Trao đổi 1-1 với gia sư AI về câu này", "Ask AI Copilot about this question")}
-                      >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                          {tx("Hỏi AI", "Ask AI")}
-                      </button>
-                      {!!quotes.length && (
-                          <button type="button" className="rv-review-action rv-review-action-evidence" onClick={() => rvJumpToManualEvidence(question)} title={rvActiveIsListening ? "Locate quote in transcript" : "Locate quote in reading passage"}>
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-                              Locate Evidence
-                          </button>
-                      )}
-                      {rvActiveIsListening && timestamps.length > 0 && (
-                          <div className="rv-review-timestamp-pills" aria-label="Locate timestamp">
-                              {timestamps.map((ts: ManualExplanationTimestamp, index: number) => (
-                                  <button key={`${ts.label}-${index}`} type="button" className="rv-review-action rv-review-action-time" onClick={() => rvSeekManualTimestamp(ts, question)} title={`Play audio from ${ts.label}`}>
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-                                      {ts.label}
-                                  </button>
-                              ))}
-                          </div>
-                      )}
-                  </div>
-                  {aiState?.loading && <div className="rv-completion-loading"><Ico name="refresh" size={14} /> {t('explain_loading')}</div>}
-                  {!!aiState && !aiState.loading && (
-                      <div className="rv-completion-explanation">
-                          <b><Ico name="bulb" size={15} /> {t('explain_title')}:</b><br />
-                          {rvRenderExplain(
-                              rvCleanExplainText(aiState.text || '', Boolean(aiState.deconstruction?.distractorBreakdown?.length)),
-                              aiState.audioEvidence,
-                              aiState.audioEvidenceSegments
-                          )}
-                          {(() => {
-                              const dec = aiState.deconstruction;
-                              if (!dec) return null;
-                              const pPairs = Array.isArray(dec.paraphrasePairs) ? dec.paraphrasePairs : [];
-                              const validPairs = pPairs.filter((pair: any) => {
-                                  const qT = String(pair?.questionTerm || pair?.questionPhrase || '').trim();
-                                  const pT = String(pair?.passageTerm || pair?.sourcePhrase || '').trim();
-                                  return qT.length > 0 && pT.length > 0 && qT !== '-' && pT !== '-';
-                              });
-                              const dItems = Array.isArray(dec.distractorBreakdown) ? dec.distractorBreakdown : [];
-                              const cleanOptionText = (raw: string): string => {
-                                  let s = String(raw || "").trim();
-                                  while (/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/.test(s)) {
-                                      s = s.replace(/^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*/, "").trim();
-                                  }
-                                  return s;
-                              };
-                              const isUnanswered = studentAnswer === undefined || studentAnswer === null || studentAnswer === '' || studentAnswer === '(trống)' || studentAnswer === '(bỏ trống)' || studentAnswer === 'No answer' || (Array.isArray(studentAnswer) && studentAnswer.length === 0);
-                              const rawTrapType = String(dec.trapType || '').trim();
-                              const hasNoAudioInTrap = /no audio|without (the )?audio|kh[oô]ng c[oó] audio|thi[eế]u audio/i.test(rawTrapType);
-                              const displayTrapType = hasNoAudioInTrap
-                                  ? (isUnanswered ? tx("Bắt nhịp từ khóa & chuyển ý", "Signpost & Transition Strategy") : tx("Bẫy từ khóa gây nhiễu", "Keyword Distractor Trap"))
-                                  : rawTrapType;
-
-                              let displayWhyWrong = String(dec.whyStudentWrong || '').trim();
-                              if (/without (the )?audio|kh[oô]ng c[oó] audio/i.test(displayWhyWrong)) {
-                                  displayWhyWrong = isUnanswered
-                                      ? tx("Cần chú ý từ khóa dẫn đường (signpost words) và bắt nhịp thông tin trước khi đáp án xuất hiện để không bị lỡ khoảng thời gian then chốt.", "Focus on signpost language and predict key answer categories before the speaker moves past the critical cue window.")
-                                      : tx("Phương án này chứa bẫy từ khóa gây nhiễu hoặc suy diễn quá mức so với dữ liệu gốc.", "This option contains misleading keyword distractors or unwarranted extrapolation.");
+                              if (!copilotOpen && copilotMessages.length === 0) {
+                                  setCopilotMessages([{ role: "copilot", text: "Chào bạn, bạn cần hỗ trợ gì?" }]);
                               }
-
-                              return (
-                                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
-                                      {/* 1. TRAP BADGE & REASONING */}
-                                      {displayTrapType && (
-                                          <div style={{
-                                              display: 'inline-flex',
-                                              alignItems: 'center',
-                                              gap: 6,
-                                              background: isUnanswered ? '#fef3c7' : '#fef2f2',
-                                              color: isUnanswered ? '#92400e' : '#b91c1c',
-                                              border: `1px solid ${isUnanswered ? '#fde68a' : '#fecaca'}`,
-                                              padding: '3px 9px',
-                                              borderRadius: 6,
-                                              fontSize: 11.5,
-                                              fontWeight: 700,
-                                              marginBottom: 6
-                                          }}>
-                                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                                              <span>{isUnanswered ? tx("CHIẾN THUẬT: ", "STRATEGY: ") : "TRAP: "}{displayTrapType}</span>
-                                          </div>
-                                      )}
-                                      {displayWhyWrong && (
-                                          <div style={{
-                                              fontSize: 12,
-                                              color: isUnanswered ? '#92400e' : '#991b1b',
-                                              background: isUnanswered ? '#fffbeb' : '#fff5f5',
-                                              borderLeft: `3px solid ${isUnanswered ? '#f59e0b' : '#ef4444'}`,
-                                              borderRadius: '0 6px 6px 0',
-                                              padding: '6px 10px',
-                                              marginBottom: 10,
-                                              lineHeight: 1.45
-                                          }}>
-                                              <strong>{isUnanswered ? tx("Chiến thuật xử lý câu bỏ trống: ", "Unanswered question strategy: ") : tx("Chẩn đoán lỗi sai: ", "Cognitive trap diagnosis: ")}</strong>
-                                              {displayWhyWrong}
-                                          </div>
-                                      )}
-
-                                      {/* 2. PARAPHRASE CHIPS */}
-                                      {validPairs.length > 0 && (
-                                          <div style={{ marginBottom: 10 }}>
-                                              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: C.sub, marginBottom: 6 }}>
-                                                  {tx("Bảng đối chiếu Paraphrase", "Paraphrase Mapping")}
-                                              </div>
-                                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                                  {validPairs.map((pair: any, pIdx: number) => {
-                                                      const qTerm = pair.questionTerm || pair.questionPhrase;
-                                                      const pTerm = pair.passageTerm || pair.sourcePhrase;
-                                                      const note = pair.explanation || pair.note;
-                                                      return (
-                                                          <div key={pIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 9px', fontSize: 11.5 }}>
-                                                              <span style={{ fontWeight: 700, color: '#1e40af' }}>{qTerm}</span>
-                                                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                                                              <span style={{ fontWeight: 700, color: '#047857' }}>{pTerm}</span>
-                                                              {note && <span style={{ color: C.sub, fontSize: 10.5, fontStyle: 'italic', borderLeft: `1px solid ${C.border}`, paddingLeft: 6 }}>{note}</span>}
-                                                          </div>
-                                                      );
-                                                  })}
-                                              </div>
-                                          </div>
-                                      )}
-
-                                      {/* 3. DISTRACTOR ELIMINATION LIST */}
-                                      {dItems.length > 0 && (
-                                          <div>
-                                              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: C.sub, marginBottom: 6 }}>
-                                                  {tx("Phân tích bẫy từng lựa chọn", "Option Distractor Breakdown")}
-                                              </div>
-                                              <div style={{ display: 'grid', gap: 5 }}>
-                                                  {dItems.map((item: any, oIdx: number) => {
-                                                      const rawStatus = String(item.status || item.verdict || '').trim();
-                                                      const statusUpper = rawStatus.toUpperCase();
-                                                      const isElimExplicit = statusUpper.includes('ELIMINATE') || statusUpper.includes('INCORRECT') || statusUpper.includes('WRONG') || statusUpper.includes('FALSE') || statusUpper.includes('TRAP') || statusUpper.includes('DISTRACTOR');
-
-                                                      const targetQ = aiQuestion || question;
-                                                      const defaultLetter = String.fromCharCode(65 + oIdx);
-                                                      const pMatch = String(item.option || '').trim().match(/^\s*\(?([A-Za-z0-9]+)[\.\)\:]\s*(.*)$/);
-                                                      const explicitLetter = pMatch && pMatch[1].length === 1 && /^[A-Za-z]$/.test(pMatch[1]) ? pMatch[1].toUpperCase() : '';
-                                                      const optLetter = explicitLetter || defaultLetter;
-
-                                                      const originalOpt = (Array.isArray(targetQ?.options) && targetQ.options[oIdx]) ? targetQ.options[oIdx] : '';
-                                                      const optBody = cleanOptionText(item.option || originalOpt);
-                                                      const displayOptionHeader = `${optLetter}. ${optBody}`;
-
-                                                      // 1. Correctness matching against targetQ.correctAnswer
-                                                      const qAnsRaw = targetQ?.correctAnswer ?? targetQ?.correct ?? targetQ?.answer;
-                                                      let isCorrectOption = false;
-
-                                                      if (targetQ?.type === 'CHOICE_MULTIPLE' || Array.isArray(qAnsRaw)) {
-                                                          const ansArray = Array.isArray(qAnsRaw) ? qAnsRaw : String(qAnsRaw || '').split(/[,;\s/]+/).filter(Boolean);
-                                                          isCorrectOption = ansArray.some((a: any) => {
-                                                              const aStr = String(a).trim();
-                                                              const aNum = Number(aStr);
-                                                              if (!isNaN(aNum) && /^\d+$/.test(aStr) && aNum === oIdx) return true;
-                                                              if (aStr.toUpperCase() === optLetter) return true;
-                                                              const cleanA = cleanOptionText(aStr).toLowerCase();
-                                                              return cleanA && (optBody.toLowerCase() === cleanA || (cleanA.length > 3 && optBody.toLowerCase().includes(cleanA)));
-                                                          });
-                                                      } else if (qAnsRaw !== undefined && qAnsRaw !== null && qAnsRaw !== '') {
-                                                          const qAnsStr = String(qAnsRaw).trim();
-                                                          const qAnsUpper = qAnsStr.toUpperCase();
-                                                          const qAnsNum = Number(qAnsStr);
-
-                                                          if (!isNaN(qAnsNum) && /^\d+$/.test(qAnsStr) && qAnsNum === oIdx) {
-                                                              isCorrectOption = true;
-                                                          } else if (qAnsUpper.length === 1 && /^[A-Z]$/.test(qAnsUpper) && qAnsUpper === optLetter) {
-                                                              isCorrectOption = true;
-                                                          } else {
-                                                              const tokens = qAnsUpper.split(/[,;\s/]+/).map((s: string) => s.trim()).filter(Boolean);
-                                                              if (tokens.includes(optLetter) || tokens.includes(String(oIdx))) {
-                                                                  isCorrectOption = true;
-                                                              } else {
-                                                                  const cleanQAns = cleanOptionText(qAnsStr).toLowerCase();
-                                                                  const cleanBody = optBody.toLowerCase();
-                                                                  if (cleanQAns && (cleanBody === cleanQAns || (cleanQAns.length > 3 && cleanBody.includes(cleanQAns)) || (cleanBody.length > 3 && cleanQAns.includes(cleanBody)))) {
-                                                                      isCorrectOption = true;
-                                                                  } else {
-                                                                      const tfngMap: Record<string, string> = {
-                                                                          'T': 'TRUE', 'TRUE': 'TRUE',
-                                                                          'F': 'FALSE', 'FALSE': 'FALSE',
-                                                                          'NG': 'NOT GIVEN', 'NOT GIVEN': 'NOT GIVEN',
-                                                                          'Y': 'YES', 'YES': 'YES',
-                                                                          'N': 'NO', 'NO': 'NO'
-                                                                      };
-                                                                      if (tfngMap[cleanBody.toUpperCase()] && tfngMap[cleanBody.toUpperCase()] === tfngMap[qAnsUpper]) {
-                                                                          isCorrectOption = true;
-                                                                      }
-                                                                  }
-                                                              }
-                                                          }
-                                                      } else {
-                                                          isCorrectOption = statusUpper.includes('CORRECT') && !isElimExplicit;
-                                                      }
-
-                                                      // 2. Student choice matching
-                                                      const stuRaw = studentAnswer;
-                                                      let isStudentChoice = false;
-                                                      if (!isUnanswered) {
-                                                          if (Array.isArray(stuRaw)) {
-                                                              isStudentChoice = stuRaw.some((s: any) => {
-                                                                  const sStr = String(s).trim();
-                                                                  const sNum = Number(sStr);
-                                                                  if (!isNaN(sNum) && /^\d+$/.test(sStr) && sNum === oIdx) return true;
-                                                                  if (sStr.toUpperCase() === optLetter) return true;
-                                                                  const cleanS = cleanOptionText(sStr).toLowerCase();
-                                                                  return cleanS && (optBody.toLowerCase() === cleanS || (cleanS.length > 3 && optBody.toLowerCase().includes(cleanS)));
-                                                              });
-                                                          } else {
-                                                              const sStr = String(stuRaw).trim();
-                                                              const sUpper = sStr.toUpperCase();
-                                                              const sNum = Number(sStr);
-                                                              if (!isNaN(sNum) && /^\d+$/.test(sStr) && sNum === oIdx) {
-                                                                  isStudentChoice = true;
-                                                              } else if (sUpper.length === 1 && /^[A-Z]$/.test(sUpper) && sUpper === optLetter) {
-                                                                  isStudentChoice = true;
-                                                              } else {
-                                                                  const cleanS = cleanOptionText(sStr).toLowerCase();
-                                                                  if (cleanS && (optBody.toLowerCase() === cleanS || (cleanS.length > 3 && optBody.toLowerCase().includes(cleanS)))) {
-                                                                      isStudentChoice = true;
-                                                                  }
-                                                              }
-                                                          }
-                                                      }
-
-                                                      const isWrongStudentChoice = !isCorrectOption && isStudentChoice;
-
-                                                      // 3. Styling & Badges
-                                                      let badgeText = 'ELIMINATE';
-                                                      let badgeBg = '#f1f5f9';
-                                                      let badgeColor = '#475569';
-                                                      let badgeBorder = '1px solid #cbd5e1';
-
-                                                      let rowBg = '#f8fafc';
-                                                      let rowBorder = '1px solid #e2e8f0';
-                                                      let titleColor = '#1e293b';
-                                                      let reasonColor = '#475569';
-
-                                                      if (isCorrectOption) {
-                                                          badgeText = 'CORRECT';
-                                                          badgeBg = '#dcfce7';
-                                                          badgeColor = '#15803d';
-                                                          badgeBorder = '1px solid #86efac';
-                                                          rowBg = '#f0fdf4';
-                                                          rowBorder = '1px solid #bbf7d0';
-                                                          titleColor = '#166534';
-                                                          reasonColor = '#15803d';
-                                                      } else if (isWrongStudentChoice) {
-                                                          badgeText = 'YOUR CHOICE · ELIMINATE';
-                                                          badgeBg = '#fee2e2';
-                                                          badgeColor = '#b91c1c';
-                                                          badgeBorder = '1px solid #fca5a5';
-                                                          rowBg = '#fff5f5';
-                                                          rowBorder = '1px solid #fecaca';
-                                                          titleColor = '#991b1b';
-                                                          reasonColor = '#7f1d1d';
-                                                      }
-
-                                                      let rawReason = String(item.reason || item.trapReason || '').trim();
-                                                      if (/without (the )?audio|kh[oô]ng c[oó] audio|impossible to confirm/i.test(rawReason)) {
-                                                          rawReason = isCorrectOption
-                                                              ? tx("Phương án này trả lời trực tiếp và phù hợp nhất với trọng tâm câu hỏi.", "This option directly and correctly satisfies the question prompt.")
-                                                              : tx("Phương án này chứa bẫy từ khóa gây nhiễu hoặc thông tin bị bóp méo.", "This option is a distractor containing distorted keywords or unwarranted assumptions.");
-                                                      }
-                                                      const reasonText = rawReason || (rawStatus.length > 15 ? rawStatus : '');
-
-                                                      return (
-                                                          <div key={oIdx} style={{
-                                                              display: 'flex',
-                                                              alignItems: 'baseline',
-                                                              gap: 8,
-                                                              padding: '6px 10px',
-                                                              borderRadius: 6,
-                                                              background: rowBg,
-                                                              border: rowBorder,
-                                                              fontSize: 11.5,
-                                                              lineHeight: 1.45
-                                                          }}>
-                                                              <span style={{
-                                                                  padding: '2px 6px',
-                                                                  borderRadius: 4,
-                                                                  fontWeight: 800,
-                                                                  fontSize: 9,
-                                                                  letterSpacing: 0.5,
-                                                                  textTransform: 'uppercase',
-                                                                  background: badgeBg,
-                                                                  color: badgeColor,
-                                                                  border: badgeBorder,
-                                                                  flexShrink: 0
-                                                              }}>
-                                                                  {badgeText}
-                                                              </span>
-                                                              <div style={{ flex: 1 }}>
-                                                                  <strong style={{ color: titleColor, marginRight: 6 }}>
-                                                                      {displayOptionHeader}
-                                                                  </strong>
-                                                                  {reasonText && (
-                                                                      <span style={{ color: reasonColor }}>
-                                                                          {reasonText}
-                                                                      </span>
-                                                                  )}
-                                                              </div>
-                                                          </div>
-                                                      );
-                                                  })}
-                                              </div>
-                                          </div>
-                                      )}
-                                  </div>
-                              );
-                          })()}
-                      </div>
-                  )}
-              </div>
-          );
-      };
-      const rvEscapeHtml = (value: any) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-      const rvCompletionAnswer = (q: any) => {
-          const raw = reviewQuiz.result.answers?.[q.id];
-          const blank = raw === undefined || raw === null || String(raw).trim() === '';
-          const given = blank ? '' : String(raw).trim();
-          const accepted = String(q.correctAnswer ?? '').split('/').map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
-          return { blank, given, expected: String(q.correctAnswer ?? '').split('/')[0].trim(), correct: !blank && accepted.includes(given.toLocaleLowerCase()) };
-      };
-      // Legacy tests are not consistent about subType: the same Notes block can
-      // arrive as SENTENCE, NOTES, or no subtype at all. The numbered shared
-      // context is the reliable signal for every inline completion form.
-      const rvCompletionContext = (q: any) => String(q.groupContext || '');
-      const rvIsInlineCompletion = (q: any) => (['BLANK', 'SHORT_ANSWER'].includes(String(q.type || '').toUpperCase())
-          || (q.type === 'DRAG_DROP' && q.subType === 'SUMMARY_DRAG'))
-          && /\[\d+\]/.test(rvCompletionContext(q));
-      const rvIsGroupedReviewQuestion = (question: any) => {
-          const type = String(question?.type || '').toUpperCase();
-          const subType = String(question?.subType || '').toUpperCase();
-          return type === 'MATCHING'
-              || type === 'DRAG_DROP_HEADING'
-              || type === 'MAP_DRAG'
-              || type === 'DIAGRAM_LABEL'
-              || (type === 'DRAG_DROP' && ['COLUMN_DRAG', 'FLOWCHART_DRAG'].includes(subType))
-              || subType === 'FLOWCHART'
-              || rvIsInlineCompletion(question);
-      };
-      const rvGroupedReviewNumbers = new Set<string>();
-      rvActiveQuestions.forEach((question: any) => {
-          if (rvIsGroupedReviewQuestion(question)) rvGroupedReviewNumbers.add(String(rvQuestionNumber(question)));
-      });
-      const rvQuestionBodyHtml = (value: any) => {
-          const plain = headingPlainText(value);
-          if (!plain || /^(?:question\s*)?\d+[.)]?$/.test(plain)) return "";
-          return formatContent(value || "");
-      };
-      const rvRenderCompletionGroup = (seed: any) => {
-          const groupQuestions = rvActiveQuestions.filter((candidate: any) =>
-              rvSectionOf(candidate) === rvActiveIdx
-              && rvIsInlineCompletion(candidate)
-              && rvCompletionContext(candidate) === rvCompletionContext(seed)
-          );
-          if (!groupQuestions.length) return null;
-          const selected = groupQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-              || groupQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
-              || groupQuestions[0];
-          const selectedState = rvCompletionAnswer(selected);
-          const selectQuestion = (question: any) => {
-              setReviewActiveQuestionId(question.id);
-              const evidence = explainMap[question.id]?.audioEvidence;
-              if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
-          };
-          const byNumber = new Map<number, any>();
-          groupQuestions.forEach((question: any) => byNumber.set(rvQuestionNumber(question), question));
-          const inlineContext = formatContent(rvCompletionContext(seed)).replace(/\[(\d+)\]/g, (token: string, rawNumber: string) => {
-              const question = byNumber.get(Number(rawNumber));
-              if (!question) return token;
-              const state = rvCompletionAnswer(question);
-              const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-              const value = state.blank ? 'No answer' : state.given;
-              return `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-completion-qid="${rvEscapeHtml(question.id)}" title="Question ${rawNumber}: ${rvEscapeHtml(value)}">${rawNumber}. ${rvEscapeHtml(value)}</button>`;
-          });
-          const selectedQuestionHtml = rvQuestionBodyHtml(selected.text);
-          return (
-              <section key={`completion-review-${seed.id}`} className="rv-completion-review">
-                  <div className="rv-completion-context" onClick={(event) => {
-                      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-completion-qid]');
-                      const question = groupQuestions.find((candidate: any) => candidate.id === button?.dataset.rvCompletionQid);
-                      if (question) selectQuestion(question);
-                  }} dangerouslySetInnerHTML={{ __html: inlineContext }} />
-                  <div className="rv-completion-nav" aria-label="Completion question navigation">
-                      {groupQuestions.map((question: any) => {
-                          const state = rvCompletionAnswer(question);
-                          const number = rvQuestionNumber(question);
-                          return <button key={question.id} type="button" onClick={() => selectQuestion(question)} className={`rv-completion-nav-button ${state.correct ? 'correct' : state.blank ? 'blank' : 'wrong'} ${selected.id === question.id ? 'selected' : ''}`}>{number}</button>;
-                      })}
+                              setCopilotOpen(!copilotOpen);
+                          }}
+                      >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                          </svg>
+                          <span>Trợ lý AI</span>
+                      </button>
                   </div>
-                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`}>
-                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
-                      <div className="rv-completion-detail-answer-row">
-                          <div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div>
-                          <div><span>Correct answer</span><strong>{selectedState.expected}</strong></div>
-                      </div>
-                      {!!selectedQuestionHtml && <div className="rv-completion-detail-question" dangerouslySetInnerHTML={{ __html: selectedQuestionHtml }} />}
-                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
-                  </div>
-              </section>
-          );
-      };
-      return (
-          <div style={{ height: "100vh", background: C.bg, color: C.text, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              {globalStyles}
-              <style>{`
-                  .rv-transcript-block { scroll-margin-top: 18px; border-left: 3px solid transparent; padding: 12px 14px; border-radius: 8px; transition: background .2s ease, border-color .2s ease, box-shadow .2s ease; }
-                  .rv-transcript-block + .rv-transcript-block { margin-top: 10px; }
-                  .rv-transcript-block.rv-transcript-evidence { border-left-color: #10b981; background: #ecfdf5; box-shadow: 0 0 0 1px rgba(16,185,129,.26); }
-                  .rv-transcript-quote { background:#d1fae5; color:inherit; border-radius:3px; padding:0 2px; box-shadow:0 0 0 1px rgba(5,150,105,.26); }
-                  .rv-transcript-time { display: inline-flex; align-items: center; min-width: 54px; font: 700 12px/1 Consolas, monospace; color: #0f766e; background: #ecfdf5; border: 1px solid #99f6e4; border-radius: 999px; padding: 5px 8px; margin-bottom: 7px; }
-                  .rv-transcript-copy { margin: 0; color: #1f2937; font-size: 15px; line-height: 1.72; white-space: pre-wrap; }
-                  .rv-audio-evidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #312e81; }
-                  .rv-audio-evidence-actions { display:flex; flex:0 0 auto; gap:6px; flex-wrap:wrap; }
-                  .rv-audio-evidence-copy { flex: 1; font-size: 12.5px; font-style: italic; line-height: 1.45; }
-                  .rv-audio-evidence-copy span { font: 800 11px/1 Consolas, monospace; color: #4338ca; }
-                  .rv-audio-evidence-copy small { display:block; margin-top:4px; color:#5b5b8e; font-size:11px; font-style:normal; }
-                  .rv-audio-evidence-jump { display:inline-flex; align-items:center; gap:5px; flex:0 0 auto; border:1px solid #a5b4fc; border-radius:7px; color:#4338ca; background:#fff; padding:7px 9px; font:800 11px/1 Inter,sans-serif; cursor:pointer; }
-                  .rv-audio-evidence-jump:hover { background:#e0e7ff; }
-                  .rv-reading-evidence-button { display:inline-flex; align-items:center; gap:5px; margin:5px 4px 5px 0; padding:4px 8px; border:1px solid #6ee7b7; border-radius:999px; background:#ecfdf5; color:#047857; font:700 12px/1 Inter,sans-serif; cursor:pointer; }
-                  .rv-reading-evidence-button:hover { background:#d1fae5; border-color:#10b981; }
-                  .rv-reading-evidence-mark { border-radius:3px; padding:0 1px; color:inherit; background:rgba(16,185,129,.20); box-shadow:inset 0 -2px 0 #10b981; }
-                  .rv-reading-evidence-block { border-radius:5px; background:rgba(16,185,129,.10); box-shadow:inset 3px 0 0 #10b981; }
-                  .rv-reading-evidence-target { animation:rv-evidence-glow 1.8s ease-out both; }
-                  .rv-reading-evidence-located { background:rgba(16,185,129,.12); }
-                  @keyframes rv-evidence-glow { 0% { background:rgba(16,185,129,.30); box-shadow:0 0 0 0 rgba(16,185,129,.55); } 65% { background:rgba(16,185,129,.14); box-shadow:0 0 0 8px rgba(16,185,129,0); } 100% { background:transparent; box-shadow:inset 0 -2px 0 #10b981; } }
-                  .rv-completion-review { margin: 0 0 20px; }
-                  .rv-completion-context { background: #f8fafc; border: 1px solid #dbe3ee; border-radius: 12px; padding: 20px 22px; color: #1e293b; font-size: 15px; line-height: 1.72; }
-                  .rv-completion-context p { margin: 0 0 10px; }
-                  .rv-completion-context p:last-child { margin-bottom: 0; }
-                  .rv-completion-badge { display: inline-flex; align-items: center; max-width: 100%; margin: 1px 3px; padding: 2px 8px; border-radius: 6px; font: 800 12px/1.55 Inter, sans-serif; cursor: pointer; vertical-align: baseline; transition: transform .15s ease, box-shadow .15s ease; }
-                  .rv-completion-badge:hover { transform: translateY(-1px); box-shadow: 0 3px 9px rgba(15,23,42,.12); }
-                  .rv-completion-badge.rv-completion-correct { color: #047857; background: #ecfdf5; border: 1px solid #34d399; }
-                  .rv-completion-badge.rv-completion-wrong { color: #b91c1c; background: #fef2f2; border: 1px solid #fca5a5; }
-                  .rv-completion-badge.rv-completion-blank { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; }
-                  .rv-flowchart-review { width:100%; max-width:460px; margin:0 0 20px; display:flex; flex-direction:column; align-items:stretch; }
-                  .rv-flowchart-heading { font-size:16px; font-weight:700; color:#1e293b; text-align:center; margin:0 0 10px 0; line-height:1.35; }
-                  .rv-flowchart-review .rv-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #4b5563; border-radius:1px; background:#fff; padding:8px 12px; color:#111827; font:400 15px/1.5 Arial,sans-serif; text-align:left !important; margin:0; }
-                  .rv-flowchart-review .rv-flowchart-node .highlightable-content,
-                  .rv-flowchart-review .rv-flowchart-node * { display:inline !important; text-align:left !important; }
-                  .rv-flowchart-review .rv-flowchart-node br { display:none !important; }
-                  .rv-flowchart-review .rv-completion-badge { min-width:100px; min-height:28px; box-sizing:border-box; justify-content:center; margin:0 4px; padding:1px 10px; border-radius:3px; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; transform:none; box-shadow:none; white-space:normal; }
-                  .rv-flowchart-review .rv-completion-badge:hover { transform:none; box-shadow:none; }
-                  .rv-flowchart-arrow { width:100%; height:24px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
-                  .rv-flowchart-correction { margin:4px 0 0 0; color:#047857; font:700 12.5px/1.35 Arial,sans-serif; text-align:left !important; }
-                  .rv-completion-nav { display: flex; flex-wrap: wrap; gap: 7px; padding: 12px 2px; }
-                  .rv-completion-nav-button { width: 34px; height: 32px; border-radius: 7px; font-weight: 800; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; color: #475569; }
-                  .rv-completion-nav-button.correct { border-color: #34d399; color: #047857; background: #ecfdf5; }
-                  .rv-completion-nav-button.wrong { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
-                  .rv-completion-nav-button.blank { border-color: #fcd34d; color: #92400e; background: #fffbeb; }
-                  .rv-completion-nav-button.selected { outline: 2px solid #4f46e5; outline-offset: 2px; }
-                  .rv-completion-detail { border: 1px solid #dbe3ee; border-left: 4px solid #f59e0b; border-radius: 10px; background: #fff; padding: 17px 18px; color: #1e293b; }
-                  .rv-completion-detail.correct { border-left-color: #10b981; }
-                  .rv-completion-detail.wrong { border-left-color: #ef4444; }
-                  .rv-completion-detail-heading { font-size: 16px; font-weight: 900; margin-bottom: 12px; }
-                  .rv-completion-detail-answer-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-                  .rv-completion-detail-answer-row > div { border-radius: 8px; padding: 9px 11px; background: #f8fafc; }
-                  .rv-completion-detail-answer-row span { display: block; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
-                  .rv-completion-detail-answer-row strong { display: block; margin-top: 3px; font-size: 14px; }
-                  .rv-completion-detail-question { margin: 12px 0; color: #475569; font-size: 13px; line-height: 1.5; }
-                  .rv-completion-why { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: #5b47e8; color: #fff; padding: 8px 12px; font-size: 12px; font-weight: 800; cursor: pointer; }
-                  .rv-completion-loading { color: #64748b; font-size: 13px; font-weight: 700; }
-                  .rv-completion-explanation { margin-top: 12px; border: 1px solid #ddd6fe; border-radius: 9px; background: #f5f3ff; padding: 12px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.6; white-space: pre-line; }
-                  .rv-completion-explanation b { color: #6d28d9; }
-                  .rv-exam-review-card { margin-bottom: 20px; border: 1px solid #d7dde6; border-left: 4px solid #f59e0b; border-radius: 4px; background: #fff; padding: 18px 20px; box-shadow: none; color: #111827; }
-                  .rv-exam-review-card.correct { border-left-color: #10b981; }
-                  .rv-exam-review-card.wrong { border-left-color: #ef4444; }
-                  .rv-exam-review-card.partial { border-left-color: #f59e0b; }
-                  .rv-exam-question-head { margin-bottom: 13px; font: 800 15px/1.45 Inter, sans-serif; color: #111827; }
-                  .rv-exam-review-options { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
-                  .rv-exam-review-option { display: grid; grid-template-columns: 18px minmax(0,1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; border: 1px solid #d7dde6; border-radius: 4px; background: #fff; color: #111827; font: 500 14px/1.5 Inter, sans-serif; }
-                  .rv-exam-review-option.correct { border-color: #34d399; background: #ecfdf5; color: #047857; }
-                  .rv-exam-review-option.wrong { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
-                  .rv-exam-review-option-status { color: inherit; font-size: 11px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
-                  .rv-exam-review-answer-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; font-size: 14px; }
-                  .rv-exam-review-answer-row > div { border: 1px solid #d7dde6; border-radius: 4px; background: #fff; padding: 9px 11px; }
-                  .rv-exam-review-answer-row span { display: block; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
-                  .rv-exam-review-answer-row strong { display: block; margin-top: 3px; overflow-wrap: anywhere; color: #111827; }
-                  .rv-review-action-wrap { margin-top: 12px; display: grid; gap: 10px; }
-                  .rv-review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-                  .rv-review-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; border-radius: 7px; padding: 7px 11px; font: 800 12px/1 Inter, sans-serif; border: 1px solid #cbd5e1; background: #fff; color: #334155; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .12s ease; }
-                  .rv-review-action:hover { transform: translateY(-1px); background: #f8fafc; }
-                  .rv-review-action:active { transform: translateY(0); }
-                  .rv-review-action:disabled { opacity: .64; cursor: wait; transform: none; }
-                  .rv-review-action-teacher { border-color: #111827; color: #111827; background: #fff; }
-                  .rv-review-action-ai { border-color: #c7d2fe; color: #4338ca; background: #eef2ff; }
-                  .rv-review-action-evidence { border-color: #99f6e4; color: #0f766e; background: #ecfdf5; }
-                  .rv-review-action-time { border-color: #fde68a; color: #92400e; background: #fffbeb; font-family: Consolas, monospace; }
-                  .rv-review-timestamp-pills { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-                  .rv-idp-matching-text-table td { vertical-align: top; }
-                  .rv-idp-matching-text-options { display: grid; gap: 7px; text-align: left; }
-                  .rv-idp-matching-text-option { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 8px; align-items: start; padding: 7px 9px; border: 1px solid #dbe3ee; border-radius: 4px; background: #fff; color: #1f2937; font: 500 13px/1.35 Inter, sans-serif; }
-                  .rv-idp-matching-text-option.correct { border-color: #34d399; background: #ecfdf5; color: #047857; }
-                  .rv-idp-matching-text-option.wrong { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
-                  .rv-idp-radio-dot { width: 15px; height: 15px; margin-top: 1px; border-radius: 50%; border: 2px solid #cbd5e1; background: #fff; box-sizing: border-box; }
-                  .rv-idp-matching-text-option.correct .rv-idp-radio-dot { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
-                  .rv-idp-matching-text-option.wrong .rv-idp-radio-dot { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
-                  .rv-idp-radio-dot.correct { border-color: #10b981; background: radial-gradient(circle at center, #10b981 0 42%, #fff 45%); }
-                  .rv-idp-radio-dot.wrong { border-color: #ef4444; background: radial-gradient(circle at center, #ef4444 0 42%, #fff 45%); }
-                  .rv-idp-matching-grid-frame { display:inline-block; min-width:min(100%, 620px); padding:18px 16px 22px; border:1px solid #555; background:#fff; box-sizing:border-box; overflow-x:auto; }
-                  .rv-idp-matching-grid-table { min-width:560px; border:0; border-collapse:collapse; width:100%; font-size:13px; background:#fff; }
-                  .rv-idp-matching-grid-table th, .rv-idp-matching-grid-table td { border:1px solid #111; background:#fff; }
-                  .rv-idp-matching-grid-table th { border-top-color:transparent; padding:9px 12px; text-align:center; font-weight:800; color:#111827; min-width:44px; }
-                  .rv-idp-matching-grid-table th:first-child, .rv-idp-matching-grid-table td:first-child { border-left-color:transparent; }
-                  .rv-idp-matching-grid-table th:last-child, .rv-idp-matching-grid-table td:last-child { border-right-color:transparent; }
-                  .rv-idp-matching-grid-table tr:last-child td { border-bottom-color:transparent; }
-                  .rv-idp-matching-grid-table td { padding:11px 12px; vertical-align:middle; color:#111827; }
-                  .rv-idp-matching-grid-question { min-width:260px; text-align:left; line-height:1.35; }
-                  .rv-idp-matching-grid-number { display:inline-flex; min-width:20px; height:22px; align-items:center; justify-content:center; border:1px solid transparent; color:#111827; background:transparent; border-radius:2px; margin-right:8px; font-size:13px; font-weight:800; }
-                  .rv-idp-matching-grid-choice { width:48px; text-align:center; cursor:pointer; padding:8px 6px !important; }
-                  .rv-idp-matching-grid-choice.correct { background:#ecfdf5; }
-                  .rv-idp-matching-grid-choice.wrong { background:#fef2f2; }
-                  .rv-idp-matching-grid-choice .rv-idp-radio-dot { margin:0 auto; }
-                  .rv-idp-matching-feature-wrap { display:inline-block; margin-top:18px; }
-                  .rv-idp-matching-feature-title { margin:0 0 6px; color:#111827; font-size:14px; font-weight:700; }
-                  .rv-idp-matching-feature-key { width:auto; border-collapse:collapse; border:0; background:#fff; font-size:13px; }
-                  .rv-idp-matching-feature-key th, .rv-idp-matching-feature-key td { border:1px solid #333; padding:8px 11px; background:#fff; color:#111827; text-align:left; }
-                  .rv-idp-matching-feature-key th { min-width:54px; font-weight:900; }
-                  .rv-idp-matching-feature-key td { min-width:190px; }
-                  .idp-sentence-ending { max-width:780px; }
-                  .idp-sentence-ending-list { display:grid; gap:9px; margin-bottom:14px; }
-                  .rv-manual-backdrop { position: fixed; inset: 0; z-index: 250; background: rgba(15,23,42,.42); display: flex; align-items: flex-start; justify-content: flex-end; padding: 76px 22px 22px; }
-                  .rv-manual-panel { width: min(560px, calc(100vw - 44px)); max-height: calc(100vh - 104px); overflow: auto; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; box-shadow: 0 28px 80px rgba(15,23,42,.28); }
-                  .rv-manual-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 18px; border-bottom: 1px solid #e2e8f0; }
-                  .rv-manual-title { margin: 0; color: #111827; font: 900 15px/1.3 Inter, sans-serif; }
-                  .rv-manual-kicker { color: #64748b; font: 800 11px/1 Inter, sans-serif; letter-spacing: 0; text-transform: uppercase; }
-                  .rv-manual-close { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #334155; cursor: pointer; }
-                  .rv-manual-body { padding: 18px; }
-                  .rv-manual-copy { color: #334155; font: 500 14.5px/1.78 Inter, sans-serif; white-space: pre-wrap; }
-                  .rv-manual-quote { display: inline; font-family: Georgia, 'Times New Roman', serif; font-style: italic; color: #334155; background: rgba(241,245,249,.92); border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 5px; }
-                  .rv-manual-evidence-list { margin-top: 16px; display: grid; gap: 8px; }
-                  .rv-manual-evidence-pill { display: inline-flex; align-items: center; gap: 7px; width: fit-content; border: 1px solid #99f6e4; border-radius: 7px; background: #ecfdf5; color: #0f766e; padding: 7px 10px; font: 800 12px/1 Inter, sans-serif; cursor: pointer; }
-                  .rv-explanation-copy { display:grid; gap:10px; margin-top:10px; color:#334155; font-size:13.5px; line-height:1.65; white-space:normal; }
-                  .rv-explanation-copy p { margin:0; }
-                  .rv-review-match-grid { display:grid; grid-template-columns:minmax(420px,1fr) minmax(220px,.55fr); gap:20px; align-items:start; }
-                  .rv-review-match-list { border:1px solid #dbe3ee; border-radius:10px; overflow:hidden; background:#fff; }
-                  .rv-review-match-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(150px,.55fr); gap:10px; align-items:stretch; width:100%; padding:12px 14px; text-align:left; color:#1e293b; background:#fff; border:0; border-bottom:1px solid #e2e8f0; cursor:pointer; font:500 14px/1.4 Inter,sans-serif; }
-                  .rv-review-match-row:last-child { border-bottom:0; }
-                  .rv-review-match-row:hover, .rv-review-match-row.is-selected { background:#f8fafc; }
-                  .rv-review-match-row.is-selected { box-shadow:inset 3px 0 0 #4f46e5; }
-                  .rv-review-match-prompt { display:flex; align-items:center; min-width:0; }
-                  .rv-review-match-number { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:25px; height:25px; margin-right:8px; border:1px solid #cbd5e1; border-radius:6px; color:#475569; font-size:11px; font-weight:900; }
-                  .rv-review-match-answer { display:grid; align-content:center; gap:3px; min-width:0; border:1px solid #dbe3ee; border-radius:7px; padding:7px 9px; background:#f8fafc; }
-                  .rv-review-match-answer span { color:#64748b; font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
-                  .rv-review-match-answer strong { overflow-wrap:anywhere; font-size:12px; line-height:1.3; }
-                  .rv-review-match-answer.correct { border-color:#86efac; background:#ecfdf5; color:#047857; }
-                  .rv-review-match-answer.wrong { border-color:#fca5a5; background:#fef2f2; color:#b91c1c; }
-                  .rv-review-match-answer.blank { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
-                  .rv-review-match-bank { border:1px solid #dbe3ee; border-radius:10px; padding:13px; background:#f8fafc; }
-                  .rv-review-match-bank-title { margin:0 0 10px; color:#64748b; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
-                  .rv-review-match-option { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; margin-bottom:7px; border:1px solid #dbe3ee; border-radius:6px; background:#fff; color:#1e293b; font-size:13px; line-height:1.35; }
-                  .rv-review-match-option:last-child { margin-bottom:0; }
-                  .rv-review-match-option-key { flex:0 0 auto; color:#0f766e; font-weight:900; }
-                  .rv-heading-review-grid { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
-                  .rv-heading-review-bank { border:1px solid #dbe3ee; border-radius:8px; padding:12px 14px; background:#fff; }
-                  .rv-heading-review-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); column-gap:18px; row-gap:0; }
-                  .rv-heading-review-option { display:flex; align-items:flex-start; gap:8px; padding:6px 0; border-bottom:1px solid #edf1f6; color:#1e293b; font-size:12.5px; line-height:1.32; }
-                  .rv-heading-review-option:last-child { border-bottom:0; }
-                  .rv-heading-review-id { flex:0 0 26px; color:#4338ca; font-style:italic; font-weight:900; }
-                  .rv-heading-review-title { padding:9px 12px; border-bottom:1px solid #e2e8f0; color:#1e293b; font-weight:900; font-size:13px; }
-                  .rv-heading-review-row { grid-template-columns:minmax(120px,.75fr) minmax(0,1fr); gap:8px; padding:9px 12px; }
-                  .rv-heading-review-result { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
-                  .rv-heading-pill { display:inline-flex; align-items:center; gap:5px; min-height:26px; border:1px solid #dbe3ee; border-radius:5px; background:#f8fafc; padding:4px 7px; color:#334155; font-size:11px; font-weight:800; line-height:1; white-space:nowrap; }
-                  .rv-heading-pill span { color:#64748b; font-size:9px; letter-spacing:.04em; text-transform:uppercase; }
-                  .rv-heading-pill strong { color:inherit; font-size:12px; font-style:italic; }
-                  .rv-heading-pill.correct { border-color:#86efac; background:#ecfdf5; color:#047857; }
-                  .rv-heading-pill.wrong { border-color:#fca5a5; background:#fef2f2; color:#b91c1c; }
-                  .rv-heading-pill.blank { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
-                  .rv-map-review-scroll { overflow:auto; border:1px solid #dbe3ee; border-radius:10px; background:#f8fafc; }
-                  .rv-map-review-layout { display:grid; grid-template-columns:minmax(700px,1fr) 220px; gap:18px; min-width:960px; padding:16px; align-items:start; }
-                  .rv-map-review-stage { position:relative; min-width:700px; border:1px solid #cbd5e1; background:#fff; }
-                  .rv-map-review-stage img { display:block; width:100%; max-width:100%; height:auto; object-fit:contain; }
-                  .rv-map-review-slot { position:absolute; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:92px; min-height:44px; padding:5px 8px; border:2px solid; background:#fff; font:700 12px/1.25 Inter,sans-serif; text-align:center; cursor:pointer; transition:box-shadow .15s, transform .15s; }
-                  .rv-map-review-slot:hover, .rv-map-review-slot.is-selected { transform:translate(-50%,-50%) scale(1.04); box-shadow:0 0 0 4px rgba(79,70,229,.16); z-index:3; }
-                  .rv-map-review-slot-number { position:absolute; top:-17px; left:0; padding:1px 4px; background:#fff; color:#475569; font-size:10px; font-weight:900; }
-                  @media (max-width: 760px) { .rv-transcript-copy { font-size: 14px; } .rv-audio-evidence { align-items: stretch; flex-direction: column; } .rv-map-drag-layout { grid-template-columns: 1fr !important; } }
-                  @media (max-width: 760px) { .rv-review-match-grid { grid-template-columns:1fr; } .rv-review-match-row { grid-template-columns:minmax(0,1fr) minmax(130px,.55fr); } .rv-review-match-answer.rv-review-match-correct { grid-column:2; } }
-                  @media (max-width: 760px) { .rv-manual-backdrop { justify-content: center; padding: 62px 12px 12px; } }
-                  @media (max-width: 560px) { .rv-completion-context { padding: 15px; font-size: 14px; } .rv-completion-detail-answer-row { grid-template-columns: 1fr; } .rv-review-action { width: 100%; } .rv-review-timestamp-pills { width: 100%; } }
-              `}</style>
-              {manualExplanationQuestion && (() => {
-                  const manual = rvManualExplanationOf(manualExplanationQuestion);
-                  if (!manual) return null;
-                  const number = rvQuestionNumber(manualExplanationQuestion);
-                  return (
-                      <div className="rv-manual-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualExplanationQuestion(null); }}>
-                          <section className="rv-manual-panel" role="dialog" aria-modal="true" aria-label={`Teacher explanation for question ${number}`}>
-                              <div className="rv-manual-head">
-                                  <div>
-                                      <div className="rv-manual-kicker">Teacher explanation</div>
-                                      <h3 className="rv-manual-title">Question {number}</h3>
-                                  </div>
-                                  <button type="button" className="rv-manual-close" onClick={() => setManualExplanationQuestion(null)} aria-label="Close teacher explanation">
-                                      <Ico name="x" size={15} />
-                                  </button>
-                              </div>
-                              <div className="rv-manual-body">
-                                  {rvRenderManualExplanationCopy(manual, manualExplanationQuestion)}
-                                  {((manual.parsedQuotes && manual.parsedQuotes.length > 0) || (rvActiveIsListening && manual.parsedTimestamps && manual.parsedTimestamps.length > 0)) && (
-                                      <div className="rv-manual-evidence-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                                          {!!manual.parsedQuotes.length && (
-                                              <button type="button" className="rv-manual-evidence-pill" onClick={() => { rvJumpToManualEvidence(manualExplanationQuestion); setManualExplanationQuestion(null); }}>
-                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s7-4.35 7-11a7 7 0 1 0-14 0c0 6.65 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-                                                  Locate evidence
-                                              </button>
-                                          )}
-                                          {rvActiveIsListening && (manual.parsedTimestamps || []).map((ts: ManualExplanationTimestamp, index: number) => (
-                                              <button key={`${ts.label}-${index}`} type="button" className="rv-review-action rv-review-action-time" onClick={() => { rvSeekManualTimestamp(ts, manualExplanationQuestion); }} title={`Play audio from ${ts.label}`}>
-                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-                                                  {ts.label}
-                                              </button>
-                                          ))}
+              </header>
+
+              {/* TAB 1: TỔNG QUAN (OVERVIEW DASHBOARD) */}
+              {rvIsOverview ? (
+                  <div className="rv-overview-scroll">
+                      <div className="rv-overview-container">
+                          {/* Card 1: Phần kiểm tra */}
+                          <section className="rv-ed-card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+                              <div style={{ flex: "1 1 420px" }}>
+                                  <h2 className="rv-ed-card-title">Phần kiểm tra</h2>
+                                  <div style={{ display: "grid", gap: 8, fontSize: 14, color: "#57534E" }}>
+                                      <div>
+                                          <span>Phần thi: </span>
+                                          <strong style={{ color: "#1C1917" }}>
+                                              {rvSections.map((_: any, idx: number) => rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`).join(", ")}
+                                          </strong>
                                       </div>
-                                  )}
+                                      <div>
+                                          <span>Trắc nghiệm: </span>
+                                          <strong className="rv-mono" style={{ color: "#1C1917" }}>{rvScoreSummary.score}/{rvTotalCount}</strong>
+                                      </div>
+                                      <div>
+                                          <span>Tổng điểm: </span>
+                                          <strong className="rv-mono" style={{ color: "#D97706" }}>{rvLiveBand}</strong>
+                                      </div>
+                                  </div>
+                                  <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: 10 }}>
+                                      <button
+                                          type="button"
+                                          onClick={() => setReviewSectionIdx(0)}
+                                          style={{
+                                              height: 38,
+                                              padding: "0 16px",
+                                              borderRadius: 8,
+                                              border: "none",
+                                              background: "#1C1917",
+                                              color: "#FFFFFF",
+                                              fontSize: 13,
+                                              fontWeight: 700,
+                                              cursor: "pointer",
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              gap: 8,
+                                          }}
+                                      >
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                                              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                                          </svg>
+                                          <span>Vào xem chi tiết & sửa bài</span>
+                                      </button>
+                                      {(rvWrongTotal + rvSkippedTotal) > 0 && (
+                                          <button
+                                              type="button"
+                                              onClick={() => {
+                                                  setRvRetryMode(true);
+                                                  setRvRetryAnswers({});
+                                                  setRvFilterWrongOnly(true);
+                                                  const firstWrong = rvAllQuestions.find((q: any) => rvQuestionStatus(q) !== "correct");
+                                                  setReviewSectionIdx(firstWrong ? rvSectionOf(firstWrong) : 0);
+                                              }}
+                                              style={{
+                                                  height: 38,
+                                                  padding: "0 16px",
+                                                  borderRadius: 8,
+                                                  border: "1px solid #F59E0B",
+                                                  background: "#FFFBEB",
+                                                  color: "#92400E",
+                                                  fontSize: 13,
+                                                  fontWeight: 700,
+                                                  cursor: "pointer",
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  gap: 8,
+                                              }}
+                                          >
+                                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                                  <path d="M12 20h9" />
+                                                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                              </svg>
+                                              <span>Làm lại câu sai ({rvWrongTotal + rvSkippedTotal} câu)</span>
+                                          </button>
+                                      )}
+                                      <button
+                                          type="button"
+                                          onClick={() => {
+                                              const targetQuiz = reviewQuiz.quiz;
+                                              pauseExamAudioPlayback();
+                                              setRvRetryMode(false);
+                                              setRvRetryAnswers({});
+                                              setReviewQuiz(null);
+                                              startExam(targetQuiz);
+                                          }}
+                                          style={{
+                                              height: 38,
+                                              padding: "0 16px",
+                                              borderRadius: 8,
+                                              border: "1px solid #D4CBB8",
+                                              background: "#FFFFFF",
+                                              color: "#1C1917",
+                                              fontSize: 13,
+                                              fontWeight: 700,
+                                              cursor: "pointer",
+                                              display: "inline-flex",
+                                              alignItems: "center",
+                                              gap: 8,
+                                          }}
+                                      >
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                              <path d="M3 3v5h5" />
+                                          </svg>
+                                          <span>Thử lại bài kiểm tra</span>
+                                      </button>
+                                  </div>
+                              </div>
+
+                              {/* Conic-gradient Donut Score */}
+                              {(() => {
+                                  const maxBand = rvIsIntegrated ? 10 : 9;
+                                  const bandPct = Math.max(0, Math.min(100, Math.round((Number(rvLiveBand) / maxBand) * 100)));
+                                  return (
+                                      <div
+                                          style={{
+                                              width: 132,
+                                              height: 132,
+                                              borderRadius: "50%",
+                                              background: `conic-gradient(#D97706 ${bandPct}%, #EDE8DF 0)`,
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent: "center",
+                                              flexShrink: 0,
+                                          }}
+                                      >
+                                          <div
+                                              style={{
+                                                  width: 102,
+                                                  height: 102,
+                                                  borderRadius: "50%",
+                                                  background: "#FFFFFF",
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                              }}
+                                          >
+                                              <span className="rv-mono" style={{ fontSize: 30, fontWeight: 800, color: "#D97706", lineHeight: 1 }}>
+                                                  {rvLiveBand}
+                                              </span>
+                                              <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", color: "#78716C", marginTop: 4 }}>
+                                                  Band Score
+                                              </span>
+                                          </div>
+                                      </div>
+                                  );
+                              })()}
+                          </section>
+
+                          {/* Card 2: Chi tiết bài thi */}
+                          <section className="rv-ed-card">
+                              <h2 className="rv-ed-card-title">Chi tiết bài thi</h2>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
+                                  {/* Left Half: 3 Status Counters */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: 18 }}>
+                                      <div style={{ textAlign: "center" }}>
+                                          <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#DCFCE7", border: "1px solid #BBF7D0", color: "#15803D", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 8px" }}>
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                                          </div>
+                                          <div className="rv-mono" style={{ fontSize: 20, fontWeight: 800, color: "#15803D" }}>{rvCorrectTotal}</div>
+                                          <div style={{ fontSize: 12, fontWeight: 600, color: "#57534E", marginTop: 2 }}>Trả lời đúng</div>
+                                      </div>
+                                      <div style={{ textAlign: "center" }}>
+                                          <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#FEE2E2", border: "1px solid #FECACA", color: "#B91C1C", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 8px" }}>
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                                          </div>
+                                          <div className="rv-mono" style={{ fontSize: 20, fontWeight: 800, color: "#B91C1C" }}>{rvWrongTotal}</div>
+                                          <div style={{ fontSize: 12, fontWeight: 600, color: "#57534E", marginTop: 2 }}>Trả lời sai</div>
+                                      </div>
+                                      <div style={{ textAlign: "center" }}>
+                                          <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#FEF3C7", border: "1px solid #FDE68A", color: "#B45309", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 8px" }}>
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                                          </div>
+                                          <div className="rv-mono" style={{ fontSize: 20, fontWeight: 800, color: "#B45309" }}>{rvSkippedTotal}</div>
+                                          <div style={{ fontSize: 12, fontWeight: 600, color: "#57534E", marginTop: 2 }}>Đã bỏ qua</div>
+                                      </div>
+                                  </div>
+
+                                  {/* Right Half: 2x2 Metric Grid */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                      <div style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: "12px 14px" }}>
+                                          <div style={{ fontSize: 11.5, fontWeight: 600, color: "#78716C" }}>Kết quả làm bài</div>
+                                          <div className="rv-mono" style={{ fontSize: 15, fontWeight: 800, color: "#1C1917", marginTop: 4 }}>{rvScoreSummary.score}/{rvTotalCount} câu</div>
+                                      </div>
+                                      <div style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: "12px 14px" }}>
+                                          <div style={{ fontSize: 11.5, fontWeight: 600, color: "#78716C" }}>Thời gian làm bài</div>
+                                          <div className="rv-mono" style={{ fontSize: 15, fontWeight: 800, color: "#1C1917", marginTop: 4 }}>{rvFormattedTimeSpent}</div>
+                                      </div>
+                                      <div style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: "12px 14px" }}>
+                                          <div style={{ fontSize: 11.5, fontWeight: 600, color: "#78716C" }}>Độ chính xác</div>
+                                          <div className="rv-mono" style={{ fontSize: 15, fontWeight: 800, color: "#1C1917", marginTop: 4 }}>{rvAccuracyPct}%</div>
+                                      </div>
+                                      <div style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: "12px 14px" }}>
+                                          <div style={{ fontSize: 11.5, fontWeight: 600, color: "#78716C" }}>Câu đúng</div>
+                                          <div className="rv-mono" style={{ fontSize: 15, fontWeight: 800, color: "#1C1917", marginTop: 4 }}>{rvScoreSummary.score}</div>
+                                      </div>
+                                  </div>
                               </div>
                           </section>
-                      </div>
-                  );
-              })()}
-              <div style={{ flex: 'none', background: C.card, padding: "15px 24px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 100 }}>
-                  <div style={{fontWeight: 900, fontSize: 18}}>REVIEW: {reviewQuiz.quiz.title}</div>
-                  <button onClick={() => { setManualExplanationQuestion(null); setReviewQuiz(null); }} style={{background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '8px 20px'}}>Back</button>
-              </div>
-              {rvHasSections && (
-                  <div style={{ flex: 'none', display: 'flex', background: C.card, borderBottom: `1px solid ${C.border}`, padding: '0 24px', overflowX: 'auto', zIndex: 90 }}>
-                      {rvSections.map((sec, idx) => {
-                          const isActive = rvActiveIdx === idx;
-                          return (
-                              <div key={idx} onClick={() => { setReviewSectionIdx(idx); setReviewActiveQuestionId(null); }} style={{ flexShrink: 0, padding: '12px 22px', cursor: 'pointer', fontWeight: isActive ? 900 : 600, fontSize: 14, color: isActive ? C.accent : C.sub, borderBottom: isActive ? `3px solid ${C.accent}` : '3px solid transparent', transition: '0.15s', whiteSpace: 'nowrap' }}>
-                                  {rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`}
-                              </div>
-                          );
-                      })}
-                  </div>
-              )}
-              {/* THANH AUDIO DÍNH TRÊN — sao chép phòng thi: play/pause · thời gian · thanh tua · tốc độ; luôn hiện, khỏi cuộn tìm */}
-              {rvActiveIsListening && reviewQuiz.quiz.audioUrl && (() => {
-                  const src = reviewQuiz.quiz.audioUrl;
-                  const safeCur = Math.min(rvAudioCur, rvAudioDur || 0);
-                  const pct = rvAudioDur ? (safeCur / rvAudioDur) * 100 : 0;
-                  return (
-                      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 24px', background: C.card, borderBottom: `1px solid ${C.border}`, zIndex: 80 }}>
-                          <audio key={src} id="review-audio" ref={audioRef} preload="metadata" playsInline src={src}
-                              onContextMenu={(e) => e.preventDefault()}
-                              onLoadedMetadata={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; audio.muted = false; audio.defaultMuted = false; audio.volume = Math.max(0, Math.min(1, _audioVolume)); setRvAudioDur(audio.duration || 0); updateExamMediaSessionPosition(audio); }}
-                              onDurationChange={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; setRvAudioDur(Number.isFinite(audio.duration) ? audio.duration : 0); }}
-                              onTimeUpdate={(e: any) => publishAudioProgress(e.currentTarget as HTMLAudioElement, true)}
-                              onPlay={(e: any) => recordAudioDiagnostic("play", e.currentTarget as HTMLAudioElement)}
-                              onPlaying={handleExamAudioPlaying}
-                              onPause={(e: any) => handleExamAudioPause(e.currentTarget as HTMLAudioElement)}
-                              onEnded={handleExamAudioEnded}
-                              onCanPlay={(e: any) => { const audio = e.currentTarget as HTMLAudioElement; recordAudioDiagnostic("canplay", audio); if (examAudioShouldPlayRef.current && audio.paused) recoverInterruptedExamAudio(audio); }}
-                              onWaiting={(e: any) => recordAudioDiagnostic("waiting", e.currentTarget as HTMLAudioElement)}
-                              onStalled={(e: any) => recordAudioDiagnostic("stalled", e.currentTarget as HTMLAudioElement)}
-                              onSuspend={(e: any) => recordAudioDiagnostic("suspend", e.currentTarget as HTMLAudioElement)}
-                              onAbort={(e: any) => recordAudioDiagnostic("abort", e.currentTarget as HTMLAudioElement)}
-                              onEmptied={(e: any) => recordAudioDiagnostic("emptied", e.currentTarget as HTMLAudioElement)}
-                              onError={(e: any) => handleExamAudioError(e.currentTarget.error)}
-                              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
-                          <button title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestReviewAudioPlayback(); else pauseExamAudioPlayback(); }}
-                              style={{ width: 32, height: 32, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, color: C.text, cursor: 'pointer', padding: 0 }}>
-                              {rvAudioPlaying ? <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
-                          </button>
-                          <span style={{ flex: 'none', fontFamily: 'Consolas, monospace', fontSize: 12, color: C.sub }}>{fmtTime(Math.floor(safeCur))}</span>
-                          <input type="range" min={0} max={rvAudioDur || 0} step={0.1} value={safeCur}
-                              onChange={(e: any) => { const a = audioRef.current; if (a) { a.currentTime = Number(e.target.value); setRvAudioCur(Number(e.target.value)); } }}
-                              style={{ flex: 1, height: 4, borderRadius: 2, appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer', background: `linear-gradient(to right, ${C.accent} 0%, ${C.accent} ${pct}%, ${C.border} ${pct}%, ${C.border} 100%)` }} />
-                          <span style={{ flex: 'none', fontFamily: 'Consolas, monospace', fontSize: 12, color: C.sub }}>{fmtTime(Math.floor(rvAudioDur))}</span>
-                          <div style={{ display: 'flex', gap: 5, flex: 'none' }}>
-                              {[1, 1.25, 1.5, 2].map(r => (
-                                  <button key={r} title={`Speed ${r}x`} onClick={() => { setPlaybackRate(r); const a = audioRef.current; if (a) a.playbackRate = r; }}
-                                      style={{ border: `1px solid ${playbackRate === r ? C.accent : C.border}`, background: playbackRate === r ? C.accent : C.bg, color: playbackRate === r ? '#fff' : C.sub, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, cursor: 'pointer' }}>{r}×</button>
-                              ))}
-                          </div>
-                      </div>
-                  );
-              })()}
-              {renderMeetAudioNotice()}
-              <div className="exam-two-column review-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
-                  {!rvActiveIsListening && (() => {
-                      const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
-                      const secQs = rvHasSections ? (rvSections[rvActiveIdx]?.questions || []) : (reviewQuiz.quiz.questions || []);
-                      const headingQs = secQs.filter((q: any) => q.type === "DRAG_DROP_HEADING");
-                      const hasSlots = headingQs.length > 0 && /\[HEADING_SLOT\]/i.test(passageHtml);
-                      const rvAllHeadingQs = [
-                          ...headingQs,
-                          ...(reviewQuiz.quiz.questions || []),
-                          ...rvSections.flatMap((section: any) => section.questions || []),
-                      ].filter((question: any) => question.type === "DRAG_DROP_HEADING");
-                      const headingCatalog = getHeadingCatalog(rvAllHeadingQs);
-                      const headingOpts = Array.from(headingCatalog.values());
-                      const rnorm = (v: any) => normalizeHeadingId(v);
-                      const headingBody = (roman: string) => headingPlainText(headingCatalog.get(rnorm(roman))?.text);
-                      return (
-                      <div className="exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 0, height: '100%', overflowY: 'auto', padding: "30px 40px", lineHeight: 1.8, fontSize: 16, background: '#fff', color: '#333' }}>
-                          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `2px solid ${C.accent}`, marginBottom: 15, paddingBottom: 10}}>
-                              <h2 style={{marginTop: 0, color: C.accent, margin: 0}}>{rvIsIntegrated ? `PART ${rvActiveIdx + 1}` : 'READING PASSAGE'}</h2>
-                          </div>
-                          {/* LIST OF HEADINGS — hiện rõ để đối chiếu (review matching headings) */}
-                          {hasSlots && headingOpts.length > 0 && (
-                              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 18, background: C.bg }}>
-                                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.sub, marginBottom: 8 }}>List of Headings</div>
-                                  {headingOpts.map((opt: any, oi: number) => {
-                                      const heading = opt?.id && Object.prototype.hasOwnProperty.call(opt, 'text')
-                                          ? { id: normalizeHeadingId(opt.id), text: headingPlainText(opt.text) }
-                                          : getHeadingOptionMeta(opt, oi);
-                                      return (
-                                          <div key={oi} style={{ display: 'flex', gap: 10, fontSize: 13.5, lineHeight: 1.5, marginBottom: 5 }}>
-                                              <span style={{ flexShrink: 0, fontStyle: 'italic', fontWeight: 700, color: C.accent, minWidth: 26 }}>{heading.id}</span>
-                                              <span>{headingPlainText(heading.text)}</span>
-                                          </div>
-                                      );
-                                  })}
-                              </div>
-                          )}
-                          {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
-                              <img
-                                  key={idx}
-                                  src={cleanMediaUrl(imgUrl)}
-                                  referrerPolicy="no-referrer"
-                                  loading="lazy"
-                                  alt="Reading passage illustration"
-                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', borderRadius: 8, display: 'block', marginBottom: 15 }}
-                              />
-                          ))}
-                          {hasSlots ? (() => {
-                              const chunks = passageHtml.split(/<div[^>]*>\s*\[HEADING_SLOT\]\s*<\/div>|\[HEADING_SLOT\]/gi);
-                              return (
-                                  <div id="ielts-passage-content" style={{ textAlign: 'justify' }}>
-                                      {chunks[0] && chunks[0].trim() && <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatContent(chunks[0]) }} />}
-                                      {headingQs.map((hq: any, hi: number) => {
-                                          const para = String.fromCharCode(65 + hi);
-                                          const placed = reviewQuiz.result.answers?.[hq.id];
-                                          const correct = String(hq.correctAnswer || "");
-                                          const placedMeta = placed ? resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, placed) : { id: "", text: "" };
-                                          const correctMeta = resolveHeadingAnswerMeta({ ...hq, options: headingOpts }, correct);
-                                          const ok = !!placed && isSingleQuestionCorrect({ ...hq, options: headingOpts }, placed);
+
+                          {/* Card 3: Danh sách câu hỏi & Phân tích theo dạng câu hỏi */}
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
+                              {/* Left 2 cols: Danh sách câu hỏi */}
+                              <section className="rv-ed-card" style={{ gridColumn: "span 2" }}>
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                                      <h2 className="rv-ed-card-title" style={{ margin: 0 }}>Danh sách câu hỏi</h2>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, fontWeight: 600, color: "#57534E" }}>
+                                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                              <span style={{ width: 10, height: 10, borderRadius: 3, background: "#DCFCE7", border: "1px solid #16A34A" }} />
+                                              Đúng
+                                          </span>
+                                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                              <span style={{ width: 10, height: 10, borderRadius: 3, background: "#FEE2E2", border: "1px solid #DC2626" }} />
+                                              Sai
+                                          </span>
+                                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                              <span style={{ width: 10, height: 10, borderRadius: 3, background: "#FEF3C7", border: "1px solid #D97706" }} />
+                                              Bỏ qua
+                                          </span>
+                                      </div>
+                                  </div>
+
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                                      {rvSections.map((sec: any, sIdx: number) => {
+                                          const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === sIdx)) : rvAllQuestions;
+                                          const label = rvUsePartLabels ? `Part ${sIdx + 1}` : `Passage ${sIdx + 1}`;
                                           return (
-                                              <React.Fragment key={hq.id}>
-                                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '20px 0 10px', fontSize: 14, lineHeight: 1.4 }}>
-                                                      <span style={{ fontWeight: 800, color: C.text, flexShrink: 0 }}>Paragraph {para}</span>
-                                                      <span style={{ background: ok ? `${C.succ}1e` : `${C.err}1e`, color: ok ? C.succ : C.err, border: `1px solid ${ok ? C.succ : C.err}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                          Your answer: {placed ? `${placedMeta.id ? `${placedMeta.id} — ` : ''}${headingPlainText(placedMeta.text) || headingPlainText(placed)}` : '—'}
-                                                      </span>
-                                                      {!ok && (
-                                                          <span style={{ background: `${C.accent}1e`, color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 6, padding: '3px 9px', fontWeight: 700, fontSize: 12.5 }}>
-                                                              Correct: {correctMeta.id ? `${correctMeta.id} — ` : ''}{headingPlainText(correctMeta.text) || headingBody(correct)}
-                                                          </span>
-                                                      )}
+                                              <div key={sIdx} style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 10, padding: "12px 14px" }}>
+                                                  <div style={{ fontSize: 12, fontWeight: 800, color: "#57534E", marginBottom: 10 }}>
+                                                      {label} {sec?.title && sec.title !== label ? `— ${sec.title}` : ""}
                                                   </div>
-                                                  {chunks[hi + 1] && chunks[hi + 1].trim() && <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatContent(chunks[hi + 1]) }} />}
-                                              </React.Fragment>
+                                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                                                      {secQs.map((q: any) => {
+                                                          const qNum = rvQuestionNumber(q);
+                                                          const st = rvQuestionStatus(q);
+                                                          if (rvFilterWrongOnly && st === "correct") return null;
+                                                          const bg = st === "correct" ? "#DCFCE7" : st === "skipped" ? "#FEF3C7" : "#FEE2E2";
+                                                          const border = st === "correct" ? "#BBF7D0" : st === "skipped" ? "#FDE68A" : "#FECACA";
+                                                          const color = st === "correct" ? "#15803D" : st === "skipped" ? "#B45309" : "#B91C1C";
+                                                          return (
+                                                              <button
+                                                                  key={q.id}
+                                                                  type="button"
+                                                                  onClick={() => rvJumpToQuestionFromMatrix(q, qNum)}
+                                                                  className="rv-mono"
+                                                                  style={{
+                                                                      width: 32,
+                                                                      height: 32,
+                                                                      borderRadius: 6,
+                                                                      border: `1px solid ${border}`,
+                                                                      background: bg,
+                                                                      color,
+                                                                      fontSize: 12,
+                                                                      fontWeight: 700,
+                                                                      cursor: "pointer",
+                                                                      display: "inline-flex",
+                                                                      alignItems: "center",
+                                                                      justifyContent: "center",
+                                                                  }}
+                                                                  title={`Câu ${qNum}`}
+                                                              >
+                                                                  {qNum}
+                                                              </button>
+                                                          );
+                                                      })}
+                                                  </div>
+                                              </div>
                                           );
                                       })}
                                   </div>
-                              );
-                          })() : (
-                              <div id="ielts-passage-content" style={{whiteSpace: 'pre-wrap', textAlign: 'justify'}} dangerouslySetInnerHTML={{__html: formatContent(passageHtml)}} />
-                          )}
-                      </div>
-                      );
-                  })()}
-                    {/* LISTENING: CỘT TRÁI = chỉ text câu hỏi theo section (y chang layout passage|questions của Reading) + nút tải transcript */}
-                  {rvActiveIsListening && (() => {
-                      const passageHtml = (rvHasSections ? (rvSections[rvActiveIdx]?.passage) : reviewQuiz.quiz.passage) || "";
-                      const transcriptRaw = reviewQuiz.quiz.transcript || passageHtml || "";
-                      const transcriptText = String(transcriptRaw)
-                          .replace(/<(?:br)\s*\/?\s*>/gi, '\n')
-                          .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
-                          .replace(/<[^>]+>/g, '')
-                          .replace(/&nbsp;/gi, ' ')
-                          .replace(/\r/g, '')
-                          .trim();
-                      const hasTimestampHeaders = /[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/.test(transcriptText);
-                      const transcriptBlocks = hasTimestampHeaders
-                          ? transcriptText
-                              .split(/(?=[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])])/)
-                              .map(block => block.trim())
-                              .filter(Boolean)
-                              .map((block, index) => {
-                                  const match = block.match(/^[\[(](\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?[\])]\s*\n?([\s\S]*)$/i);
-                                  if (match) {
-                                      const startStr = match[1];
-                                      const endStr = match[2];
-                                      const label = endStr ? `${startStr} - ${endStr}` : startStr;
-                                      const startSecs = rvTimestampSeconds(startStr);
-                                      const endSecs = endStr ? rvTimestampSeconds(endStr) : undefined;
-                                      return {
-                                          key: `${startStr}-${index}`,
-                                          startSecs,
-                                          endSecs,
-                                          label,
-                                          text: match[3].trim()
-                                      };
-                                  }
-                                  return { key: `plain-${index}`, startSecs: undefined, endSecs: undefined, label: '', text: block };
-                              })
-                          : transcriptText
-                              .split(/\n+/)
-                              .map(line => line.trim())
-                              .filter(Boolean)
-                              .map((line, index) => ({
-                                  key: `para-${index}`,
-                                  startSecs: undefined,
-                                  endSecs: undefined,
-                                  label: '',
-                                  text: line
-                              }));
-                      const downloadTranscript = () => {
-                          const body = /<[a-z][\s\S]*>/i.test(transcriptRaw) ? transcriptRaw : transcriptText.split(/\n+/).map(line => `<p>${line.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>`).join('');
-                          const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word'><head><meta charset='utf-8'><title>Transcript</title></head><body>${body}</body></html>`;
-                          const blob = new Blob(['\uFEFF', html], { type: 'application/msword' });
-                          const url = URL.createObjectURL(blob);
-                          const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${(reviewQuiz.quiz.title || 'transcript').replace(/[^\w-]+/g,'_')}_transcript.doc`;
-                          document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-                      };
-                      return (
-                          <div className="rv-transcript-panel exam-passage-col" style={{ width: `${splitRatio}%`, minWidth: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '22px 28px 34px', background: '#fff', color: '#333', boxSizing: 'border-box' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: `2px solid ${C.accent}`, marginBottom: 16, paddingBottom: 10 }}>
-                                  <div><div style={{ fontSize: 16, fontWeight: 900, color: C.accent }}>TRANSCRIPT</div><div style={{ marginTop: 3, fontSize: 12, color: C.sub }}>Listening evidence, ordered by the original audio timeline</div></div>
-                                  {transcriptText ? <button onClick={downloadTranscript} title="Download transcript" style={{ flexShrink: 0, background: C.bg, color: C.text, border: `1px solid ${C.border}`, padding: '6px 10px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Transcript (.doc)</button> : null}
-                              </div>
-                              {transcriptBlocks.length ? transcriptBlocks.map(block => (
-                                  <article
-                                      key={block.key}
-                                      id={block.startSecs !== undefined ? `rv-transcript-${block.startSecs}` : undefined}
-                                      data-rv-transcript-start={block.startSecs !== undefined ? block.startSecs : undefined}
-                                      data-rv-transcript-end={block.startSecs !== undefined ? (block.endSecs ?? block.startSecs) : undefined}
-                                      className="rv-transcript-block"
-                                  >
-                                      {block.label && <div className="rv-transcript-time">{block.label}</div>}
-                                      <p className="rv-transcript-copy">{block.text}</p>
-                                  </article>
-                              )) : <div style={{ padding: '34px 8px', color: C.sub, fontSize: 14, lineHeight: 1.6 }}>Transcript is not available for this test.</div>}
+                              </section>
+
+                              {/* Right 1 col: Phân tích theo dạng câu hỏi */}
+                              <section className="rv-ed-card">
+                                  <h2 className="rv-ed-card-title">Phân tích theo dạng câu hỏi</h2>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                                      {(() => {
+                                          const typeBuckets: Record<string, { score: number; total: number }> = {};
+                                          rvScoreSummary.groups.forEach((group: any) => {
+                                              const q = group.questions[0];
+                                              const rawLabel = q?.subType || (q?.type === "CHOICE" || q?.type === "CHOICE_MULTIPLE" ? "Multiple Choice" : q?.type === "MATCHING" ? "Matching" : q?.type === "TFNG" ? "True / False / Not Given" : q?.type === "YNNG" ? "Yes / No / Not Given" : "Note / Form / Table Completion");
+                                              if (!typeBuckets[rawLabel]) typeBuckets[rawLabel] = { score: 0, total: 0 };
+                                              typeBuckets[rawLabel].score += group.score;
+                                              typeBuckets[rawLabel].total += group.total;
+                                          });
+                                          return Object.entries(typeBuckets).map(([label, stat]) => {
+                                              const pct = stat.total ? Math.round((stat.score / stat.total) * 100) : 0;
+                                              const barColor = pct >= 75 ? "#16A34A" : pct >= 50 ? "#D97706" : "#DC2626";
+                                              return (
+                                                  <div key={label} style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 8, padding: "10px 12px" }}>
+                                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>
+                                                          <span style={{ color: "#1C1917" }}>{label}</span>
+                                                          <span className="rv-mono" style={{ color: barColor }}>{stat.score}/{stat.total} ({pct}%)</span>
+                                                      </div>
+                                                      <div style={{ height: 6, borderRadius: 999, background: "#E6DFD3", overflow: "hidden" }}>
+                                                          <div style={{ width: `${pct}%`, height: "100%", background: barColor, borderRadius: 999 }} />
+                                                      </div>
+                                                  </div>
+                                              );
+                                          });
+                                      })()}
+                                  </div>
+
+                                  {Boolean((reviewQuiz.result as any).teacherFeedback || (reviewQuiz.result as any).scratchpad) && (
+                                      <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #E6DFD3", display: "grid", gap: 10 }}>
+                                          {(reviewQuiz.result as any).teacherFeedback && (
+                                              <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: 12, fontSize: 13, color: "#92400E" }}>
+                                                  <strong style={{ display: "block", marginBottom: 4 }}>Nhận xét của Giáo viên:</strong>
+                                                  {(reviewQuiz.result as any).teacherFeedback}
+                                              </div>
+                                          )}
+                                          {(reviewQuiz.result as any).scratchpad && (
+                                              <div style={{ background: "#FAF7F2", border: "1px solid #E6DFD3", borderRadius: 8, padding: 12, fontSize: 12.5, color: "#57534E", whiteSpace: "pre-wrap" }}>
+                                                  <strong style={{ display: "block", marginBottom: 4, color: "#1C1917" }}>Ghi chú trong phòng thi:</strong>
+                                                  {(reviewQuiz.result as any).scratchpad}
+                                              </div>
+                                          )}
+                                      </div>
+                                  )}
+                              </section>
                           </div>
-                      );
-
-                  })()}
-                  <div className="exam-column-splitter" onMouseDown={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
-                       onTouchStart={(e: any) => { e.preventDefault(); setIsDraggingSplitter && setIsDraggingSplitter(true); }}
-                       title="Drag to resize"
-                       style={{ width: 28, margin: '0 -9px', background: 'transparent', cursor: 'ew-resize', zIndex: 30, display: 'flex', alignItems: 'stretch', justifyContent: 'center', flexShrink: 0, position: 'relative' }}>
-                       <div style={{ width: 10, background: '#ededed', borderLeft: '1px solid #d1d5db', borderRight: '1px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-                           <div style={{ width: 26, height: 26, borderRadius: 2, background: isDraggingSplitter ? '#1b1e2b' : '#fff', border: '1px solid #9aa0a6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)' }}>
-                               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isDraggingSplitter ? '#fff' : '#3a3d47'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 8 20 12 16 16"/></svg>
-                           </div>
-                       </div>
+                      </div>
                   </div>
-                  {isDraggingSplitter && (
-                      <div style={{ position: 'absolute', inset: 0, zIndex: 9000, cursor: 'ew-resize', userSelect: 'none' }}
-                           onMouseMove={(e: any) => { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); }}
-                           onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}
-                           onTouchMove={(e: any) => { if (e.touches && e.touches[0]) { const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }}
-                           onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} />
-                  )}
-                  <div className="exam-question-col" style={{ flex: 1, minWidth: 0, height: '100%', overflowY: 'auto', padding: "28px 24px", background: C.bg }}>
-                      
-                      {(() => {
-                          const rqQuiz = reviewQuiz.quiz;
-                          const rqRes = reviewQuiz.result;
-                          
-                          // Phân tích và tính toán dữ liệu thống kê
-                          const liveSummary = rvScoreSummary;
-                          const correctCount = liveSummary.score;
-                          const totalQs = liveSummary.total;
-                          const skippedCount = liveSummary.skipped;
-                          const incorrectCount = liveSummary.incorrect;
-                          
-                          const accuracy = totalQs ? ((correctCount / totalQs) * 100).toFixed(1) : '0.0';
-                          const liveBand = getIeltsBand(correctCount, totalQs, rqQuiz.type);
-                          const bandNum = Number(liveBand) || 0;
-                          const bandPct = (bandNum / 9) * 100;
-                          const durM = Math.floor((rqRes.durationSeconds || 0) / 60);
-                          const durS = (rqRes.durationSeconds || 0) % 60;
-                          const timeStr = durM > 0 ? `${durM} ${t('acad_min')} ${durS} ${t('acad_sec')}` : `${durS} ${t('acad_sec')}`;
-
+              ) : (
+                  /* TABS 2..N: SPLIT-WORKBENCH */
+                  <>
+                      {/* Sticky Audio Bar (Listening Only) */}
+                      {rvActiveIsListening && rvAudioSrc && (() => {
+                          const safeCur = Math.min(rvAudioCur, rvAudioDur || 0);
+                          const pct = rvAudioDur ? (safeCur / rvAudioDur) * 100 : 0;
                           return (
-                              <>
-                                  {/* DASHBOARD THỐNG KÊ TỔNG QUAN (UI MỚI TỪ ẢNH MẪU) */}
-                                  <div style={{background: '#fff', borderRadius: 16, marginBottom: 24, boxShadow: '0 4px 20px rgba(0,0,0,0.05)', overflow: 'hidden', border: `1px solid #e2e8f0`}}>
-                                      
-                                      {/* KHỐI 1: PHẦN KIỂM TRA (TOP) */}
-                                      <div style={{padding: '30px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', flexWrap: 'wrap', gap: 20}}>
-                                          <div>
-                                              <div style={{fontSize: 18, fontWeight: 900, color: '#1e293b', marginBottom: 20}}>{t('rev_test_part')}</div>
-                                              <div style={{display: 'flex', gap: 40, flexWrap: 'wrap'}}>
-                                                  <div>
-                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_part')}</div>
-                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{rqQuiz.title}</div>
-                                                  </div>
-                                                  <div>
-                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_mcq')}</div>
-                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{correctCount}/{totalQs}</div>
-                                                  </div>
-                                                  <div>
-                                                      <div style={{fontSize: 12, color: '#64748b', marginBottom: 4}}>{t('rev_total_band')}</div>
-                                                      <div style={{fontWeight: 700, color: '#334155', fontSize: 14}}>{liveBand}</div>
-                                                  </div>
-                                              </div>
-                                          </div>
-                                          
-                                          {/* Vòng tròn điểm (Donut Chart CSS) */}
-                                          <div style={{position: 'relative', width: 120, height: 120, borderRadius: '50%', background: `conic-gradient(#facc15 ${bandPct}%, #e2e8f0 0)`, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-                                              <div style={{width: 90, height: 90, background: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 900, color: '#eab308'}}>
-                                                  {liveBand}
-                                              </div>
-                                          </div>
-                                      </div>
-
-                                      {/* KHỐI 2: CHI TIẾT BÀI THI (BOTTOM) */}
-                                      <div style={{padding: '30px 40px', background: '#f8fafc'}}>
-                                          <div style={{fontSize: 16, fontWeight: 800, color: '#1e293b', marginBottom: 20}}>{t('rev_detail')}</div>
-                                          <div style={{display: 'flex', gap: 24, flexWrap: 'wrap'}}>
-                                              
-                                              {/* 3 Cột icon tròn (Đúng / Sai / Bỏ qua) */}
-                                              <div style={{flex: 1, display: 'flex', justifyContent: 'space-around', background: '#fff', padding: '24px 20px', borderRadius: 12, border: '1px solid #e2e8f0', minWidth: 300}}>
-                                                  <div style={{textAlign: 'center'}}>
-                                                      <div style={{width: 48, height: 48, background: '#22c55e', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
-                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                                      </div>
-                                                      <div style={{fontSize: 13, color: '#22c55e', fontWeight: 600}}>{t('rev_correct')}</div>
-                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{correctCount} {t('rev_questions_unit')}</div>
-                                                  </div>
-                                                  <div style={{textAlign: 'center'}}>
-                                                      <div style={{width: 48, height: 48, background: '#ef4444', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
-                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                                                      </div>
-                                                      <div style={{fontSize: 13, color: '#ef4444', fontWeight: 600}}>{t('rev_incorrect')}</div>
-                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{incorrectCount} {t('rev_questions_unit')}</div>
-                                                  </div>
-                                                  <div style={{textAlign: 'center'}}>
-                                                      <div style={{width: 48, height: 48, background: '#f97316', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px'}}>
-                                                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
-                                                      </div>
-                                                      <div style={{fontSize: 13, color: '#f97316', fontWeight: 600}}>{t('rev_skipped')}</div>
-                                                      <div style={{fontSize: 15, fontWeight: 800, color: '#1e293b', marginTop: 4}}>{skippedCount} {t('rev_questions_unit')}</div>
-                                                  </div>
-                                              </div>
-
-                                              {/* Lưới thông tin phụ (Grid 2x2) */}
-                                              <div style={{flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, background: '#fff', padding: '24px', borderRadius: 12, border: '1px solid #e2e8f0', minWidth: 300}}>
-                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
-                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="clipboard" size={18} /></div>
-                                                      <div>
-                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_result')}</div>
-                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{correctCount}/{totalQs} {t('rev_questions_unit')}</div>
-                                                      </div>
-                                                  </div>
-                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
-                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="clock" size={18} /></div>
-                                                      <div>
-                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_time')}</div>
-                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{timeStr}</div>
-                                                      </div>
-                                                  </div>
-                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
-                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="target" size={18} /></div>
-                                                      <div>
-                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_accuracy')}</div>
-                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{accuracy}%</div>
-                                                      </div>
-                                                  </div>
-                                                  <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
-                                                      <div style={{color: '#1e293b', background: '#f1f5f9', padding: 8, borderRadius: 8}}><Ico name="check" size={18} /></div>
-                                                      <div>
-                                                          <div style={{fontSize: 12, color: '#64748b', fontWeight: 600}}>{t('rev_correct_count')}</div>
-                                                          <div style={{fontSize: 14, fontWeight: 800, color: '#1e293b', marginTop: 2}}>{correctCount} / {totalQs} {t('rev_questions_unit')}</div>
-                                                      </div>
-                                                  </div>
-                                              </div>
-                                          </div>
-                                      </div>
-                                  </div>
-
-                                  {/* CÁC THÔNG TIN BỔ SUNG (Audio, Feedback, Flagged, Scratchpad, Weakness Analysis) */}
-                                  <div style={{background: '#fff', padding: '30px 40px', borderRadius: 16, marginBottom: 24, border: `1px solid #e2e8f0`, boxShadow: '0 4px 20px rgba(0,0,0,0.02)'}}>
-                                      
-                                      {rqRes.teacherFeedback && <div style={{marginBottom: 15, background: `#fffbeb`, border: '1px solid #fde68a', color: '#92400e', padding: 16, borderRadius: 12, fontSize: 14}}><b style={{color: '#b45309'}}><Ico name="chat" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />Teacher's feedback:</b><br/>{rqRes.teacherFeedback}</div>}
-                                      
-                                      {rqRes.flaggedQuestions && rqRes.flaggedQuestions.length > 0 && (
-                                          <div style={{marginBottom: 15, color: '#ef4444', fontSize: 14, background: '#fef2f2', border: '1px solid #fecaca', padding: 16, borderRadius: 12}}>
-                                              <b style={{color: '#b91c1c'}}><Ico name="pin" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />Flagged questions during exam:</b> {rqRes.flaggedQuestions.map((id: string) => rqQuiz.questions.findIndex(q=>q.id===id)+1).join(', ')}
-                                          </div>
+                              <div className="rv-audio-bar">
+                                  <button
+                                      type="button"
+                                      title="Play / Pause"
+                                      onClick={() => {
+                                          const a = audioRef.current;
+                                          if (!a) return;
+                                          if (a.paused) void requestReviewAudioPlayback();
+                                          else pauseExamAudioPlayback();
+                                      }}
+                                      style={{
+                                          width: 30,
+                                          height: 30,
+                                          borderRadius: 6,
+                                          border: "none",
+                                          background: "#1C1917",
+                                          color: "#FFFFFF",
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          cursor: "pointer",
+                                          flexShrink: 0,
+                                      }}
+                                  >
+                                      {rvAudioPlaying ? (
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" /><rect x="14" y="5" width="4" height="14" /></svg>
+                                      ) : (
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
                                       )}
-                                      
-                                      {rqRes.scratchpad && (
-                                          <div style={{marginBottom: 20, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: 16, borderRadius: 12, fontSize: 14, whiteSpace: 'pre-wrap'}}>
-                                              <b style={{color: '#15803d'}}> Your notes:</b><br/>{rqRes.scratchpad}
-                                          </div>
-                                      )}
-
-                                      <div style={{marginTop: 10}}>
-                                          <div style={{fontSize: 14, fontWeight: 800, marginBottom: 15, color: '#1e293b'}}><Ico name="barChart" size={15} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />WEAKNESS ANALYSIS BY TYPE</div>
-                                          <div style={{display: 'flex', gap: 15, flexWrap: 'wrap'}}>
-                                              {(() => {
-                                                  const groups: Record<string, any[]> = {};
-                                                  liveSummary.groups.forEach((group: any) => {
-                                                      const q = group.questions[0];
-                                                      const label = q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'CHOICE_MULTIPLE' ? 'Multiple Choice' : 'Sentence Completion');
-                                                      if (!groups[label]) groups[label] = [];
-                                                      groups[label].push(group);
-                                                  });
-                                                  return Object.entries(groups).map(([label, typeGroups]) => {
-                                                      let correctInType = 0;
-                                                      const totalInType = typeGroups.reduce((sum, group: any) => sum + group.total, 0);
-                                                      typeGroups.forEach((group: any) => { correctInType += group.score; });
-                                                      const rate = totalInType ? Math.round((correctInType / totalInType) * 100) : 0;
-                                                      return (
-                                                          <div key={label} style={{flex: '1 1 calc(50% - 15px)', minWidth: 160, background: '#f8fafc', padding: 16, borderRadius: 12, border: `1px solid #e2e8f0`}}>
-                                                              <div style={{fontSize: 12, color: '#64748b', fontWeight: 700, textTransform: 'uppercase'}}>{label}</div>
-                                                              <div style={{fontSize: 18, fontWeight: 900, marginTop: 4, color: rate >= 70 ? '#22c55e' : '#ef4444'}}>{correctInType}/{totalInType} ({rate}%)</div>
-                                                          </div>
-                                                      );
-                                                  });
-                                              })()}
-                                          </div>
-                                      </div>
+                                  </button>
+                                  <span className="rv-mono" style={{ fontSize: 12, color: "#57534E", flexShrink: 0 }}>{fmtTime(Math.floor(safeCur))}</span>
+                                  <input
+                                      type="range"
+                                      min={0}
+                                      max={rvAudioDur || 0}
+                                      step={0.1}
+                                      value={safeCur}
+                                      onChange={(e: any) => {
+                                          const a = audioRef.current;
+                                          if (a) {
+                                              a.currentTime = Number(e.target.value);
+                                              setRvAudioCur(Number(e.target.value));
+                                          }
+                                      }}
+                                      style={{
+                                          flex: 1,
+                                          height: 5,
+                                          borderRadius: 999,
+                                          accentColor: "#D97706",
+                                          cursor: "pointer",
+                                          background: `linear-gradient(to right, #D97706 0%, #D97706 ${pct}%, #E6DFD3 ${pct}%, #E6DFD3 100%)`,
+                                      }}
+                                  />
+                                  <span className="rv-mono" style={{ fontSize: 12, color: "#57534E", flexShrink: 0 }}>{fmtTime(Math.floor(rvAudioDur))}</span>
+                                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                                      {[1, 1.25, 1.5, 2].map(r => (
+                                          <button
+                                              key={r}
+                                              type="button"
+                                              onClick={() => {
+                                                  setPlaybackRate(r);
+                                                  const a = audioRef.current;
+                                                  if (a) a.playbackRate = r;
+                                              }}
+                                              className="rv-mono"
+                                              style={{
+                                                  border: `1px solid ${playbackRate === r ? "#1C1917" : "#D4CBB8"}`,
+                                                  background: playbackRate === r ? "#1C1917" : "#FFFFFF",
+                                                  color: playbackRate === r ? "#FFFFFF" : "#57534E",
+                                                  fontSize: 11,
+                                                  fontWeight: 700,
+                                                  padding: "2px 7px",
+                                                  borderRadius: 5,
+                                                  cursor: "pointer",
+                                              }}
+                                          >
+                                              {r}x
+                                          </button>
+                                      ))}
                                   </div>
-                              </>
+                              </div>
                           );
                       })()}
-                      
-                      {rvActiveQuestions.map((q, i) => {
-                          if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
-                          if (q.type === "DRAG_DROP_HEADING") {
-                              const headingKey = `${rvSectionOf(q)}::${String(q.instruction || '')}::${String(q.groupContext || '')}`;
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                  candidate.type === "DRAG_DROP_HEADING"
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
-                              );
-                              if (alreadyRendered) return null;
-                              const headingQuestions = rvActiveQuestions.filter((candidate: any) =>
-                                  candidate.type === "DRAG_DROP_HEADING"
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}::${String(candidate.groupContext || '')}` === headingKey
-                              );
-                              const headingCatalog = getHeadingCatalog([
-                                  q,
-                                  reviewQuiz.quiz,
-                                  rvSections[rvActiveIdx],
-                                  ...headingQuestions,
-                                  ...(reviewQuiz.quiz.questions || []),
-                                  ...rvSections.flatMap((section: any) => [section, ...(section?.questions || [])]),
-                              ]);
-                              const headingOptions = Array.from(headingCatalog.values());
-                              const headingLabel = (value: any, question: any) => {
-                                  const meta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, value);
-                                  const id = normalizeHeadingId(meta.id);
-                                  const text = headingPlainText(meta.text);
-                                  return text ? `${id ? `${id}. ` : ''}${text}` : (id || String(value || ''));
-                              };
-                              const headingState = (question: any) => {
-                                  const raw = reviewQuiz.result.answers?.[question.id];
-                                  const blank = raw === undefined || raw === null || String(raw).trim() === '';
-                                  const givenMeta = blank ? { id: '', text: '' } : resolveHeadingAnswerMeta({ ...question, options: headingOptions }, raw);
-                                  const expectedMeta = resolveHeadingAnswerMeta({ ...question, options: headingOptions }, question.correctAnswer);
-                                  const givenId = normalizeHeadingId(givenMeta.id);
-                                  const expectedId = normalizeHeadingId(expectedMeta.id);
-                                  return { blank, givenId, expectedId, given: blank ? 'No answer' : headingLabel(raw, question), expected: headingLabel(question.correctAnswer, question), correct: !blank && isSingleQuestionCorrect({ ...question, options: headingOptions }, raw) };
-                              };
-                              const selected = headingQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-                                  || headingQuestions.find((candidate: any) => !headingState(candidate).correct)
-                                  || headingQuestions[0];
-                              const selectedState = headingState(selected);
-                              const firstNumber = rvQuestionNumber(headingQuestions[0]);
-                              const lastNumber = rvQuestionNumber(headingQuestions[headingQuestions.length - 1]);
-                              return <section key={`heading-review-${q.id}`} className="rv-completion-review rv-heading-review">
-                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-heading-review-grid">
-                                      <aside className="mh-heading-tray notranslate rv-heading-review-bank" translate="no">
-                                          <div className="rv-review-match-bank-title">List of Headings</div>
-                                          <div className="rv-heading-review-options">
-                                              {headingOptions.map((heading: any, optionIndex: number) => (
-                                                  <div key={`${heading.id}-${optionIndex}`} className="rv-heading-review-option">
-                                                      <span className="rv-heading-review-id">{normalizeHeadingId(heading.id)}.</span>
-                                                      <span>{headingPlainText(heading.text)}</span>
-                                                  </div>
+
+                      {renderMeetAudioNotice()}
+
+                      {/* 50/50 Resizable Split Body */}
+                      <div
+                          className="rv-split-body"
+                          style={{ cursor: isDraggingSplitter ? "col-resize" : "default" }}
+                          onMouseMove={(e: any) => {
+                              if (isDraggingSplitter) {
+                                  const nr = (e.clientX / window.innerWidth) * 100;
+                                  if (nr > 22 && nr < 78) setSplitRatio(nr);
+                              }
+                          }}
+                          onMouseUp={() => isDraggingSplitter && setIsDraggingSplitter(false)}
+                          onMouseLeave={() => isDraggingSplitter && setIsDraggingSplitter(false)}
+                      >
+                          {/* LEFT PANE: READING PASSAGE OR LISTENING TRANSCRIPT */}
+                          <div className="rv-pane-left" style={{ width: `${splitRatio}%` }}>
+                              <div className="rv-pane-subhead">
+                                  <span>
+                                      {rvActiveIsListening
+                                          ? `Audio Transcript — Part ${rvActiveIdx + 1}`
+                                          : `${rvIsIntegrated ? `Part ${rvActiveIdx + 1}` : `Reading Passage ${rvActiveIdx + 1}`}`}
+                                  </span>
+                                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: "none", color: "#78716C" }}>
+                                      {rvActiveIsListening ? "Nhấn mốc [MM:SS] để tua audio" : "Nhấn biểu tượng định vị ở câu hỏi để tô sáng dẫn chứng"}
+                                  </span>
+                              </div>
+
+                              <div className="rv-pane-left-scroll rv-transcript-panel">
+                                  {!rvActiveIsListening ? (() => {
+                                      const passageHtml = (rvSections[rvActiveIdx]?.passage || rvSections[rvActiveIdx]?.passageHtml || reviewQuiz.quiz.passage || (reviewQuiz.quiz as any).passageHtml || "");
+                                      return (
+                                          <>
+                                              {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
+                                                  <img
+                                                      key={idx}
+                                                      src={cleanMediaUrl(imgUrl)}
+                                                      referrerPolicy="no-referrer"
+                                                      loading="lazy"
+                                                      alt="Reading passage illustration"
+                                                      style={{ maxWidth: "100%", height: "auto", objectFit: "contain", borderRadius: 8, display: "block", marginBottom: 16 }}
+                                                  />
                                               ))}
-                                          </div>
-                                      </aside>
-                                      <div className="rv-review-match-list">
-                                          <div className="rv-heading-review-title">Questions {firstNumber}-{lastNumber}</div>
-                                          {headingQuestions.map((question: any, index: number) => {
-                                              const state = headingState(question);
-                                              const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                              const number = rvQuestionNumber(question);
-                                              const paraLabel = headingPlainText(question.text).replace(/^paragraph\s+/i, '') || String.fromCharCode(65 + index);
-                                              return <button key={question.id} type="button" onClick={() => setReviewActiveQuestionId(question.id)} className={`rv-review-match-row rv-heading-review-row ${selected.id === question.id ? 'is-selected' : ''}`}>
-                                                  <span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span>Paragraph {paraLabel}</span></span>
-                                                  <span className="rv-heading-review-result">
-                                                      <span className={`rv-heading-pill ${tone}`}><span>Your</span><strong>{state.blank ? '-' : (state.givenId || state.given)}</strong></span>
-                                                      {!state.correct && <span className="rv-heading-pill correct"><span>Correct</span><strong>{state.expectedId || state.expected}</strong></span>}
-                                                  </span>
-                                              </button>;
-                                          })}
-                                      </div>
-                                  </div>
-                                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
-                                      <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
-                                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
-                                  </div>
-                              </section>;
-                          }
-                          if (rvIsInlineCompletion(q)) {
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                  rvSectionOf(candidate) === rvActiveIdx
-                                  && rvIsInlineCompletion(candidate)
-                                  && rvCompletionContext(candidate) === rvCompletionContext(q)
-                              );
-                              return alreadyRendered ? null : rvRenderCompletionGroup(q);
-                          }
-                          if (q.type === "MATCHING") {
-                              const baseOptions = Array.isArray(q.options) && q.options.length ? q.options : [];
-                              const makeOptionCells = (rawOptions: any[]) => {
-                                  const infoGrid = isMatchingInfoOptionSet(rawOptions);
-                                  return rawOptions.filter((option: any) => String(option ?? "").trim()).map((option: any, optionIndex: number) => ({
-                                      label: matchingOptionLabel(option, optionIndex),
-                                      value: matchingOptionValue(option, optionIndex, infoGrid),
-                                      text: cleanOptionAnswerText(option) || matchingOptionLabel(option, optionIndex),
-                                      infoGrid,
-                                  }));
-                              };
-                              const baseCells = makeOptionCells(baseOptions);
-                              const optionKey = JSON.stringify(baseCells.map(option => `${option.label}:${option.value}`));
-                              const matchingOptionsFor = (candidate: any) => makeOptionCells(Array.isArray(candidate?.options) && candidate.options.length ? candidate.options : baseOptions);
-                              const isSameMatchingRun = (candidate: any) =>
-                                  candidate?.type === "MATCHING"
-                                  && rvSectionOf(candidate) === rvActiveIdx
-                                  && JSON.stringify(matchingOptionsFor(candidate).map(option => `${option.label}:${option.value}`)) === optionKey;
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some(isSameMatchingRun);
-                              if (alreadyRendered) return null;
-                              const seenMatchNumbers = new Set<string>();
-                              const matchQuestions: any[] = rvActiveQuestions.filter(isSameMatchingRun).filter((candidate: any) => {
-                                  const numberKey = String(rvQuestionNumber(candidate));
-                                  if (seenMatchNumbers.has(numberKey)) return false;
-                                  seenMatchNumbers.add(numberKey);
-                                  return true;
-                              });
-                              const optionCells = matchingOptionsFor(matchQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length) || q);
-                              const options = optionCells.map(option => option.value);
-                              const infoGrid = optionCells.every(option => option.infoGrid);
-                              const mapSource = `${q.instruction || ''} ${q.groupContext || ''}`;
-                              const mapImage = (formatContent(mapSource).match(/<img\b[^>]*>/i)?.[0] || '').replace(/&amp;/gi, '&');
-                              const cleanInstruction = formatContent(q.instruction || '').replace(/<img\b[^>]*>/gi, '');
-                              const selected = matchQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-                                  || matchQuestions.find((candidate: any) => !isSingleQuestionCorrect({ ...candidate, options }, reviewQuiz.result.answers?.[candidate.id]))
-                                  || matchQuestions[0];
-                              const questionColumnTitle = String(matchQuestions.find((candidate: any) => candidate.leftTitle)?.leftTitle || q.leftTitle || '').trim();
-                              const legendTitle = String(matchQuestions.find((candidate: any) => candidate.rightTitle)?.rightTitle || q.rightTitle || '').trim();
-                              const renderGrid = <div style={{overflowX:'auto'}}><div className="rv-idp-matching-grid-frame"><table className="rv-idp-matching-grid-table"><thead><tr><th className="rv-idp-matching-grid-question">{questionColumnTitle}</th>{optionCells.map(option => <th key={`rv-match-head-${option.label}`}>{option.label}</th>)}</tr></thead><tbody>{matchQuestions.map((question:any) => {
-                                  const answer = reviewQuiz.result.answers?.[question.id];
-                                  const number = rvQuestionNumber(question);
-                                  const optionCarrier = { ...question, options };
-                                  const chosenText = resolveMatchingAnswerText(optionCarrier, answer);
-                                  const correctText = resolveMatchingAnswerText(optionCarrier, question.correctAnswer);
-                                  return <tr key={question.id} onClick={() => setReviewActiveQuestionId(question.id)} style={{cursor:'pointer'}}><td className="rv-idp-matching-grid-question"><span className="rv-idp-matching-grid-number">{number}</span><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></td>{optionCells.map((option) => {
-                                      const correct = normalizeComparableAnswer(correctText) === normalizeComparableAnswer(option.value);
-                                      const chosen = answer !== undefined && answer !== "" && normalizeComparableAnswer(chosenText) === normalizeComparableAnswer(option.value);
-                                      const tone = correct ? 'correct' : chosen ? 'wrong' : '';
-                                      return <td key={`${question.id}-${option.label}`} className={`rv-idp-matching-grid-choice ${tone}`} title={correct ? 'Correct answer' : chosen ? 'Your answer' : ''}><span className={`rv-idp-radio-dot ${tone}`} /></td>;
-                                  })}</tr>;
-                              })}</tbody></table></div>{!infoGrid && <div className="rv-idp-matching-feature-wrap">{legendTitle && <div className="rv-idp-matching-feature-title">{legendTitle}</div>}<table className="rv-idp-matching-feature-key"><tbody>{optionCells.map(option => <tr key={`rv-match-key-${option.label}`}><th>{option.label}</th><td>{option.text}</td></tr>)}</tbody></table></div>}</div>;
-                              return <section key={`matching-review-${q.id}`} className="rv-completion-review">
-                                  {cleanInstruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:cleanInstruction}} />}
-                                  {mapImage ? <div className="rv-map-drag-layout" style={{display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(300px,.85fr)', gap:18, alignItems:'start'}}><div className="idp-map-plan-visual" dangerouslySetInnerHTML={{__html:mapImage}} />{renderGrid}</div> : renderGrid}
-                                  {selected && (() => {
-                                      const answer = reviewQuiz.result.answers?.[selected.id];
-                                      const optionCarrier = { ...selected, options };
-                                      const selectedOk = isSingleQuestionCorrect(optionCarrier, answer);
-                                      const selectedBlank = answer === undefined || answer === null || answer === "";
-                                      return <div className={`rv-completion-detail ${selectedOk ? 'correct' : selectedBlank ? 'blank' : 'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedBlank ? 'No answer' : resolveMatchingAnswerText(optionCarrier, answer)}</strong></div><div><span>Correct answer</span><strong>{resolveMatchingAnswerText(optionCarrier, selected.correctAnswer)}</strong></div></div>{rvRenderReviewActions(selected, answer, optionCarrier)}</div>;
-                                  })()}
-                              </section>;
-                          }
-                          if (q.type === "DRAG_DROP" && q.subType === "SENTENCE_ENDING_DRAG") {
-                              const optionKey = JSON.stringify((q.options || []).map((option: any) => cleanOptionAnswerText(option)));
-                              const isSameSentenceRun = (candidate: any) =>
-                                  candidate?.type === "DRAG_DROP"
-                                  && candidate?.subType === "SENTENCE_ENDING_DRAG"
-                                  && rvSectionOf(candidate) === rvActiveIdx
-                                  && JSON.stringify((candidate.options || []).map((option: any) => cleanOptionAnswerText(option))) === optionKey;
-                              if (rvActiveQuestions.slice(0, i).some(isSameSentenceRun)) return null;
-                              const sentenceQuestions = rvActiveQuestions.filter(isSameSentenceRun);
-                              const options = (sentenceQuestions.find((candidate: any) => Array.isArray(candidate.options) && candidate.options.length)?.options || q.options || []).map((option: any) => cleanOptionAnswerText(option)).filter(Boolean);
-                              const selected = sentenceQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-                                  || sentenceQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
-                                  || sentenceQuestions[0];
-                              const selectedState = rvCompletionAnswer(selected);
-                              return <section key={`sentence-ending-review-${q.id}`} className="rv-completion-review">
-                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="idp-sentence-ending">
-                                      <div className="idp-sentence-ending-list">{sentenceQuestions.map((question:any) => {
-                                          const state = rvCompletionAnswer(question);
-                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                          const number = rvQuestionNumber(question);
-                                          return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-flowchart-node ${selected.id===question.id?'is-selected':''}`} style={{display:'block',width:'100%',textAlign:'left',border:0,background:'transparent',padding:'0 0 11px',font:'inherit',cursor:'pointer',color:C.text}}>
-                                              <span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /> <span className={`rv-completion-badge rv-completion-${tone}`}>{number}. {state.blank?'No answer':state.given}</span>{!state.correct && <small style={{marginLeft:6,color:C.succ,fontWeight:800}}>Correct: {state.expected}</small>}
-                                          </button>;
-                                      })}</div>
-                                      <div className="rv-review-match-bank" style={{borderRadius:0,background:'#fff'}}><div className="rv-review-match-bank-title">Answer choices</div>{options.map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span>{option}</span></div>)}</div>
-                                  </div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
-                              </section>;
-                          }
-                          if (q.type === "DRAG_DROP" && q.subType === "COLUMN_DRAG") {
-                              const isSameColumnRun = (candidate: any) => candidate?.type === "DRAG_DROP" && candidate?.subType === "COLUMN_DRAG" && rvSectionOf(candidate) === rvSectionOf(q);
-                              // Some imported DOCX tests leave instruction/groupContext blank on
-                              // individual rows. Their order is the reliable group boundary.
-                              if (rvActiveQuestions.slice(0, i).some(isSameColumnRun)) return null;
-                              const seenDragNumbers = new Set<string>();
-                              const dragQuestions: any[] = rvActiveQuestions.filter(isSameColumnRun).filter((candidate: any) => {
-                                  const numberKey = String(rvQuestionNumber(candidate));
-                                  if (seenDragNumbers.has(numberKey)) return false;
-                                  seenDragNumbers.add(numberKey);
-                                  return true;
-                              });
-                              const selected = dragQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId) || dragQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct) || dragQuestions[0];
-                              const selectedState = rvCompletionAnswer(selected);
-                              return <section key={`column-drag-review-${q.id}`} className="rv-completion-review">
-                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-review-match-list">{dragQuestions.map((question:any) => { const state=rvCompletionAnswer(question); const number=rvQuestionNumber(question); const tone=state.correct?'correct':state.blank?'blank':'wrong'; return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-review-match-row ${selected.id===question.id?'is-selected':''}`}><span className="rv-review-match-prompt"><b className="rv-review-match-number">{number}</b><span dangerouslySetInnerHTML={{__html:formatContent(question.text || '')}} /></span><span className={`rv-review-match-answer ${tone}`}><span>Your answer</span><strong>{state.blank?'No answer':state.given}</strong></span>{!state.correct && <span className="rv-review-match-answer correct rv-review-match-correct"><span>Correct answer</span><strong>{state.expected}</strong></span>}</button>; })}</div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
-                              </section>;
-                          }
-                          if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
-                              const flowKey = `${rvSectionOf(q)}::${String(q.instruction || '')}`;
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                  ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
-                              );
-                              if (alreadyRendered) return null;
-                              const flowQuestions = rvActiveQuestions.filter((candidate: any) =>
-                                  ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
-                                  && `${rvSectionOf(candidate)}::${String(candidate.instruction || '')}` === flowKey
-                              );
-                              const selected = flowQuestions.find((candidate: any) => candidate.id === reviewActiveQuestionId)
-                                  || flowQuestions.find((candidate: any) => !rvCompletionAnswer(candidate).correct)
-                                  || flowQuestions[0];
-                              const selectedState = rvCompletionAnswer(selected);
-                              const selectFlowQuestion = (question: any) => {
-                                  setReviewActiveQuestionId(question.id);
-                                  const evidence = explainMap[question.id]?.audioEvidence;
-                                  if (evidence?.timestamp) rvJumpToTranscript(evidence.timestamp, evidence.quote || '');
-                              };
-                              const flowChartData = (() => {
-                                  const firstQ: any = flowQuestions[0] || {};
-                                  if (firstQ.flowSteps && Array.isArray(firstQ.flowSteps) && firstQ.flowSteps.length > 0) {
-                                      return {
-                                          title: firstQ.flowTitle || "",
-                                          steps: firstQ.flowSteps,
-                                          cleanInstruction: q.instruction,
-                                      };
-                                  }
-                                  const rawInstruction = q.instruction || "";
-                                  const rawSegments = rawInstruction
-                                      .split(/<\/(?:div|p)>/i)
-                                      .map((s: string) => s.replace(/<(?:div|p)\b[^>]*>/i, "").trim())
-                                      .filter(Boolean);
-                                  const standardInstructionLines: string[] = [];
-                                  let extractedTitle = "";
-                                  const leadingSteps: Array<{ type: string; html: string; questionNumber: number | null }> = [];
-                                  const isArrow = (txt: string, html: string) =>
-                                      /^(?:↓|⬇|▼|⇩|\|\s*v|->|→|v|&darr;|&#8595;)$/i.test(txt) || /idp-flow-arrow/i.test(html);
-                                  const isStandardInstruction = (txt: string) =>
-                                      /^\s*(?:Questions?\b|Complete\b|Choose\b|Write\b|NB\b|Read\b|Look\b)/i.test(txt);
-
-                                  for (const seg of rawSegments) {
-                                      const plain = seg.replace(/<[^>]+>/g, "").trim();
-                                      if (!plain) continue;
-                                      if (isArrow(plain, seg)) continue;
-                                      if (isStandardInstruction(plain) && leadingSteps.length === 0 && !extractedTitle) {
-                                          standardInstructionLines.push(seg);
-                                      } else {
-                                          if (!extractedTitle && leadingSteps.length === 0 && (/<(?:strong|b)\b/i.test(seg) || !/^\s*\(/.test(plain))) {
-                                              extractedTitle = seg;
-                                          } else {
-                                              leadingSteps.push({ type: "step", html: seg, questionNumber: null });
-                                          }
-                                      }
-                                  }
-
-                                  const allSteps: Array<{ type: string; html: string; questionNumber: number | null; question?: any }> = [
-                                      ...leadingSteps,
-                                      ...flowQuestions.map((fq: any) => ({
-                                          type: "step",
-                                          html: fq.text,
-                                          questionNumber: fq.questionNumber,
-                                          question: fq,
-                                      })),
-                                  ];
-
-                                  const cleanIns = standardInstructionLines.length
-                                      ? "<div>" + standardInstructionLines.join("</div><div>") + "</div>"
-                                      : (extractedTitle || leadingSteps.length ? "" : q.instruction);
-
-                                  return {
-                                      title: extractedTitle,
-                                      steps: allSteps,
-                                      cleanInstruction: cleanIns,
-                                  };
-                              })();
-                              const displayIns = flowChartData?.cleanInstruction !== undefined ? flowChartData.cleanInstruction : q.instruction;
-                              const flowTitle = flowChartData?.title || (flowQuestions[0] as any)?.flowTitle || "";
-                              let stepsToRender: Array<{ html: string; questionNumber?: number | null; question?: any }> = [];
-                              if (flowChartData?.steps && flowChartData.steps.length > 0) {
-                                  stepsToRender = flowChartData.steps.map((st: any) => {
-                                      if (st.question) return st;
-                                      if (st.questionNumber != null) {
-                                          const foundQ = flowQuestions.find((item: any) => Number(item.questionNumber) === Number(st.questionNumber));
-                                          return { ...st, question: foundQ };
-                                      }
-                                      return st;
-                                  });
-                              } else {
-                                  stepsToRender = flowQuestions.map((fq: any) => ({ html: fq.text, questionNumber: fq.questionNumber, question: fq }));
-                              }
-                              return <section key={`flow-drag-review-${q.id}`} className="rv-completion-review" style={{marginBottom:20}}>
-                                  {displayIns && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(displayIns)}} />}
-                                  <div className="rv-flowchart-review" onClick={(event:any) => {
-                                      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-flow-qid]');
-                                      const question = flowQuestions.find((candidate: any) => candidate.id === button?.dataset.rvFlowQid);
-                                      if (question) selectFlowQuestion(question);
-                                  }}>
-                                      {flowTitle && (
-                                          <div className="rv-flowchart-heading" dangerouslySetInnerHTML={{__html:formatContent(flowTitle)}} />
-                                      )}
-                                      {stepsToRender.map((step: any, index: number) => {
-                                          const question = step.question;
-                                          if (!question) {
-                                              const cleanedText = String(step.html || "")
-                                                  .replace(/<br\s*\/?>/gi, " ")
-                                                  .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
-                                                  .replace(/&nbsp;/gi, " ")
-                                                  .replace(/\s+/g, " ")
-                                                  .trim();
-                                              return (
-                                                  <React.Fragment key={`rv-flow-step-${index}`}>
-                                                      <div className="rv-flowchart-node" dangerouslySetInnerHTML={{__html:formatContent(cleanedText)}} />
-                                                      {index < stepsToRender.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
-                                                  </React.Fragment>
-                                              );
-                                          }
-                                          const state = rvCompletionAnswer(question);
-                                          const number = rvQuestionNumber(question);
-                                          const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                          const label = state.blank ? 'No answer' : state.given;
-                                          const slotLabel = state.blank ? number : label;
-                                          const cleanedText = String(question.text || "")
-                                              .replace(/<br\s*\/?>/gi, " ")
-                                              .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
-                                              .replace(/&nbsp;/gi, " ")
-                                              .replace(/\s+/g, " ")
-                                              .trim();
-                                          const renderedNode = formatContent(cleanedText).replace(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/g, `<button type="button" class="rv-completion-badge rv-completion-${tone}" data-rv-flow-qid="${rvEscapeHtml(question.id)}" title="Question ${number}">${rvEscapeHtml(slotLabel)}</button>`);
-                                          return <React.Fragment key={question.id}>
-                                              <div className="rv-flowchart-node" style={{borderColor:state.correct ? C.succ : state.blank ? C.warn : C.err}} dangerouslySetInnerHTML={{__html:renderedNode}} />
-                                              {!state.correct && <div className="rv-flowchart-correction">Correct answer: {state.expected}</div>}
-                                              {index < stepsToRender.length - 1 && <div className="rv-flowchart-arrow" aria-hidden="true" />}
-                                          </React.Fragment>;
-                                      })}
-                                  </div>
-                                  <div className={`rv-completion-detail ${selectedState.correct ? 'correct' : selectedState.blank ? 'blank' : 'wrong'}`} style={{marginTop:14}}>
-                                      <div className="rv-completion-detail-heading">Question {rvQuestionNumber(selected)}</div>
-                                      <div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank ? 'No answer' : selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>
-                                      {rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}
-                                  </div>
-                              </section>;
-                          }
-                          if (q.type === "DIAGRAM_LABEL") {
-                              const imageUrl = String((q as any).diagramImageUrl || "").trim();
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
-                              if (alreadyRendered) return null;
-                              const diagramQuestions = rvActiveQuestions.filter((candidate: any) => candidate.type === "DIAGRAM_LABEL" && String(candidate.diagramImageUrl || "").trim() === imageUrl && rvSectionOf(candidate) === rvActiveIdx);
-                              const source:any = diagramQuestions[0] || q;
-                              const imageBounds = {x:27,y:7,width:46,height:86,...(source.diagramImageBounds || {})};
-                              const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOXES")).toUpperCase();
-                              const isOverlayDiagram = imageMode === "OVERLAY";
-                              const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
-                              const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
-                              const boxes = source.diagramBoxes || {};
-                              const numberFor = (question:any,index:number) => getDiagramQuestionNumber(question,index,rvActiveQuestions);
-                              const textBoxes = getDiagramTextBoxes(diagramQuestions,rvActiveQuestions);
-                              const questionByNumber = new Map(diagramQuestions.map((question:any,index:number)=>[numberFor(question,index),question]));
-                              const boxFor = (question:any,index:number) => boxes[numberFor(question,index)] || (question.diagramBoxes || {})[numberFor(question,index)] || {x:50,y:16+index*(62/Math.max(1,diagramQuestions.length-1||1)),width:14,height:5};
-                              const selected = diagramQuestions.find((candidate:any) => candidate.id === reviewActiveQuestionId) || diagramQuestions.find((candidate:any) => !rvCompletionAnswer(candidate).correct) || diagramQuestions[0];
-                              const textOnly = (value:any) => String(value || "").replace(/<br\s*\/?>/gi,"\n").replace(/<[^>]+>/g,"").replace(/&nbsp;/gi," ");
-                              const renderResultGap = (number:string,key:string) => {
-                                  const question:any = questionByNumber.get(number);
-                                  if (!question) return <span key={key}>[{number}]</span>;
-                                  const state = rvCompletionAnswer(question);
-                                  const tone = state.correct ? 'correct' : state.blank ? 'blank' : 'wrong';
-                                  return <button key={key} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-completion-badge rv-completion-${tone} ${selected?.id===question.id?'is-selected':''}`} title={`Question ${number}`} style={{margin:'0 4px',verticalAlign:'baseline'}}>{number}. {state.blank?'No answer':state.given}{!state.correct && <small style={{marginLeft:4,color:C.succ}}>→ {state.expected}</small>}</button>;
-                              };
-                              const renderTextBox = (box:DiagramTextBox) => textOnly(box.text || "").split(/(\[\d+\])/g).map((part:string,index:number)=>{const marker=part.match(/^\[(\d+)\]$/);return marker?renderResultGap(marker[1],`${box.id}-gap-${index}`):<span key={`${box.id}-text-${index}`}>{part}</span>;});
-                              return <section key={`diagram-review-${q.id}`} className="rv-completion-review">
-                                  {q.instruction && <div className="group-context" style={{marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div style={{overflow:'auto',border:`1px solid ${C.border}`,background:'#f8fafc'}}>
-                                      <div style={{position:'relative',minWidth:760,aspectRatio:diagramAspectRatio,background:'#fff'}}>
-                                          {imageUrl && <img src={cleanMediaUrl(imageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Diagram" draggable={false} style={isFullCanvasDiagram?{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'fill',pointerEvents:'none'}:{position:'absolute',left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`,objectFit:'contain',pointerEvents:'none'}} />}
-                                          {!isOverlayDiagram && <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>{textBoxes.map((box:DiagramTextBox)=>{if(!Number.isFinite(Number(box.targetX))||!Number.isFinite(Number(box.targetY))) return null;const x1=box.anchor==='center'?Number(box.x):Number(box.x)+(Number(box.width)||26)/2;const y1=box.anchor==='center'?Number(box.y):Number(box.y)+(Number(box.height)||16)/2;return <line key={`diagram-review-connector-${box.id}`} x1={x1} y1={y1} x2={Number(box.targetX)} y2={Number(box.targetY)} stroke="#111827" strokeWidth="0.28" vectorEffect="non-scaling-stroke"/>;})}</svg>}
-                                          {isOverlayDiagram ? diagramQuestions.map((question:any,index:number)=>{const box=boxFor(question,index);const state=rvCompletionAnswer(question);const number=numberFor(question,index);return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||10}%`,height:`${box.height||5}%`,transform:'translate(-50%,-50%)',padding:0,boxSizing:'border-box',border:`2px solid ${state.correct?C.succ:state.blank?C.warn:C.err}`,background:state.blank?'rgba(255,255,255,.14)':'rgba(255,255,255,.84)',color:C.text,textAlign:'center',fontSize:12,lineHeight:1.1,cursor:'pointer'}}>{state.blank?'':state.given}{!state.correct&&!state.blank&&<small style={{display:'block',color:C.succ}}>→ {state.expected}</small>}</button>}) : textBoxes.map((box:DiagramTextBox)=><div key={`diagram-review-box-${box.id}`} style={{position:'absolute',left:`${box.x}%`,top:`${box.y}%`,width:`${box.width||26}%`,minHeight:`${box.height||16}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',boxSizing:'border-box',padding:'12px 14px',border:'2px solid #111827',background:'rgba(255,255,255,.97)',color:C.text,fontSize:14,lineHeight:1.4,whiteSpace:'pre-wrap',boxShadow:'0 2px 0 rgba(15,23,42,.05)'}}>{renderTextBox(box)}</div>)}
-                                      </div>
-                                  </div>
-                                  {selected && (()=>{const selectedState=rvCompletionAnswer(selected);return <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected, diagramQuestions.indexOf(selected))}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>})()}
-                              </section>;
-                          }
-                          if (q.type === "MAP_DRAG") {
-                              const mapUrl = resolveQuestionMapUrl(q);
-                              const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
-                                  candidate.type === "MAP_DRAG"
-                                  && resolveQuestionMapUrl(candidate) === mapUrl
-                                  && rvSectionOf(candidate) === rvActiveIdx
-                              );
-                              if (alreadyRendered) return null;
-                              const mapQuestions = rvActiveQuestions.filter((candidate: any) =>
-                                  candidate.type === "MAP_DRAG"
-                                  && resolveQuestionMapUrl(candidate) === mapUrl
-                                  && rvSectionOf(candidate) === rvActiveIdx
-                              );
-                              const numberFor = (question: any) => String(question.text || "").match(/\d+/)?.[0]
-                                  || String(rvQuestionNumber(question));
-                              const slots = (q as any).mapSlots || {};
-                              const slotFor = (question: any, index: number) => slots[numberFor(question)] || (question as any).mapSlots?.[numberFor(question)] || {
-                                  x: 50, y: 16 + index * (68 / Math.max(1, mapQuestions.length - 1 || 1)), width: 18, height: 7,
-                              };
-                              const selected = mapQuestions.find((candidate:any) => candidate.id === reviewActiveQuestionId) || mapQuestions.find((candidate:any) => !rvCompletionAnswer(candidate).correct) || mapQuestions[0];
-                              const selectedState = rvCompletionAnswer(selected);
-                              return <section key={`map-review-${q.id}`} className="rv-completion-review">
-                                  <div style={{fontWeight:800, marginBottom:8}}>Questions {numberFor(mapQuestions[0])}-{numberFor(mapQuestions[mapQuestions.length - 1])}</div>
-                                  {q.instruction && <div style={{fontSize:14, lineHeight:1.5, marginBottom:14}} dangerouslySetInnerHTML={{__html:formatContent(q.instruction)}} />}
-                                  <div className="rv-map-review-scroll"><div className="rv-map-review-layout">
-                                      <div className="rv-map-review-stage">
-                                          {mapUrl ? (
-                                              <img src={cleanMediaUrl(mapUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Map labelling diagram" style={{ width: '100%', maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block' }} />
-                                          ) : <div style={{padding:30, color:C.sub}}>Map image is unavailable.</div>}
-                                          {mapUrl && mapQuestions.map((question: any, index: number) => {
-                                              const slot = slotFor(question, index);
-                                              const state = rvCompletionAnswer(question);
-                                              return <button key={question.id} type="button" onClick={()=>setReviewActiveQuestionId(question.id)} className={`rv-map-review-slot ${selected.id===question.id?'is-selected':''}`} style={{left:`${slot.x}%`, top:`${slot.y}%`, width:`${slot.width || 18}%`, minHeight:`${slot.height || 7}%`, borderColor:state.correct?C.succ:state.blank?C.warn:C.err, color:state.correct?C.succ:state.blank?C.warn:C.err}}>
-                                                  <span className="rv-map-review-slot-number">#{numberFor(question)}</span>
-                                                  <span>{state.blank?'No answer':state.given}</span>{!state.correct && <small style={{display:'block',marginTop:3,color:C.succ}}>Correct: {state.expected}</small>}
-                                              </button>;
-                                          })}
-                                      </div>
-                                      <aside className="rv-review-match-bank"><div className="rv-review-match-bank-title">Answer choices</div>{(q.options || []).map((option:string, optionIndex:number) => <div key={`${option}-${optionIndex}`} className="rv-review-match-option"><span className="rv-review-match-option-key">{String.fromCharCode(65+optionIndex)}</span><span>{option}</span></div>)}</aside>
-                                  </div></div>
-                                  <div className={`rv-completion-detail ${selectedState.correct?'correct':selectedState.blank?'blank':'wrong'}`} style={{marginTop:14}}><div className="rv-completion-detail-heading">Question {numberFor(selected)}</div><div className="rv-completion-detail-answer-row"><div><span>Your answer</span><strong>{selectedState.blank?'No answer':selectedState.given}</strong></div><div><span>Correct answer</span><strong>{selectedState.expected}</strong></div></div>{rvRenderReviewActions(selected, reviewQuiz.result.answers?.[selected.id], selected)}</div>
-                              </section>;
-                          }
-                          const rvGroup = rvGroupByQuestionId.get(q.id);
-                          if (!rvIsGroupedReviewQuestion(q) && rvGroupedReviewNumbers.has(String(rvQuestionNumber(q)))) return null;
-                          if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
-                          const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
-                          const studentAns = multiOutcome
-                            ? multiOutcome.selected
-                            : ((reviewQuiz.result.answers && reviewQuiz.result.answers[q.id] !== undefined) ? reviewQuiz.result.answers[q.id] : undefined);
-                          let isCorrect = false;
-                              let isPartial = false;
-                              let correctDisplay: string | number = String(q.correctAnswer);
-                              
-                              if (q.type === "CHOICE") {
-                                  isCorrect = studentAns === q.correctAnswer;
-                                  correctDisplay = q.options ? q.options[q.correctAnswer as number] : String(q.correctAnswer);
-                              } else if (q.type === "CHOICE_MULTIPLE") {
-                                  const correctArr = multiOutcome?.correct || (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer]);
-                                  isCorrect = multiOutcome ? multiOutcome.isFullyCorrect : getChoiceMultipleOutcome([q], { [q.id]: studentAns }).isFullyCorrect;
-                                  isPartial = !isCorrect && Boolean(multiOutcome?.score);
-                                  correctDisplay = correctArr.map((idx: any) => q.options ? q.options[idx] : idx).join(" / ");
-                              } else {
-                                  const sA = String(studentAns || "").trim().toLowerCase();
-                                  const cA = String(q.correctAnswer).split("/").map(s => s.trim().toLowerCase());
-                                  isCorrect = cA.includes(sA);
-                              }
-
-                          const showContext = q.groupContext && q.groupContext !== currentContext;
-                          if (showContext) currentContext = q.groupContext as string;
-
-                          // === HIỆN ĐỦ LỰA CHỌN + đánh dấu đúng/sai (MCQ, matching heading) ===
-                          const rvOpts = Array.isArray(q.options) ? q.options : [];
-                          const rvShowOpts = rvOpts.length > 0 && ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG_DROP_HEADING"].includes(q.type);
-                          const rvIsMulti = q.type === "CHOICE_MULTIPLE";
-                          const rvNorm = (v: any) => String(v ?? "").trim().toLowerCase();
-                          const rvCMulti = rvIsMulti ? (multiOutcome?.correct || (Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer])).map(Number) : [];
-                          const rvSMulti = rvIsMulti ? (Array.isArray(studentAns) ? studentAns.map(Number) : (studentAns !== undefined && studentAns !== "" ? [Number(studentAns)] : [])) : [];
-                          const rvOptMark = (oi: number, otext: string) => {
-                              if (q.type === "CHOICE") return { correct: Number(q.correctAnswer) === oi, chosen: studentAns !== undefined && studentAns !== "" && Number(studentAns) === oi };
-                              if (rvIsMulti) return { correct: rvCMulti.includes(oi), chosen: rvSMulti.includes(oi) };
-                              const lab = (otext.match(/^\s*([ivxlcdm]+|[A-Za-z])[\.\)]/i) || [])[1];
-                              return { correct: !!lab && rvNorm(q.correctAnswer) === rvNorm(lab), chosen: !!lab && rvNorm(studentAns) === rvNorm(lab) };
-                          };
-                          const questionBodyHtml = rvQuestionBodyHtml(q.text);
-                          return (
-                          <React.Fragment key={q.id}>
-                              {showContext && (
-                                  <div className="group-context">
-                                      <div dangerouslySetInnerHTML={{__html: formatContent(q.groupContext || "")}} />
-                                      {Boolean((q as any).groupImageUrl || (q as any).diagramImageUrl) && (
-                                          <div style={{ marginTop: 10, marginBottom: 10 }}>
-                                              <img
-                                                  src={cleanMediaUrl((q as any).groupImageUrl || (q as any).diagramImageUrl)}
-                                                  referrerPolicy="no-referrer"
-                                                  loading="lazy"
-                                                  alt="Diagram reference"
-                                                  style={{ maxWidth: '100%', height: 'auto', objectFit: 'contain', display: 'block', borderRadius: 4 }}
-                                              />
-                                          </div>
-                                      )}
-                                  </div>
-                              )}
-                              <div className={`rv-exam-review-card ${isCorrect ? 'correct' : (isPartial ? 'partial' : 'wrong')}`}>
-                                  <div className="rv-exam-question-head">Question {rvGroup ? rvGroupQuestionLabel(rvGroup) : i+1}{questionBodyHtml ? ': ' : ''}{questionBodyHtml && <span style={{fontWeight: 500}} dangerouslySetInnerHTML={{__html: questionBodyHtml}} />}</div>
-                                  {rvShowOpts ? (
-                                      <ul className="rv-exam-review-options">
-                                          {rvOpts.map((o: any, oi: number) => {
-                                              const { correct, chosen } = rvOptMark(oi, String(o));
-                                              const clean = String(o).replace(/^\s*([ivxlcdm]+|[A-Za-z]{1,3})[\.\)]\s*/i, '');
-                                              return (
-                                                  <li key={oi} className={`rv-exam-review-option ${correct ? 'correct' : (chosen ? 'wrong' : '')}`}>
-                                                      <span style={{ flexShrink: 0, marginTop: 1, color: correct ? C.succ : (chosen ? C.err : C.sub) }}>
-                                                          {correct
-                                                              ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                                                              : (chosen
-                                                                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                                                  : <span style={{ display: 'inline-block', width: 15, height: 15, border: `1.5px solid ${C.border}`, borderRadius: rvIsMulti ? 3 : '50%' }} />)}
-                                                      </span>
-                                                      <span style={{ flex: 1, color: C.text }} dangerouslySetInnerHTML={{ __html: formatContent(clean) }} />
-                                                      {chosen && <span className="rv-exam-review-option-status">Your answer</span>}
-                                                      {correct && !chosen && <span className="rv-exam-review-option-status">Correct</span>}
-                                                  </li>
-                                              );
-                                          })}
-                                      </ul>
-                                  ) : (
-                                  <div className="rv-exam-review-answer-row">
-                                      <div>
-                                          <span>Your answer</span><strong>{(studentAns === undefined || studentAns === "" || (Array.isArray(studentAns) && studentAns.length === 0)) ? "No answer" : String(studentAns)}</strong>
-                                      </div>
-                                      {!isCorrect && (
-                                          <div>
-                                              <span>Correct answer</span><strong>{correctDisplay}</strong>
-                                          </div>
-                                      )}
-                                  </div>
-                                  )}
-                                  {rvRenderReviewActions(q, studentAns, multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q)}
-                              </div>
-                          </React.Fragment>
-                      )})}
-                  </div>
-              </div>
-
-              {/* COPILOT KEYFRAME STYLES */}
-              <style>{`
-                  @keyframes copilotPanelIn {
-                      from { opacity: 0; transform: translateY(16px) scale(0.97); }
-                      to { opacity: 1; transform: translateY(0) scale(1); }
-                  }
-                  @keyframes copilotMsgIn {
-                      from { opacity: 0; transform: translateY(8px); }
-                      to { opacity: 1; transform: translateY(0); }
-                  }
-                  @keyframes copilotWave {
-                      0%, 80%, 100% { transform: scale(0.6); opacity: 0.35; }
-                      40% { transform: scale(1); opacity: 1; }
-                  }
-                  @keyframes copilotBeacon {
-                      0%, 100% { transform: scale(1); opacity: 1; }
-                      50% { transform: scale(1.4); opacity: 0.4; }
-                  }
-              `}</style>
-
-              {/* REVIEW COPILOT FLOATING LAUNCHER BUTTON */}
-              <button
-                  type="button"
-                  onClick={() => setCopilotOpen(!copilotOpen)}
-                  style={{
-                      position: 'fixed',
-                      bottom: 24,
-                      right: 24,
-                      zIndex: 9999,
-                      background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
-                      color: '#fff',
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      borderRadius: 999,
-                      padding: '11px 20px',
-                      boxShadow: '0 10px 28px rgba(79, 70, 229, 0.4), 0 2px 6px rgba(0, 0, 0, 0.1)',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 9,
-                      fontSize: 13,
-                      fontWeight: 700,
-                      letterSpacing: -0.01,
-                      transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
-                  }}
-                  title={tx("Mở gia sư AI 1-1", "Open 1-on-1 AI Copilot")}
-              >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                  <span>{tx("Gia sư IELTS AI", "IELTS AI Tutor")}</span>
-                  <span style={{ position: 'relative', display: 'inline-flex', width: 8, height: 8 }}>
-                      <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: '#4ade80', animation: 'copilotBeacon 2s infinite ease-in-out' }} />
-                      <span style={{ position: 'relative', width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }} />
-                  </span>
-              </button>
-
-              {/* REVIEW COPILOT FLOATING SLIDE-OVER CHAT PANEL */}
-              {copilotOpen && (
-                  <div
-                      style={{
-                          position: 'fixed',
-                          bottom: 78,
-                          right: 24,
-                          width: copilotExpanded ? 680 : 425,
-                          maxWidth: 'calc(100vw - 32px)',
-                          height: copilotExpanded ? 760 : 585,
-                          maxHeight: 'calc(100vh - 90px)',
-                          zIndex: 9999,
-                          background: C.card,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 20,
-                          boxShadow: '0 24px 60px -12px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(0,0,0,0.06)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          overflow: 'hidden',
-                          animation: 'copilotPanelIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-                          transition: 'width 0.3s cubic-bezier(0.16, 1, 0.3, 1), height 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-                      }}
-                  >
-                      {/* Panel Header */}
-                      <div style={{ padding: '12px 16px', background: `linear-gradient(135deg, ${C.accent}12, #4338ca0e)`, borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                              <span style={{ display: 'inline-flex', padding: 6, borderRadius: 10, background: 'linear-gradient(135deg, #4f46e5, #4338ca)', color: '#fff', flexShrink: 0 }}>
-                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                              </span>
-                              <div style={{ minWidth: 0 }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-                                          {tx("Gia sư IELTS AI Master", "IELTS AI Master Tutor")}
-                                      </span>
-                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: '#16a34a', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '1px 6px', borderRadius: 999 }}>
-                                          <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#22c55e' }} />
-                                          {tx("Trực tuyến", "Online")}
-                                      </span>
-                                  </div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11, color: C.sub }}>
-                                      {copilotActiveQ ? (
-                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(99, 102, 241, 0.1)', color: '#4338ca', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>
-                                              {tx("Đang hỏi Câu", "Focused on Q")}: {rvQuestionNumber(copilotActiveQ)}
-                                              <button
-                                                  type="button"
-                                                  onClick={() => setCopilotActiveQ(null)}
-                                                  style={{ background: 'transparent', border: 'none', color: '#6366f1', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 800, marginLeft: 2 }}
-                                                  title={tx("Bỏ ghim câu hỏi để hỏi toàn bài", "Unpin question to ask about whole test")}
-                                              >
-                                                  ✕
-                                              </button>
-                                          </span>
-                                      ) : (
-                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                              <span style={{ fontWeight: 600, color: '#047857' }}>{tx("Toàn bài thi", "Full Exam")}</span>
-                                              {rvAllQuestions.length > 0 && (
-                                                  <select
-                                                      value=""
-                                                      onChange={e => {
-                                                          const targetId = e.target.value;
-                                                          const found = rvAllQuestions.find((qq: any) => String(qq?.id) === targetId);
-                                                          if (found) setCopilotActiveQ(found);
-                                                      }}
-                                                      style={{ fontSize: 10.5, padding: '2px 5px', borderRadius: 4, border: `1px solid ${C.border}`, background: C.bg, color: C.text, cursor: 'pointer' }}
-                                                  >
-                                                      <option value="">{tx("Chọn câu để hỏi...", "Focus on a question...")}</option>
-                                                      {rvAllQuestions.map((qq: any) => (
-                                                          <option key={qq.id} value={qq.id}>
-                                                              {tx("Câu", "Q")}{rvQuestionNumber(qq)}: {String(qq.question || qq.title || qq.type || "").slice(0, 30)}
-                                                          </option>
-                                                      ))}
-                                                  </select>
-                                              )}
-                                          </span>
-                                      )}
-                                  </div>
-                              </div>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                              <button
-                                  type="button"
-                                  onClick={() => setCopilotExpanded(!copilotExpanded)}
-                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
-                                  title={copilotExpanded ? tx("Thu nhỏ", "Collapse") : tx("Mở rộng", "Expand")}
-                              >
-                                  {copilotExpanded ? (
-                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/></svg>
-                                  ) : (
-                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-                                  )}
-                              </button>
-                              <button
-                                  type="button"
-                                  onClick={() => setCopilotMessages([])}
-                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
-                                  title={tx("Xóa lịch sử chat", "Clear conversation")}
-                              >
-                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                              </button>
-                              <button
-                                  type="button"
-                                  onClick={() => setCopilotOpen(false)}
-                                  style={{ background: 'transparent', border: 'none', color: C.sub, padding: 5, borderRadius: 6, cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
-                                  aria-label="Close copilot"
-                              >
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                              </button>
-                          </div>
-                      </div>
-
-                      {/* Quick prompt chips */}
-                      <div style={{ padding: '8px 12px', background: C.bg, borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 6, overflowX: 'auto', whiteSpace: 'nowrap' }}>
-                          {copilotActiveQ ? (
-                              <>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Tại sao đáp án của em lại sai so với đáp án đúng?", "Why is my answer incorrect compared to the official key?"))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Tại sao em sai?", "Why am I wrong?")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Chỉ ra từ khóa paraphrase chính trong câu này giữa câu hỏi và bài đọc/audio.", "Identify key paraphrase mappings between question and passage/audio."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Chỉ từ Paraphrase", "Show Paraphrases")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Dịch và phân tích cấu trúc ngữ pháp của câu chứa đáp án đúng.", "Translate and dissect the grammar of the evidence sentence."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Phân tích dẫn chứng", "Dissect Evidence")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Cho em mẹo làm bài để tránh bẫy dạng câu này lần sau.", "Give me strategies to avoid traps on this question type."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Mẹo làm bài", "Tips for this type")}
-                                  </button>
-                              </>
-                          ) : (
-                              <>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Tóm tắt các lỗi sai chính trong bài thi này và nguyên nhân cốt lõi.", "Summarize my main mistakes and their core causes in this exam."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Tóm tắt lỗi sai bài này", "Summarize mistakes")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Phân tích 3 bẫy đề nguy hiểm nhất em gặp phải trong đề thi này.", "Analyze the 3 most dangerous traps I encountered in this test."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Phân tích bẫy đề lớn nhất", "Analyze worst traps")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Tổng hợp 5 cụm từ vựng học thuật Band 8+ đắt giá nhất xuất hiện trong bài.", "Extract 5 high-value Band 8+ academic collocations from this test."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Từ vựng Band 8+ trong bài", "Band 8+ Vocab")}
-                                  </button>
-                                  <button
-                                      type="button"
-                                      onClick={() => void handleSendCopilotMessage(tx("Đề xuất kế hoạch luyện tập để tăng 1.0 Band điểm dựa trên bài thi này.", "Suggest a concrete study plan to gain +1.0 Band based on this test."))}
-                                      style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 600, color: C.text, cursor: 'pointer', flexShrink: 0 }}
-                                  >
-                                      {tx("Chiến thuật tăng 1.0 Band", "Strategy to gain +1.0 Band")}
-                                  </button>
-                              </>
-                          )}
-                      </div>
-
-                      {(() => {
-                          const rvRenderCopilotAiContent = (rawText: string) => {
-                              const lines = rawText.split('\n');
-                              const elements: React.ReactNode[] = [];
-                              let currentList: { type: 'ul' | 'ol'; items: React.ReactNode[] } | null = null;
-
-                              const parseSubTokens = (str: string, sKey: string): React.ReactNode => {
-                                  const re = /(\[(\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:-|–|—|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?)\])|(["“]([^"”\n]{2,250})["”])/g;
-                                  const pieces: React.ReactNode[] = [];
-                                  let lastI = 0;
-                                  let m: RegExpExecArray | null;
-
-                                  while ((m = re.exec(str)) !== null) {
-                                      if (m.index > lastI) {
-                                          pieces.push(str.slice(lastI, m.index));
-                                      }
-                                      if (m[1]) {
-                                          const tsLabel = m[2];
-                                          pieces.push(
-                                              <button
-                                                  key={`${sKey}-ts-${m.index}`}
-                                                  type="button"
-                                                  onClick={() => rvSeek(tsLabel)}
-                                                  style={{
-                                                      display: 'inline-flex',
-                                                      alignItems: 'center',
-                                                      gap: 3,
-                                                      padding: '1px 6px',
-                                                      margin: '0 3px',
-                                                      background: 'rgba(16, 185, 129, 0.08)',
-                                                      color: '#047857',
-                                                      border: '1px solid rgba(16, 185, 129, 0.28)',
-                                                      borderRadius: 4,
-                                                      fontSize: '0.9em',
-                                                      fontWeight: 700,
-                                                      cursor: 'pointer',
-                                                      verticalAlign: 'baseline',
-                                                      lineHeight: 1.4
-                                                  }}
-                                                  title={tx("Phát audio từ mốc này", `Play audio from ${tsLabel}`)}
-                                              >
-                                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 18 12 6 20 6 4"/></svg>
-                                                  <span>{tsLabel}</span>
-                                              </button>
-                                          );
-                                      } else if (m[3]) {
-                                          const qStr = (m[4] || '').trim();
-                                          const normalizedQ = rvNormalizeEvidenceText(qStr);
-                                          const isLabel = /^(problem|solution|suggestion|pattern|option\s+[a-g]|question\s+\d+|true|false|not\s+given|yes|no|listening|reading|task\s+[12])$/i.test(qStr);
-                                          const isSubstantive = qStr.length >= 10 && qStr.split(/\s+/).length >= 2;
-                                          const matchesSource = Boolean(normalizedQ.length >= 6 && rvSourceTextNormalized && rvSourceTextNormalized.includes(normalizedQ));
-
-                                          if (isSubstantive && !isLabel && matchesSource) {
-                                              pieces.push(
-                                                  <button
-                                                      key={`${sKey}-q-${m.index}`}
-                                                      type="button"
-                                                      onClick={() => {
-                                                          if (rvActiveIsListening) {
-                                                              rvJumpToTranscript("", qStr);
-                                                          } else {
-                                                              rvJumpToEvidence(qStr);
-                                                          }
-                                                      }}
-                                                      style={{
-                                                          display: 'inline-flex',
-                                                          alignItems: 'center',
-                                                          gap: 3,
-                                                          padding: '1px 6px',
-                                                          margin: '0 2px',
-                                                          background: 'rgba(99, 102, 241, 0.08)',
-                                                          color: '#4338ca',
-                                                          border: '1px solid rgba(99, 102, 241, 0.25)',
-                                                          borderRadius: 4,
-                                                          fontSize: '0.92em',
-                                                          fontWeight: 600,
-                                                          cursor: 'pointer',
-                                                          verticalAlign: 'baseline',
-                                                          textAlign: 'left'
-                                                      }}
-                                                      title={rvActiveIsListening ? tx("Xem dẫn chứng trong transcript", "Locate in transcript") : tx("Xem dẫn chứng trong bài đọc", "Locate in passage")}
-                                                  >
-                                                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                                                      <span>“{qStr}”</span>
-                                                  </button>
-                                              );
-                                          } else {
-                                              pieces.push(`“${qStr}”`);
-                                          }
-                                      }
-                                      lastI = re.lastIndex;
-                                  }
-
-                                  if (lastI < str.length) {
-                                      pieces.push(str.slice(lastI));
-                                  }
-                                  return pieces;
-                              };
-
-                              const renderInline = (content: string, pKey: string): React.ReactNode => {
-                                  const boldParts = content.split(/\*\*([^*]+)\*\*/g);
-                                  return boldParts.map((bPart, bIdx) => {
-                                      const isBold = bIdx % 2 === 1;
-                                      const sub = parseSubTokens(bPart, `${pKey}-b${bIdx}`);
-                                      return isBold ? <strong key={`${pKey}-strong-${bIdx}`} style={{ fontWeight: 700, color: C.text }}>{sub}</strong> : <React.Fragment key={`${pKey}-fr-${bIdx}`}>{sub}</React.Fragment>;
-                                  });
-                              };
-
-                              const flushList = (key: string) => {
-                                  if (!currentList) return;
-                                  if (currentList.type === 'ul') {
-                                      elements.push(
-                                          <ul key={key} style={{ margin: '4px 0 6px', paddingLeft: 18, listStyleType: 'disc' }}>
-                                              {currentList.items.map((it, idx) => <li key={idx} style={{ margin: '3px 0' }}>{it}</li>)}
-                                          </ul>
-                                      );
-                                  } else {
-                                      elements.push(
-                                          <ol key={key} style={{ margin: '4px 0 6px', paddingLeft: 20 }}>
-                                              {currentList.items.map((it, idx) => <li key={idx} style={{ margin: '3px 0' }}>{it}</li>)}
-                                          </ol>
-                                      );
-                                  }
-                                  currentList = null;
-                              };
-
-                              lines.forEach((line, lIdx) => {
-                                  const trimmed = line.trim();
-                                  if (!trimmed) {
-                                      flushList(`list-f-${lIdx}`);
-                                      return;
-                                  }
-
-                                  const headingMatch = trimmed.match(/^#{1,4}\s+(.+)$/);
-                                  if (headingMatch) {
-                                      flushList(`list-h-${lIdx}`);
-                                      elements.push(
-                                          <div key={`h-${lIdx}`} style={{ fontWeight: 800, fontSize: 13, color: C.text, margin: '8px 0 3px' }}>
-                                              {renderInline(headingMatch[1], `h-in-${lIdx}`)}
-                                          </div>
-                                      );
-                                      return;
-                                  }
-
-                                  const ulMatch = trimmed.match(/^[-*•]\s+(.+)$/);
-                                  if (ulMatch && !trimmed.startsWith('**')) {
-                                      if (!currentList || currentList.type !== 'ul') {
-                                          flushList(`list-ul-${lIdx}`);
-                                          currentList = { type: 'ul', items: [] };
-                                      }
-                                      currentList.items.push(renderInline(ulMatch[1], `ul-${lIdx}`));
-                                      return;
-                                  }
-
-                                  const olMatch = trimmed.match(/^(\d+)[\.\)]\s+(.+)$/);
-                                  if (olMatch) {
-                                      if (!currentList || currentList.type !== 'ol') {
-                                          flushList(`list-ol-${lIdx}`);
-                                          currentList = { type: 'ol', items: [] };
-                                      }
-                                      currentList.items.push(renderInline(olMatch[2], `ol-${lIdx}`));
-                                      return;
-                                  }
-
-                                  flushList(`list-p-${lIdx}`);
-                                  elements.push(
-                                      <p key={`p-${lIdx}`} style={{ margin: '3px 0 5px', lineHeight: 1.55 }}>
-                                          {renderInline(trimmed, `p-in-${lIdx}`)}
-                                      </p>
-                                  );
-                              });
-
-                              flushList('list-end');
-                              return elements;
-                          };
-
-                          return (
-                              <div
-                                  ref={copilotChatBoxRef}
-                                  style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}
-                              >
-                                  {copilotMessages.length === 0 ? (
-                                      <div style={{ margin: 'auto', textAlign: 'center', color: C.sub, fontSize: 12.5, lineHeight: 1.5, padding: '24px 14px' }}>
-                                          <div style={{ display: 'inline-flex', padding: 12, borderRadius: '50%', background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(67, 56, 202, 0.15))', color: C.accent, marginBottom: 10 }}>
-                                              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                                          </div>
-                                          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-                                              {tx("Gia sư IELTS AI 1-1 Sẵn sàng Đồng hành", "Personalized 1-on-1 IELTS AI Master")}
-                                          </div>
-                                          <div style={{ marginTop: 6, maxWidth: 360, margin: '6px auto 0' }}>
-                                              {tx(
-                                                  "Mình đã nắm trọn vẹn toàn bộ đề thi, transcript/bài đọc và bài làm của bạn. Bạn có thể hỏi bất kỳ điều gì: phân tích một câu, chiến thuật giải đề, hay giải thích từ vựng nhé!",
-                                                  "I have full context over this entire exam, passages/transcripts, and your answers. Feel free to ask anything: break down any question, discuss strategies, or unpack vocabulary!"
-                                              )}
-                                          </div>
-                                      </div>
-                                  ) : (
-                                      copilotMessages.map((msg, mIdx) => {
-                                          const isUser = msg.role === "user";
-                                          return (
                                               <div
-                                                  key={mIdx}
-                                                  style={{
-                                                      alignSelf: isUser ? 'flex-end' : 'flex-start',
-                                                      maxWidth: copilotExpanded ? '82%' : '88%',
-                                                      background: isUser ? 'linear-gradient(135deg, #4f46e5, #4338ca)' : C.bg,
-                                                      color: isUser ? '#fff' : C.text,
-                                                      border: isUser ? 'none' : `1px solid ${C.border}`,
-                                                      borderRadius: isUser ? '16px 16px 3px 16px' : '16px 16px 16px 3px',
-                                                      padding: '10px 14px',
-                                                      fontSize: 12.5,
-                                                      lineHeight: 1.55,
-                                                      wordBreak: 'break-word',
-                                                      boxShadow: isUser ? '0 4px 12px rgba(79, 70, 229, 0.25)' : '0 1px 3px rgba(0,0,0,0.04)',
-                                                      animation: 'copilotMsgIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards'
-                                                  }}
-                                              >
-                                                  {!isUser && (
-                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, paddingBottom: 4, borderBottom: `1px solid ${C.border}`, fontSize: 10.5, color: C.sub }}>
-                                                          <span style={{ fontWeight: 700, color: C.accent }}>IELTS AI Master</span>
+                                                  id="ielts-passage-content"
+                                                  style={{ whiteSpace: "pre-wrap" }}
+                                                  dangerouslySetInnerHTML={{ __html: formatContent(passageHtml) }}
+                                              />
+                                          </>
+                                      );
+                                  })() : (() => {
+                                      // Multi-tier transcript fallback so DOCX-imported Listening tests NEVER show empty transcript
+                                      const rawTranscript =
+                                          rvSections[rvActiveIdx]?.transcript ||
+                                          rvSections[rvActiveIdx]?.passage ||
+                                          rvSections[rvActiveIdx]?.passageHtml ||
+                                          reviewQuiz.quiz.transcript ||
+                                          (reviewQuiz.quiz as any).transcriptHtml ||
+                                          reviewQuiz.quiz.passage ||
+                                          rvSections.map((s: any) => s?.transcript || s?.passage || "").filter(Boolean).join("\n\n") ||
+                                          "";
+                                      const transcriptText = String(rawTranscript)
+                                          .replace(/<(?:br)\s*\/?\s*>/gi, "\n")
+                                          .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, "\n")
+                                          .replace(/<[^>]+>/g, "")
+                                          .replace(/&nbsp;/gi, " ")
+                                          .replace(/\r/g, "")
+                                          .trim();
+
+                                      if (!transcriptText) {
+                                          return <div style={{ color: "#78716C", fontStyle: "italic" }}>Chưa có transcript cho phần nghe này.</div>;
+                                      }
+
+                                      const hasTimestampHeaders = /[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])]/.test(transcriptText);
+                                      const transcriptBlocks = hasTimestampHeaders
+                                          ? transcriptText
+                                              .split(/(?=[\[(]\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:[-–—−~]|to)\s*\d{1,2}:\d{2}(?::\d{2})?)?[\])])/)
+                                              .map(b => b.trim())
+                                              .filter(Boolean)
+                                              .map((block, index) => {
+                                                  const match = block.match(/^[\[(](\d{1,2}:\d{2}(?::\d{2})?)(?:\s*(?:[-–—−~]|to)\s*(\d{1,2}:\d{2}(?::\d{2})?))?[\])]\s*\n?([\s\S]*)$/i);
+                                                  if (match) {
+                                                      const startStr = match[1];
+                                                      const endStr = match[2];
+                                                      const label = endStr ? `${startStr} - ${endStr}` : startStr;
+                                                      return {
+                                                          key: `${startStr}-${index}`,
+                                                          time: label,
+                                                          startSecs: rvTimestampSeconds(startStr),
+                                                          endSecs: endStr ? rvTimestampSeconds(endStr) : undefined,
+                                                          text: (match[3] || "").trim(),
+                                                      };
+                                                  }
+                                                  return { key: `plain-${index}`, time: "", startSecs: -1, endSecs: undefined, text: block };
+                                              })
+                                          : transcriptText.split(/\n{2,}/).map(b => b.trim()).filter(Boolean).map((block, index) => ({
+                                              key: `para-${index}`,
+                                              time: "",
+                                              startSecs: -1,
+                                              endSecs: undefined,
+                                              text: block,
+                                          }));
+
+                                      return (
+                                          <div id="ielts-passage-content">
+                                              {transcriptBlocks.map(block => (
+                                                  <article
+                                                      key={block.key}
+                                                      className="rv-transcript-block"
+                                                      {...(block.startSecs >= 0 ? { "data-rv-transcript-start": block.startSecs } : {})}
+                                                      {...(block.endSecs !== undefined && block.endSecs >= 0 ? { "data-rv-transcript-end": block.endSecs } : {})}
+                                                  >
+                                                      {block.time && (
                                                           <button
                                                               type="button"
-                                                              onClick={() => {
-                                                                  if (navigator.clipboard) void navigator.clipboard.writeText(msg.text);
-                                                              }}
-                                                              style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 0, fontSize: 10 }}
-                                                              title={tx("Sao chép nội dung", "Copy text")}
+                                                              className="rv-transcript-time"
+                                                              onClick={() => rvSeek(block.time)}
                                                           >
-                                                              {tx("Sao chép", "Copy")}
+                                                              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
+                                                              <span>{block.time}</span>
                                                           </button>
+                                                      )}
+                                                      <p className="rv-transcript-copy" style={{ margin: 0, whiteSpace: "pre-wrap" }}>{block.text}</p>
+                                                  </article>
+                                              ))}
+                                          </div>
+                                      );
+                                  })()}
+                              </div>
+                          </div>
+
+                          {/* RESIZE SPLITTER */}
+                          <div
+                              className="rv-splitter"
+                              onMouseDown={() => setIsDraggingSplitter(true)}
+                              title="Kéo để thay đổi độ rộng 2 cột"
+                          />
+
+                          {/* RIGHT PANE: CONTEXTUAL QUESTIONS & INLINE MICRO-ACTIONS */}
+                          <div className="rv-pane-right">
+                              {/* Retry Mode Banner */}
+                              {rvRetryMode && (
+                                  <div style={{ background: "#FFFBEB", border: "1px solid #F59E0B", borderRadius: 10, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E" }}>
+                                          Chế độ Làm lại câu sai — Điền hoặc chọn lại đáp án trực tiếp bên dưới.
+                                      </div>
+                                      <button
+                                          type="button"
+                                          onClick={() => setRvRetryMode(false)}
+                                          style={{ border: "1px solid #D97706", background: "#FFFFFF", color: "#92400E", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                                      >
+                                          Hoàn tất & đối chiếu
+                                      </button>
+                                  </div>
+                              )}
+
+                              {(() => {
+                                  let currentContext = "";
+                                  const groupedNumbers = new Set<string>();
+                                  rvActiveQuestions.forEach((q: any) => {
+                                      if (rvIsGroupedReviewQuestion(q)) groupedNumbers.add(String(rvQuestionNumber(q)));
+                                  });
+
+                                  return rvActiveQuestions.map((q: any, i: number) => {
+                                      if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
+
+                                      // 1. INLINE COMPLETION TASKS (Note / Form / Table / Summary / Sentence Completion with [N])
+                                      if (rvIsInlineCompletion(q)) {
+                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
+                                              rvSectionOf(candidate) === rvActiveIdx
+                                              && rvIsInlineCompletion(candidate)
+                                              && rvCompletionContext(candidate) === rvCompletionContext(q)
+                                          );
+                                          if (alreadyRendered) return null;
+
+                                          const groupQuestions = rvActiveQuestions.filter((candidate: any) =>
+                                              rvSectionOf(candidate) === rvActiveIdx
+                                              && rvIsInlineCompletion(candidate)
+                                              && rvCompletionContext(candidate) === rvCompletionContext(q)
+                                          );
+                                          if (rvFilterWrongOnly && groupQuestions.every((gq: any) => rvQuestionStatus(gq) === "correct")) return null;
+
+                                          const byNumber = new Map<number, any>();
+                                          groupQuestions.forEach((gq: any) => byNumber.set(rvQuestionNumber(gq), gq));
+                                          const isSummaryDrag = q.type === "DRAG_DROP" && q.subType === "SUMMARY_DRAG";
+                                          const wordBankOptions = isSummaryDrag
+                                              ? (groupQuestions.find((gq: any) => Array.isArray(gq.options) && gq.options.length)?.options || q.options || [])
+                                              : [];
+
+                                          return (
+                                              <section key={`inline-comp-${q.id}`} className="rv-task-group-card">
+                                                  {q.instruction && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  )}
+                                                  {isSummaryDrag && wordBankOptions.length > 0 && (
+                                                      <div className="rv-word-bank">
+                                                          <div className="rv-word-bank-title">Word Bank</div>
+                                                          <div className="rv-word-bank-chips">
+                                                              {wordBankOptions.map((opt: any, oIdx: number) => (
+                                                                  <span key={oIdx} className="rv-word-chip">{cleanOptionAnswerText(opt) || String(opt)}</span>
+                                                              ))}
+                                                          </div>
                                                       </div>
                                                   )}
-                                                  <div style={{ wordBreak: 'break-word' }}>
-                                                      {isUser ? <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div> : rvRenderCopilotAiContent(msg.text)}
-                                                  </div>
-                                              </div>
+                                                  {rvRenderHtmlWithInlineBlanks(rvCompletionContext(q), byNumber, isSummaryDrag)}
+                                              </section>
                                           );
-                                      })
-                                  )}
-                                  {copilotLoading && (
-                                      <div style={{ alignSelf: 'flex-start', background: C.bg, border: `1px solid ${C.border}`, borderRadius: '16px 16px 16px 3px', padding: '10px 16px', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                                          <div style={{ display: 'flex', gap: 4 }}>
-                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0s' }} />
-                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0.2s' }} />
-                                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent, animation: 'copilotWave 1.4s infinite ease-in-out', animationDelay: '0.4s' }} />
-                                          </div>
-                                          <span style={{ fontSize: 11.5, color: C.sub }}>{tx("Gia sư AI đang phân tích...", "AI Tutor is analyzing...")}</span>
-                                      </div>
-                                  )}
-                              </div>
-                          );
-                      })()}
+                                      }
 
-                      {/* Input box */}
-                      <div style={{ padding: '10px 12px', background: C.card, borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'center' }}>
+                                      // 2. FLOW-CHART COMPLETION / DRAG-AND-DROP
+                                      if ((q.type === "DRAG_DROP" && q.subType === "FLOWCHART_DRAG") || q.subType === "FLOWCHART") {
+                                          const flowKey = `${rvSectionOf(q)}::${String(q.instruction || "")}`;
+                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
+                                              ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
+                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === flowKey
+                                          );
+                                          if (alreadyRendered) return null;
+                                          const flowQuestions = rvActiveQuestions.filter((candidate: any) =>
+                                              ((candidate.type === "DRAG_DROP" && candidate.subType === "FLOWCHART_DRAG") || candidate.subType === "FLOWCHART")
+                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === flowKey
+                                          );
+                                          if (rvFilterWrongOnly && flowQuestions.every((fq: any) => rvQuestionStatus(fq) === "correct")) return null;
+
+                                          const byNumber = new Map<number, any>();
+                                          flowQuestions.forEach((fq: any) => byNumber.set(rvQuestionNumber(fq), fq));
+                                          const firstQ: any = flowQuestions[0] || q;
+                                          const flowSteps: any[] = Array.isArray(firstQ.flowSteps) && firstQ.flowSteps.length > 0
+                                              ? firstQ.flowSteps
+                                              : flowQuestions.map((fq: any) => ({ html: fq.text, questionNumber: rvQuestionNumber(fq), question: fq }));
+                                          const options = (flowQuestions.find((fq: any) => Array.isArray(fq.options) && fq.options.length)?.options || q.options || []);
+
+                                          return (
+                                              <section key={`flow-${q.id}`} className="rv-task-group-card">
+                                                  {q.instruction && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  )}
+                                                  {options.length > 0 && (
+                                                      <div className="rv-word-bank">
+                                                          <div className="rv-word-bank-title">Options</div>
+                                                          <div className="rv-word-bank-chips">
+                                                              {options.map((opt: any, oIdx: number) => (
+                                                                  <span key={oIdx} className="rv-word-chip">{String.fromCharCode(65 + oIdx)}. {cleanOptionAnswerText(opt) || String(opt)}</span>
+                                                              ))}
+                                                          </div>
+                                                      </div>
+                                                  )}
+                                                  {firstQ.flowTitle && (
+                                                      <div style={{ fontWeight: 800, fontSize: 15, textAlign: "center", marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: formatContent(firstQ.flowTitle) }} />
+                                                  )}
+                                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                                      {flowSteps.map((step: any, sIdx: number) => {
+                                                          const stepQ = step.question || (step.questionNumber != null ? byNumber.get(Number(step.questionNumber)) : null);
+                                                          const stepHtml = String(step.html || stepQ?.text || "");
+                                                          return (
+                                                              <React.Fragment key={sIdx}>
+                                                                  <div style={{ border: "1px solid #D4CBB8", borderRadius: 8, padding: "10px 14px", background: "#FAF7F2" }}>
+                                                                      {/\[\d+\]/.test(stepHtml)
+                                                                          ? rvRenderHtmlWithInlineBlanks(stepHtml, byNumber, true)
+                                                                          : stepQ
+                                                                              ? (
+                                                                                  <div>
+                                                                                      <span dangerouslySetInnerHTML={{ __html: formatContent(stepHtml) }} />
+                                                                                      {" "}
+                                                                                      {rvRenderInlineSlotBox(stepQ, true)}
+                                                                                      {rvRenderInlineDrawer(stepQ, rvEffectiveAnswers?.[stepQ.id], stepQ)}
+                                                                                  </div>
+                                                                              )
+                                                                              : <div dangerouslySetInnerHTML={{ __html: formatContent(stepHtml) }} />
+                                                                      }
+                                                                  </div>
+                                                                  {sIdx < flowSteps.length - 1 && (
+                                                                      <div style={{ textAlign: "center", color: "#78716C", lineHeight: 1 }}>
+                                                                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" /></svg>
+                                                                      </div>
+                                                                  )}
+                                                              </React.Fragment>
+                                                          );
+                                                      })}
+                                                  </div>
+                                              </section>
+                                          );
+                                      }
+
+                                      // 3. DRAG_DROP_HEADING (Matching Headings)
+                                      if (q.type === "DRAG_DROP_HEADING") {
+                                          const headingKey = `${rvSectionOf(q)}::${String(q.instruction || "")}`;
+                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
+                                              candidate.type === "DRAG_DROP_HEADING"
+                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === headingKey
+                                          );
+                                          if (alreadyRendered) return null;
+                                          const headingQuestions = rvActiveQuestions.filter((candidate: any) =>
+                                              candidate.type === "DRAG_DROP_HEADING"
+                                              && `${rvSectionOf(candidate)}::${String(candidate.instruction || "")}` === headingKey
+                                          );
+                                          if (rvFilterWrongOnly && headingQuestions.every((hq: any) => rvQuestionStatus(hq) === "correct")) return null;
+
+                                          const headingCatalog = getHeadingCatalog([
+                                              q,
+                                              reviewQuiz.quiz,
+                                              rvSections[rvActiveIdx],
+                                              ...headingQuestions,
+                                              ...rvAllQuestions,
+                                          ]);
+                                          const headingOptions = Array.from(headingCatalog.values());
+
+                                          return (
+                                              <section key={`heading-${q.id}`} className="rv-task-group-card">
+                                                  {q.instruction && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  )}
+                                                  {headingOptions.length > 0 && (
+                                                      <div className="rv-word-bank">
+                                                          <div className="rv-word-bank-title">List of Headings</div>
+                                                          <div style={{ display: "grid", gap: 4 }}>
+                                                              {headingOptions.map((h: any, hIdx: number) => (
+                                                                  <div key={hIdx} style={{ fontSize: 13, color: "#1C1917" }}>
+                                                                      <strong className="rv-mono" style={{ color: "#92400E", marginRight: 8 }}>{normalizeHeadingId(h.id)}.</strong>
+                                                                      <span>{headingPlainText(h.text)}</span>
+                                                                  </div>
+                                                              ))}
+                                                          </div>
+                                                      </div>
+                                                  )}
+                                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                                      {headingQuestions.map((hq: any, hIdx: number) => {
+                                                          if (rvFilterWrongOnly && rvQuestionStatus(hq) === "correct") return null;
+                                                          const paraLabel = headingPlainText(hq.text).replace(/^paragraph\s+/i, "") || String.fromCharCode(65 + hIdx);
+                                                          return (
+                                                              <div key={hq.id} style={{ padding: "8px 10px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
+                                                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                                                                      <strong style={{ fontSize: 13.5 }}>Paragraph {paraLabel}</strong>
+                                                                      {rvRenderInlineSlotBox({ ...hq, options: headingOptions }, true)}
+                                                                  </div>
+                                                                  {rvRenderInlineDrawer(hq, rvEffectiveAnswers?.[hq.id], { ...hq, options: headingOptions })}
+                                                              </div>
+                                                          );
+                                                      })}
+                                                  </div>
+                                              </section>
+                                          );
+                                      }
+
+                                      // 4. MAP_DRAG & DIAGRAM_LABEL
+                                      if (q.type === "MAP_DRAG" || q.type === "DIAGRAM_LABEL") {
+                                          const isMap = q.type === "MAP_DRAG";
+                                          const mediaUrl = isMap ? resolveQuestionMapUrl(q) : String((q as any).diagramImageUrl || "").trim();
+                                          const alreadyRendered = rvActiveQuestions.slice(0, i).some((candidate: any) =>
+                                              candidate.type === q.type
+                                              && (isMap ? resolveQuestionMapUrl(candidate) : String(candidate.diagramImageUrl || "").trim()) === mediaUrl
+                                              && rvSectionOf(candidate) === rvActiveIdx
+                                          );
+                                          if (alreadyRendered) return null;
+                                          const visualQuestions = rvActiveQuestions.filter((candidate: any) =>
+                                              candidate.type === q.type
+                                              && (isMap ? resolveQuestionMapUrl(candidate) : String(candidate.diagramImageUrl || "").trim()) === mediaUrl
+                                              && rvSectionOf(candidate) === rvActiveIdx
+                                          );
+                                          if (rvFilterWrongOnly && visualQuestions.every((vq: any) => rvQuestionStatus(vq) === "correct")) return null;
+
+                                          return (
+                                              <section key={`visual-${q.id}`} className="rv-task-group-card">
+                                                  {q.instruction && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  )}
+                                                  {mediaUrl && (
+                                                      <div style={{ marginBottom: 14, border: "1px solid #E6DFD3", borderRadius: 8, overflow: "hidden", background: "#FFFFFF", padding: 10 }}>
+                                                          <img
+                                                              src={cleanMediaUrl(mediaUrl)}
+                                                              referrerPolicy="no-referrer"
+                                                              loading="lazy"
+                                                              alt="Visual task diagram"
+                                                              style={{ width: "100%", maxHeight: 420, objectFit: "contain", display: "block", margin: "0 auto" }}
+                                                          />
+                                                      </div>
+                                                  )}
+                                                  {Array.isArray(q.options) && q.options.length > 0 && (
+                                                      <div className="rv-word-bank">
+                                                          <div className="rv-word-bank-title">Options</div>
+                                                          <div className="rv-word-bank-chips">
+                                                              {q.options.map((opt: any, oIdx: number) => (
+                                                                  <span key={oIdx} className="rv-word-chip">{String.fromCharCode(65 + oIdx)}. {cleanOptionAnswerText(opt) || String(opt)}</span>
+                                                              ))}
+                                                          </div>
+                                                      </div>
+                                                  )}
+                                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                                      {visualQuestions.map((vq: any) => {
+                                                          if (rvFilterWrongOnly && rvQuestionStatus(vq) === "correct") return null;
+                                                          const bodyHtml = rvQuestionBodyHtml(vq.text);
+                                                          return (
+                                                              <div key={vq.id} style={{ padding: "8px 12px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
+                                                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                                                                      <span style={{ fontSize: 14, fontWeight: 600 }} dangerouslySetInnerHTML={{ __html: bodyHtml || `Question ${rvQuestionNumber(vq)}` }} />
+                                                                      {rvRenderInlineSlotBox(vq, true)}
+                                                                  </div>
+                                                                  {rvRenderInlineDrawer(vq, rvEffectiveAnswers?.[vq.id], vq)}
+                                                              </div>
+                                                          );
+                                                      })}
+                                                  </div>
+                                              </section>
+                                          );
+                                      }
+
+                                      // 5. STANDARD & MATCHING / MCQ / TFNG / SHORT ANSWER CARDS
+                                      const rvGroup = rvGroupByQuestionId.get(q.id);
+                                      if (!rvIsGroupedReviewQuestion(q) && groupedNumbers.has(String(rvQuestionNumber(q)))) return null;
+                                      if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
+
+                                      const qStatus = rvQuestionStatus(q);
+                                      if (rvFilterWrongOnly && qStatus === "correct") return null;
+
+                                      const qNum = rvQuestionNumber(q);
+                                      const isFlashed = rvFlashQuestionNum === qNum;
+                                      const showContext = Boolean(q.groupContext && q.groupContext !== currentContext && !/\[\d+\]/.test(String(q.groupContext)));
+                                      if (showContext) currentContext = String(q.groupContext);
+
+                                      const rvOpts = Array.isArray(q.options) ? q.options : [];
+                                      const isMcq = q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE";
+                                      const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
+                                      const studentAns = multiOutcome ? multiOutcome.selected : rvEffectiveAnswers?.[q.id];
+                                      const questionBodyHtml = rvQuestionBodyHtml(q.text);
+
+                                      return (
+                                          <React.Fragment key={q.id}>
+                                              {showContext && (
+                                                  <div className="rv-task-group-card">
+                                                      <div dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
+                                                  </div>
+                                              )}
+                                              <div id={`q-row-${qNum}`} className={`rv-q-card ${isFlashed ? "rv-flash-ring" : ""}`}>
+                                                  {q.instruction && i === 0 && (
+                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(q.instruction) }} />
+                                                  )}
+                                                  <div className="rv-q-card-head">
+                                                      <div className="rv-q-stem">
+                                                          <span className="rv-qnum-badge" style={{ marginRight: 8 }}>{rvGroup && rvGroup.questions.length > 1 ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}` : qNum}</span>
+                                                          {questionBodyHtml ? (
+                                                              <span dangerouslySetInnerHTML={{ __html: questionBodyHtml }} />
+                                                          ) : (
+                                                              <span>Question {qNum}</span>
+                                                          )}
+                                                      </div>
+                                                      {rvRenderInlineSlotBox(q, false)}
+                                                  </div>
+
+                                                  {isMcq && rvOpts.length > 0 && (
+                                                      <ul className="rv-mcq-list">
+                                                          {rvOpts.map((opt: any, oIdx: number) => {
+                                                              const optLetter = String.fromCharCode(65 + oIdx);
+                                                              const cleanText = cleanOptionAnswerText(opt) || String(opt);
+                                                              const isCorrectOpt = q.type === "CHOICE"
+                                                                  ? (Number(q.correctAnswer) === oIdx || String(q.correctAnswer).trim().toUpperCase() === optLetter)
+                                                                  : (multiOutcome?.correct || []).map(Number).includes(oIdx);
+                                                              const isChosenOpt = q.type === "CHOICE"
+                                                                  ? (studentAns !== undefined && studentAns !== "" && (Number(studentAns) === oIdx || String(studentAns).trim().toUpperCase() === optLetter))
+                                                                  : (Array.isArray(studentAns) && studentAns.map(Number).includes(oIdx));
+
+                                                              return (
+                                                                  <li
+                                                                      key={oIdx}
+                                                                      className={`rv-mcq-opt ${isCorrectOpt ? "is-correct" : isChosenOpt ? "is-wrong" : ""}`}
+                                                                      onClick={() => {
+                                                                          if (rvRetryMode && q.type === "CHOICE") {
+                                                                              setRvRetryAnswers(prev => ({ ...prev, [q.id]: oIdx }));
+                                                                          }
+                                                                      }}
+                                                                      style={{ cursor: rvRetryMode ? "pointer" : "default" }}
+                                                                  >
+                                                                      <div>
+                                                                          <strong className="rv-mono" style={{ marginRight: 8 }}>{optLetter}.</strong>
+                                                                          <span style={{ textDecoration: isChosenOpt && !isCorrectOpt ? "line-through" : "none" }} dangerouslySetInnerHTML={{ __html: formatContent(cleanText) }} />
+                                                                      </div>
+                                                                      {isCorrectOpt && <span className="rv-mcq-tag">(Đáp án đúng)</span>}
+                                                                      {isChosenOpt && !isCorrectOpt && <span className="rv-mcq-tag">(Bạn chọn - Sai)</span>}
+                                                                  </li>
+                                                              );
+                                                          })}
+                                                      </ul>
+                                                  )}
+
+                                                  {rvRenderInlineDrawer(q, studentAns, multiOutcome ? { ...q, correctAnswer: multiOutcome.correct } : q)}
+                                              </div>
+                                          </React.Fragment>
+                                      );
+                                  });
+                              })()}
+                          </div>
+                      </div>
+
+                      {/* BOTTOM QUESTION PALETTE */}
+                      <footer className="rv-footer-palette">
+                          {rvSections.map((sec: any, sIdx: number) => {
+                              const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === sIdx)) : rvAllQuestions;
+                              const label = rvUsePartLabels ? `P${sIdx + 1}` : `Pass ${sIdx + 1}`;
+                              return (
+                                  <div key={sIdx} style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                      <span style={{ fontSize: 11, fontWeight: 800, color: "#78716C", marginRight: 2 }}>{label}:</span>
+                                      {secQs.map((q: any) => {
+                                          const qNum = rvQuestionNumber(q);
+                                          const st = rvQuestionStatus(q);
+                                          return (
+                                              <button
+                                                  key={q.id}
+                                                  type="button"
+                                                  className={`rv-palette-btn ${st}`}
+                                                  onClick={() => rvJumpToQuestionFromMatrix(q, qNum)}
+                                                  title={`Câu ${qNum}`}
+                                              >
+                                                  {qNum}
+                                              </button>
+                                          );
+                                      })}
+                                  </div>
+                              );
+                          })}
+                      </footer>
+                  </>
+              )}
+
+              {/* MINIMALIST FREE-FORM "TRỢ LÝ AI" SLIDE-OVER DRAWER */}
+              {copilotOpen && (
+                  <aside
+                      style={{
+                          position: "fixed",
+                          top: 0,
+                          right: 0,
+                          width: 380,
+                          maxWidth: "100vw",
+                          height: "100vh",
+                          background: "#FFFFFF",
+                          borderLeft: "1px solid #E6DFD3",
+                          boxShadow: "-8px 0 24px rgba(28, 25, 23, 0.08)",
+                          zIndex: 200,
+                          display: "flex",
+                          flexDirection: "column",
+                      }}
+                  >
+                      {/* Drawer Header */}
+                      <div style={{ height: 52, padding: "0 16px", borderBottom: "1px solid #E6DFD3", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#16A34A", display: "inline-block" }} />
+                              <strong style={{ fontSize: 14, fontWeight: 800, color: "#1C1917" }}>Trợ lý AI</strong>
+                          </div>
+                          <button
+                              type="button"
+                              onClick={() => setCopilotOpen(false)}
+                              style={{ border: "none", background: "transparent", color: "#57534E", cursor: "pointer", padding: 4, display: "inline-flex" }}
+                              aria-label="Đóng Trợ lý AI"
+                          >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                          </button>
+                      </div>
+
+                      {/* Drawer Chat Thread */}
+                      <div
+                          ref={copilotChatBoxRef}
+                          style={{
+                              flex: 1,
+                              overflowY: "auto",
+                              padding: 16,
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 10,
+                              background: "#FAF7F2",
+                          }}
+                      >
+                          {(copilotMessages.length > 0 ? copilotMessages : [{ role: "copilot" as const, text: "Chào bạn, bạn cần hỗ trợ gì?" }]).map((msg, mIdx) => {
+                              const isUser = msg.role === "user";
+                              return (
+                                  <div
+                                      key={mIdx}
+                                      style={{
+                                          alignSelf: isUser ? "flex-end" : "flex-start",
+                                          maxWidth: "88%",
+                                          background: isUser ? "#1C1917" : "#F4EFE6",
+                                          color: isUser ? "#FFFFFF" : "#1C1917",
+                                          border: isUser ? "none" : "1px solid #E6DFD3",
+                                          borderRadius: isUser ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                                          padding: "10px 13px",
+                                          fontSize: 13.5,
+                                          lineHeight: 1.55,
+                                          whiteSpace: "pre-wrap",
+                                          wordBreak: "break-word",
+                                      }}
+                                  >
+                                      {msg.text}
+                                  </div>
+                              );
+                          })}
+                          {copilotLoading && (
+                              <div style={{ alignSelf: "flex-start", background: "#F4EFE6", border: "1px solid #E6DFD3", borderRadius: "12px 12px 12px 2px", padding: "8px 12px", fontSize: 12.5, color: "#57534E" }}>
+                                  Đang trả lời...
+                              </div>
+                          )}
+                      </div>
+
+                      {/* Drawer Input Footer */}
+                      <div style={{ padding: 12, borderTop: "1px solid #E6DFD3", background: "#FFFFFF", display: "flex", gap: 8 }}>
                           <input
                               type="text"
                               value={copilotInput}
                               onChange={e => setCopilotInput(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') void handleSendCopilotMessage(); }}
-                              placeholder={copilotActiveQ ? tx(`Hỏi gia sư về Câu ${rvQuestionNumber(copilotActiveQ)}...`, `Ask AI about Question ${rvQuestionNumber(copilotActiveQ)}...`) : tx("Hỏi gia sư AI về đề thi hoặc bất kỳ câu hỏi nào...", "Ask AI tutor about this exam or any question...")}
-                              style={{ flex: 1, padding: '9px 13px', fontSize: 12.5, borderRadius: 10, border: `1px solid ${C.border}`, background: C.bg, color: C.text, outline: 'none' }}
+                              onKeyDown={e => { if (e.key === "Enter") void handleSendCopilotMessage(); }}
+                              placeholder="Hỏi bất kỳ câu nào (VD: Giải thích câu 5, tại sao câu 12 không chọn B)..."
+                              style={{
+                                  flex: 1,
+                                  height: 38,
+                                  padding: "0 12px",
+                                  borderRadius: 8,
+                                  border: "1px solid #D4CBB8",
+                                  background: "#FAF7F2",
+                                  color: "#1C1917",
+                                  fontSize: 13,
+                                  outline: "none",
+                              }}
                           />
                           <button
                               type="button"
                               disabled={copilotLoading || !copilotInput.trim()}
                               onClick={() => void handleSendCopilotMessage()}
                               style={{
-                                  padding: '9px 14px',
-                                  borderRadius: 10,
-                                  background: copilotLoading || !copilotInput.trim() ? C.border : 'linear-gradient(135deg, #4f46e5, #4338ca)',
-                                  color: '#fff',
-                                  border: 'none',
-                                  cursor: copilotLoading || !copilotInput.trim() ? 'default' : 'pointer',
-                                  opacity: copilotLoading || !copilotInput.trim() ? 0.6 : 1,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  transition: 'all 0.2s'
+                                  height: 38,
+                                  padding: "0 14px",
+                                  borderRadius: 8,
+                                  border: "none",
+                                  background: "#1C1917",
+                                  color: "#FFFFFF",
+                                  fontSize: 13,
+                                  fontWeight: 700,
+                                  cursor: copilotLoading || !copilotInput.trim() ? "default" : "pointer",
+                                  opacity: copilotLoading || !copilotInput.trim() ? 0.5 : 1,
                               }}
-                              title="Send"
                           >
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                              Gửi
                           </button>
                       </div>
-                  </div>
+                  </aside>
               )}
           </div>
       );
@@ -18715,7 +18883,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           ? normalizeExamSections({ ...catalogQuiz, questions: catalogQuiz.questions.filter(question => questionIds.has(question.id)) })
           : catalogQuiz;
         setReviewQuiz({quiz: quizForReview as Quiz, result: r});
-        setReviewSectionIdx(0);
+        setReviewSectionIdx(-1);
         setReviewActiveQuestionId(null);
         const reviewed = Array.isArray(me.inventory?.reviewedQuizzes) ? me.inventory!.reviewedQuizzes : [];
         if (!reviewed.includes(r.id)) {
