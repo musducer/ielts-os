@@ -48,6 +48,9 @@ tmp/
 *.encoding-backup
 *.lnk
 ~$*
+*.docx
+index (*).html
+taode.py
 
 # Scratch & Debug artifacts
 _*

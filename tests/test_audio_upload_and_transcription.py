@@ -431,7 +431,8 @@ class AudioUploadEndpointTests(unittest.TestCase):
             index._ensure_storage_bucket_cors(bucket)
             self.assertEqual(bucket.patch_count, 1)
             self.assertEqual(len(bucket.cors), 1)
-            self.assertEqual(bucket.cors[0]["origin"], ["*"])
+            self.assertEqual(bucket.cors[0]["origin"], index._audio_upload_cors_origins())
+            self.assertNotIn("DELETE", bucket.cors[0]["method"])
             self.assertIn("PUT", bucket.cors[0]["method"])
             self.assertIn("OPTIONS", bucket.cors[0]["method"])
 

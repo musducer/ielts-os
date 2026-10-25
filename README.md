@@ -13,7 +13,7 @@ Writing instructions, student responses and corrected essays are left aligned. P
 Trong không gian chấm và review Writing (Manuscript Editorial Desk):
 - Chấm điểm 4 tiêu chí IELTS chuẩn (Task Achievement / Response, Coherence & Cohesion, Lexical Resource, Grammatical Range & Accuracy) kèm mô tả Public Band Descriptors và 3 trọng tâm cải thiện (Bottlenecks).
 - Hệ thống thẻ trôi thông minh (`FloatingCardPortal`): Toàn bộ thẻ chú thích (Hover Card) và bảng soạn thảo (Selection Pill & Composer) được gắn vào `document.body` với định vị thích ứng tự động lật (`Smart Vertical Auto-Flip`), mũi tên định hướng và kẹp biên an toàn, triệt tiêu hoàn toàn hiện tượng rung giật giao diện (jitter loop).
-- Cầu nối chống rung chuột (`Debounced Hover-Intent Bridge` 60ms/150ms) kết hợp thuật toán bắt đúng dòng văn bản bị ngắt (`getTargetClientLineRect`), cho phép học sinh rê chuột xem giải thích lỗi, xem gợi ý Band 8+ và lưu từ vựng 1-click vào Sổ từ vựng (`vocabNotebook`).
+- Cầu nối chống rung chuột (`Debounced Hover-Intent Bridge` 60ms/150ms) kết hợp thuật toán bắt đúng dòng văn bản bị ngắt (`getTargetClientLineRect`), cho phép học sinh rê chuột xem giải thích lỗi và xem gợi ý Band 8+ (xuất hồ sơ đầy đủ qua Dossier PDF).
 - Trợ lý AI Selection Critique & Chấm tự động toàn bài: Bộ định tuyến suy luận chuyên dụng (`_writing_eval_chat`) ưu tiên các mô hình mạnh nhất (Tier 1: Google Gemini 2.5 Pro / Flash đa phương tiện với thinking budget 2048; Tier 2: Groq 120B reasoning; Tier 3: Cerebras 120B reasoning). Tự động nạp và nhận diện biểu đồ Task 1 qua `image_part` Base64. Cung cấp endpoint chuyên dụng `/api/ai_critique` với cơ chế retry 3 cấp độ tự động fallback khi gặp lỗi JSON mode (`json_validate_failed`), bóc tách regex an toàn, chuẩn hóa trường `replacement` / `comment` / `criterion` / `category`, và khắc phục triệt để lỗi HTTP/2 `res.statusText` rỗng khi hiển thị lỗi frontend. Hỗ trợ tự động lưu bản nháp (`autoSave=true`) ngay khi click.
 - Hiệu chuẩn Chống Giảm Điểm Oan (Anti-Band Deflation Protocol): Tuân thủ nghiêm ngặt thang chấm chính thức IELTS May 2023, triệt tiêu thiên kiến neo điểm 6.0 (Schema Anchoring Bias), đánh giá 4 tiêu chí độc lập trước khi gắn lỗi, phân định chuẩn mực giữa `error` thực sự và `upgrade`/`praise`, bảo đảm các bài luận Band 7.5–8.5 không bị dìm điểm vô lý. Áp dụng quy tắc làm tròn điểm IELTS chính thức (`< 0.25 -> 0.0`, `>= 0.25 & < 0.75 -> 0.5`, `>= 0.75 -> 1.0`).
 - Xuất tài liệu học thuật PDF vector (Academic Assessment Dossier): Động cơ in vector chuẩn in ấn (Print-to-PDF) qua hidden iframe, tài liệu sắc nét ở mọi độ phân giải, tự động trích xuất và nhúng biểu đồ Task 1 trực tiếp qua backend proxy `/api/image_base64` và thẻ `<img>` không bị chặn CORS browser (`referrerpolicy="no-referrer"`), 4 cột tiêu chí nằm ngang, đánh số chú thích `[1]`, `[2]` đồng bộ với bảng đối chiếu sửa lỗi chi tiết (.pdf-no-break), bản sửa hoàn chỉnh và bài mẫu Band 8+.
@@ -143,7 +143,7 @@ IELTS OS là nền tảng quản lý học tập và thi IELTS trên máy tính 
 
 - Chấm điểm, band score, đáp án, bài làm học sinh và feedback giáo viên.
 - **Bàn làm việc Chấm & Review Writing (Writing Manuscript Editorial Desk)**: Không gian làm việc 2 cột chuẩn biên tập học thuật với điều hướng Task 1 & Task 2, ngăn kéo xem đề/biểu đồ linh hoạt, 4 chế độ đọc (Bản gốc có chú thích, Inline Track Changes Diff, Bản sửa hoàn chỉnh, và Bài mẫu Band 8+).
-- **Hệ thống Chú thích & Tương tác thông minh**: Hover popover card có 120ms bridge hiển thị 4 tiêu chí (TA/TR, CC, LR, GRA), phân loại lỗi (Lỗi sai, Chưa tự nhiên, Nâng cấp Band 7.5-8.5), đề xuất thay thế, gợi ý Band 8+, nút 1-click lưu cụm từ vào Sổ từ vựng (`vocabNotebook`) cho học sinh; trình soạn chú thích 2 giai đoạn (`Selection Pill` & `Composer`) kèm gắn nhanh tag lỗi cho giáo viên.
+- **Hệ thống Chú thích & Tương tác thông minh**: Hover popover card có 120ms bridge hiển thị 4 tiêu chí (TA/TR, CC, LR, GRA), phân loại lỗi (Lỗi sai, Chưa tự nhiên, Nâng cấp Band 7.5-8.5), đề xuất thay thế, gợi ý Band 8+; trình soạn chú thích 2 giai đoạn (`Selection Pill` & `Composer`) kèm gắn nhanh tag lỗi cho giáo viên.
 - **Thanh X-Ray & Radar lặp từ**: Theo dõi số từ (badge đạt/thiếu từ), số đoạn, số câu, mật độ từ trung bình, và radar tự động phát hiện các từ lặp lại từ 3 lần trở lên.
 - **AI Co-Pilot chấm nháp Writing**: Tích hợp `/api/ai_feedback` sinh bảng điểm 4 tiêu chí chuẩn IELTS 9-band, 3 trọng tâm khắc phục (bottlenecks), các điểm sáng, 6-10 chú thích chuẩn vị trí văn bản, bản sửa sạch và bài mẫu Band 8.5 cho giáo viên kiểm duyệt và áp dụng trong 1 click.
 - **Xuất Dossier PDF chuẩn học thuật**: Xuất file PDF/in ấn chuyên nghiệp gồm bảng điểm, ma trận tiêu chí, kế hoạch hành động, bài viết đánh số chú thích số mũ và bảng đối chiếu chi tiết sửa lỗi.
@@ -345,9 +345,44 @@ Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm tr
 
 - **Warm Editorial Review Workbench (`src/components_split/REVIEW_QUIZ.txt`)**:
   - Dedicated `Tổng quan` tab (`reviewSectionIdx === -1`) with Hero Summary, CSS conic-gradient Band Score donut chart, 3 circular SVG status counters (`Trả lời đúng`, `Trả lời sai`, `Đã bỏ qua`), 2×2 metric grid, 1–40 `Danh sách câu hỏi` jump matrix, and question-type accuracy progress bars.
-  - Resizable 50/50 Split-Workbench for `Part 1..4` / `Passage 1..3` with sticky Listening audio bar (`Play/Pause`, scrubber, `1x / 1.25x / 1.5x / 2x` speed selector), multi-tier transcript/passage viewer, and contextual right-hand task view.
+  - Two-tab top header (`Tổng quan` & `Chi tiết`) paired with an Exam-Room-style bottom Part/Passage navigator (expanding question pills only for the active part while showing `X of Y` for inactive parts) and a resizable 50/50 Split-Workbench with sticky Listening audio bar (`Play/Pause`, scrubber, `1x / 1.25x / 1.5x / 2x` speed selector), multi-tier transcript/passage viewer, and contextual right-hand task view.
   - Inline Answer Comparison boxes (`.inline-ans-box` / `.dashed-drag-slot`) paired with a 4-button Inline Micro-Action Cluster (Teacher Lightbulb SVG, Evidence Locator Pin SVG, Audio `[MM:SS]` pill, and `AI` button) and expandable inline explanation drawers directly beneath each question line.
   - Minimalist free-form `Trợ lý AI` slide-over drawer (`380px`) backed by `POST /api/ai_review_chat`.
 - **4-Tier AI Source-Text Resolution & Concise 3-Line Explanations**:
   - `resolveReviewQuestionContext` in `src/App.template.tsx` resolves section transcripts/passages across `quiz.sections[i]`, `quiz.passages[i]`, top-level `quiz.transcript` / `quiz.passage`, and DOM fallback, while extracting surrounding sentence context for numbered `[BLANK]` items.
   - `/api/ai_explain` in `api/index.py` outputs high-signal 3-line explanations (`• Bản chất:`, `• Dẫn chứng:`, `• Kết luận:`, max 75–90 words) without listing untouched options (`A–H`).
+
+## Security & Large Upload Policy
+
+- **Firestore & Storage Rules (`firestore.rules`, `storage.rules`, `firebase.json`)**: Workspace documents require Firebase Authentication; teacher-managed collections and fields (`quizzes`, `transactions`, `history`, `schedules`, `examFolders`, `topicAssignments`, `realExamPackages`, `sharedLinks`) are restricted to verified `@ielts.os` teacher accounts, and students are isolated to their own PII/vocab/results.
+- **API Guard & SSRF Protection (`api/index.py`)**: AI, OCR, DOCX, and media proxy endpoints enforce Origin/Firebase Bearer token checks and per-IP rate limiting (`_verify_api_request_guard`), while external image/audio fetchers block private/loopback/link-local/metadata IP ranges and validate image magic bytes.
+- **Large File Support Preserved**: DOCX uploads default to 100 MB (configurable up to 512 MB via `MAX_DOCX_UPLOAD_BYTES`), AI exam page scans are not capped at 15 MB, and Firebase Storage audio rules allow up to 512 MB (`MAX_AUDIO_UPLOAD_BYTES`).
+
+## Practice Exam Exit, Unified 3-State Save Architecture, Quest Deck & Asset Management
+
+- **Practice Exam Exit Without Saving (`src/components_split/ACTIVE_EXAM.txt`, `src/App.template.tsx`)**:
+  - Practice exams display a `← Quay lại` button in the exam room top header (`exitPracticeExamWithoutSaving`). Clicking it prompts the student for confirmation, halts Listening audio, clears temporary exam state, and returns to the previous screen without saving or counting an attempt.
+- **Unified 3-State Save UX Across All Editors (`src/App.template.tsx`, `src/WritingFeedback.tsx`, `src/components_split/EXAM_BUILDER.txt`, `src/components_split/TOPIC_ASSIGNMENTS.txt`, `src/components_split/STUDENTS.txt`)**:
+  - All major save workflows (Exam Builder, Key Editor, Real Exam Package, Topic/Quest Assignments, Writing Feedback Grading, Student Profile/Gift Catalog) enforce three states: (1) inline loading spinner + disabled button (`Đang lưu...`), (2) floating top-right toast confirmation (`showSaveToast`), and (3) unsaved-changes protection (`beforeunload` + confirmation modal when closing or switching tabs with dirty changes).
+- **Quest Selector Deck & Classified Permanent Inventory (`src/components_split/STUDENT_PORTAL.txt`, `src/App.template.tsx`)**:
+  - The Quests portal tab uses a compact **Quest Selector Deck** (search bar + `Tất cả / Đang thực hiện / Đã hoàn thành` filters + selectable quest cards with progress bars) and renders only the active quest's stage map below instead of stacking all quests vertically.
+  - Rewards Store and Inventory items render dedicated SVG artwork per item type (`renderGiftStoreIcon`), and the Permanent Inventory (`Vật phẩm Vĩnh viễn`) provides sub-category filter pills (`Tất cả`, `Khung Avatar`, `Danh hiệu`, `Linh thú`, `Giao diện`, `Khác`).
+- **Teacher Confiscation of Coins & All Gift Types (`src/App.template.tsx`, `src/components_split/STUDENTS.txt`)**:
+  - Teachers can confiscate any amount of OS Coins (or reset to `0`), consumables (`-1` or revoke all), permanent cosmetics (automatically unequipping active items and recording a `revokedPermanents` tombstone so anti-loss sync / `localStorage` never resurrects them), redeemed rewards (`myRewards`), or clear a student's entire inventory at once.
+
+## Unified IELTS & Integrated Question Taxonomy & Student Portal Filter Popover
+
+- **Pure Non-Destructive Question Classifier (`src/questionTaxonomy.ts`, `src/App.template.tsx`, `api/index.py`)**:
+  - Automatically classifies 100% of questions and Writing tasks in runtime without mutating `q.type` or `q.subType` (0% risk of breaking exam room layout or scoring).
+  - Canonical taxonomy across 4 distinct skills (`Listening`, `Reading`, `Writing`, `Integrated`):
+    - **Listening**: `L_FORM_NOTE`, `L_TABLE`, `L_SENTENCE_SUMMARY`, `L_FLOWCHART`, `L_SHORT_ANSWER`, `L_MAP_PLAN`, `L_DIAGRAM`, `L_MCQ_SINGLE`, `L_MCQ_MULTI`, `L_MATCHING`.
+    - **Reading**: `R_TFNG`, `R_YNNG`, `R_MATCHING_HEADINGS`, `R_MATCHING_INFO`, `R_MATCHING_FEATURES`, `R_SENTENCE_ENDINGS`, `R_SUMMARY_BOX`, `R_NOTE_TABLE_SUMMARY`, `R_DIAGRAM_FLOWCHART`, `R_SHORT_ANSWER`, `R_MCQ_SINGLE`, `R_MCQ_MULTI`.
+    - **Writing**: Task 1 (`W_T1_LINE`, `W_T1_BAR`, `W_T1_PIE`, `W_T1_TABLE`, `W_T1_MIXED`, `W_T1_MAP`, `W_T1_PROCESS`) and Task 2 (`W_T2_OPINION`, `W_T2_DISCUSSION`, `W_T2_ADV_DISADV`, `W_T2_PROBLEM_SOLUTION`, `W_T2_TWO_PART`).
+    - **Integrated**: `I_LISTENING`, `I_CLOZE_GRAMMAR`, `I_ARRANGEMENT`, `I_READING_COMP`, `I_SENTENCE_TRANSFORM`.
+- **Dedicated "Integrated" Skill Tab & Compact SVG Filter Popover (`src/components_split/STUDENT_PORTAL.txt`)**:
+  - Integrated tests receive their own dedicated tab alongside Listening, Reading, and Writing in both Exam Room and Progress sections.
+  - Compact SVG Filter button with counter badge next to the search input, opening a floating multi-select popover listing only the canonical categories for the active skill with available test counts and clear button.
+  - Matching test cards display compact location badges (e.g. `Part 2 · Map / Plan Labelling` in accent color when filtered, or up to 3 muted summary tags +N when unfiltered).
+- **Exam Builder & Review Analytics Standardization (`src/components_split/EXAM_BUILDER.txt`, `src/components_split/REVIEW_QUIZ.txt`, `src/components_split/STUDENTS.txt`)**:
+  - Exam Builder replaces the hardcoded subType dropdown with a canonical Category dropdown populated dynamically by skill, and adds Task 1 / Task 2 category selectors for Writing tasks.
+  - Review Quiz and Student Weakness Analytics display human-readable canonical IELTS category names.

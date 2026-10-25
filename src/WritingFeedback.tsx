@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useLayoutEffect, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import DOMPurify from 'dompurify';
 import { useTranslation } from 'react-i18next';
 import { normalizeWritingTasks, countWritingWords, type WritingTaskDefinition } from './publicRelease';
 
@@ -946,10 +947,10 @@ export function buildVectorPdfDossierHtml(params: {
       <div style="padding: 12px 16px; background: #F6F3EC; border: 1px solid #E4DFD3; border-radius: 6px; font-size: 12px; line-height: 1.6;">
         <div style="font-weight: 700; margin-bottom: 4px;">${escapeHtml(params.taskTitle)}</div>
         ${params.taskInstructions ? `<div style="margin-bottom: 6px; color: #4B5563;">${escapeHtml(params.taskInstructions)}</div>` : ''}
-        ${params.taskPrompt ? `<div style="margin-top: 4px;">${params.taskPrompt}</div>` : ''}
+        ${params.taskPrompt ? `<div style="margin-top: 4px;">${DOMPurify.sanitize(params.taskPrompt)}</div>` : ''}
         ${params.mediaUrl ? `
           <div class="dossier-chart-box" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #DCD6C8; text-align: center; break-inside: avoid; page-break-inside: avoid;">
-            <img id="pdf-dossier-chart-img" src="${params.mediaUrl.startsWith('data:') ? params.mediaUrl : escapeHtml(params.mediaUrl)}" alt="Task Visual Graphic" referrerpolicy="no-referrer" style="display: block; margin: 0 auto; max-width: 100%; max-height: 300px; width: auto; height: auto; object-fit: contain; background: #FFFFFF; padding: 10px; border: 1px solid #E4DFD3; border-radius: 6px;" />
+            <img id="pdf-dossier-chart-img" src="${escapeHtml(params.mediaUrl)}" alt="Task Visual Graphic" referrerpolicy="no-referrer" style="display: block; margin: 0 auto; max-width: 100%; max-height: 300px; width: auto; height: auto; object-fit: contain; background: #FFFFFF; padding: 10px; border: 1px solid #E4DFD3; border-radius: 6px;" />
           </div>
         ` : ''}
       </div>
@@ -1275,8 +1276,6 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     quizResults = [],
     setQuizResults,
     syncData,
-    findMe,
-    saveMyVocabNotebook,
     globalStyles,
   } = props;
 
@@ -1423,7 +1422,6 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   const [filterCriterion, setFilterCriterion] = useState<string>('ALL');
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
   const [pulseMarkId, setPulseMarkId] = useState<string | null>(null);
-  const [vocabToast, setVocabToast] = useState<string | null>(null);
   const [isChartZoomOpen, setIsChartZoomOpen] = useState(false);
 
   useEffect(() => {
@@ -1472,10 +1470,22 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
   // PDF Export & AI Selection Critique States
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [aiCritiqueLoading, setAiCritiqueLoading] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+
+  useEffect(() => {
+    if (!isTeacher || !isDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isTeacher, isDirty]);
 
   // Update handlers
   const updateWritingGrading = (patch: Partial<WritingGrading>) => {
     if (!setReviewQuiz) return;
+    setIsDirty(true);
     const now = Date.now();
     setReviewQuiz((prev: any) => {
       if (!prev) return prev;
@@ -1569,6 +1579,9 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         setActionStatus('saved_ok');
         setStatusMessage(tx('Đã cập nhật bài chấm!', 'Assessment updated!'));
       }
+      setIsDirty(false);
+      if (true) {
+      }
       setTimeout(() => {
         setActionStatus('idle');
         setStatusMessage('');
@@ -1659,15 +1672,16 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
         media_url: activeTaskChartUrl || activeTask.mediaUrl || '',
         lang: isVi ? 'vi' : 'en',
       };
+      const idToken = typeof currentUser?.getIdToken === 'function' ? await currentUser.getIdToken().catch(() => '') : '';
       let res = await fetch('/api/ai_critique', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}) },
         body: JSON.stringify(payload),
       });
       if (res.status === 404) {
         res = await fetch('/api/ai_feedback', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}) },
           body: JSON.stringify(payload),
         });
       }
@@ -1811,50 +1825,16 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectionBox, hoveredComment]);
 
-  // Student Vocab Notebook Save
-  const handleSaveToVocab = async (word: string, meaning: string, context: string) => {
-    if (!findMe || !saveMyVocabNotebook) {
-      alert(tx('Vui lòng đăng nhập tài khoản học viên để lưu vào Sổ từ vựng.', 'Please log in with a student account to save to Vocabulary Notebook.'));
-      return;
-    }
-    const me = findMe();
-    if (!me) return;
-    const now = Date.now();
-    const cleanWord = word.trim();
-    if (!cleanWord) return;
-
-    // Determine category based on word count
-    const wordCount = cleanWord.split(/\s+/).length;
-    const category = wordCount > 2 ? 'idiom' : wordCount === 2 ? 'collocation' : 'word';
-
-    const card = {
-      id: `vocab_${now}_${Math.random().toString(36).slice(2, 8)}`,
-      word: cleanWord,
-      meaning: meaning || 'Saved from Writing Feedback',
-      evidence: context || '',
-      category,
-      box: 1,
-      due: now,
-      createdAt: now,
-    };
-
-    const nextNotebook = [card, ...(me.vocabNotebook || [])];
-    const ok = await saveMyVocabNotebook(nextNotebook, me.vocabTombstones || []);
-    if (ok) {
-      setVocabToast(tx(`Đã lưu "${cleanWord}" vào Sổ từ vựng!`, `Saved "${cleanWord}" to Vocabulary Notebook!`));
-      setTimeout(() => setVocabToast(null), 3000);
-    } else {
-      alert(tx('Không thể lưu từ vào sổ từ vựng.', 'Unable to save word to Vocabulary Notebook.'));
-    }
-  };
+  // (Removed student save feedback/phrase to Vocab Notebook)
 
   // AI Co-Pilot Execution
   const runAiCoPilot = async () => {
     setAiModal({ open: true, loading: true, error: '', data: null });
     try {
+      const idToken = typeof currentUser?.getIdToken === 'function' ? await currentUser.getIdToken().catch(() => '') : '';
       const resp = await fetch('/api/ai_feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}) },
         body: JSON.stringify({
           structured: true,
           task_number: taskNumber,
@@ -2185,7 +2165,18 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
           {/* Left: Task Switcher + Prompt Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button
-              onClick={() => setReviewQuiz && setReviewQuiz(null)}
+              onClick={() => {
+                if (isTeacher && isDirty) {
+                  const ok = window.confirm(
+                    tx(
+                      'Bạn có thay đổi chấm bài chưa được lưu! Nếu thoát ngay bây giờ, các thay đổi sẽ bị mất.\n\nBạn có chắc chắn muốn thoát không?',
+                      'You have unsaved grading changes! If you leave now, your changes will be lost.\n\nAre you sure you want to leave?'
+                    )
+                  );
+                  if (!ok) return;
+                }
+                if (setReviewQuiz) setReviewQuiz(null);
+              }}
               className="wf-btn-hairline"
               style={{ padding: '6px 12px', fontSize: 12 }}
             >
@@ -2281,7 +2272,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                   title={tx('Chấm nháp tự động 4 tiêu chí và chỉ lỗi chi tiết bằng AI', 'Auto-grade 4 criteria and extract line-by-line annotations via AI')}
                   disabled={actionStatus === 'saving_draft' || actionStatus === 'publishing'}
                 >
-                  <Ico name="sparkles" size={14} color={C.accent} /> AI Co-Pilot
+                  <Ico name="sparkles" size={14} color={C.accent} /> AI Co-Pilot {isDirty ? `(${tx('Chưa lưu', 'Unsaved')})` : ''}
                 </button>
                 <button
                   onClick={() => saveWritingGrade(false)}
@@ -2427,7 +2418,7 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
             {activeTask.instructions && <p style={{ fontSize: 13, color: C.sub, lineHeight: 1.6, margin: '0 0 10px' }}>{activeTask.instructions}</p>}
             {activeTask.prompt && (
               <div
-                dangerouslySetInnerHTML={{ __html: activeTask.prompt }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(activeTask.prompt) }}
                 style={{ fontSize: 14, lineHeight: 1.65, color: C.text, padding: '12px 16px', background: C.wash, border: `1px solid ${C.border}`, borderRadius: 8 }}
               />
             )}
@@ -3087,33 +3078,6 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                                 ))}
                               </div>
                             )}
-
-                            {/* Student Save Vocab Button */}
-                            {!isTeacher && comment.replacement && (
-                              <div style={{ marginTop: 8 }}>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleSaveToVocab(comment.replacement!, comment.comment, comment.anchorQuote || '');
-                                  }}
-                                  style={{
-                                    background: C.wash,
-                                    border: `1px solid ${C.border}`,
-                                    color: C.accent,
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    padding: '3px 8px',
-                                    borderRadius: 6,
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 4,
-                                  }}
-                                >
-                                  <Ico name="plus" size={11} color={C.accent} /> {tx('Lưu vào Sổ từ vựng', 'Save to Vocab')}
-                                </button>
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -3339,30 +3303,6 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
                     </span>
                   ))}
                 </div>
-              )}
-
-              {/* Student Save to Vocab Button */}
-              {!isTeacher && hoveredComment.replacement && (
-                <button
-                  onClick={() => handleSaveToVocab(hoveredComment.replacement!, hoveredComment.comment, hoveredComment.anchorQuote || '')}
-                  style={{
-                    width: '100%',
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    border: `1px solid ${C.accentLine}`,
-                    background: C.accentWash,
-                    color: C.accent,
-                    fontWeight: 700,
-                    fontSize: 12,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 5,
-                  }}
-                >
-                  <Ico name="plus" size={12} color={C.accent} /> {tx('Lưu cụm từ vào Sổ từ vựng', 'Save phrase to Vocabulary Notebook')}
-                </button>
               )}
             </div>
           );
@@ -3814,33 +3754,6 @@ export default function WritingFeedback(props: WritingFeedbackDeskProps) {
               </div>
             ) : null}
           </div>
-        </div>
-      )}
-
-      {/* ========================================== */}
-      {/* 7. TOAST NOTIFICATION                      */}
-      {/* ========================================== */}
-      {vocabToast && (
-        <div style={{
-          position: 'fixed',
-          bottom: 24,
-          right: 24,
-          background: '#1A1726',
-          color: '#FFFFFF',
-          padding: '10px 16px',
-          borderRadius: 8,
-          fontSize: 13,
-          fontWeight: 700,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
-          zIndex: 3000,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#22C55E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
-          <span>{vocabToast}</span>
         </div>
       )}
 

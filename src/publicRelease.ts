@@ -10,6 +10,8 @@ export interface WritingTaskDefinition {
   minimumWords: number;
   recommendedMinutes: number;
   order: number;
+  /** Optional teacher override of the canonical taxonomy id (W_T1_* / W_T2_*). */
+  categoryId?: string;
 }
 
 export interface GiftDefinition {
@@ -197,6 +199,7 @@ export const writingQuestions = (quiz: any) => normalizeWritingTasks(quiz).map(t
   text: task.prompt,
   correctAnswer: "",
   passageIndex: task.taskNumber - 1,
+  ...(task.categoryId ? { categoryId: task.categoryId } : {}),
 }));
 
 export const countWritingWords = (value: unknown) => {

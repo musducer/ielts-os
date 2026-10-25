@@ -1,0 +1,68 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isTeacher() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.matches('^[^@]+@ielts\\.os$');
+    }
+
+    match /ielts_workspace/trung_linh_data {
+      allow read: if isAuthenticated();
+      allow create: if isTeacher();
+      allow delete: if false;
+      allow update: if isTeacher() || (
+        isAuthenticated()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'transactions',
+          'history',
+          'schedules',
+          'examFolders',
+          'topicAssignments',
+          'realExamPackages',
+          'sharedLinks',
+          'quizzes',
+          'quizTombstones',
+          'deletedHistoryIds',
+          'deletedScheduleIds',
+          'deletedTransactionIds',
+          'examFolderTombstones'
+        ])
+      );
+
+      match /quizzes/{quizId} {
+        allow read: if isAuthenticated();
+        allow write: if isTeacher();
+      }
+
+      match /writingDrafts/{draftId} {
+        allow read, write: if isAuthenticated();
+      }
+
+      match /audioUploads/{uploadId} {
+        allow read, write: if isTeacher();
+      }
+
+      match /examBulkOperations/{opId} {
+        allow read, write: if isTeacher();
+      }
+    }
+
+    match /ielts_workspace/live_arena {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /ielts_vocab/{studentKey}/cards/{cardId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

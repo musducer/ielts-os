@@ -94,7 +94,7 @@
           };
         };
         const saveAssignment = async () => {
-          if (!topicAssignmentEditor) return;
+          if (!topicAssignmentEditor || questEditorSaving) return;
           const rewards = topicAssignmentEditor.rewards.map(normaliseReward);
           const invalidReward = rewards.find(reward =>
             (reward.rewardType === "coins" && parseQuestCoinReward(reward.rewardValue) < 1)
@@ -125,16 +125,23 @@
             alert(tx("Cần có tiêu đề, chuyên đề và ít nhất một chặng đã chọn đề.", "A title, topic category, and at least one configured step are required."));
             return;
           }
-          const nextAssignments = topicAssignments.some(item => item.id === draft.id)
-            ? topicAssignments.map(item => item.id === draft.id ? draft : item)
-            : [draft, ...topicAssignments];
-          setTopicAssignments(nextAssignments);
-          const saved = await syncData({ topicAssignments: nextAssignments });
-          if (saved) {
-            setTopicAssignmentEditor(null);
-            alert(tx("Đã lưu chuyên đề và đồng bộ cho các thiết bị.", "Quest assignment saved and synchronized."));
-          } else {
-            alert(tx("Bản nháp vẫn còn trên thiết bị này. Hệ thống sẽ thử đồng bộ lại khi có mạng.", "The draft remains on this device and will retry when the connection returns."));
+          setQuestEditorSaving(true);
+          try {
+            const nextAssignments = topicAssignments.some(item => item.id === draft.id)
+              ? topicAssignments.map(item => item.id === draft.id ? draft : item)
+              : [draft, ...topicAssignments];
+            setTopicAssignments(nextAssignments);
+            const saved = await syncData({ topicAssignments: nextAssignments });
+            topicEditorBaselineRef.current = null;
+            setTopicEditorDirty(false);
+            if (saved) {
+              setTopicAssignmentEditor(null);
+              showSaveToast(tx(`Đã lưu chuyên đề "${draft.title}" thành công!`, `Quest "${draft.title}" saved successfully!`), "success");
+            } else {
+              showSaveToast(tx("Bản nháp chuyên đề đã lưu trên thiết bị và sẽ tự đồng bộ khi có mạng.", "Quest draft saved locally and will sync when online."), "warning");
+            }
+          } finally {
+            setQuestEditorSaving(false);
           }
         };
         const deleteAssignment = async (assignment: TopicAssignment) => {
@@ -162,9 +169,10 @@
                   <div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</div>
                   <h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)", letterSpacing: 0 }}>{draft.title || tx("Chuyên đề mới", "New quest")}</h2>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setTopicAssignmentEditor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
-                  <button onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="save" size={15} /> {tx("Lưu chuyên đề", "Save quest")}</button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {topicEditorDirty && <span style={{ fontSize: 11.5, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", padding: "5px 10px", borderRadius: 20 }}>● {tx("Chưa lưu", "Unsaved")}</span>}
+                  <button onClick={() => { if (confirmDiscardUnsavedChanges()) setTopicAssignmentEditor(null); }} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
+                  <button disabled={questEditorSaving} onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: questEditorSaving ? "wait" : "pointer", opacity: questEditorSaving ? 0.7 : 1, padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name={questEditorSaving ? "refresh" : "save"} size={15} /> {questEditorSaving ? tx("Đang lưu...", "Saving...") : tx("Lưu chuyên đề", "Save quest")}</button>
                 </div>
               </div>
 

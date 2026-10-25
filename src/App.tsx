@@ -49,6 +49,15 @@ import {
   type StoredExamPolicy,
 } from "./deliveryPolicy";
 import type { GiftDefinition, RewardMechanism, WritingTaskDefinition } from "./publicRelease";
+import {
+  CANONICAL_TAXONOMY,
+  TAXONOMY_BY_ID,
+  getQuizCategoryBreakdown,
+  inferQuestionCategory,
+  quizTaxonomySkill,
+  toErrorDnaBucket,
+  type TaxonomySkill,
+} from "./questionTaxonomy";
 // ==========================================
 // HỘP ĐEN (ERROR BOUNDARY) CHỐNG TRẮNG TRANG
 // ==========================================
@@ -70,6 +79,14 @@ const auth = getAuth(app);
 const storage = getStorage(app);
 const getApiBase = () => ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) ? "http://localhost:8000" : "";
 const isTeacherEmail = (email: string | null | undefined) => String(email || "").trim().toLowerCase().endsWith("@ielts.os");
+const getAuthHeaders = async (extra: Record<string, string> = {}): Promise<Record<string, string>> => {
+  try {
+    const token = auth.currentUser ? await auth.currentUser.getIdToken() : "";
+    return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+  } catch {
+    return { ...extra };
+  }
+};
 const DB_DOC_REF = doc(db, "ielts_workspace", "trung_linh_data");
 const LIVE_DOC_REF = doc(db, "ielts_workspace", "live_arena");
 // A full exam can exceed Firestore's 1 MiB document limit. Keep every exam in its
@@ -1575,7 +1592,7 @@ export interface ErrorDnaProfile {
 }
 
 interface VocabCard { id: string; word: string; phonetic?: string; pos?: string; meaning?: string; example?: string; cefr?: string; category?: string; evidence?: string; box: number; due: number; createdAt: number; }
-interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; errorDna?: ErrorDnaProfile; }
+interface Student { id: string; name: string; phone: string; rate: number; target: string; cefr: string; exp: number; level: number; email?: string; savedVocabs?: string[]; vocabNotebook?: VocabCard[]; vocabTombstones?: string[]; isPinned?: boolean; privateMessage?: string; dob?: string; coins?: number; myRewards?: string[]; inventory?: { consumables: Record<string, number>; permanents: string[]; revokedPermanents?: string[]; equippedTitle?: string; equippedTheme?: string; equippedFrame?: string; equippedPet?: string; reviewedQuizzes?: string[]; }; lastLoginDate?: string; currentStreak?: number; currentSessionId?: string; sessionClaimedAt?: number; activeExamId?: string; debtMessage?: string; pendingNotifications?: {id: string, title: string, body: string}[]; errorDna?: ErrorDnaProfile; }
 interface Rubric { vocab: string; grammar: string; fluency: string; task: string; }
 interface Session { id: string | number; studentId: string; studentName: string; teacher: string; skills: string[]; date: string; duration: number; rate: number; earnings: number; notes: string; rubric: Rubric; isPaid: boolean; }
 interface ScheduleMaterial { id: string; url: string; label?: string; }
@@ -1594,6 +1611,10 @@ interface CoinOperation {
   consumableQuantity?: number;
   permanentName?: string;
   inventoryGrants?: { consumables?: Record<string, number>; permanents?: string[] };
+  revokedConsumables?: Record<string, number>;
+  revokedPermanents?: string[];
+  revokedRewards?: string[];
+  clearAllInventory?: boolean;
   reviewedQuizId?: string;
   giftSnapshot?: { id?: string; name: string; price: number; details?: string; kind?: "consumable" | "permanent" };
 }
@@ -1603,8 +1624,26 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
   return students.map(student => {
     if (String(student?.id || "") !== String(operation.studentId)) return student;
     const inventory = student.inventory || {};
-    const consumables = { ...(inventory.consumables || {}) };
-    const permanents = Array.isArray(inventory.permanents) ? [...inventory.permanents] : [];
+    let consumables: Record<string, number> = { ...(inventory.consumables || {}) };
+    let permanents: string[] = Array.isArray(inventory.permanents) ? [...inventory.permanents] : [];
+    const revokedPermSet = new Set<string>(Array.isArray(inventory.revokedPermanents) ? inventory.revokedPermanents.map((x: any) => String(x || "").trim()).filter(Boolean) : []);
+    let myRewards: string[] = Array.isArray(student.myRewards) ? [...student.myRewards] : [];
+    let equippedTitle = inventory.equippedTitle;
+    let equippedTheme = inventory.equippedTheme;
+    let equippedFrame = inventory.equippedFrame;
+    let equippedPet = inventory.equippedPet;
+
+    if (operation.clearAllInventory) {
+      permanents.forEach(p => { if (p) revokedPermSet.add(p); });
+      consumables = {};
+      permanents = [];
+      myRewards = [];
+      equippedTitle = "";
+      equippedTheme = "";
+      equippedFrame = "";
+      equippedPet = "";
+    }
+
     const consumableGrants: Record<string, number> = { ...(operation.inventoryGrants?.consumables || {}) };
     if (operation.consumableName) {
       consumableGrants[operation.consumableName] = (Number(consumableGrants[operation.consumableName]) || 0)
@@ -1614,17 +1653,71 @@ const applyCoinOperation = (students: any[], operation: CoinOperation) => {
       const count = Math.max(0, Math.floor(Number(quantity) || 0));
       if (name && count) consumables[name] = (Number(consumables[name]) || 0) + count;
     });
+
+    if (operation.revokedConsumables) {
+      Object.entries(operation.revokedConsumables).forEach(([name, count]) => {
+        const deduct = Math.max(0, Math.floor(Number(count) || 0));
+        if (!name || !deduct) return;
+        const nextVal = (Number(consumables[name]) || 0) - deduct;
+        if (nextVal <= 0) delete consumables[name];
+        else consumables[name] = nextVal;
+      });
+    }
+
     const permanentGrants = Array.from(new Set([
       ...(Array.isArray(operation.inventoryGrants?.permanents) ? operation.inventoryGrants!.permanents : []),
       ...(operation.permanentName ? [operation.permanentName] : []),
     ].map(name => String(name || "").trim()).filter(Boolean)));
-    permanentGrants.forEach(name => { if (!permanents.includes(name)) permanents.push(name); });
+    permanentGrants.forEach(name => {
+      revokedPermSet.delete(name);
+      if (!permanents.includes(name)) permanents.push(name);
+    });
+
+    if (Array.isArray(operation.revokedPermanents) && operation.revokedPermanents.length > 0) {
+      const toRevoke = new Set(operation.revokedPermanents.map(x => String(x || "").trim()).filter(Boolean));
+      toRevoke.forEach(item => revokedPermSet.add(item));
+      permanents = permanents.filter(item => !toRevoke.has(String(item || "").trim()));
+      toRevoke.forEach(item => {
+        const strippedTitle = item.replace(/^Danh hiệu:\s*/i, "").trim();
+        if (equippedTitle && (equippedTitle === item || equippedTitle === strippedTitle)) equippedTitle = "";
+        if (equippedTheme && equippedTheme === item) equippedTheme = "";
+        if (equippedFrame && equippedFrame === item) equippedFrame = "";
+        if (equippedPet && equippedPet === item) equippedPet = "";
+      });
+    }
+
+    if (Array.isArray(operation.revokedRewards) && operation.revokedRewards.length > 0) {
+      const idxToRemove = new Set<number>();
+      const valToRemove = new Set<string>();
+      operation.revokedRewards.forEach(r => {
+        const s = String(r || "");
+        if (s.startsWith("__INDEX__:")) {
+          const idx = Number(s.slice("__INDEX__:".length));
+          if (Number.isInteger(idx) && idx >= 0) idxToRemove.add(idx);
+        } else if (s) {
+          valToRemove.add(s);
+        }
+      });
+      myRewards = myRewards.filter((item, idx) => !idxToRemove.has(idx) && !valToRemove.has(String(item || "")));
+    }
+
     const reviewedQuizzes = Array.isArray(inventory.reviewedQuizzes) ? [...inventory.reviewedQuizzes] : [];
     if (operation.reviewedQuizId && !reviewedQuizzes.includes(operation.reviewedQuizId)) reviewedQuizzes.push(operation.reviewedQuizId);
     return {
       ...student,
       coins: Math.max(0, (Number(student.coins) || 0) + Number(operation.delta || 0)),
-      inventory: { ...inventory, consumables, permanents, reviewedQuizzes },
+      myRewards,
+      inventory: {
+        ...inventory,
+        consumables,
+        permanents,
+        revokedPermanents: Array.from(revokedPermSet),
+        equippedTitle,
+        equippedTheme,
+        equippedFrame,
+        equippedPet,
+        reviewedQuizzes,
+      },
     };
   });
 };
@@ -1649,7 +1742,7 @@ interface RealExamPackage { id: string; title: string; active: boolean; mode: "L
 interface RealExamContext { packageId: string; packageTitle: string; packageQuizIds: string[]; packageAttemptId: string; testTakerId: string; orderIndex: number; total: number; isFinal: boolean; }
 interface RealExamSession { packageId: string; packageAttemptId: string; testTakerId: string; completedQuizIds: string[]; startedAt: number; }
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
-interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
+interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; categoryId?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
 interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
@@ -3884,7 +3977,7 @@ export default function IeltsSupremeOS() {
   const [realExamFullscreenBlocked, setRealExamFullscreenBlocked] = useState(false);
   const [examBuilderSaveState, setExamBuilderSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [examSkillTab, setExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
-  const [studentExamSkillTab, setStudentExamSkillTab] = useState<"Listening" | "Reading" | "Writing">("Listening");
+  const [studentExamSkillTab, setStudentExamSkillTab] = useState<TaxonomySkill>("Listening");
   const [studentSelectedVolBySkill, setStudentSelectedVolBySkill] = useState<Record<string, string>>({});
   const [examDocxBatch, setExamDocxBatch] = useState<ExamDocxBatchItem[]>([]);
   const [examDocxBatchBusy, setExamDocxBatchBusy] = useState(false);
@@ -4156,7 +4249,7 @@ export default function IeltsSupremeOS() {
     try {
       const res = await fetch("/api/writing_sandbox_coach", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           taskPrompt: task?.prompt || task?.instructions || "",
           taskType: task?.taskNumber === 1 ? "Task 1" : "Task 2",
@@ -4324,7 +4417,7 @@ export default function IeltsSupremeOS() {
       const API_BASE = getApiBase();
       const res = await fetch(`${API_BASE}/api/ai_review_chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
           message: textToSend,
@@ -4674,11 +4767,298 @@ export default function IeltsSupremeOS() {
 
   const [showInventory, setShowInventory] = useState(false);
   const [invTab, setInvTab] = useState<"CONSUMABLE"|"PERMANENT">("CONSUMABLE");
+  const [invPermCategory, setInvPermCategory] = useState<"ALL" | "FRAME" | "TITLE" | "PET" | "THEME" | "OTHER">("ALL");
   // Portal học viên chia tab để hết cuộn dài: Tổng quan / Phòng thi / Từ vựng / Tiến độ / Phần thưởng
   const [portalTab, setPortalTab] = useState<"home"|"exams"|"quests"|"vocab"|"progress"|"rewards">("home");
+  const [selectedQuestAssignmentId, setSelectedQuestAssignmentId] = useState<string | null>(null);
+  const [questSearchFilter, setQuestSearchFilter] = useState("");
+  const [questStateFilter, setQuestStateFilter] = useState<"ALL" | "IN_PROGRESS" | "COMPLETED">("ALL");
   const [selectedQuestNode, setSelectedQuestNode] = useState<{ assignmentId: string; nodeId: string } | null>(null);
   const [questLaunchLoading, setQuestLaunchLoading] = useState<string | null>(null);
   const [questStatusNotice, setQuestStatusNotice] = useState<QuestStatusNotice | null>(null);
+  const [giftModalTab, setGiftModalTab] = useState<"GRANT" | "CONFISCATE">("GRANT");
+  const [confiscateCoinAmount, setConfiscateCoinAmount] = useState<string>("100");
+  const [uiSaveToast, setUiSaveToast] = useState<{ id: number; message: string; kind: "success" | "warning" | "error" } | null>(null);
+  const uiSaveToastTimerRef = useRef<number | null>(null);
+  const showSaveToast = (message: string, kind: "success" | "warning" | "error" = "success") => {
+    if (uiSaveToastTimerRef.current) window.clearTimeout(uiSaveToastTimerRef.current);
+    const id = Date.now();
+    setUiSaveToast({ id, message, kind });
+    uiSaveToastTimerRef.current = window.setTimeout(() => {
+      setUiSaveToast(prev => (prev?.id === id ? null : prev));
+    }, 3600);
+  };
+  const [studentFormSaving, setStudentFormSaving] = useState(false);
+  const [questEditorSaving, setQuestEditorSaving] = useState(false);
+  const [realExamPkgSaving, setRealExamPkgSaving] = useState(false);
+  const [keyEditorSaving, setKeyEditorSaving] = useState(false);
+
+  // Dirty-state tracking for unsaved changes warnings across all editors
+  const editingQuizBaselineRef = useRef<{ id: string; json: string } | null>(null);
+  const keyEditingQuizBaselineRef = useRef<{ id: string; json: string } | null>(null);
+  const realExamPkgBaselineRef = useRef<{ id: string; json: string } | null>(null);
+  const topicEditorBaselineRef = useRef<{ id: string; json: string } | null>(null);
+  const [examEditorDirty, setExamEditorDirty] = useState(false);
+  const [keyEditorDirty, setKeyEditorDirty] = useState(false);
+  const [realExamPkgDirty, setRealExamPkgDirty] = useState(false);
+  const [topicEditorDirty, setTopicEditorDirty] = useState(false);
+
+  useEffect(() => {
+    if (!editingQuiz) {
+      editingQuizBaselineRef.current = null;
+      setExamEditorDirty(false);
+      return;
+    }
+    const { _activePassageTab, ...comparable } = editingQuiz as any;
+    const json = JSON.stringify(comparable);
+    if (!editingQuizBaselineRef.current || editingQuizBaselineRef.current.id !== editingQuiz.id) {
+      editingQuizBaselineRef.current = { id: editingQuiz.id, json };
+      setExamEditorDirty(false);
+    } else {
+      setExamEditorDirty(editingQuizBaselineRef.current.json !== json);
+    }
+  }, [editingQuiz]);
+
+  useEffect(() => {
+    if (!keyEditingQuiz) {
+      keyEditingQuizBaselineRef.current = null;
+      setKeyEditorDirty(false);
+      return;
+    }
+    const json = JSON.stringify(keyEditingQuiz);
+    if (!keyEditingQuizBaselineRef.current || keyEditingQuizBaselineRef.current.id !== keyEditingQuiz.id) {
+      keyEditingQuizBaselineRef.current = { id: keyEditingQuiz.id, json };
+      setKeyEditorDirty(false);
+    } else {
+      setKeyEditorDirty(keyEditingQuizBaselineRef.current.json !== json);
+    }
+  }, [keyEditingQuiz]);
+
+  useEffect(() => {
+    if (!realExamPackageEditor) {
+      realExamPkgBaselineRef.current = null;
+      setRealExamPkgDirty(false);
+      return;
+    }
+    const { updatedAt, ...comparable } = realExamPackageEditor as any;
+    const json = JSON.stringify(comparable);
+    if (!realExamPkgBaselineRef.current || realExamPkgBaselineRef.current.id !== realExamPackageEditor.id) {
+      realExamPkgBaselineRef.current = { id: realExamPackageEditor.id, json };
+      setRealExamPkgDirty(false);
+    } else {
+      setRealExamPkgDirty(realExamPkgBaselineRef.current.json !== json);
+    }
+  }, [realExamPackageEditor]);
+
+  useEffect(() => {
+    if (!topicAssignmentEditor) {
+      topicEditorBaselineRef.current = null;
+      setTopicEditorDirty(false);
+      return;
+    }
+    const { updatedAt, ...comparable } = topicAssignmentEditor as any;
+    const json = JSON.stringify(comparable);
+    if (!topicEditorBaselineRef.current || topicEditorBaselineRef.current.id !== topicAssignmentEditor.id) {
+      topicEditorBaselineRef.current = { id: topicAssignmentEditor.id, json };
+      setTopicEditorDirty(false);
+    } else {
+      setTopicEditorDirty(topicEditorBaselineRef.current.json !== json);
+    }
+  }, [topicAssignmentEditor]);
+
+  const hasAnyUnsavedTeacherChanges = examEditorDirty || keyEditorDirty || realExamPkgDirty || topicEditorDirty || rewardConfigDirty;
+
+  useEffect(() => {
+    if (!hasAnyUnsavedTeacherChanges) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasAnyUnsavedTeacherChanges]);
+
+  const confirmDiscardUnsavedChanges = (customMsg?: string): boolean => {
+    if (!hasAnyUnsavedTeacherChanges) return true;
+    return window.confirm(
+      customMsg ||
+      tx(
+        "Bạn có thay đổi chưa được lưu! Nếu thoát ngay bây giờ, các thay đổi sẽ bị mất.\n\nBạn có chắc chắn muốn thoát mà không lưu không?",
+        "You have unsaved changes! If you leave now, your changes will be lost.\n\nAre you sure you want to leave without saving?"
+      )
+    );
+  };
+
+  const handleTeacherTabChange = (nextTab: TabType) => {
+    if (nextTab === activeTab) return;
+    if (!confirmDiscardUnsavedChanges()) return;
+    setActiveTab(nextTab);
+  };
+
+  const formatCosmeticDisplayName = (rawName: string) => {
+    const p = String(rawName || "");
+    if (isVi) return p;
+    const enMap: Record<string, string> = {
+      "Giao diện: Hoàng Kim": "Theme: Golden Sovereign",
+      "Giao diện: Nửa Đêm": "Theme: Midnight Navy",
+      "Giao diện: Anh Đào": "Theme: Sakura Bloom",
+      "Giao diện: Rừng Sâu": "Theme: Emerald Forest",
+      "Khung avatar: Vương Miện": "Avatar Frame: Crown of Sol",
+      "Khung avatar: Rồng Lửa": "Avatar Frame: Infernal Dragon",
+      "Khung avatar: Băng Giá": "Avatar Frame: Frostbite Sigil",
+      "Khung avatar: Cầu Vồng": "Avatar Frame: Prismatic Aurora",
+      "Khung avatar: Sao Băng": "Avatar Frame: Shooting Star",
+      "Linh thú: Cú Mèo": "Companion: Celestial Owl",
+      "Linh thú: Mèo Thần Tài": "Companion: Fortune Cat",
+      "Linh thú: Rồng Con": "Companion: Baby Drake",
+      "Linh thú: Cáo Lửa": "Companion: Flame Fox",
+      "Linh thú: Chim Cánh Cụt": "Companion: Frost Penguin",
+      "Linh thú: Gấu Trúc": "Companion: Zen Panda",
+    };
+    if (enMap[p]) return enMap[p];
+    if (p.startsWith("Danh hiệu: ")) return "Title: " + p.slice(11);
+    if (p.startsWith("Giao diện: ")) return "Theme: " + p.slice(11);
+    if (p.startsWith("Khung avatar: ")) return "Avatar Frame: " + p.slice(14);
+    if (p.startsWith("Linh thú: ")) return "Companion: " + p.slice(10);
+    return p;
+  };
+
+  const getPermanentItemCategory = (rawName: string): "FRAME" | "TITLE" | "PET" | "THEME" | "OTHER" => {
+    const p = String(rawName || "").trim();
+    const lower = p.toLowerCase();
+    if (p.startsWith("Khung avatar:") || lower.includes("khung") || lower.includes("frame")) return "FRAME";
+    if (p.startsWith("Danh hiệu:") || lower.includes("danh hiệu") || lower.includes("title")) return "TITLE";
+    if (p.startsWith("Linh thú:") || lower.includes("linh thú") || lower.includes("pet") || lower.includes("companion")) return "PET";
+    if (p.startsWith("Giao diện:") || lower.includes("giao diện") || lower.includes("theme")) return "THEME";
+    return "OTHER";
+  };
+
+  const renderGiftStoreIcon = (rawName: string, size = 24, accentColor = "#0D9488") => {
+    const lower = String(rawName || "").toLowerCase();
+    const baseProps = {
+      width: size,
+      height: size,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      strokeLinecap: "round" as const,
+      strokeLinejoin: "round" as const,
+      style: { display: "block", flexShrink: 0 },
+    };
+    if (lower.includes("deadline") || lower.includes("dời") || lower.includes("hoãn") || lower.includes("gia hạn")) {
+      return (
+        <svg {...baseProps} stroke="#D97706" strokeWidth="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#FEF3C7" />
+          <circle cx="12" cy="12" r="4.5" stroke="#B45309" strokeWidth="1.8" fill="#FFFBEB" />
+          <path d="M12 9.8v2.4l1.6 1" stroke="#B45309" strokeWidth="1.8" />
+        </svg>
+      );
+    }
+    if (lower.includes("milo") || lower.includes("sữa") || lower.includes("milk") || lower.includes("cacao")) {
+      return (
+        <svg {...baseProps} stroke="#15803D" strokeWidth="2">
+          <path d="M14 2l3 2v3" stroke="#166534" />
+          <rect x="6" y="6" width="12" height="15" rx="2.5" fill="#DCFCE7" stroke="#15803D" />
+          <path d="M6 10h12" stroke="#15803D" />
+          <path d="M9.5 14.5l1.8 1.8 3.2-3.2" stroke="#15803D" strokeWidth="2.2" />
+        </svg>
+      );
+    }
+    if (lower.includes("trà sữa") || lower.includes("viên viên") || lower.includes("boba") || lower.includes("trân châu")) {
+      return (
+        <svg {...baseProps} stroke="#9333EA" strokeWidth="2">
+          <path d="M15 2l-2 6" stroke="#7E22CE" strokeWidth="2.3" />
+          <path d="M6 8h12l-1.4 12a2 2 0 0 1-2 1.8H9.4a2 2 0 0 1-2-1.8L6 8z" fill="#F3E8FF" />
+          <path d="M5 8h14" stroke="#7E22CE" strokeWidth="2.2" />
+          <circle cx="9.5" cy="18.5" r="1" fill="#6B21A8" stroke="none" />
+          <circle cx="12" cy="19" r="1" fill="#6B21A8" stroke="none" />
+          <circle cx="14.5" cy="18.5" r="1" fill="#6B21A8" stroke="none" />
+          <circle cx="11" cy="16.5" r="1" fill="#6B21A8" stroke="none" />
+          <circle cx="13.5" cy="16.5" r="1" fill="#6B21A8" stroke="none" />
+        </svg>
+      );
+    }
+    if (lower.includes("trái chò") || lower.includes("trà") || lower.includes("nước") || lower.includes("ly") || lower.includes("cà phê") || lower.includes("coffee") || lower.includes("matcha") || lower.includes("juice")) {
+      return (
+        <svg {...baseProps} stroke="#0284C7" strokeWidth="2">
+          <path d="M14 2l2 6" stroke="#0369A1" strokeWidth="2.2" />
+          <path d="M6.5 8h11l-1.3 11.8a2 2 0 0 1-2 1.8H9.8a2 2 0 0 1-2-1.8L6.5 8z" fill="#E0F2FE" />
+          <path d="M5.5 8h13" stroke="#0284C7" strokeWidth="2.2" />
+          <path d="M8.5 13.5c1.2-1 2.5 1 3.7 0s2.3 1 3.3 0" stroke="#0284C7" strokeWidth="1.7" />
+        </svg>
+      );
+    }
+    if (lower.startsWith("khung avatar:") || lower.includes("khung") || lower.includes("frame")) {
+      return (
+        <svg {...baseProps} stroke="#E11D48" strokeWidth="2">
+          <rect x="4" y="4" width="16" height="16" rx="5" fill="#FFE4E6" />
+          <circle cx="12" cy="12" r="4.2" fill="#FFF1F2" stroke="#BE123C" strokeWidth="1.8" />
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2" stroke="#E11D48" strokeWidth="2" />
+        </svg>
+      );
+    }
+    if (lower.startsWith("danh hiệu:") || lower.includes("danh hiệu") || lower.includes("title") || lower.includes("cúp") || lower.includes("huy hiệu")) {
+      return (
+        <svg {...baseProps} stroke="#D97706" strokeWidth="2">
+          <path d="M8 21h8M12 17v4" />
+          <path d="M7 4h10v5a5 5 0 0 1-10 0V4z" fill="#FEF3C7" />
+          <path d="M7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3" />
+        </svg>
+      );
+    }
+    if (lower.startsWith("linh thú:") || lower.includes("linh thú") || lower.includes("pet") || lower.includes("mèo") || lower.includes("cún") || lower.includes("rồng")) {
+      return (
+        <svg {...baseProps} stroke="#EA580C" strokeWidth="2">
+          <circle cx="7" cy="9.5" r="2" fill="#FFEDD5" />
+          <circle cx="12" cy="7" r="2" fill="#FFEDD5" />
+          <circle cx="17" cy="9.5" r="2" fill="#FFEDD5" />
+          <path d="M8.5 14.5c0-2 1.6-3.5 3.5-3.5s3.5 1.5 3.5 3.5c0 2.2-1.8 4.5-3.5 4.5s-3.5-2.3-3.5-4.5z" fill="#FFEDD5" />
+        </svg>
+      );
+    }
+    if (lower.startsWith("giao diện:") || lower.includes("giao diện") || lower.includes("theme") || lower.includes("màu")) {
+      return (
+        <svg {...baseProps} stroke="#4F46E5" strokeWidth="2">
+          <path d="M12 2a10 10 0 0 0 0 20 2.5 2.5 0 0 0 2.5-2.5c0-.6-.2-1.2-.6-1.6-.4-.4-.6-1-.6-1.6A2.5 2.5 0 0 1 15.8 14H17a5 5 0 0 0 5-5c0-3.9-4.5-7-10-7z" fill="#EEF2FF" />
+          <circle cx="7.5" cy="10.5" r="1.2" fill="#4F46E5" stroke="none" />
+          <circle cx="11" cy="7.5" r="1.2" fill="#EC4899" stroke="none" />
+          <circle cx="15.5" cy="8.5" r="1.2" fill="#F59E0B" stroke="none" />
+        </svg>
+      );
+    }
+    if (lower.includes("voucher") || lower.includes("thẻ") || lower.includes("vé") || lower.includes("ticket") || lower.includes("coupon")) {
+      return (
+        <svg {...baseProps} stroke="#0D9488" strokeWidth="2">
+          <path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1.5a1.5 1.5 0 0 0 0 3V15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1.5a1.5 1.5 0 0 0 0-3V9z" fill="#CCFBF1" />
+          <path d="M9 7v10" strokeDasharray="2 2" />
+        </svg>
+      );
+    }
+    if (lower.includes("sách") || lower.includes("tài liệu") || lower.includes("vở") || lower.includes("bút") || lower.includes("book")) {
+      return (
+        <svg {...baseProps} stroke="#2563EB" strokeWidth="2">
+          <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2V4z" fill="#DBEAFE" />
+          <path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7V4z" fill="#EFF6FF" />
+        </svg>
+      );
+    }
+    if (lower.includes("bánh") || lower.includes("kẹo") || lower.includes("snack") || lower.includes("pizza") || lower.includes("ăn")) {
+      return (
+        <svg {...baseProps} stroke="#E11D48" strokeWidth="2">
+          <path d="M4 13h16v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6z" fill="#FFE4E6" />
+          <path d="M4 13c0-3 3.5-5 8-5s8 2 8 5" fill="#FECDD3" />
+          <path d="M12 4v4" stroke="#E11D48" strokeWidth="2.2" />
+        </svg>
+      );
+    }
+    return (
+      <svg {...baseProps} stroke={accentColor} strokeWidth="2">
+        <rect x="3" y="8" width="18" height="4" rx="1" fill={`${accentColor}22`} />
+        <path d="M12 8v13" />
+        <path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7" fill={`${accentColor}12`} />
+        <path d="M7.5 8a2.5 2.5 0 0 1 0-5C10 3 12 8 12 8s2-5 4.5-5a2.5 2.5 0 0 1 0 5" />
+      </svg>
+    );
+  };
   // Sub-tab trong Phòng thi HS (hết cuộn): đề khả dụng / kết quả & review
   const [examRoomTab, setExamRoomTab] = useState<"available"|"results">("available");
   // Sub-tab trong hồ sơ HS phía giáo viên: kết quả thi / buổi học / thống kê
@@ -4688,7 +5068,7 @@ export default function IeltsSupremeOS() {
   const [expandedSessionId, setExpandedSessionId] = useState<string|number|null>(null);
   const [useCodeObj, setUseCodeObj] = useState<{name: string, code: string}|null>(null);
   const [dismissedPmId, setDismissedPmId] = useState<string | null>(null);
-  const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|"Listening"|"Reading"|"Writing">("All");
+  const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|TaxonomySkill>("All");
   const [dailyExpSavedFeedback, setDailyExpSavedFeedback] = useState(false);
 
   const [unlockKey, setUnlockKey] = useState("");
@@ -5333,6 +5713,11 @@ export default function IeltsSupremeOS() {
   };
 
   const [stQuizSearch, setStQuizSearch] = useState("");
+  // Bộ lọc dạng bài (taxonomy) trong Phòng thi học sinh — reset khi đổi kỹ năng.
+  const [stSelectedCategories, setStSelectedCategories] = useState<string[]>([]);
+  const [stFilterPopoverOpen, setStFilterPopoverOpen] = useState<boolean>(false);
+  const [stCategoryMatchMode, setStCategoryMatchMode] = useState<"ANY" | "ALL">("ANY");
+  useEffect(() => { setStSelectedCategories([]); setStFilterPopoverOpen(false); }, [studentExamSkillTab]);
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
   const [examFolders, setExamFolders] = useState<string[]>(() => {
@@ -6008,7 +6393,13 @@ const mergeMyPermanents = (prev: any, incoming: any[]) => {
     return incoming.map((s: any) => {
       if (String(s?.email || "").toLowerCase() !== email) return s;
       const inPerms = Array.isArray(s?.inventory?.permanents) ? s.inventory.permanents : [];
-      const union = Array.from(new Set([...(Array.isArray(backup) ? backup : []), ...prevPerms, ...inPerms]));
+      const revokedSet = new Set<string>(
+        Array.isArray(s?.inventory?.revokedPermanents)
+          ? s.inventory.revokedPermanents.map((x: any) => String(x || "").trim()).filter(Boolean)
+          : []
+      );
+      const union = Array.from(new Set([...(Array.isArray(backup) ? backup : []), ...prevPerms, ...inPerms]))
+        .filter((item: any) => !revokedSet.has(String(item || "").trim()));
       const dedicatedReady = vocabStoreReadyRef.current[email];
       const mergedVocab = dedicatedReady
         ? {
@@ -6047,7 +6438,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
     );
     if (pendingCoinConfirmed) clearPendingCoinOperation();
     // Bọc toàn bộ dữ liệu qua hàm clean() để triệt tiêu null/undefined
-    const incomingStudents = clean(d.students);
+    const myEmailLower = String(currentUser?.email || "").trim().toLowerCase();
+    const rawStudents = clean(d.students);
+    const incomingStudents = (userRole === "STUDENT" && Array.isArray(rawStudents))
+      ? rawStudents.map((s: any) => {
+          if (!s || String(s.email || "").trim().toLowerCase() === myEmailLower) return s;
+          const { phone, dob, rate, customRate, debtMessage, vocabNotebook, vocabTombstones, errorDna, ...publicStudent } = s;
+          return publicStudent;
+        })
+      : rawStudents;
     if (pendingCoinOperation && !pendingCoinConfirmed && Array.isArray(incomingStudents)) {
       // A delayed/mobile snapshot may still be the pre-purchase balance. Project the
       // pending operation onto that snapshot, while retaining the already optimistic
@@ -6075,7 +6474,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
     const transactionTombstones = new Set((Array.isArray(d.deletedTransactionIds) ? d.deletedTransactionIds : []).map(String));
     const cleanTransactions = (clean(d.transactions) as Transaction[]).filter(t => t && t.id && !transactionTombstones.has(String(t.id)));
-    setTransactions(cleanTransactions); 
+    setTransactions(userRole === "TEACHER" ? cleanTransactions : []); 
 
     const scheduleTombstones = new Set((Array.isArray(d.deletedScheduleIds) ? d.deletedScheduleIds : []).map(String));
     const cleanSchedules = (clean(d.schedules) as Schedule[]).filter(s => s && s.id && !scheduleTombstones.has(String(s.id)));
@@ -7192,14 +7591,31 @@ const applyWorkspaceSnapshot = (snap: any) => {
                   ]));
                     const operationTargetsStudent = !!coinOperation
                       && String(coinOperation.studentId || "") === String(serverItem.id || "");
+                    const effectiveRevokedPerms: string[] = operationTargetsStudent
+                      ? (Array.isArray(_tsv.revokedPermanents) ? _tsv.revokedPermanents : [])
+                      : _tuniq(_tsv.revokedPermanents, _tlc.revokedPermanents);
+                    const revokedPermSet = new Set(effectiveRevokedPerms.map((x: any) => String(x || "").trim()).filter(Boolean));
+                    const mergedPermanents = operationTargetsStudent && coinOperation?.clearAllInventory
+                      ? []
+                      : _tuniq(_tsv.permanents, _tlc.permanents).filter((p: any) => !revokedPermSet.has(String(p || "").trim()));
                     const mergedInv = {
                       ..._tlc, ..._tsv,
-                      permanents: _tuniq(_tsv.permanents, _tlc.permanents),
+                      permanents: mergedPermanents,
+                      revokedPermanents: effectiveRevokedPerms,
                       reviewedQuizzes: _tuniq(_tsv.reviewedQuizzes, _tlc.reviewedQuizzes),
                       consumables: operationTargetsStudent
                         ? { ...(_tsv.consumables || {}) }
                         : (_tsv.consumables || _tlc.consumables || {}),
+                      ...(operationTargetsStudent && (coinOperation?.clearAllInventory || (coinOperation?.revokedPermanents && coinOperation.revokedPermanents.length > 0)) ? {
+                        equippedTitle: _tsv.equippedTitle || "",
+                        equippedTheme: _tsv.equippedTheme || "",
+                        equippedFrame: _tsv.equippedFrame || "",
+                        equippedPet: _tsv.equippedPet || "",
+                      } : {}),
                     };
+                    const mergedMyRewards = operationTargetsStudent && (coinOperation?.clearAllInventory || (coinOperation?.revokedRewards && coinOperation.revokedRewards.length > 0))
+                      ? (Array.isArray(serverItem.myRewards) ? serverItem.myRewards : [])
+                      : _tuniq(serverItem.myRewards, localItem.myRewards);
                   return {
                     ...serverItem,
                     ...localItem,
@@ -7216,7 +7632,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
                     // merge here as well, otherwise a milestone that grants Coins + a
                     // permanent Quest gift in the same submission can lose the gift.
                     inventory: mergedInv,
-                    myRewards: _tuniq(serverItem.myRewards, localItem.myRewards),
+                    myRewards: mergedMyRewards,
                     // CHỐNG BAY SỔ TỪ VỰNG: HV là chủ sổ — GV ghi (kể cả bằng state cũ) KHÔNG bao giờ được đè vocabNotebook.
                     vocabNotebook: serverItem.vocabNotebook !== undefined ? serverItem.vocabNotebook : (localItem.vocabNotebook || []),
                     vocabTombstones: serverItem.vocabTombstones !== undefined ? serverItem.vocabTombstones : (localItem.vocabTombstones || []),
@@ -7297,6 +7713,24 @@ const applyWorkspaceSnapshot = (snap: any) => {
                 finalUpdate[key] = serverArr;
               }
             } else if (key === "quizResults" || key === "liveSessions" || key === "systemLogs") {
+              const myEmail = (currentUser?.email || "").toLowerCase();
+              const myServerStudent = Array.isArray(serverStudents)
+                ? serverStudents.find((s: any) => (s?.email || "").toLowerCase() === myEmail)
+                : null;
+              const allowedLocalVal = (key === "quizResults" && myServerStudent?.id)
+                ? localVal.filter((item: any) => !item?.studentId || String(item.studentId) === String(myServerStudent.id))
+                : localVal;
+              const mergedArr = [...serverArr];
+              allowedLocalVal.forEach((localItem: any) => {
+                const idx = mergedArr.findIndex((s: any) => s.id === localItem.id);
+                if (idx === -1) {
+                  mergedArr.push(localItem);
+                } else if (key !== "quizResults" || !myServerStudent?.id || String(mergedArr[idx]?.studentId || "") === String(myServerStudent.id)) {
+                  mergedArr[idx] = { ...mergedArr[idx], ...localItem };
+                }
+              });
+              finalUpdate[key] = mergedArr;
+            } else if (false) {
               const mergedArr = [...serverArr];
               localVal.forEach((localItem: any) => {
                 const idx = mergedArr.findIndex((s: any) => s.id === localItem.id);
@@ -7419,7 +7853,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   // PHÂN TÍCH LỖI THEO DẠNG CÂU HỎI (toàn trung tâm + theo học viên)
   const errorAnalytics = useMemo(() => {
-    const typeLabel = (q: QuizQuestion) => formatQuestionTypeLabel(q.subType || (q.type === 'CHOICE' ? 'Multiple Choice' : q.type === 'MATCHING' ? 'Matching' : q.type === 'CHOICE_MULTIPLE' ? 'Multi-select' : 'Completion'));
+    const typeLabel = (q: QuizQuestion, quiz: Quiz) => inferQuestionCategory(q, quiz).label;
     const typeStats: Record<string, { correct: number; total: number }> = {};
     const studentStats: Record<string, { name: string; types: Record<string, { correct: number; total: number }> }> = {};
     (quizResults || []).forEach(r => {
@@ -7430,7 +7864,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       summary.groups.forEach((group: any) => {
         const q = group.questions[0];
         if (!q) return;
-        const label = typeLabel(q);
+        const label = typeLabel(q, quiz);
         if (!typeStats[label]) typeStats[label] = { correct: 0, total: 0 };
         typeStats[label].total += group.total; typeStats[label].correct += group.score;
         if (!studentStats[r.studentId]) {
@@ -7488,7 +7922,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const summary = getQuizScoreSummary(quiz, r.answers || {});
         summary.groups.forEach((group: any) => {
           const q = group.questions[0];
-          const label = q.subType || q.type;
+          const label = inferQuestionCategory(q, quiz).label;
           if (!g[label]) g[label] = { c: 0, t: 0 };
           g[label].t += group.total;
           g[label].c += group.score;
@@ -7519,7 +7953,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       }
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_feedback`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", studentName: r.studentName, quizTitle: r.quizTitle, type: quiz?.type || "", score: r.score, total: r.total, band: r.band, weakness: weak, wrongCount, details })
       });
       const data = await readApiJson(resp);
@@ -7715,7 +8149,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         : undefined;
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
           question: resolvedCtx.effectiveQuestionText || stripTags(q.text),
@@ -8075,7 +8509,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const excludeWords = (me.vocabNotebook || []).map(c => String(c.word || "").trim()).filter(Boolean).slice(0, 800);
       const API_BASE = getApiBase();
       const resp = await fetch(`${API_BASE}/api/ai_vocab`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ lang: i18n.language === "vi" ? "vi" : "en", count: requestedCount, minCount: requestedCount, target: me.target || "", source, wrongContext: wrongCtx, exclude: excludeWords, kinds: (vocabKinds && vocabKinds.length ? vocabKinds : ["word", "phrasal_verb", "idiom", "collocation", "grammar"]) })
       });
       const data = await readApiJson(resp);
@@ -8626,8 +9060,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     alert("Live lesson session and feedback synchronized successfully!");
   };
 
-  const handleStudentAction = () => {
-    if (!newSt.name) return;
+  const handleStudentAction = async () => {
+    if (!newSt.name || studentFormSaving) return;
     const nameCap = newSt.name.trim().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     let nx: Student[];
     let coinOperation: CoinOperation | null = null;
@@ -8640,7 +9074,137 @@ const applyWorkspaceSnapshot = (snap: any) => {
       setEditStId(null);
     }
     else { nx = [{ id: getTrueTime().toString(), name: nameCap, phone: "", rate: newSt.rate || 300000, target: newSt.target || "6.5", cefr: newSt.cefr || "B2", exp: 0, level: 1, email: newSt.email, dob: newSt.dob, isPinned: false, privateMessage: "" }, ...students]; }
-    setStudents(nx); syncData({ students: nx, ...(coinOperation ? { __coinOperation: coinOperation } : {}) }); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", dob: "", privateMessage: "" });
+    setStudentFormSaving(true);
+    try {
+      setStudents(nx);
+      const saved = await syncData({ students: nx, ...(coinOperation ? { __coinOperation: coinOperation } : {}) });
+      setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", dob: "", privateMessage: "" });
+      setShowAddStudent(false);
+      showSaveToast(
+        saved
+          ? tx(`Đã lưu thông tin học viên "${nameCap}" thành công!`, `Student "${nameCap}" saved successfully!`)
+          : tx(`Đã lưu tạm "${nameCap}" trên thiết bị, chờ đồng bộ mạng.`, `Saved "${nameCap}" locally, waiting for network sync.`),
+        saved ? "success" : "warning"
+      );
+    } finally {
+      setStudentFormSaving(false);
+    }
+  };
+
+  const teacherConfiscateCoins = async (studentId: string, amountOrAll: number | "ALL") => {
+    const st = students.find(s => s.id === studentId);
+    if (!st) return;
+    const currentCoins = Math.max(0, Number(st.coins) || 0);
+    if (currentCoins <= 0) {
+      showSaveToast(tx("Học viên này hiện không còn xu nào để tịch thu.", "This student currently has 0 coins."), "warning");
+      return;
+    }
+    const deduct = amountOrAll === "ALL" ? currentCoins : Math.min(currentCoins, Math.max(1, Math.floor(Number(amountOrAll) || 0)));
+    if (!deduct) return;
+    if (!window.confirm(tx(`Xác nhận tịch thu ${deduct} OS Coins của học viên ${st.name}?`, `Confirm confiscating ${deduct} OS Coins from ${st.name}?`))) return;
+    const op = makeCoinOperation(st.id, -deduct, "TEACHER_CONFISCATE_COINS");
+    const nx = applyCoinOperation(students, op);
+    setStudents(nx);
+    const saved = await syncData({ students: nx, __coinOperation: op });
+    showSaveToast(
+      saved
+        ? tx(`Đã tịch thu ${deduct} Xu của ${st.name}!`, `Confiscated ${deduct} Coins from ${st.name}!`)
+        : tx(`Đã ghi nhận tịch thu ${deduct} Xu (đang chờ đồng bộ).`, `Recorded confiscation of ${deduct} Coins (sync pending).`),
+      saved ? "success" : "warning"
+    );
+  };
+
+  const teacherConfiscateConsumable = async (studentId: string, itemName: string, countOrAll: number | "ALL") => {
+    const st = students.find(s => s.id === studentId);
+    if (!st || !itemName) return;
+    const currentCount = Number(st.inventory?.consumables?.[itemName]) || 0;
+    if (currentCount <= 0) return;
+    const deduct = countOrAll === "ALL" ? currentCount : Math.min(currentCount, Math.max(1, Math.floor(Number(countOrAll) || 1)));
+    if (!window.confirm(tx(`Xác nhận tịch thu ${deduct}x "${itemName}" của học viên ${st.name}?`, `Confirm confiscating ${deduct}x "${itemName}" from ${st.name}?`))) return;
+    const op = makeCoinOperation(st.id, 0, "TEACHER_CONFISCATE_CONSUMABLE", {
+      revokedConsumables: { [itemName]: deduct },
+    });
+    const nx = applyCoinOperation(students, op);
+    setStudents(nx);
+    const saved = await syncData({ students: nx, __coinOperation: op });
+    showSaveToast(
+      saved
+        ? tx(`Đã tịch thu ${deduct}x "${itemName}" của ${st.name}!`, `Confiscated ${deduct}x "${itemName}" from ${st.name}!`)
+        : tx(`Đã tịch thu "${itemName}" (chờ đồng bộ).`, `Confiscated "${itemName}" (sync pending).`),
+      saved ? "success" : "warning"
+    );
+  };
+
+  const teacherConfiscatePermanent = async (studentId: string, itemName: string) => {
+    const st = students.find(s => s.id === studentId);
+    if (!st || !itemName) return;
+    if (!window.confirm(tx(`Xác nhận tịch thu vật phẩm vĩnh viễn "${itemName}" của học viên ${st.name}?\n(Nếu học viên đang trang bị món này, hệ thống sẽ tự động gỡ bỏ).`, `Confirm confiscating permanent item "${itemName}" from ${st.name}?\n(If currently equipped, it will be automatically unequipped).`))) return;
+    const op = makeCoinOperation(st.id, 0, "TEACHER_CONFISCATE_PERMANENT", {
+      revokedPermanents: [itemName],
+    });
+    const nx = applyCoinOperation(students, op);
+    setStudents(nx);
+    const saved = await syncData({ students: nx, __coinOperation: op });
+    showSaveToast(
+      saved
+        ? tx(`Đã tịch thu vật phẩm vĩnh viễn "${itemName}" của ${st.name}!`, `Confiscated permanent item "${itemName}" from ${st.name}!`)
+        : tx(`Đã tịch thu "${itemName}" (chờ đồng bộ).`, `Confiscated "${itemName}" (sync pending).`),
+      saved ? "success" : "warning"
+    );
+  };
+
+  const teacherConfiscateMyReward = async (studentId: string, rewardText: string, index?: number) => {
+    const st = students.find(s => s.id === studentId);
+    if (!st) return;
+    if (!window.confirm(tx(`Xác nhận tịch thu / hủy phần quà "${rewardText}" của học viên ${st.name}?`, `Confirm revoking reward "${rewardText}" from ${st.name}?`))) return;
+    const token = typeof index === "number" && index >= 0 ? `__INDEX__:${index}` : rewardText;
+    const op = makeCoinOperation(st.id, 0, "TEACHER_CONFISCATE_REWARD", {
+      revokedRewards: [token, rewardText],
+    });
+    const nx = applyCoinOperation(students, op);
+    // Also mark any matching rewardCode as redeemed/revoked if present in rewardText
+    const nextCodes = rewardCodes.filter(rc => !(rc.studentId === st.id && rewardText.includes(rc.code)));
+    if (nextCodes.length !== rewardCodes.length) setRewardCodes(nextCodes);
+    setStudents(nx);
+    const saved = await syncData({
+      students: nx,
+      __coinOperation: op,
+      ...(nextCodes.length !== rewardCodes.length ? { rewardCodes: nextCodes } : {}),
+    });
+    showSaveToast(
+      saved
+        ? tx(`Đã thu hồi phần quà "${rewardText}" của ${st.name}!`, `Revoked reward "${rewardText}" from ${st.name}!`)
+        : tx(`Đã thu hồi phần quà (chờ đồng bộ).`, `Reward revoked (sync pending).`),
+      saved ? "success" : "warning"
+    );
+  };
+
+  const teacherConfiscateAllStudentAssets = async (studentId: string, includeCoins = false) => {
+    const st = students.find(s => s.id === studentId);
+    if (!st) return;
+    const currentCoins = Math.max(0, Number(st.coins) || 0);
+    const msg = includeCoins
+      ? tx(`CẢNH BÁO: Bạn có chắc chắn muốn TỊCH THU TOÀN BỘ XU (${currentCoins} Xu) VÀ TẤT CẢ MỌI LOẠI QUÀ (Tiêu hao, Vĩnh viễn, Quà đổi thưởng) của học viên ${st.name} không?`, `WARNING: Are you sure you want to CONFISCATE ALL COINS (${currentCoins} Coins) AND ALL GIFTS/ITEMS from ${st.name}?`)
+      : tx(`CẢNH BÁO: Bạn có chắc chắn muốn TỊCH THU TẤT CẢ MỌI LOẠI QUÀ (Tiêu hao, Vĩnh viễn, Quà đổi thưởng) trong kho đồ của học viên ${st.name} không?`, `WARNING: Are you sure you want to CONFISCATE ALL GIFTS/ITEMS (Consumables, Permanents, Redeemed Rewards) from ${st.name}?`);
+    if (!window.confirm(msg)) return;
+    const op = makeCoinOperation(st.id, includeCoins ? -currentCoins : 0, "TEACHER_CONFISCATE_ALL", {
+      clearAllInventory: true,
+    });
+    const nx = applyCoinOperation(students, op);
+    const nextCodes = rewardCodes.filter(rc => rc.studentId !== st.id);
+    if (nextCodes.length !== rewardCodes.length) setRewardCodes(nextCodes);
+    setStudents(nx);
+    const saved = await syncData({
+      students: nx,
+      __coinOperation: op,
+      ...(nextCodes.length !== rewardCodes.length ? { rewardCodes: nextCodes } : {}),
+    });
+    showSaveToast(
+      saved
+        ? tx(`Đã tịch thu toàn bộ ${includeCoins ? "xu và " : ""}kho quà của ${st.name}!`, `Confiscated all ${includeCoins ? "coins and " : ""}items from ${st.name}!`)
+        : tx(`Đã tịch thu toàn bộ kho quà (chờ đồng bộ).`, `Confiscated all items (sync pending).`),
+      saved ? "success" : "warning"
+    );
   };
 
   const handleAddSchedule = () => {
@@ -9374,7 +9938,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const formData = new FormData();
       staged.forEach(item => formData.append("files", item.file));
-      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
+      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", headers: await getAuthHeaders(), body: formData });
       const data = await readApiJson(response);
       if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || "Không thể phân tích batch DOCX.");
       const results = Array.isArray(data?.results) ? data.results : [];
@@ -9454,7 +10018,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const formData = new FormData();
       staged.forEach(item => formData.append("files", item.file));
-      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", body: formData });
+      const response = await fetch(`${getApiBase()}/api/upload_docx_batch`, { method: "POST", headers: await getAuthHeaders(), body: formData });
       const data = await readApiJson(response);
       if (!response.ok && !Array.isArray(data?.results)) throw new Error(data?.error || tx("Không thể phân tích batch DOCX.", "Unable to parse DOCX batch."));
       const results = Array.isArray(data?.results) ? data.results : [];
@@ -9549,7 +10113,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   const parseSupplementDocxFile = async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch(`${getApiBase()}/api/upload_docx_supplement`, {
+    const response = await fetch(`${getApiBase()}/api/upload_docx_supplement`, { headers: await getAuthHeaders(),
       method: "POST",
       body: formData,
     });
@@ -9625,7 +10189,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const formData = new FormData();
       validFiles.forEach((file: any) => formData.append("files", file));
-      const response = await fetch(`${getApiBase()}/api/scan_exam_page`, {
+      const response = await fetch(`${getApiBase()}/api/scan_exam_page`, { headers: await getAuthHeaders(),
         method: "POST",
         body: formData,
       });
@@ -9699,16 +10263,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     { key: "other", labelVi: "Dạng câu hỏi khác", labelEn: "Other Question Types" }
   ];
 
-  const categorizeIeltsQuestionType = (q: any): { key: string; labelVi: string; labelEn: string } => {
-    const raw = `${q?.questionType || ""} ${q?.subType || ""} ${q?.type || ""}`.toLowerCase();
-    if (raw.includes("head")) return CANONICAL_IELTS_TYPES[2];
-    if (raw.includes("true") || raw.includes("false") || raw.includes("not given") || raw.includes("tfng") || raw.includes("yes") || raw.includes("no") || raw.includes("ynng")) return CANONICAL_IELTS_TYPES[1];
-    if (raw.includes("diagram") || raw.includes("map") || raw.includes("flow_chart") || raw.includes("flowchart") || raw.includes("external_diagram")) return CANONICAL_IELTS_TYPES[5];
-    if (raw.includes("summary") || raw.includes("note") || raw.includes("sentence") || raw.includes("table") || raw.includes("form") || raw.includes("completion") || raw.includes("blank")) return CANONICAL_IELTS_TYPES[4];
-    if (raw.includes("match")) return CANONICAL_IELTS_TYPES[3];
-    if (raw.includes("choice") || raw.includes("multiple") || raw.includes("mcq")) return CANONICAL_IELTS_TYPES[0];
-    if (raw.includes("short")) return CANONICAL_IELTS_TYPES[6];
-    return CANONICAL_IELTS_TYPES[7];
+  const categorizeIeltsQuestionType = (q: any, quiz?: any): { key: string; labelVi: string; labelEn: string } => {
+    // Dùng taxonomy chuẩn (inferQuestionCategory) rồi gom về 8 nhóm Error DNA cũ để giữ tương thích cache errorDna.
+    const bucket = toErrorDnaBucket(inferQuestionCategory(q, quiz).id);
+    return CANONICAL_IELTS_TYPES.find(t => t.key === bucket) || CANONICAL_IELTS_TYPES[7];
   };
 
   const triggerErrorDnaAnalysis = async (targetStudent: Student, force = false) => {
@@ -9735,7 +10293,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       summary.groups.forEach((group: any) => {
         const q = group.questions[0];
         if (!q) return;
-        const cat = categorizeIeltsQuestionType(q);
+        const cat = categorizeIeltsQuestionType(q, quiz);
+        const fineCategory = inferQuestionCategory(q, quiz);
         totalQuestionsAnalyzed += group.total;
         typeMap[cat.key].total += group.total;
         typeMap[cat.key].correct += group.score;
@@ -9746,8 +10305,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const correctStr = String(q.correctAnswer ?? q.correct ?? (Array.isArray(q.answers) ? q.answers.join(" / ") : "N/A"));
           recentMistakes.push({
             quizTitle: quiz.title || r.quizTitle || "Exam",
-            skill: (quiz as any).skill || (String(quiz.type).toUpperCase().includes("LISTEN") ? "Listening" : "Reading"),
-            questionType: cat.labelEn,
+            skill: quizTaxonomySkill(quiz),
+            questionType: fineCategory.label,
             subType: q.subType || q.type || "",
             questionText: String(q.question || q.text || q.prompt || "").slice(0, 160),
             studentAnswer: studentAnsStr.slice(0, 100),
@@ -9782,7 +10341,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     try {
       const res = await fetch("/api/analyze_error_dna", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           studentName: targetStudent.name || "Student",
           targetBand: targetStudent.target || "7.0",
@@ -9836,6 +10395,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               ...targetQuiz,
               id: targetQuiz.id || getTrueTime().toString()
           }))), getDeliveryMode(targetQuiz));
+          setExamBuilderSaveState("saving");
           try {
           const persisted = await persistQuizWithRevision(qz as Quiz);
           const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
@@ -9843,12 +10403,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (existingIndex !== -1) updated[existingIndex] = persisted;
           else updated.unshift(persisted);
           setQuizCatalogState(updated);
-          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
+          setExamBuilderSaveState("saved");
+          showSaveToast(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`), "success");
           return true;
           } catch (error: any) {
+          setExamBuilderSaveState("error");
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              showSaveToast(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại trước khi lưu.', 'This exam was modified elsewhere. Please reload before saving.'), "error");
               alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
+              showSaveToast(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`), "error");
               alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
@@ -9870,6 +10434,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               id: currentSnapshot.id || getTrueTime().toString()
           }))), getDeliveryMode(currentSnapshot));
 
+          setExamBuilderSaveState("saving");
           try {
           const persisted = await persistQuizWithRevision(qz as Quiz);
           const existingIndex = quizzesRef.current.findIndex(q => q.id === persisted.id);
@@ -9877,14 +10442,20 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           if (existingIndex !== -1) updated[existingIndex] = persisted;
           else updated.unshift(persisted);
           setQuizCatalogState(updated);
+          editingQuizBaselineRef.current = null;
+          setExamEditorDirty(false);
+          setExamBuilderSaveState("saved");
           setEditingQuiz(null);
           localStorage.removeItem('ielts_exam_draft');
-          alert(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`));
+          showSaveToast(tx(`Đã lưu và đồng bộ đề "${qz.title}" thành công!`, `Exam "${qz.title}" saved and synced successfully!`), "success");
           return true;
           } catch (error: any) {
+          setExamBuilderSaveState("error");
           if (String(error?.message || error).includes('QUIZ_REVISION_CONFLICT')) {
+              showSaveToast(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại trước khi lưu.', 'This exam was modified elsewhere. Please reload before saving.'), "error");
               alert(tx('Đề này vừa được thay đổi ở nơi khác. Hãy tải lại danh sách trước khi lưu để tránh ghi đè chế độ hoặc trạng thái publish mới hơn.', 'This exam was modified elsewhere. Please reload the list before saving to avoid overwriting newer changes.'));
           } else {
+              showSaveToast(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`), "error");
               alert(tx(`Chưa thể đồng bộ đề "${qz.title}" lên máy chủ.`, `Could not sync exam "${qz.title}" to server.`));
           }
           return false;
@@ -10054,21 +10625,34 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     } catch (error) {}
   };
   const saveRealExamPackage = async (pkg: RealExamPackage) => {
-    const nextPkg: RealExamPackage = {
-      ...pkg,
-      id: pkg.id || makeRealExamId(),
-      title: String(pkg.title || "Real exam package").trim(),
-      quizIds: (pkg.quizIds || []).filter(Boolean),
-      mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
-      maxAttempts: Math.max(1, Number(pkg.maxAttempts) || 1),
-      updatedAt: Date.now(),
-      createdAt: pkg.createdAt || Date.now(),
-    };
-    const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
-    setRealExamPackages(nx);
-    const saved = await syncData({ realExamPackages: nx });
-    if (!saved) alert(tx("Chưa đồng bộ được gói bài thi thật. Dữ liệu vẫn đang giữ trên thiết bị này.", "Failed to sync real exam package. Data is safely stored on this device."));
-    return saved;
+    if (realExamPkgSaving) return false;
+    setRealExamPkgSaving(true);
+    try {
+      const nextPkg: RealExamPackage = {
+        ...pkg,
+        id: pkg.id || makeRealExamId(),
+        title: String(pkg.title || "Real exam package").trim(),
+        quizIds: (pkg.quizIds || []).filter(Boolean),
+        mode: (pkg.quizIds || []).length >= 3 ? "LRW" : "LR",
+        maxAttempts: Math.max(1, Number(pkg.maxAttempts) || 1),
+        updatedAt: Date.now(),
+        createdAt: pkg.createdAt || Date.now(),
+      };
+      const nx = [nextPkg, ...realExamPackages.filter(item => item.id !== nextPkg.id)];
+      setRealExamPackages(nx);
+      const saved = await syncData({ realExamPackages: nx });
+      realExamPkgBaselineRef.current = null;
+      setRealExamPkgDirty(false);
+      showSaveToast(
+        saved
+          ? tx(`Đã lưu gói thi thật "${nextPkg.title}" thành công!`, `Real exam package "${nextPkg.title}" saved successfully!`)
+          : tx("Chưa đồng bộ được gói bài thi thật lên máy chủ. Dữ liệu vẫn giữ trên thiết bị này.", "Failed to sync real exam package. Data is safely stored on this device."),
+        saved ? "success" : "warning"
+      );
+      return saved;
+    } finally {
+      setRealExamPkgSaving(false);
+    }
   };
   const createRealExamPackageFromSelection = async () => {
     const selected = selectedQuizzes.map(id => quizzesRef.current.find(quiz => quiz.id === id)).filter(Boolean) as Quiz[];
@@ -11148,6 +11732,58 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     forceSubmitExam();
   };
 
+  const exitPracticeExamWithoutSaving = () => {
+    const state = latestExamState.current;
+    const exam = state.activeExam || activeExam;
+    if (!exam) return;
+    const confirmed = window.confirm(
+      tx(
+        "Bạn có chắc chắn muốn thoát khỏi bài luyện tập này không?\nTiến độ và kết quả hiện tại sẽ KHÔNG được lưu.",
+        "Are you sure you want to exit this practice test?\nYour current progress and results will NOT be saved."
+      )
+    );
+    if (!confirmed) return;
+    if (examTimerRef.current) window.clearInterval(examTimerRef.current);
+    if (writingAutosaveTimerRef.current) window.clearTimeout(writingAutosaveTimerRef.current);
+    pauseExamAudioPlayback();
+    const questContext = exam.questContext;
+    const writingExam = isWritingQuiz(exam);
+    localStorage.removeItem(`ielts_os_exam_state_${currentUser?.email}`);
+    if (writingExam && writingAttemptIdRef.current) {
+      const attemptId = writingAttemptIdRef.current;
+      try {
+        localStorage.removeItem(writingLocalDraftKey(exam, attemptId));
+        localStorage.removeItem(`ielts_writing_active_${String(currentUser?.email || "").toLowerCase()}_${exam.id}`);
+      } catch {}
+      if (currentUser?.email && navigator.onLine) {
+        void deleteDoc(doc(WRITING_DRAFTS_COLLECTION_REF, writingDraftKey(currentUser.email, exam.id, attemptId))).catch(() => {});
+      }
+      writingAttemptIdRef.current = "";
+    }
+    writingSubmittingRef.current = false;
+    if (!state.isPreview) {
+      setLiveSessions(prev => {
+        const nx = prev.filter(x => x.id !== (currentUser?.email || "unknown"));
+        syncLiveArena(nx);
+        return nx;
+      });
+    }
+    _setAudioTested(false);
+    setActiveExam(null);
+    setGracePeriod(null);
+    setHardLocked(false);
+    setExamAnswers({});
+    setFlaggedQuestions([]);
+    setScratchpadText("");
+    setQNotes({});
+    if (questContext) {
+      setPortalTab("quests");
+      setSelectedQuestAssignmentId(questContext.topicAssignmentId);
+      setSelectedQuestNode({ assignmentId: questContext.topicAssignmentId, nodeId: questContext.nodeId });
+    }
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  };
+
   const handleBulkDeleteHistory = () => {
       if(!confirm(`Delete ${selectedSessions.length} selected sessions?`)) return;
       const nx = history.filter(h => !selectedSessions.includes(h.id.toString()));
@@ -11234,11 +11870,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       const saved = await syncData({ giftCatalog: nextGifts, rewardMechanisms: nextRewards });
       if (!saved) {
         setRewardConfigError(tx("Chưa lưu được. Bản chỉnh sửa vẫn ở thiết bị này và sẽ tự thử lại khi có mạng.", "Could not save. Changes remain on this device and will retry when online."));
+        showSaveToast(tx("Chưa đồng bộ được cấu hình quà lên máy chủ. Bản lưu vẫn giữ trên thiết bị.", "Could not sync reward config to server. Kept locally."), "warning");
         return;
       }
       setGiftCatalog(nextGifts);
       setRewardMechanisms(nextRewards);
       setRewardConfigDirty(false);
+      showSaveToast(tx("Đã lưu cấu hình Quà tặng & Cơ chế thưởng thành công!", "Gift catalog & reward rules saved successfully!"), "success");
     } finally {
       setRewardConfigSaving(false);
     }
@@ -12046,6 +12684,52 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       })}
       <div style={{ position: 'absolute', top: '32%', left: 0, right: 0, textAlign: 'center', fontSize: 72, animation: 'celebPop 1.6s ease forwards' }}><Ico name="sparkles" size={64} /></div>
     </div>
+  ) : null;
+
+  const saveToastOverlay = (uiSaveToast && typeof document !== "undefined") ? createPortal(
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        top: 18,
+        right: 18,
+        zIndex: 2147483001,
+        maxWidth: "min(420px, calc(100vw - 36px))",
+        background: uiSaveToast.kind === "error" ? "#FEF2F2" : uiSaveToast.kind === "warning" ? "#FFFBEB" : "#ECFDF5",
+        color: uiSaveToast.kind === "error" ? "#991B1B" : uiSaveToast.kind === "warning" ? "#92400E" : "#065F46",
+        border: `1.5px solid ${uiSaveToast.kind === "error" ? "#FCA5A5" : uiSaveToast.kind === "warning" ? "#FCD34D" : "#6EE7B7"}`,
+        borderRadius: 14,
+        padding: "12px 16px",
+        boxShadow: "0 16px 36px -8px rgba(15, 23, 42, 0.22)",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        fontFamily: "var(--sans), system-ui, sans-serif",
+        fontSize: 13.5,
+        fontWeight: 700,
+      }}
+    >
+      <span style={{ display: "inline-flex", flexShrink: 0 }}>
+        {uiSaveToast.kind === "error" ? (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        ) : uiSaveToast.kind === "warning" ? (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        ) : (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        )}
+      </span>
+      <span style={{ flex: 1, lineHeight: 1.4 }}>{uiSaveToast.message}</span>
+      <button
+        type="button"
+        onClick={() => setUiSaveToast(null)}
+        style={{ background: "transparent", border: "none", color: "inherit", opacity: 0.7, padding: 4, cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+        aria-label={tx("Đóng thông báo", "Dismiss")}
+      >
+        ✕
+      </button>
+    </div>,
+    document.body
   ) : null;
 
   const persistentAudioNode = (!reviewQuiz && preloadOrActiveAudioUrl && typeof document !== "undefined") ? (
@@ -14042,25 +14726,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       >
                           <span>Tổng quan</span>
                       </button>
-                      {rvSections.map((sec: any, idx: number) => {
-                          const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === idx)) : rvAllQuestions;
-                          const secCorrect = secQs.filter((q: any) => rvQuestionStatus(q) === "correct").length;
-                          const label = rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`;
-                          return (
-                              <button
-                                  key={idx}
-                                  type="button"
-                                  className={`rv-tab-pill ${!rvIsOverview && rvActiveIdx === idx ? "is-active" : ""}`}
-                                  onClick={() => {
-                                      setReviewSectionIdx(idx);
-                                      setReviewActiveQuestionId(null);
-                                  }}
-                              >
-                                  <span>{label}</span>
-                                  <span className="rv-tab-count">({secCorrect}/{secQs.length})</span>
-                              </button>
-                          );
-                      })}
+                      <button
+                          type="button"
+                          className={`rv-tab-pill ${!rvIsOverview ? "is-active" : ""}`}
+                          onClick={() => {
+                              if (rvIsOverview) setReviewSectionIdx(0);
+                              setReviewActiveQuestionId(null);
+                          }}
+                      >
+                          <span>Chi tiết</span>
+                      </button>
                   </nav>
 
                   {/* Right Actions */}
@@ -14377,7 +15052,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           const typeBuckets: Record<string, { score: number; total: number }> = {};
                                           rvScoreSummary.groups.forEach((group: any) => {
                                               const q = group.questions[0];
-                                              const rawLabel = q?.subType || (q?.type === "CHOICE" || q?.type === "CHOICE_MULTIPLE" ? "Multiple Choice" : q?.type === "MATCHING" ? "Matching" : q?.type === "TFNG" ? "True / False / Not Given" : q?.type === "YNNG" ? "Yes / No / Not Given" : "Note / Form / Table Completion");
+                                              const rawLabel = inferQuestionCategory(q, reviewQuiz.quiz).label;
                                               if (!typeBuckets[rawLabel]) typeBuckets[rawLabel] = { score: 0, total: 0 };
                                               typeBuckets[rawLabel].score += group.score;
                                               typeBuckets[rawLabel].total += group.total;
@@ -15016,10 +15691,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       if (rvFilterWrongOnly && qStatus === "correct") return null;
 
                                       const cGrp = rvContiguousGroupByQId.get(q.id);
-                                      const groupOptions = (cGrp?.options && cGrp.options.length)
-                                          ? cGrp.options
-                                          : (Array.isArray(q.options) ? q.options : []);
-                                      const qWithOpts = groupOptions.length && (!Array.isArray(q.options) || !q.options.length)
+                                      const ownOptions = Array.isArray(q.options) && q.options.length > 0 ? q.options : [];
+                                      const sharedGroupOptions = (cGrp?.options && cGrp.options.length > 0) ? cGrp.options : [];
+                                      const groupOptions = ownOptions.length > 0 ? ownOptions : sharedGroupOptions;
+                                      const qWithOpts = groupOptions.length > 0 && ownOptions.length === 0
                                           ? { ...q, options: groupOptions }
                                           : q;
 
@@ -15181,29 +15856,95 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                           </div>
                       </div>
 
-                      {/* BOTTOM QUESTION PALETTE */}
-                      <footer className="rv-footer-palette">
+                      {/* BOTTOM QUESTION PALETTE (Exam Room Mechanism) */}
+                      <footer className="rv-footer-palette" style={{ height: 48, gap: 20 }}>
                           {rvSections.map((sec: any, sIdx: number) => {
                               const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === sIdx)) : rvAllQuestions;
-                              const label = rvUsePartLabels ? `P${sIdx + 1}` : `Pass ${sIdx + 1}`;
+                              const secCorrect = secQs.filter((q: any) => rvQuestionStatus(q) === "correct").length;
+                              const isActive = rvActiveIdx === sIdx;
+                              const label = rvUsePartLabels ? `Part ${sIdx + 1}` : `Passage ${sIdx + 1}`;
+                              const allCorrect = secQs.length > 0 && secCorrect === secQs.length;
+                              const pct = secQs.length ? Math.round((secCorrect / secQs.length) * 100) : 0;
+                              const switchSection = () => {
+                                  setReviewSectionIdx(sIdx);
+                                  setReviewActiveQuestionId(null);
+                                  const rightPane = document.querySelector(".rv-pane-right");
+                                  if (rightPane) rightPane.scrollTop = 0;
+                                  const leftPane = document.querySelector(".rv-pane-left-scroll");
+                                  if (leftPane) leftPane.scrollTop = 0;
+                              };
                               return (
-                                  <div key={sIdx} style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                      <span style={{ fontSize: 11, fontWeight: 800, color: "#78716C", marginRight: 2 }}>{label}:</span>
-                                      {secQs.map((q: any) => {
-                                          const qNum = rvQuestionNumber(q);
-                                          const st = rvQuestionStatus(q);
-                                          return (
-                                              <button
-                                                  key={q.id}
-                                                  type="button"
-                                                  className={`rv-palette-btn ${st}`}
-                                                  onClick={() => rvJumpToQuestionFromMatrix(q, qNum)}
-                                                  title={`Câu ${qNum}`}
-                                              >
-                                                  {qNum}
-                                              </button>
-                                          );
-                                      })}
+                                  <div
+                                      key={sIdx}
+                                      onClick={!isActive ? switchSection : undefined}
+                                      style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 10,
+                                          flexShrink: 0,
+                                          cursor: !isActive ? "pointer" : "default",
+                                          padding: "4px 6px",
+                                          borderRadius: 6,
+                                      }}
+                                  >
+                                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 4, flexShrink: 0 }}>
+                                          <div style={{ height: 3, width: "100%", minWidth: 42, background: "#E6DFD3", borderRadius: 2, overflow: "hidden" }}>
+                                              <div style={{ height: "100%", width: `${pct}%`, background: allCorrect ? "#16A34A" : "#1C1917", transition: "width .25s ease" }} />
+                                          </div>
+                                          <button
+                                              type="button"
+                                              onClick={switchSection}
+                                              style={{
+                                                  border: "none",
+                                                  background: "transparent",
+                                                  padding: 0,
+                                                  fontSize: 13,
+                                                  fontWeight: isActive ? 800 : 600,
+                                                  color: isActive ? "#1C1917" : "#57534E",
+                                                  cursor: "pointer",
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  gap: 5,
+                                                  whiteSpace: "nowrap",
+                                              }}
+                                          >
+                                              {allCorrect && (
+                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                                      <polyline points="20 6 9 17 4 12" />
+                                                  </svg>
+                                              )}
+                                              <span>{label}</span>
+                                          </button>
+                                      </div>
+                                      {isActive ? (
+                                          <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                              {secQs.map((q: any) => {
+                                                  const qNum = rvQuestionNumber(q);
+                                                  const st = rvQuestionStatus(q);
+                                                  const isCur = reviewActiveQuestionId === q.id;
+                                                  return (
+                                                      <button
+                                                          key={q.id}
+                                                          type="button"
+                                                          className={`rv-palette-btn ${st}`}
+                                                          style={isCur ? { outline: "2px solid #1C1917", outlineOffset: 1 } : undefined}
+                                                          onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              rvJumpToQuestionFromMatrix(q, qNum);
+                                                          }}
+                                                          title={`Câu ${qNum}`}
+                                                      >
+                                                          {qNum}
+                                                      </button>
+                                                  );
+                                              })}
+                                          </div>
+                                      ) : (
+                                          <span style={{ fontSize: 12, color: "#78716C", whiteSpace: "nowrap" }}>
+                                              {secCorrect} of {secQs.length}
+                                          </span>
+                                      )}
                                   </div>
                               );
                           })}
@@ -16737,6 +17478,31 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               <button onClick={() => { setActiveExam(null); setIsPreview(false); if (document.fullscreenElement) document.exitFullscreen().catch(()=>{}); }}
                                   style={{background: 'var(--etext)', color: 'var(--ebg)', padding: '6px 16px', fontSize: 13, fontWeight: 700, borderRadius: 3, border: 'none', cursor: 'pointer'}}>
                                   {userRole === "STUDENT" ? "EXIT TEST UI" : "EXIT PREVIEW"}
+                              </button>
+                          )}
+
+                          {/* Practice Exit ("Quay lại" without saving) */}
+                          {!isPreview && !activeExam.realExamContext && (activeExam.questContext ? activeExam.practiceMode === true : (isPracticeQuiz(activeExam) || activeExam.practiceMode === true || (activeExam as any).deliveryMode === "practice" || Number(activeExam.maxAttempts) >= 99)) && (
+                              <button
+                                  type="button"
+                                  onClick={exitPracticeExamWithoutSaving}
+                                  title={tx("Thoát bài luyện tập (không lưu kết quả)", "Exit practice without saving")}
+                                  style={{
+                                      background: '#fef3f2',
+                                      color: '#b42318',
+                                      border: '1px solid #fecdca',
+                                      padding: '6px 14px',
+                                      fontSize: 13,
+                                      fontWeight: 700,
+                                      borderRadius: 6,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 6,
+                                  }}
+                              >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+                                  <span>{tx("Quay lại", "Back")}</span>
                               </button>
                           )}
 
@@ -19284,9 +20050,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       if (q.audience === "SPECIFIC" && !(q.targetStudentIds || []).includes(me.id)) return false;
       return true;
     });
-    const quizSkill = (quiz: Quiz | undefined) => isWritingQuiz(quiz) ? "Writing" as const : String(quiz?.type || "").toLowerCase().includes("listen") ? "Listening" as const : "Reading" as const;
-    const activeQuizzesForSkill = activeQuizzes.filter(quiz => quizSkill(quiz) === studentExamSkillTab);
+    const quizSkill = (quiz: Quiz | undefined): TaxonomySkill => quizTaxonomySkill(quiz);
+    const rawQuizzesForSkill = activeQuizzes.filter(quiz => quizSkill(quiz) === studentExamSkillTab);
+    const activeQuizzesForSkill = rawQuizzesForSkill.filter(quiz => {
+      if (stSelectedCategories.length === 0) return true;
+      const breakdown = getQuizCategoryBreakdown(quiz);
+      const quizCategoryIds = new Set(breakdown.map(b => b.categoryId));
+      if (stCategoryMatchMode === "ALL") {
+        return stSelectedCategories.every(id => quizCategoryIds.has(id));
+      }
+      return stSelectedCategories.some(id => quizCategoryIds.has(id));
+    });
     const resultsForSkill = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
+    const categoryQuizCounts: Record<string, number> = {};
+    rawQuizzesForSkill.forEach(quiz => {
+      const breakdown = getQuizCategoryBreakdown(quiz);
+      breakdown.forEach(b => {
+        categoryQuizCounts[b.categoryId] = (categoryQuizCounts[b.categoryId] || 0) + 1;
+      });
+    });
 
     type QuizVolClassification = {
       isVolSeries: boolean;
@@ -19688,6 +20470,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </div>
         )}
         {confettiOverlay}
+        {saveToastOverlay}
 
         {/* MÀN HÌNH NHẮC NỢ BẠO CHÚA */}
         {showDebtWarning && (
@@ -19847,13 +20630,65 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       <div style={{flex: 1, overflowY: 'auto', display: 'grid', gap: 10}}>
                           {invTab === "CONSUMABLE" && Object.entries(me.inventory?.consumables || {}).map(([name, count]) => (
                               <div key={name} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${C.border}`}}>
-                                  <div><div style={{fontWeight: 900}}>{formatCosmeticDisplayName(name)}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
+                                  <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+                                      <span style={{width: 40, height: 40, borderRadius: 10, background: `${C.accent}12`, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}>{renderGiftStoreIcon(name, 24, C.accent)}</span>
+                                      <div><div style={{fontWeight: 900}}>{formatCosmeticDisplayName(name)}</div><div style={{fontSize: 12, color: C.sub}}>{t('quantity_label')}: {count as number}</div></div>
+                                  </div>
                                   <button onClick={() => handleUseItem(name)} style={{background: C.succ, color: '#fff', padding: '8px 16px'}}>{t('use_now')}</button>
                               </div>
                           ))}
                           {invTab === "CONSUMABLE" && Object.keys(me.inventory?.consumables || {}).length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub}}>{t('inventory_empty_consumable')}</div>}
                           
-                         {invTab === "PERMANENT" && (Array.isArray(me.inventory?.permanents) ? me.inventory!.permanents : []).map((id: string) => {
+                         {invTab === "PERMANENT" && (() => {
+    const allPerms: string[] = Array.isArray(me.inventory?.permanents) ? me.inventory!.permanents.map(String) : [];
+    const counts = {
+      ALL: allPerms.length,
+      FRAME: allPerms.filter(x => getPermanentItemCategory(x) === "FRAME").length,
+      TITLE: allPerms.filter(x => getPermanentItemCategory(x) === "TITLE").length,
+      PET: allPerms.filter(x => getPermanentItemCategory(x) === "PET").length,
+      THEME: allPerms.filter(x => getPermanentItemCategory(x) === "THEME").length,
+      OTHER: allPerms.filter(x => getPermanentItemCategory(x) === "OTHER").length,
+    };
+    const catMeta: Array<{ key: "ALL" | "FRAME" | "TITLE" | "PET" | "THEME" | "OTHER"; label: string }> = [
+      { key: "ALL", label: tx("Tất cả", "All") },
+      { key: "FRAME", label: tx("Khung Avatar", "Avatar Frames") },
+      { key: "TITLE", label: tx("Danh hiệu", "Titles") },
+      { key: "PET", label: tx("Linh thú", "Pets") },
+      { key: "THEME", label: tx("Giao diện", "Themes") },
+      { key: "OTHER", label: tx("Khác", "Others") },
+    ];
+    return (
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6, paddingBottom: 8, borderBottom: `1px dashed ${C.border}` }}>
+        {catMeta.map(cat => {
+          const active = invPermCategory === cat.key;
+          return (
+            <button
+              key={cat.key}
+              type="button"
+              onClick={() => setInvPermCategory(cat.key)}
+              style={{
+                padding: '6px 11px',
+                borderRadius: 20,
+                fontSize: 12,
+                fontWeight: active ? 800 : 600,
+                background: active ? C.accent : C.card,
+                color: active ? '#fff' : C.text,
+                border: `1px solid ${active ? C.accent : C.border}`,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <span>{cat.label}</span>
+              <span style={{ fontSize: 10.5, opacity: active ? 0.9 : 0.65, background: active ? 'rgba(255,255,255,0.22)' : C.bg, padding: '1px 6px', borderRadius: 10 }}>{counts[cat.key]}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  })()}
+                         {invTab === "PERMANENT" && (Array.isArray(me.inventory?.permanents) ? me.inventory!.permanents : []).filter((id: string) => invPermCategory === "ALL" || getPermanentItemCategory(String(id)) === invPermCategory).map((id: string) => {
     const safeName = String(id);
     const isEquipped = (me.inventory?.equippedTheme === safeName
         || me.inventory?.equippedFrame === safeName
@@ -19869,7 +20704,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         ? <span style={{ position: 'relative', width: 32, height: 32, flexShrink: 0, display: 'inline-block' }}>{renderFrameArt(safeName, 32, 'inv')}</span>
         : _isPet
         ? <span style={{ width: 32, height: 32, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{renderPetArt(safeName, 32, 'inv')}</span>
-        : <Ico name="trophy" size={18} color={C.warn} />;
+        : <span style={{ width: 32, height: 32, borderRadius: 8, background: `${C.warn}14`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{renderGiftStoreIcon(safeName, 20, C.warn)}</span>;
     return (
     <div key={safeName} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 15, background: C.card, borderRadius: 8, border: `1px solid ${isEquipped ? C.succ : C.border}`}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth: 0}}>
@@ -20149,7 +20984,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   {consumableGiftCatalog.filter(gift => gift.enabled).map(gift => (
                     <div key={gift.id} style={{background: C.bg, padding: 20, borderRadius: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 16}}>
                       <div>
-                        <Ico name="gift" size={26} color={C.warn} style={{marginBottom: 8}} />
+                        <div style={{ width: 48, height: 48, borderRadius: 14, background: `${C.accent}10`, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+                          {renderGiftStoreIcon(gift.name, 28, C.accent)}
+                        </div>
                         <div style={{fontWeight: 800, fontSize: 16}}>{gift.name}</div>
                         {gift.details && <div style={{fontSize: 13, color: C.sub, marginTop: 4}}>{gift.details}</div>}
                       </div>
@@ -20399,7 +21236,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   </h3>
                   {/* SKILL FILTER PILLS */}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {(['All', 'Listening', 'Reading', 'Writing'] as const).map(sk => {
+                    {(['All', 'Listening', 'Reading', 'Writing', 'Integrated'] as const).map(sk => {
                       const active = progressSkillFilter === sk;
                       return (
                         <button
@@ -20442,7 +21279,152 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           </div>
           {questStatusNotice && <div style={{ marginBottom: 16, padding: '11px 13px', border: `1px solid ${C.accent}55`, borderLeft: `3px solid ${C.accent}`, background: `${C.accent}0d`, color: C.text, fontSize: 13, lineHeight: 1.5, borderRadius: 7, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}><span>{questStatusText(questStatusNotice)}</span><button onClick={() => setQuestStatusNotice(null)} style={{ border: 'none', background: 'transparent', color: C.sub, cursor: 'pointer', padding: 0 }}><Ico name="x" size={15} /></button></div>}
           <div style={{ display: 'grid', gap: 16 }}>
-            {myTopicAssignments.map(assignment => {
+            {(() => {
+              if (!myTopicAssignments.length) return null;
+              const filteredQuests = myTopicAssignments.filter(a => {
+                const q = questSearchFilter.trim().toLowerCase();
+                if (q && !a.title.toLowerCase().includes(q) && !String(a.topicCategory || '').toLowerCase().includes(q)) return false;
+                if (questStateFilter !== "ALL") {
+                  const prog = getMyQuestProgress(a);
+                  const isDone = a.nodes.length > 0 && prog.completedNodeIds.length >= a.nodes.length;
+                  if (questStateFilter === "COMPLETED" && !isDone) return false;
+                  if (questStateFilter === "IN_PROGRESS" && isDone) return false;
+                }
+                return true;
+              });
+              const activeAssignment = filteredQuests.find(a => a.id === selectedQuestAssignmentId)
+                || filteredQuests.find(a => {
+                  const prog = getMyQuestProgress(a);
+                  return prog.completedNodeIds.length < a.nodes.length;
+                })
+                || filteredQuests[0]
+                || null;
+
+              return (
+                <>
+                  {/* QUEST SELECTOR DECK (Compact selector instead of infinite vertical stack) */}
+                  <div className="card" style={{ padding: '16px 18px', border: `1px solid ${C.border}`, borderRadius: 12, background: C.card }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.6, color: C.sub }}>
+                          {questTx(`Danh sách chuyên đề (${filteredQuests.length}/${myTopicAssignments.length})`, `Quest Catalog (${filteredQuests.length}/${myTopicAssignments.length})`)}
+                        </span>
+                        <div style={{ display: 'inline-flex', background: C.bg, padding: 3, borderRadius: 8, border: `1px solid ${C.border}`, gap: 2 }}>
+                          {([
+                            { id: "ALL", label: questTx("Tất cả", "All") },
+                            { id: "IN_PROGRESS", label: questTx("Đang học", "In Progress") },
+                            { id: "COMPLETED", label: questTx("Hoàn thành", "Completed") },
+                          ] as const).map(tab => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              onClick={() => setQuestStateFilter(tab.id)}
+                              style={{
+                                padding: '4px 10px',
+                                fontSize: 11.5,
+                                fontWeight: questStateFilter === tab.id ? 800 : 600,
+                                borderRadius: 6,
+                                border: 'none',
+                                background: questStateFilter === tab.id ? C.card : 'transparent',
+                                color: questStateFilter === tab.id ? C.accent : C.sub,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {myTopicAssignments.length > 2 && (
+                        <input
+                          value={questSearchFilter}
+                          onChange={(e: any) => setQuestSearchFilter(e.target.value)}
+                          placeholder={questTx("Tìm tên chuyên đề hoặc kỹ năng...", "Search quest or topic...")}
+                          style={{ maxWidth: 260, padding: '7px 12px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg }}
+                        />
+                      )}
+                    </div>
+
+                    {filteredQuests.length === 0 ? (
+                      <div style={{ padding: '18px 12px', textAlign: 'center', color: C.sub, fontSize: 13 }}>
+                        {questTx("Không có chuyên đề nào khớp bộ lọc hiện tại.", "No quests match the current filter.")}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 10, maxHeight: 230, overflowY: 'auto', paddingRight: 2 }}>
+                        {filteredQuests.map((item, idx) => {
+                          const prog = getMyQuestProgress(item);
+                          const totalSteps = item.nodes.length || 1;
+                          const passedSteps = prog.completedNodeIds.length;
+                          const pct = Math.min(100, Math.round((passedSteps / totalSteps) * 100));
+                          const isSelected = activeAssignment?.id === item.id;
+                          const isDone = passedSteps >= item.nodes.length && item.nodes.length > 0;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedQuestAssignmentId(item.id);
+                                setSelectedQuestNode(null);
+                              }}
+                              style={{
+                                textAlign: 'left',
+                                padding: '11px 13px',
+                                borderRadius: 10,
+                                border: isSelected ? `2px solid ${C.accent}` : `1px solid ${C.border}`,
+                                background: isSelected ? `${C.accent}0c` : C.bg,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                transition: 'all .15s ease',
+                              }}
+                            >
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 900, color: isDone ? C.succ : C.accent, background: isDone ? `${C.succ}15` : `${C.accent}15`, padding: '2px 7px', borderRadius: 5, maxWidth: '75%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {item.topicCategory || `Quest #${idx + 1}`}
+                                  </span>
+                                  <span style={{ fontSize: 11, fontWeight: 900, fontFamily: 'var(--mono)', color: isDone ? C.succ : C.text }}>
+                                    {passedSteps}/{item.nodes.length}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text, lineHeight: 1.3, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                  {item.title}
+                                </div>
+                              </div>
+                              <div style={{ width: '100%' }}>
+                                <div style={{ height: 5, background: 'rgba(0,0,0,0.07)', borderRadius: 99, overflow: 'hidden' }}>
+                                  <div style={{ width: `${pct}%`, height: '100%', background: isDone ? C.succ : C.accent, borderRadius: 99 }} />
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+            {myTopicAssignments.filter(assignment => {
+              const q = questSearchFilter.trim().toLowerCase();
+              if (q && !assignment.title.toLowerCase().includes(q) && !String(assignment.topicCategory || '').toLowerCase().includes(q)) return false;
+              if (questStateFilter !== "ALL") {
+                const prog = getMyQuestProgress(assignment);
+                const isDone = assignment.nodes.length > 0 && prog.completedNodeIds.length >= assignment.nodes.length;
+                if (questStateFilter === "COMPLETED" && !isDone) return false;
+                if (questStateFilter === "IN_PROGRESS" && isDone) return false;
+              }
+              return true;
+            }).filter((assignment, idx, arr) => {
+              if (selectedQuestAssignmentId && arr.some(a => a.id === selectedQuestAssignmentId)) {
+                return assignment.id === selectedQuestAssignmentId;
+              }
+              const firstInProgress = arr.find(a => getMyQuestProgress(a).completedNodeIds.length < a.nodes.length);
+              if (firstInProgress) return assignment.id === firstInProgress.id;
+              return idx === 0;
+            }).map(assignment => {
               const progress = getMyQuestProgress(assignment);
               const totalQuestQuestions = assignment.nodes.reduce((sum, node) => sum + Math.max(0, Number(node.questionCount) || 0), 0);
               const correctAnswerCount = Math.min(Math.max(0, Number(progress.totalAccumulatedScore) || 0), totalQuestQuestions || Number(progress.totalAccumulatedScore) || 0);
@@ -20582,7 +21564,170 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10}}>
                 <h3 style={{marginTop: 0, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="monitor" size={18} color={C.accent} /> {t('test_room_title')}</h3>
                 {examRoomTab === "available" && (
-                  <input placeholder={t('filter_quizzes')} value={stQuizSearch} onChange={(e: any)=>setStQuizSearch(e.target.value)} style={{minWidth: 180, padding: '6px 12px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text}} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                    <input
+                      placeholder={t('filter_quizzes')}
+                      value={stQuizSearch}
+                      onChange={(e: any) => setStQuizSearch(e.target.value)}
+                      style={{ minWidth: 170, padding: '6px 12px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setStFilterPopoverOpen(prev => !prev)}
+                      style={{
+                        height: 32,
+                        padding: '0 10px',
+                        borderRadius: 7,
+                        border: `1px solid ${stSelectedCategories.length ? C.accent : C.border}`,
+                        background: stSelectedCategories.length ? `${C.accent}12` : C.card,
+                        color: stSelectedCategories.length ? C.accent : C.sub,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        transition: 'all 0.15s ease',
+                      }}
+                      title={tx("Lọc theo dạng bài", "Filter by question category")}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                      </svg>
+                      <span>{tx("Dạng bài", "Category")}</span>
+                      {stSelectedCategories.length > 0 && (
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 900,
+                          background: C.accent,
+                          color: '#fff',
+                          borderRadius: 9,
+                          padding: '0 5px',
+                          lineHeight: '16px',
+                          minWidth: 16,
+                          textAlign: 'center',
+                        }}>
+                          {stSelectedCategories.length}
+                        </span>
+                      )}
+                    </button>
+
+                    {/* Multi-Select Category Popover */}
+                    {stFilterPopoverOpen && (
+                      <>
+                        <div
+                          onClick={() => setStFilterPopoverOpen(false)}
+                          style={{ position: 'fixed', inset: 0, zIndex: 59 }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 6px)',
+                            right: 0,
+                            width: 290,
+                            maxHeight: 380,
+                            background: C.card,
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 10,
+                            boxShadow: '0 10px 30px rgba(0,0,0,0.12)',
+                            zIndex: 60,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          <div style={{
+                            padding: '10px 14px',
+                            borderBottom: `1px solid ${C.border}`,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            background: C.bg,
+                          }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>
+                              {tx(`Lọc dạng bài (${studentExamSkillTab})`, `Filter Category (${studentExamSkillTab})`)}
+                            </div>
+                            {stSelectedCategories.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setStSelectedCategories([])}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: C.accent,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                }}
+                              >
+                                {tx("Xóa lọc", "Clear")}
+                              </button>
+                            )}
+                          </div>
+
+                          <div style={{ padding: '8px 10px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {(CANONICAL_TAXONOMY[studentExamSkillTab] || []).map(catItem => {
+                              const isSelected = stSelectedCategories.includes(catItem.id);
+                              const count = categoryQuizCounts[catItem.id] || 0;
+                              return (
+                                <label
+                                  key={catItem.id}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    padding: '6px 8px',
+                                    borderRadius: 6,
+                                    background: isSelected ? `${C.accent}12` : 'transparent',
+                                    cursor: 'pointer',
+                                    fontSize: 12,
+                                    userSelect: 'none',
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => {
+                                        setStSelectedCategories(prev =>
+                                          prev.includes(catItem.id)
+                                            ? prev.filter(id => id !== catItem.id)
+                                            : [...prev, catItem.id]
+                                        );
+                                      }}
+                                      style={{ accentColor: C.accent, cursor: 'pointer' }}
+                                    />
+                                    <span style={{
+                                      color: isSelected ? C.accent : C.text,
+                                      fontWeight: isSelected ? 700 : 500,
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                    }}>
+                                      {catItem.label}
+                                    </span>
+                                  </div>
+                                  <span style={{
+                                    fontSize: 10.5,
+                                    fontWeight: 700,
+                                    color: count > 0 ? C.sub : `${C.sub}60`,
+                                    background: C.bg,
+                                    padding: '1px 6px',
+                                    borderRadius: 4,
+                                    marginLeft: 6,
+                                    flexShrink: 0,
+                                  }}>
+                                    {count}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
             </div>
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
@@ -20600,7 +21745,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               })}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingBottom: 2, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
-              {(["Listening", "Reading", "Writing"] as const).map(skill => {
+              {(["Listening", "Reading", "Writing", "Integrated"] as const).map(skill => {
                 const active = studentExamSkillTab === skill;
                 const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length;
                 const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length;
@@ -20699,6 +21844,39 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   </span>
                                 )}
                             </div>
+                            {(() => {
+                              const breakdown = getQuizCategoryBreakdown(q);
+                              const matched = stSelectedCategories.length > 0
+                                ? breakdown.filter(b => stSelectedCategories.includes(b.categoryId))
+                                : [];
+                              if (stSelectedCategories.length > 0) {
+                                if (matched.length === 0) return null;
+                                return (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+                                    {matched.map(item => (
+                                      <span key={item.categoryId} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 5, background: `${C.accent}12`, color: C.accent, fontWeight: 700, border: `1px solid ${C.accent}30` }}>
+                                        {item.partLabels.join(', ')} · {item.label}
+                                      </span>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              if (breakdown.length === 0) return null;
+                              return (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+                                  {breakdown.slice(0, 3).map(item => (
+                                    <span key={item.categoryId} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 5, color: C.sub, background: C.card, border: `1px solid ${C.border}`, fontWeight: 600 }}>
+                                      {item.partLabels.join(', ')} · {item.label}
+                                    </span>
+                                  ))}
+                                  {breakdown.length > 3 && (
+                                    <span style={{ fontSize: 10.5, padding: '2px 6px', borderRadius: 5, color: C.sub, background: C.card, border: `1px solid ${C.border}`, fontWeight: 600 }}>
+                                      +{breakdown.length - 3}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             <div style={{fontSize: 11, color: isLockedByOtherDevice ? C.warn : (isAvailable ? C.succ : C.err), marginTop: 4, fontWeight: 700}}>
                                 <Ico name="clock" size={14} style={{verticalAlign:'-2px',marginRight:6,display:'inline-block'}} />{isLockedByOtherDevice ? t('locked_other_device') : statusText}
                             </div>
@@ -21090,6 +22268,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "system-ui, sans-serif", transition: "0.2s" }}>
       {globalStyles}
       {confettiOverlay}
+      {saveToastOverlay}
       <nav className="no-print" data-app-unused={String(printBlankSheet)+String(setPrintBlankSheet)+String(builderSectionIndex)+String(setBuilderSectionIndex)} style={{ background: 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(30px)', WebkitBackdropFilter: 'blur(30px)', borderBottom: `1px solid ${C.border}`, padding: isMobile ? "9px 14px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, gap: isMobile ? 10 : 20 }}>
         
         {/* LOGO AREA */}
@@ -21104,7 +22283,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
         <div style={{ flex: 1, display: isMobile ? 'none' : 'flex', justifyContent: 'center', overflow: 'hidden' }}>
             <div className="ios-tabs-container">
               {(["DASHBOARD", "CLASSROOM", "EXAM_BUILDER", "TOPIC_ASSIGNMENTS", "LIVE_ARENA", "STUDENTS", "FINANCE", "DRIVE"] as TabType[]).map(tabKey => (
-                <button key={tabKey} onClick={() => setActiveTab(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{tabKey === "TOPIC_ASSIGNMENTS" ? (i18n.language === "vi" ? "Chuyên đề" : "Quests") : t('tab_' + tabKey)}</button>
+                <button key={tabKey} onClick={() => handleTeacherTabChange(tabKey)} className={`tab-btn ${activeTab === tabKey ? 'active' : ''}`}>{tabKey === "TOPIC_ASSIGNMENTS" ? (i18n.language === "vi" ? "Chuyên đề" : "Quests") : t('tab_' + tabKey)}</button>
               ))}
             </div>
         </div>
@@ -21870,6 +23049,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     setEditingQuiz(persisted);
                     setQuizCatalogState(nx);
                     setExamBuilderSaveState("saved");
+                    const { _activePassageTab, ...comparable } = persisted as any;
+                    editingQuizBaselineRef.current = { id: persisted.id, json: JSON.stringify(comparable) };
+                    setExamEditorDirty(false);
+                    showSaveToast(tx(`Đã lưu và đồng bộ đề "${persisted.title}" thành công!`, `Exam "${persisted.title}" saved and synced successfully!`), "success");
                 } catch (error: any) {
                     saved = true;
                     setExamBuilderSaveState("error");
@@ -21965,7 +23148,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 {keyEditingQuiz ? (
                     <div key="key-editor" className="ebx-root" style={{background: EB.paper, padding: 0, flex: 1, overflowY: 'auto'}}>
                       <div style={{maxWidth: 820, margin: '0 auto', padding: '34px 32px 60px'}}>
-                        <div style={{...ebEyebrow, marginBottom: 10}}><Ico name="key" size={13} />{t('eb_edit_key')}</div>
+                        <div style={{...ebEyebrow, marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                          <span style={{display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="key" size={13} />{t('eb_edit_key')} {keyEditorDirty ? `(${tx('Chưa lưu', 'Unsaved')})` : ''}</span>
+                          <button type="button" className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setKeyEditingQuiz(null); }} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '6px 12px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, textTransform: 'none', letterSpacing: 0}}><Ico name="x" size={13} />{tx("Đóng", "Close")}</button>
+                        </div>
                         <h3 style={{margin: '0 0 8px', fontFamily: EB.fDisplay, fontWeight: 600, color: EB.ink, fontSize: 32, letterSpacing: '-0.02em'}}>{keyEditingQuiz!.title}</h3>
                         <div style={{height: 2, width: 56, background: EB.accent, borderRadius: 2, marginBottom: 28}} />
                         <div style={{display: 'grid', gap: 0, marginBottom: 30}}>
@@ -21995,11 +23181,26 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 </div>
                             ))}
                         </div>
-                        <button className="ebx-primary" onClick={() => {
+                        <button className="ebx-primary" disabled={keyEditorSaving} onClick={async () => {
+                            if (keyEditorSaving) return;
+                            setKeyEditorSaving(true);
+                            try {
+                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
+                              setQuizzes(nx);
+                              const saved = typeof syncData === 'function' ? await syncData({ quizzes: nx }) : true;
+                              keyEditingQuizBaselineRef.current = null;
+                              setKeyEditorDirty(false);
+                              setKeyEditingQuiz(null);
+                              showSaveToast(saved ? tx("Đã lưu và đồng bộ đáp án (Key) thành công!", "Answer Key saved and synced successfully!") : tx("Đã lưu Key trên thiết bị, chờ đồng bộ mạng.", "Key saved locally, waiting for network sync."), saved ? "success" : "warning");
+                            } finally {
+                              setKeyEditorSaving(false);
+                            }
+                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: keyEditorSaving ? 'wait' : 'pointer', opacity: keyEditorSaving ? 0.7 : 1, fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name={keyEditorSaving ? "refresh" : "save"} size={15} />{keyEditorSaving ? tx("Đang lưu Key...", "Saving Key...") : t('eb_save_key')}</button>
+                        {false && <button onClick={() => {
                             const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
                             setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
                             alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
-                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
+                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>}
                       </div>
                     </div>
 
@@ -22014,7 +23215,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>{tx("Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.", "Runs in sequence: Listening, Reading, then Writing if applicable. Results are kept private and students return to the lobby after each skill.")}</p>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
-                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
+                                    <button className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setRealExamPackageEditor(null); }} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
                                     <button className="ebx-primary" onClick={async () => {
                                         const draft = realExamPackageEditor;
                                         const ordered = (draft.quizIds || []).filter(Boolean).map(id => quizzes.find((quiz: any) => quiz.id === id)).filter(Boolean) as Quiz[];
@@ -22026,7 +23227,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         await saveRealExamPackage({ ...draft, quizIds: ordered.map(quiz => quiz.id), maxAttempts: Math.max(1, Number(draft.maxAttempts) || 1) });
                                         setSelectedQuizzes([]);
                                         setRealExamPackageEditor(null);
-                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />{tx("Lưu gói thi", "Save package")}</button>
+                                    }} disabled={realExamPkgSaving} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: realExamPkgSaving ? 'wait' : 'pointer', opacity: realExamPkgSaving ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name={realExamPkgSaving ? "refresh" : "save"} size={14} />{realExamPkgSaving ? tx("Đang lưu...", "Saving...") : tx("Lưu gói thi", "Save package")}{realExamPkgDirty ? " ●" : ""}</button>
                                 </div>
                             </div>
 
@@ -22150,7 +23351,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                     <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _showSettings: !prev._showSettings} : prev)} style={{background: editingQuiz._showSettings ? EB.accent : EB.sheet, color: editingQuiz._showSettings ? '#fff' : EB.ink, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${editingQuiz._showSettings ? EB.accent : EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="gear" size={14} />{t('eb_settings')}</button>
                                 </div>
                                 <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
-                                    <button className="ebx-soft" onClick={() => setEditingQuiz(null)} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
+                                    {examEditorDirty && <span style={{fontSize: 11.5, fontWeight: 800, color: '#B45309', background: '#FEF3C7', border: '1px solid #FDE68A', padding: '5px 10px', borderRadius: 20, display: 'inline-flex', alignItems: 'center'}}>● {tx("Chưa lưu thay đổi", "Unsaved changes")}</span>}
+                                    <button className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setEditingQuiz(null); }} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
                                     <button className="ebx-primary" disabled={examBuilderSaveState === "saving"} onClick={handleForceSave} style={{background: EB.accent, color: '#fff', padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: EB.radiusSm, border: 'none', cursor: examBuilderSaveState === "saving" ? 'wait' : 'pointer', opacity: examBuilderSaveState === "saving" ? .7 : 1, display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name={examBuilderSaveState === "saving" ? "refresh" : "save"} size={14} />{examBuilderSaveState === "saving" ? "Synchronizing..." : examBuilderSaveState === "saved" ? "Synced" : examBuilderSaveState === "error" ? "Retry save" : t('eb_save')}</button>
                                 </div>
                             </div>
@@ -22202,6 +23404,19 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 <label style={{ fontSize: 10, fontWeight: 800, color: EB.sub }}>MIN. WORDS<input type="number" min={1} value={task.minimumWords} onChange={event => updateWritingTask(task.id, { minimumWords: Math.max(1, Number(event.target.value) || 1) })} style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '7px 8px', border: `1px solid ${EB.line}`, borderRadius: 6 }} /></label>
                                             </div>
                                         </div>
+                                        <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>{tx("DẠNG BÀI VIẾT (QUESTION CATEGORY)", "WRITING QUESTION CATEGORY")}</span>
+                                            <select
+                                                className="ebx-soft"
+                                                value={task.categoryId || inferQuestionCategory(task, editingQuiz).id}
+                                                onChange={e => updateWritingTask(task.id, { categoryId: e.target.value })}
+                                                style={{ padding: '8px 12px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, width: '100%', boxSizing: 'border-box' }}
+                                            >
+                                                {(CANONICAL_TAXONOMY.Writing || []).filter(c => task.taskNumber === 1 ? c.group === "Task 1" : c.group === "Task 2").map(c => (
+                                                    <option key={c.id} value={c.id}>{c.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
                                         <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>TASK INSTRUCTION</span><input value={task.instructions} onChange={event => updateWritingTask(task.id, { instructions: event.target.value })} style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
                                         <div style={{ marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 800, color: EB.sub, marginBottom: 6 }}>PROMPT</div><div style={{ border: `1px solid ${EB.line}`, borderRadius: 8, overflow: 'hidden', background: EB.sheet }}><RichTextEditor value={task.prompt} onChange={(value: string) => updateWritingTask(task.id, { prompt: value })} placeholder={`Enter ${task.title} prompt`} /></div></div>
                                         <label style={{ display: 'grid', gap: 6 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>OPTIONAL MEDIA URL</span><input type="url" value={task.mediaUrl || ''} onChange={event => updateWritingTask(task.id, { mediaUrl: event.target.value })} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
@@ -22323,18 +23538,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
                                                 </select>
-                                                <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
-                                                    updateGroup((qItem: any) => ({ ...qItem, subType: e.target.value }));
-                                                }} style={{...selBox, color: EB.sub}}>
-                                                    <option value="">{t('eb_subtype_none')}</option>
-                                                    <option value="True/False/Not Given">True / False / Not Given</option>
-                                                    <option value="Matching Headings">Matching Headings</option>
-                                                    <option value="Multiple Choice">Multiple Choice</option>
-                                                    <option value="Sentence Completion">Sentence Completion</option>
-                                                    <option value="SUMMARY_DRAG">Summary drag (Reading)</option>
-                                                    <option value="COLUMN_DRAG">Matching 2 columns (Listening)</option>
-                                                    <option value="FLOWCHART">Flow-chart (inline input)</option>
-                                                    <option value="FLOWCHART_DRAG">Flow-chart (drag and drop)</option>
+                                                <select className="ebx-soft" value={q.categoryId || inferQuestionCategory(q, editingQuiz).id} onChange={(e: any) => {
+                                                    const chosen = e.target.value;
+                                                    updateGroup((qItem: any) => ({ ...qItem, categoryId: chosen }));
+                                                }} style={{...selBox, color: EB.sub, maxWidth: 260}}>
+                                                    {(CANONICAL_TAXONOMY[quizTaxonomySkill(editingQuiz)] || []).map(catItem => (
+                                                        <option key={catItem.id} value={catItem.id}>{catItem.label}</option>
+                                                    ))}
                                                 </select>
                                             </div>
                                             <div style={{display: 'flex', gap: 7}}>
@@ -23946,7 +25156,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           };
         };
         const saveAssignment = async () => {
-          if (!topicAssignmentEditor) return;
+          if (!topicAssignmentEditor || questEditorSaving) return;
           const rewards = topicAssignmentEditor.rewards.map(normaliseReward);
           const invalidReward = rewards.find(reward =>
             (reward.rewardType === "coins" && parseQuestCoinReward(reward.rewardValue) < 1)
@@ -23977,16 +25187,23 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             alert(tx("Cần có tiêu đề, chuyên đề và ít nhất một chặng đã chọn đề.", "A title, topic category, and at least one configured step are required."));
             return;
           }
-          const nextAssignments = topicAssignments.some(item => item.id === draft.id)
-            ? topicAssignments.map(item => item.id === draft.id ? draft : item)
-            : [draft, ...topicAssignments];
-          setTopicAssignments(nextAssignments);
-          const saved = await syncData({ topicAssignments: nextAssignments });
-          if (saved) {
-            setTopicAssignmentEditor(null);
-            alert(tx("Đã lưu chuyên đề và đồng bộ cho các thiết bị.", "Quest assignment saved and synchronized."));
-          } else {
-            alert(tx("Bản nháp vẫn còn trên thiết bị này. Hệ thống sẽ thử đồng bộ lại khi có mạng.", "The draft remains on this device and will retry when the connection returns."));
+          setQuestEditorSaving(true);
+          try {
+            const nextAssignments = topicAssignments.some(item => item.id === draft.id)
+              ? topicAssignments.map(item => item.id === draft.id ? draft : item)
+              : [draft, ...topicAssignments];
+            setTopicAssignments(nextAssignments);
+            const saved = await syncData({ topicAssignments: nextAssignments });
+            topicEditorBaselineRef.current = null;
+            setTopicEditorDirty(false);
+            if (saved) {
+              setTopicAssignmentEditor(null);
+              showSaveToast(tx(`Đã lưu chuyên đề "${draft.title}" thành công!`, `Quest "${draft.title}" saved successfully!`), "success");
+            } else {
+              showSaveToast(tx("Bản nháp chuyên đề đã lưu trên thiết bị và sẽ tự đồng bộ khi có mạng.", "Quest draft saved locally and will sync when online."), "warning");
+            }
+          } finally {
+            setQuestEditorSaving(false);
           }
         };
         const deleteAssignment = async (assignment: TopicAssignment) => {
@@ -24014,9 +25231,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   <div style={{ color: C.accent, fontSize: 11, fontWeight: 800, letterSpacing: 1.1, textTransform: "uppercase", marginBottom: 5 }}>{tx("Bài tập chuyên đề", "Quest assignments")}</div>
                   <h2 style={{ margin: 0, fontSize: 27, fontFamily: "var(--display)", letterSpacing: 0 }}>{draft.title || tx("Chuyên đề mới", "New quest")}</h2>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setTopicAssignmentEditor(null)} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
-                  <button onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: "pointer", padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name="save" size={15} /> {tx("Lưu chuyên đề", "Save quest")}</button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {topicEditorDirty && <span style={{ fontSize: 11.5, fontWeight: 800, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", padding: "5px 10px", borderRadius: 20 }}>● {tx("Chưa lưu", "Unsaved")}</span>}
+                  <button onClick={() => { if (confirmDiscardUnsavedChanges()) setTopicAssignmentEditor(null); }} style={{ border: `1px solid ${C.border}`, background: C.card, color: C.text, cursor: "pointer", padding: "9px 14px", borderRadius: 7, fontWeight: 700 }}>{tx("Quay lại", "Back")}</button>
+                  <button disabled={questEditorSaving} onClick={() => void saveAssignment()} style={{ border: "none", background: C.accent, color: "#fff", cursor: questEditorSaving ? "wait" : "pointer", opacity: questEditorSaving ? 0.7 : 1, padding: "9px 16px", borderRadius: 7, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7 }}><Ico name={questEditorSaving ? "refresh" : "save"} size={15} /> {questEditorSaving ? tx("Đang lưu...", "Saving...") : tx("Lưu chuyên đề", "Save quest")}</button>
                 </div>
               </div>
 
@@ -25090,7 +26308,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {giftCatalog.map(gift => (
                                   <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span style={{ width: 28, height: 28, borderRadius: 6, background: C.bg, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{renderGiftStoreIcon(gift.name, 16, C.accent)}</span>
+                                      <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, flex: 1 }} />
+                                    </div>
                                     <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Chi tiết quà", "Gift details")} placeholder={tx("Chi tiết", "Details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label={tx("Loại quà", "Gift type")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
                                       <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
@@ -25433,7 +26654,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
 
                               <button
                                 type="button"
-                                onClick={() => setGiftFor(profile.id)}
+                                onClick={() => { setGiftModalTab("GRANT"); setGiftFor(profile.id); }}
                                 style={{
                                   background: C.card,
                                   color: C.text,
@@ -25450,6 +26671,27 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               >
                                 <Ico name="gift" size={14} color={C.accent} />
                                 {t('gift_manual_btn')}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => { setGiftModalTab("CONFISCATE"); setGiftFor(profile.id); }}
+                                style={{
+                                  background: `${C.err}10`,
+                                  color: C.err,
+                                  border: `1px solid ${C.err}35`,
+                                  fontSize: 12.5,
+                                  fontWeight: 700,
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6
+                                }}
+                              >
+                                <Ico name="shield" size={14} color={C.err} />
+                                {tx("Tịch thu Xu / Quà", "Confiscate Coins / Gifts")}
                               </button>
 
                               {pUnpaid > 0 && (
@@ -25565,7 +26807,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 const gst = students.find(s => s.id === giftFor);
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
-                const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
+                const giveCoins = (amt: number) => { const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); const nx = applyCoinOperation(students, coinOperation); setStudents(nx); void syncData({ students: nx, __coinOperation: coinOperation }); showSaveToast(`+${amt} OS Coins → ${gst.name}`, "success"); };
                 const giveConsumable = (gift: GiftDefinition) => {
                   const name = gift.name;
                   if (!consumableGiftCatalog.some(item => item.enabled && item.id === gift.id)) return;
@@ -25574,8 +26816,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
                   } : s);
                   const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
+                  const nxApplied = applyCoinOperation(students, operation);
+                  setStudents(nxApplied); void syncData({ students: nxApplied, __coinOperation: operation });
+                  if (false) {
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
-                  alert(`${t('gift_done')} (${name})`);
+                  }
+                  showSaveToast(`${t('gift_done')} (${name}) → ${gst.name}`, "success");
                 };
                 const givePermanent = (gift: GiftDefinition) => {
                   const name = gift.name;
@@ -25585,8 +26831,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
                   } : s);
                   const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
+                  const nxApplied = applyCoinOperation(students, operation);
+                  setStudents(nxApplied); void syncData({ students: nxApplied, __coinOperation: operation });
+                  if (false) {
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
-                  alert(`${t('gift_done')} (${name})`);
+                  }
+                  showSaveToast(`${t('gift_done')} (${name}) → ${gst.name}`, "success");
                 };
                 const permChip = (gift: GiftDefinition) => {
                   const has = owned.includes(gift.name);
@@ -25605,8 +26855,183 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                         <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8, color: C.text }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
                         <button type="button" onClick={() => setGiftFor(null)} style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 4 }}><Ico name="x" size={18} /></button>
                       </div>
-                      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 12 }}>{gst.name} · {tx(`Số dư: ${gst.coins || 0} OS Coins`, `Balance: ${gst.coins || 0} OS Coins`)}</div>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 16, background: C.bg, padding: 4, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                        <button
+                          type="button"
+                          onClick={() => setGiftModalTab("GRANT")}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            borderRadius: 7,
+                            border: 'none',
+                            background: giftModalTab === "GRANT" ? C.accent : 'transparent',
+                            color: giftModalTab === "GRANT" ? '#fff' : C.text,
+                            fontWeight: 800,
+                            fontSize: 12.5,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          + {tx("Tặng Xu & Quà", "Grant Coins & Gifts")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGiftModalTab("CONFISCATE")}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            borderRadius: 7,
+                            border: 'none',
+                            background: giftModalTab === "CONFISCATE" ? C.err : 'transparent',
+                            color: giftModalTab === "CONFISCATE" ? '#fff' : C.err,
+                            fontWeight: 800,
+                            fontSize: 12.5,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          − {tx("Tịch thu Xu & Mọi loại Quà", "Confiscate Coins & All Gifts")}
+                        </button>
+                      </div>
+                      {giftModalTab === "CONFISCATE" && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                          {/* 1. CONFISCATE COINS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: `${C.err}08`, border: `1px solid ${C.err}28` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                              <span style={{ fontSize: 11.5, fontWeight: 800, color: C.err, textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx("1. Tịch thu OS Coins", "1. Confiscate OS Coins")}</span>
+                              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: 'var(--mono)', color: C.text }}>{tx("Hiện có:", "Current:")} {gst.coins || 0} Xu</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                              {[50, 100, 200, 500].map(amt => (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  disabled={(gst.coins || 0) <= 0}
+                                  onClick={() => void teacherConfiscateCoins(gst.id, amt)}
+                                  style={{ background: C.card, color: C.err, border: `1px solid ${C.err}40`, padding: '6px 11px', borderRadius: 7, fontSize: 12, fontWeight: 800, cursor: (gst.coins || 0) <= 0 ? 'not-allowed' : 'pointer', opacity: (gst.coins || 0) <= 0 ? 0.5 : 1 }}
+                                >
+                                  −{amt} Xu
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                disabled={(gst.coins || 0) <= 0}
+                                onClick={() => void teacherConfiscateCoins(gst.id, "ALL")}
+                                style={{ background: C.err, color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 800, cursor: (gst.coins || 0) <= 0 ? 'not-allowed' : 'pointer', opacity: (gst.coins || 0) <= 0 ? 0.5 : 1 }}
+                              >
+                                {tx("Tịch thu hết Xu (Về 0)", "Confiscate All Coins (To 0)")}
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <input
+                                type="number"
+                                min="1"
+                                value={confiscateCoinAmount}
+                                onChange={(e: any) => setConfiscateCoinAmount(e.target.value)}
+                                placeholder={tx("Nhập số xu cần trừ...", "Enter coin amount...")}
+                                style={{ flex: 1, padding: '7px 10px', fontSize: 12.5, borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}
+                              />
+                              <button
+                                type="button"
+                                disabled={(gst.coins || 0) <= 0}
+                                onClick={() => void teacherConfiscateCoins(gst.id, Number(confiscateCoinAmount) || 0)}
+                                style={{ background: `${C.err}18`, color: C.err, border: `1px solid ${C.err}40`, padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              >
+                                {tx("Tịch thu số này", "Deduct amount")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 2. CONFISCATE CONSUMABLES */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("2. Vật phẩm tiêu hao đang sở hữu", "2. Owned Consumable Items")} ({Object.keys(gst.inventory?.consumables || {}).length})
+                            </div>
+                            {Object.entries(gst.inventory?.consumables || {}).filter(([, c]) => (Number(c) || 0) > 0).length === 0 ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Học viên không có vật phẩm tiêu hao nào.", "No consumable items owned.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7 }}>
+                                {Object.entries(gst.inventory?.consumables || {}).filter(([, c]) => (Number(c) || 0) > 0).map(([itemName, count]) => (
+                                  <div key={itemName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                      {renderGiftStoreIcon(itemName, 18, C.accent)}
+                                      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{itemName}</span>
+                                      <span style={{ fontSize: 11, fontWeight: 800, fontFamily: 'var(--mono)', color: C.accent, background: `${C.accent}12`, padding: '2px 7px', borderRadius: 10 }}>x{count as number}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                      <button type="button" onClick={() => void teacherConfiscateConsumable(gst.id, itemName, 1)} style={{ background: `${C.warn}18`, color: '#B45309', border: `1px solid ${C.warn}40`, padding: '4px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer' }}>−1</button>
+                                      <button type="button" onClick={() => void teacherConfiscateConsumable(gst.id, itemName, "ALL")} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer' }}>{tx("Thu hồi hết", "Revoke all")}</button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. CONFISCATE PERMANENTS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("3. Vật phẩm vĩnh viễn đang sở hữu (Khung, Danh hiệu, Linh thú, Giao diện, Khác)", "3. Owned Permanent Items (Frames, Titles, Pets, Themes, Others)")} ({owned.length})
+                            </div>
+                            {owned.length === 0 ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Học viên không có vật phẩm vĩnh viễn nào.", "No permanent items owned.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7, maxHeight: 220, overflowY: 'auto' }}>
+                                {owned.map(itemName => {
+                                  const isEq = gst.inventory?.equippedTheme === itemName || gst.inventory?.equippedFrame === itemName || gst.inventory?.equippedPet === itemName || gst.inventory?.equippedTitle === itemName.replace("Danh hiệu: ", "");
+                                  return (
+                                    <div key={itemName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                        {renderGiftStoreIcon(itemName, 18, C.accent)}
+                                        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatCosmeticDisplayName(itemName)}</span>
+                                        {isEq && <span style={{ fontSize: 10, fontWeight: 800, color: C.succ, background: `${C.succ}15`, padding: '2px 6px', borderRadius: 6 }}>{tx("Đang đeo", "Equipped")}</span>}
+                                      </div>
+                                      <button type="button" onClick={() => void teacherConfiscatePermanent(gst.id, itemName)} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', flexShrink: 0 }}>{tx("Tịch thu", "Confiscate")}</button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 4. CONFISCATE REDEEMED REWARDS / VOUCHERS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("4. Quà đã đổi / Mã thưởng (myRewards)", "4. Redeemed Rewards / Vouchers")} ({(gst.myRewards || []).length})
+                            </div>
+                            {!(gst.myRewards && gst.myRewards.length > 0) ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Chưa có quà đổi thưởng nào.", "No redeemed rewards.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7, maxHeight: 160, overflowY: 'auto' }}>
+                                {(gst.myRewards || []).map((rw, idx) => (
+                                  <div key={`${rw}_${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                    <span style={{ fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rw}</span>
+                                    <button type="button" onClick={() => void teacherConfiscateMyReward(gst.id, rw, idx)} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', flexShrink: 0 }}>{tx("Tịch thu", "Revoke")}</button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 5. NUCLEAR OPTION: CONFISCATE ALL */}
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
+                            <button
+                              type="button"
+                              onClick={() => void teacherConfiscateAllStudentAssets(gst.id, false)}
+                              style={{ flex: 1, background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}45`, padding: '10px 12px', borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              {tx("Tịch thu TOÀN BỘ Quà trong kho", "Confiscate ALL Gifts/Items")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void teacherConfiscateAllStudentAssets(gst.id, true)}
+                              style={{ flex: 1, background: C.err, color: '#fff', border: 'none', padding: '10px 12px', borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              {tx("Tịch thu TOÀN BỘ Xu + Mọi loại Quà", "Confiscate ALL Coins + ALL Gifts")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: giftModalTab === "GRANT" ? 'flex' : 'none', flexDirection: 'column', gap: 18 }}>
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_coins')}</div>
                           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{[50, 100, 200, 500, 1000].map(a => <button key={a} type="button" onClick={() => giveCoins(a)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '7px 12px', fontWeight: 700, borderRadius: 8, border: `1px solid ${C.warn}33`, cursor: 'pointer' }}>+{a} <Ico name="coins" size={12} style={{ verticalAlign: -1 }} /></button>)}</div>
@@ -25649,7 +27074,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       {editStId && (<div><label style={{ fontSize: 11, fontWeight: 700, color: C.warn, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_os_coins')}</label><input type="number" value={newSt.coins || 0} onChange={(e: any) => setNewSt({ ...newSt, coins: Number(e.target.value) })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.warn}`, background: C.bg }} placeholder={t('stu_coins_ph')} /></div>)}
                     </div>
                     <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-                      <button type="button" onClick={() => { handleStudentAction(); setShowAddStudent(false); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "10px", borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{editStId ? t('stu_update') : t('stu_add_new')}</button>
+                      <button type="button" disabled={studentFormSaving} onClick={() => { void handleStudentAction(); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "10px", borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: studentFormSaving ? 'wait' : 'pointer', opacity: studentFormSaving ? 0.7 : 1 }}>{studentFormSaving ? tx("Đang lưu...", "Saving...") : (editStId ? t('stu_update') : t('stu_add_new'))}</button>
                       <button type="button" onClick={() => { setEditStId(null); setShowAddStudent(false); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); }} style={{ background: C.bg, color: C.text, padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>{t('common_cancel')}</button>
                     </div>
                   </div>
@@ -25841,7 +27266,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             {([{ key: 'DASHBOARD', icon: 'home' }, { key: 'STUDENTS', icon: 'users' }, { key: 'EXAM_BUILDER', icon: 'fileText' }, { key: 'FINANCE', icon: 'wallet' }] as {key: TabType, icon: string}[]).map(it => {
               const on = activeTab === it.key;
               return (
-                <button key={it.key} onClick={() => { setActiveTab(it.key); setMobileMoreOpen(false); }} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: on ? C.accent : C.sub }}>
+                <button key={it.key} onClick={() => { handleTeacherTabChange(it.key); setMobileMoreOpen(false); }} style={{ flex: 1, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '8px 0', color: on ? C.accent : C.sub }}>
                   <Ico name={it.icon} size={21} />
                   <span style={{ fontSize: 10, fontWeight: on ? 800 : 600 }}>{t('tab_' + it.key)}</span>
                 </button>
@@ -25858,7 +27283,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               <div onClick={e => e.stopPropagation()} style={{ width: '100%', background: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: '10px 14px calc(20px + env(safe-area-inset-bottom))', borderTop: `1px solid ${C.border}` }}>
                 <div style={{ width: 38, height: 4, borderRadius: 2, background: C.border, margin: '6px auto 14px' }} />
                 {([{ key: 'CLASSROOM', icon: 'clock' }, { key: 'TOPIC_ASSIGNMENTS', icon: 'target' }, { key: 'LIVE_ARENA', icon: 'monitor' }, { key: 'DRIVE', icon: 'cloud' }] as {key: TabType, icon: string}[]).map(it => (
-                  <button key={it.key} onClick={() => { setActiveTab(it.key); setMobileMoreOpen(false); }} style={{ width: '100%', textAlign: 'left', background: activeTab === it.key ? `${C.accent}12` : 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 12px', borderRadius: 12, color: C.text, fontSize: 15, fontWeight: 700 }}>
+                  <button key={it.key} onClick={() => { handleTeacherTabChange(it.key); setMobileMoreOpen(false); }} style={{ width: '100%', textAlign: 'left', background: activeTab === it.key ? `${C.accent}12` : 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 12px', borderRadius: 12, color: C.text, fontSize: 15, fontWeight: 700 }}>
                     <Ico name={it.icon} size={20} color={activeTab === it.key ? C.accent : C.sub} /> {it.key === 'TOPIC_ASSIGNMENTS' ? (i18n.language === 'vi' ? 'Bài tập chuyên đề' : 'Quest assignments') : t('tab_' + it.key)}
                   </button>
                 ))}

@@ -12,7 +12,7 @@ service firebase.storage {
       allow get: if true;
       allow list: if false;
       allow create, update: if isTeacher()
-        && request.resource.size < 200 * 1024 * 1024
+        && request.resource.size <= 512 * 1024 * 1024
         && request.resource.contentType.matches('audio/.*');
       allow delete: if isTeacher();
     }

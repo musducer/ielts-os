@@ -872,7 +872,10 @@
                               <div style={{ display: 'grid', gap: 7 }}>
                                 {giftCatalog.map(gift => (
                                   <div key={gift.id} style={{ display: 'grid', gridTemplateColumns: isWide ? 'minmax(150px, 1.15fr) minmax(150px, 1.2fr) 120px 90px 82px 32px' : '1fr 1fr', gap: 7, alignItems: 'center', paddingBottom: 7, borderBottom: `1px solid ${C.border}` }}>
-                                    <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span style={{ width: 28, height: 28, borderRadius: 6, background: C.bg, border: `1px solid ${C.border}`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{renderGiftStoreIcon(gift.name, 16, C.accent)}</span>
+                                      <input value={gift.name} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, name: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Tên quà", "Gift name")} placeholder={tx("Tên quà", "Gift name")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg, flex: 1 }} />
+                                    </div>
                                     <input value={gift.details || ''} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, details: event.target.value, updatedAt: getTrueTime() } : item))} aria-label={tx("Chi tiết quà", "Gift details")} placeholder={tx("Chi tiết", "Details")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }} />
                                     <select value={gift.kind} onChange={event => stageGiftCatalog(giftCatalog.map(item => item.id === gift.id ? { ...item, kind: event.target.value as GiftDefinition['kind'], updatedAt: getTrueTime() } : item))} aria-label={tx("Loại quà", "Gift type")} style={{ padding: '8px 9px', fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}`, background: C.bg }}>
                                       <option value="consumable">{tx('Tiêu hao', 'Consumable')}</option>
@@ -1215,7 +1218,7 @@
 
                               <button
                                 type="button"
-                                onClick={() => setGiftFor(profile.id)}
+                                onClick={() => { setGiftModalTab("GRANT"); setGiftFor(profile.id); }}
                                 style={{
                                   background: C.card,
                                   color: C.text,
@@ -1232,6 +1235,27 @@
                               >
                                 <Ico name="gift" size={14} color={C.accent} />
                                 {t('gift_manual_btn')}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => { setGiftModalTab("CONFISCATE"); setGiftFor(profile.id); }}
+                                style={{
+                                  background: `${C.err}10`,
+                                  color: C.err,
+                                  border: `1px solid ${C.err}35`,
+                                  fontSize: 12.5,
+                                  fontWeight: 700,
+                                  padding: '8px 14px',
+                                  borderRadius: 8,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6
+                                }}
+                              >
+                                <Ico name="shield" size={14} color={C.err} />
+                                {tx("Tịch thu Xu / Quà", "Confiscate Coins / Gifts")}
                               </button>
 
                               {pUnpaid > 0 && (
@@ -1347,7 +1371,7 @@
                 const gst = students.find(s => s.id === giftFor);
                 if (!gst) return null;
                 const owned: string[] = Array.isArray(gst.inventory?.permanents) ? gst.inventory!.permanents : [];
-                const giveCoins = (amt: number) => { const nx = students.map(s => s.id === giftFor ? { ...s, coins: (s.coins || 0) + amt } : s); const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); setStudents(nx); syncData({ students: nx, __coinOperation: coinOperation }); alert(`+${amt} OS Coins → ${gst.name}`); };
+                const giveCoins = (amt: number) => { const coinOperation = makeCoinOperation(giftFor, amt, "TEACHER_GRANT"); const nx = applyCoinOperation(students, coinOperation); setStudents(nx); void syncData({ students: nx, __coinOperation: coinOperation }); showSaveToast(`+${amt} OS Coins → ${gst.name}`, "success"); };
                 const giveConsumable = (gift: GiftDefinition) => {
                   const name = gift.name;
                   if (!consumableGiftCatalog.some(item => item.enabled && item.id === gift.id)) return;
@@ -1356,8 +1380,12 @@
                     inventory: { ...(s.inventory || {}), consumables: { ...(s.inventory?.consumables || {}), [name]: (Number(s.inventory?.consumables?.[name]) || 0) + 1 }, permanents: s.inventory?.permanents || [] },
                   } : s);
                   const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { consumableName: name, consumableQuantity: 1, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
+                  const nxApplied = applyCoinOperation(students, operation);
+                  setStudents(nxApplied); void syncData({ students: nxApplied, __coinOperation: operation });
+                  if (false) {
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
-                  alert(`${t('gift_done')} (${name})`);
+                  }
+                  showSaveToast(`${t('gift_done')} (${name}) → ${gst.name}`, "success");
                 };
                 const givePermanent = (gift: GiftDefinition) => {
                   const name = gift.name;
@@ -1367,8 +1395,12 @@
                     inventory: { ...(s.inventory || {}), consumables: s.inventory?.consumables || {}, permanents: Array.from(new Set([...(s.inventory?.permanents || []), name])) },
                   } : s);
                   const operation = makeCoinOperation(giftFor, 0, "TEACHER_GIFT", { permanentName: name, giftSnapshot: { id: gift.id, name: gift.name, price: gift.price, details: gift.details, kind: gift.kind } });
+                  const nxApplied = applyCoinOperation(students, operation);
+                  setStudents(nxApplied); void syncData({ students: nxApplied, __coinOperation: operation });
+                  if (false) {
                   setStudents(nx); void syncData({ students: nx, __coinOperation: operation });
-                  alert(`${t('gift_done')} (${name})`);
+                  }
+                  showSaveToast(`${t('gift_done')} (${name}) → ${gst.name}`, "success");
                 };
                 const permChip = (gift: GiftDefinition) => {
                   const has = owned.includes(gift.name);
@@ -1387,8 +1419,183 @@
                         <h3 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8, color: C.text }}><Ico name="gift" size={18} color={C.accent} />{t('gift_modal_title')}</h3>
                         <button type="button" onClick={() => setGiftFor(null)} style={{ background: 'transparent', border: 'none', color: C.sub, cursor: 'pointer', padding: 4 }}><Ico name="x" size={18} /></button>
                       </div>
-                      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{gst.name} · {t('gift_modal_sub')}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                      <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 12 }}>{gst.name} · {tx(`Số dư: ${gst.coins || 0} OS Coins`, `Balance: ${gst.coins || 0} OS Coins`)}</div>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 16, background: C.bg, padding: 4, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                        <button
+                          type="button"
+                          onClick={() => setGiftModalTab("GRANT")}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            borderRadius: 7,
+                            border: 'none',
+                            background: giftModalTab === "GRANT" ? C.accent : 'transparent',
+                            color: giftModalTab === "GRANT" ? '#fff' : C.text,
+                            fontWeight: 800,
+                            fontSize: 12.5,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          + {tx("Tặng Xu & Quà", "Grant Coins & Gifts")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setGiftModalTab("CONFISCATE")}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            borderRadius: 7,
+                            border: 'none',
+                            background: giftModalTab === "CONFISCATE" ? C.err : 'transparent',
+                            color: giftModalTab === "CONFISCATE" ? '#fff' : C.err,
+                            fontWeight: 800,
+                            fontSize: 12.5,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          − {tx("Tịch thu Xu & Mọi loại Quà", "Confiscate Coins & All Gifts")}
+                        </button>
+                      </div>
+                      {giftModalTab === "CONFISCATE" && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                          {/* 1. CONFISCATE COINS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: `${C.err}08`, border: `1px solid ${C.err}28` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                              <span style={{ fontSize: 11.5, fontWeight: 800, color: C.err, textTransform: 'uppercase', letterSpacing: 0.5 }}>{tx("1. Tịch thu OS Coins", "1. Confiscate OS Coins")}</span>
+                              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: 'var(--mono)', color: C.text }}>{tx("Hiện có:", "Current:")} {gst.coins || 0} Xu</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                              {[50, 100, 200, 500].map(amt => (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  disabled={(gst.coins || 0) <= 0}
+                                  onClick={() => void teacherConfiscateCoins(gst.id, amt)}
+                                  style={{ background: C.card, color: C.err, border: `1px solid ${C.err}40`, padding: '6px 11px', borderRadius: 7, fontSize: 12, fontWeight: 800, cursor: (gst.coins || 0) <= 0 ? 'not-allowed' : 'pointer', opacity: (gst.coins || 0) <= 0 ? 0.5 : 1 }}
+                                >
+                                  −{amt} Xu
+                                </button>
+                              ))}
+                              <button
+                                type="button"
+                                disabled={(gst.coins || 0) <= 0}
+                                onClick={() => void teacherConfiscateCoins(gst.id, "ALL")}
+                                style={{ background: C.err, color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 800, cursor: (gst.coins || 0) <= 0 ? 'not-allowed' : 'pointer', opacity: (gst.coins || 0) <= 0 ? 0.5 : 1 }}
+                              >
+                                {tx("Tịch thu hết Xu (Về 0)", "Confiscate All Coins (To 0)")}
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <input
+                                type="number"
+                                min="1"
+                                value={confiscateCoinAmount}
+                                onChange={(e: any) => setConfiscateCoinAmount(e.target.value)}
+                                placeholder={tx("Nhập số xu cần trừ...", "Enter coin amount...")}
+                                style={{ flex: 1, padding: '7px 10px', fontSize: 12.5, borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}
+                              />
+                              <button
+                                type="button"
+                                disabled={(gst.coins || 0) <= 0}
+                                onClick={() => void teacherConfiscateCoins(gst.id, Number(confiscateCoinAmount) || 0)}
+                                style={{ background: `${C.err}18`, color: C.err, border: `1px solid ${C.err}40`, padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                              >
+                                {tx("Tịch thu số này", "Deduct amount")}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 2. CONFISCATE CONSUMABLES */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("2. Vật phẩm tiêu hao đang sở hữu", "2. Owned Consumable Items")} ({Object.keys(gst.inventory?.consumables || {}).length})
+                            </div>
+                            {Object.entries(gst.inventory?.consumables || {}).filter(([, c]) => (Number(c) || 0) > 0).length === 0 ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Học viên không có vật phẩm tiêu hao nào.", "No consumable items owned.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7 }}>
+                                {Object.entries(gst.inventory?.consumables || {}).filter(([, c]) => (Number(c) || 0) > 0).map(([itemName, count]) => (
+                                  <div key={itemName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                      {renderGiftStoreIcon(itemName, 18, C.accent)}
+                                      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{itemName}</span>
+                                      <span style={{ fontSize: 11, fontWeight: 800, fontFamily: 'var(--mono)', color: C.accent, background: `${C.accent}12`, padding: '2px 7px', borderRadius: 10 }}>x{count as number}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                      <button type="button" onClick={() => void teacherConfiscateConsumable(gst.id, itemName, 1)} style={{ background: `${C.warn}18`, color: '#B45309', border: `1px solid ${C.warn}40`, padding: '4px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer' }}>−1</button>
+                                      <button type="button" onClick={() => void teacherConfiscateConsumable(gst.id, itemName, "ALL")} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer' }}>{tx("Thu hồi hết", "Revoke all")}</button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. CONFISCATE PERMANENTS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("3. Vật phẩm vĩnh viễn đang sở hữu (Khung, Danh hiệu, Linh thú, Giao diện, Khác)", "3. Owned Permanent Items (Frames, Titles, Pets, Themes, Others)")} ({owned.length})
+                            </div>
+                            {owned.length === 0 ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Học viên không có vật phẩm vĩnh viễn nào.", "No permanent items owned.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7, maxHeight: 220, overflowY: 'auto' }}>
+                                {owned.map(itemName => {
+                                  const isEq = gst.inventory?.equippedTheme === itemName || gst.inventory?.equippedFrame === itemName || gst.inventory?.equippedPet === itemName || gst.inventory?.equippedTitle === itemName.replace("Danh hiệu: ", "");
+                                  return (
+                                    <div key={itemName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                        {renderGiftStoreIcon(itemName, 18, C.accent)}
+                                        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatCosmeticDisplayName(itemName)}</span>
+                                        {isEq && <span style={{ fontSize: 10, fontWeight: 800, color: C.succ, background: `${C.succ}15`, padding: '2px 6px', borderRadius: 6 }}>{tx("Đang đeo", "Equipped")}</span>}
+                                      </div>
+                                      <button type="button" onClick={() => void teacherConfiscatePermanent(gst.id, itemName)} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', flexShrink: 0 }}>{tx("Tịch thu", "Confiscate")}</button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 4. CONFISCATE REDEEMED REWARDS / VOUCHERS */}
+                          <div style={{ padding: 14, borderRadius: 10, background: C.bg, border: `1px solid ${C.border}` }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx("4. Quà đã đổi / Mã thưởng (myRewards)", "4. Redeemed Rewards / Vouchers")} ({(gst.myRewards || []).length})
+                            </div>
+                            {!(gst.myRewards && gst.myRewards.length > 0) ? (
+                              <div style={{ fontSize: 12, color: C.sub, fontStyle: 'italic' }}>{tx("Chưa có quà đổi thưởng nào.", "No redeemed rewards.")}</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 7, maxHeight: 160, overflowY: 'auto' }}>
+                                {(gst.myRewards || []).map((rw, idx) => (
+                                  <div key={`${rw}_${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: C.card, border: `1px solid ${C.border}` }}>
+                                    <span style={{ fontSize: 12, color: C.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rw}</span>
+                                    <button type="button" onClick={() => void teacherConfiscateMyReward(gst.id, rw, idx)} style={{ background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}35`, padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 800, cursor: 'pointer', flexShrink: 0 }}>{tx("Tịch thu", "Revoke")}</button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 5. NUCLEAR OPTION: CONFISCATE ALL */}
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
+                            <button
+                              type="button"
+                              onClick={() => void teacherConfiscateAllStudentAssets(gst.id, false)}
+                              style={{ flex: 1, background: `${C.err}15`, color: C.err, border: `1px solid ${C.err}45`, padding: '10px 12px', borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              {tx("Tịch thu TOÀN BỘ Quà trong kho", "Confiscate ALL Gifts/Items")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void teacherConfiscateAllStudentAssets(gst.id, true)}
+                              style={{ flex: 1, background: C.err, color: '#fff', border: 'none', padding: '10px 12px', borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}
+                            >
+                              {tx("Tịch thu TOÀN BỘ Xu + Mọi loại Quà", "Confiscate ALL Coins + ALL Gifts")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: giftModalTab === "GRANT" ? 'flex' : 'none', flexDirection: 'column', gap: 18 }}>
                         <div>
                           <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('gift_sec_coins')}</div>
                           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>{[50, 100, 200, 500, 1000].map(a => <button key={a} type="button" onClick={() => giveCoins(a)} style={{ background: `${C.warn}15`, color: C.warn, fontSize: 12.5, padding: '7px 12px', fontWeight: 700, borderRadius: 8, border: `1px solid ${C.warn}33`, cursor: 'pointer' }}>+{a} <Ico name="coins" size={12} style={{ verticalAlign: -1 }} /></button>)}</div>
@@ -1431,7 +1638,7 @@
                       {editStId && (<div><label style={{ fontSize: 11, fontWeight: 700, color: C.warn, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block', marginBottom: 4 }}>{t('stu_os_coins')}</label><input type="number" value={newSt.coins || 0} onChange={(e: any) => setNewSt({ ...newSt, coins: Number(e.target.value) })} style={{ width: '100%', padding: '8px 10px', fontSize: 13, borderRadius: 8, border: `1px solid ${C.warn}`, background: C.bg }} placeholder={t('stu_coins_ph')} /></div>)}
                     </div>
                     <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-                      <button type="button" onClick={() => { handleStudentAction(); setShowAddStudent(false); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "10px", borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{editStId ? t('stu_update') : t('stu_add_new')}</button>
+                      <button type="button" disabled={studentFormSaving} onClick={() => { void handleStudentAction(); }} style={{ flex: 1, background: C.accent, color: "#fff", padding: "10px", borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: studentFormSaving ? 'wait' : 'pointer', opacity: studentFormSaving ? 0.7 : 1 }}>{studentFormSaving ? tx("Đang lưu...", "Saving...") : (editStId ? t('stu_update') : t('stu_add_new'))}</button>
                       <button type="button" onClick={() => { setEditStId(null); setShowAddStudent(false); setNewSt({ name: "", rate: 300000, target: "6.5", cefr: "B2", email: "", privateMessage: "", dob: "" }); }} style={{ background: C.bg, color: C.text, padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.border}`, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>{t('common_cancel')}</button>
                     </div>
                   </div>

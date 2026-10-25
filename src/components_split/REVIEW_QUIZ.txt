@@ -1921,25 +1921,16 @@
                       >
                           <span>Tổng quan</span>
                       </button>
-                      {rvSections.map((sec: any, idx: number) => {
-                          const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === idx)) : rvAllQuestions;
-                          const secCorrect = secQs.filter((q: any) => rvQuestionStatus(q) === "correct").length;
-                          const label = rvUsePartLabels ? `Part ${idx + 1}` : `Passage ${idx + 1}`;
-                          return (
-                              <button
-                                  key={idx}
-                                  type="button"
-                                  className={`rv-tab-pill ${!rvIsOverview && rvActiveIdx === idx ? "is-active" : ""}`}
-                                  onClick={() => {
-                                      setReviewSectionIdx(idx);
-                                      setReviewActiveQuestionId(null);
-                                  }}
-                              >
-                                  <span>{label}</span>
-                                  <span className="rv-tab-count">({secCorrect}/{secQs.length})</span>
-                              </button>
-                          );
-                      })}
+                      <button
+                          type="button"
+                          className={`rv-tab-pill ${!rvIsOverview ? "is-active" : ""}`}
+                          onClick={() => {
+                              if (rvIsOverview) setReviewSectionIdx(0);
+                              setReviewActiveQuestionId(null);
+                          }}
+                      >
+                          <span>Chi tiết</span>
+                      </button>
                   </nav>
 
                   {/* Right Actions */}
@@ -2256,7 +2247,7 @@
                                           const typeBuckets: Record<string, { score: number; total: number }> = {};
                                           rvScoreSummary.groups.forEach((group: any) => {
                                               const q = group.questions[0];
-                                              const rawLabel = q?.subType || (q?.type === "CHOICE" || q?.type === "CHOICE_MULTIPLE" ? "Multiple Choice" : q?.type === "MATCHING" ? "Matching" : q?.type === "TFNG" ? "True / False / Not Given" : q?.type === "YNNG" ? "Yes / No / Not Given" : "Note / Form / Table Completion");
+                                              const rawLabel = inferQuestionCategory(q, reviewQuiz.quiz).label;
                                               if (!typeBuckets[rawLabel]) typeBuckets[rawLabel] = { score: 0, total: 0 };
                                               typeBuckets[rawLabel].score += group.score;
                                               typeBuckets[rawLabel].total += group.total;
@@ -2895,10 +2886,10 @@
                                       if (rvFilterWrongOnly && qStatus === "correct") return null;
 
                                       const cGrp = rvContiguousGroupByQId.get(q.id);
-                                      const groupOptions = (cGrp?.options && cGrp.options.length)
-                                          ? cGrp.options
-                                          : (Array.isArray(q.options) ? q.options : []);
-                                      const qWithOpts = groupOptions.length && (!Array.isArray(q.options) || !q.options.length)
+                                      const ownOptions = Array.isArray(q.options) && q.options.length > 0 ? q.options : [];
+                                      const sharedGroupOptions = (cGrp?.options && cGrp.options.length > 0) ? cGrp.options : [];
+                                      const groupOptions = ownOptions.length > 0 ? ownOptions : sharedGroupOptions;
+                                      const qWithOpts = groupOptions.length > 0 && ownOptions.length === 0
                                           ? { ...q, options: groupOptions }
                                           : q;
 
@@ -3060,29 +3051,95 @@
                           </div>
                       </div>
 
-                      {/* BOTTOM QUESTION PALETTE */}
-                      <footer className="rv-footer-palette">
+                      {/* BOTTOM QUESTION PALETTE (Exam Room Mechanism) */}
+                      <footer className="rv-footer-palette" style={{ height: 48, gap: 20 }}>
                           {rvSections.map((sec: any, sIdx: number) => {
                               const secQs = rvHasSections ? (sec?.questions || rvAllQuestions.filter((q: any) => rvSectionOf(q) === sIdx)) : rvAllQuestions;
-                              const label = rvUsePartLabels ? `P${sIdx + 1}` : `Pass ${sIdx + 1}`;
+                              const secCorrect = secQs.filter((q: any) => rvQuestionStatus(q) === "correct").length;
+                              const isActive = rvActiveIdx === sIdx;
+                              const label = rvUsePartLabels ? `Part ${sIdx + 1}` : `Passage ${sIdx + 1}`;
+                              const allCorrect = secQs.length > 0 && secCorrect === secQs.length;
+                              const pct = secQs.length ? Math.round((secCorrect / secQs.length) * 100) : 0;
+                              const switchSection = () => {
+                                  setReviewSectionIdx(sIdx);
+                                  setReviewActiveQuestionId(null);
+                                  const rightPane = document.querySelector(".rv-pane-right");
+                                  if (rightPane) rightPane.scrollTop = 0;
+                                  const leftPane = document.querySelector(".rv-pane-left-scroll");
+                                  if (leftPane) leftPane.scrollTop = 0;
+                              };
                               return (
-                                  <div key={sIdx} style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                      <span style={{ fontSize: 11, fontWeight: 800, color: "#78716C", marginRight: 2 }}>{label}:</span>
-                                      {secQs.map((q: any) => {
-                                          const qNum = rvQuestionNumber(q);
-                                          const st = rvQuestionStatus(q);
-                                          return (
-                                              <button
-                                                  key={q.id}
-                                                  type="button"
-                                                  className={`rv-palette-btn ${st}`}
-                                                  onClick={() => rvJumpToQuestionFromMatrix(q, qNum)}
-                                                  title={`Câu ${qNum}`}
-                                              >
-                                                  {qNum}
-                                              </button>
-                                          );
-                                      })}
+                                  <div
+                                      key={sIdx}
+                                      onClick={!isActive ? switchSection : undefined}
+                                      style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 10,
+                                          flexShrink: 0,
+                                          cursor: !isActive ? "pointer" : "default",
+                                          padding: "4px 6px",
+                                          borderRadius: 6,
+                                      }}
+                                  >
+                                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 4, flexShrink: 0 }}>
+                                          <div style={{ height: 3, width: "100%", minWidth: 42, background: "#E6DFD3", borderRadius: 2, overflow: "hidden" }}>
+                                              <div style={{ height: "100%", width: `${pct}%`, background: allCorrect ? "#16A34A" : "#1C1917", transition: "width .25s ease" }} />
+                                          </div>
+                                          <button
+                                              type="button"
+                                              onClick={switchSection}
+                                              style={{
+                                                  border: "none",
+                                                  background: "transparent",
+                                                  padding: 0,
+                                                  fontSize: 13,
+                                                  fontWeight: isActive ? 800 : 600,
+                                                  color: isActive ? "#1C1917" : "#57534E",
+                                                  cursor: "pointer",
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  justifyContent: "center",
+                                                  gap: 5,
+                                                  whiteSpace: "nowrap",
+                                              }}
+                                          >
+                                              {allCorrect && (
+                                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                                      <polyline points="20 6 9 17 4 12" />
+                                                  </svg>
+                                              )}
+                                              <span>{label}</span>
+                                          </button>
+                                      </div>
+                                      {isActive ? (
+                                          <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                              {secQs.map((q: any) => {
+                                                  const qNum = rvQuestionNumber(q);
+                                                  const st = rvQuestionStatus(q);
+                                                  const isCur = reviewActiveQuestionId === q.id;
+                                                  return (
+                                                      <button
+                                                          key={q.id}
+                                                          type="button"
+                                                          className={`rv-palette-btn ${st}`}
+                                                          style={isCur ? { outline: "2px solid #1C1917", outlineOffset: 1 } : undefined}
+                                                          onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              rvJumpToQuestionFromMatrix(q, qNum);
+                                                          }}
+                                                          title={`Câu ${qNum}`}
+                                                      >
+                                                          {qNum}
+                                                      </button>
+                                                  );
+                                              })}
+                                          </div>
+                                      ) : (
+                                          <span style={{ fontSize: 12, color: "#78716C", whiteSpace: "nowrap" }}>
+                                              {secCorrect} of {secQs.length}
+                                          </span>
+                                      )}
                                   </div>
                               );
                           })}

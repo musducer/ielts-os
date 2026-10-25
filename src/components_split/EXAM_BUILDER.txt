@@ -122,6 +122,10 @@
                     setEditingQuiz(persisted);
                     setQuizCatalogState(nx);
                     setExamBuilderSaveState("saved");
+                    const { _activePassageTab, ...comparable } = persisted as any;
+                    editingQuizBaselineRef.current = { id: persisted.id, json: JSON.stringify(comparable) };
+                    setExamEditorDirty(false);
+                    showSaveToast(tx(`Đã lưu và đồng bộ đề "${persisted.title}" thành công!`, `Exam "${persisted.title}" saved and synced successfully!`), "success");
                 } catch (error: any) {
                     saved = true;
                     setExamBuilderSaveState("error");
@@ -217,7 +221,10 @@
                 {keyEditingQuiz ? (
                     <div key="key-editor" className="ebx-root" style={{background: EB.paper, padding: 0, flex: 1, overflowY: 'auto'}}>
                       <div style={{maxWidth: 820, margin: '0 auto', padding: '34px 32px 60px'}}>
-                        <div style={{...ebEyebrow, marginBottom: 10}}><Ico name="key" size={13} />{t('eb_edit_key')}</div>
+                        <div style={{...ebEyebrow, marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                          <span style={{display: 'inline-flex', alignItems: 'center', gap: 6}}><Ico name="key" size={13} />{t('eb_edit_key')} {keyEditorDirty ? `(${tx('Chưa lưu', 'Unsaved')})` : ''}</span>
+                          <button type="button" className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setKeyEditingQuiz(null); }} style={{background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '6px 12px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, textTransform: 'none', letterSpacing: 0}}><Ico name="x" size={13} />{tx("Đóng", "Close")}</button>
+                        </div>
                         <h3 style={{margin: '0 0 8px', fontFamily: EB.fDisplay, fontWeight: 600, color: EB.ink, fontSize: 32, letterSpacing: '-0.02em'}}>{keyEditingQuiz!.title}</h3>
                         <div style={{height: 2, width: 56, background: EB.accent, borderRadius: 2, marginBottom: 28}} />
                         <div style={{display: 'grid', gap: 0, marginBottom: 30}}>
@@ -247,11 +254,26 @@
                                 </div>
                             ))}
                         </div>
-                        <button className="ebx-primary" onClick={() => {
+                        <button className="ebx-primary" disabled={keyEditorSaving} onClick={async () => {
+                            if (keyEditorSaving) return;
+                            setKeyEditorSaving(true);
+                            try {
+                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
+                              setQuizzes(nx);
+                              const saved = typeof syncData === 'function' ? await syncData({ quizzes: nx }) : true;
+                              keyEditingQuizBaselineRef.current = null;
+                              setKeyEditorDirty(false);
+                              setKeyEditingQuiz(null);
+                              showSaveToast(saved ? tx("Đã lưu và đồng bộ đáp án (Key) thành công!", "Answer Key saved and synced successfully!") : tx("Đã lưu Key trên thiết bị, chờ đồng bộ mạng.", "Key saved locally, waiting for network sync."), saved ? "success" : "warning");
+                            } finally {
+                              setKeyEditorSaving(false);
+                            }
+                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: keyEditorSaving ? 'wait' : 'pointer', opacity: keyEditorSaving ? 0.7 : 1, fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name={keyEditorSaving ? "refresh" : "save"} size={15} />{keyEditorSaving ? tx("Đang lưu Key...", "Saving Key...") : t('eb_save_key')}</button>
+                        {false && <button onClick={() => {
                             const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
                             setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
                             alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
-                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>
+                        }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>}
                       </div>
                     </div>
 
@@ -266,7 +288,7 @@
                                     <p style={{ margin: '9px 0 0', maxWidth: 610, color: EB.sub, fontSize: 13, lineHeight: 1.6 }}>{tx("Gói này chạy theo thứ tự Listening, Reading, rồi Writing nếu có. Kết quả được giữ kín và học sinh chỉ trở lại sảnh thi sau mỗi kỹ năng.", "Runs in sequence: Listening, Reading, then Writing if applicable. Results are kept private and students return to the lobby after each skill.")}</p>
                                 </div>
                                 <div style={{ display: 'flex', gap: 8 }}>
-                                    <button className="ebx-soft" onClick={() => setRealExamPackageEditor(null)} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
+                                    <button className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setRealExamPackageEditor(null); }} style={{ background: EB.sheet, color: EB.sub, border: `1px solid ${EB.line}`, padding: '9px 14px', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Ico name="x" size={14} />{tx("Đóng", "Close")}</button>
                                     <button className="ebx-primary" onClick={async () => {
                                         const draft = realExamPackageEditor;
                                         const ordered = (draft.quizIds || []).filter(Boolean).map(id => quizzes.find((quiz: any) => quiz.id === id)).filter(Boolean) as Quiz[];
@@ -278,7 +300,7 @@
                                         await saveRealExamPackage({ ...draft, quizIds: ordered.map(quiz => quiz.id), maxAttempts: Math.max(1, Number(draft.maxAttempts) || 1) });
                                         setSelectedQuizzes([]);
                                         setRealExamPackageEditor(null);
-                                    }} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name="save" size={14} />{tx("Lưu gói thi", "Save package")}</button>
+                                    }} disabled={realExamPkgSaving} style={{ background: EB.accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: EB.radiusSm, fontWeight: 800, cursor: realExamPkgSaving ? 'wait' : 'pointer', opacity: realExamPkgSaving ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', gap: 7 }}><Ico name={realExamPkgSaving ? "refresh" : "save"} size={14} />{realExamPkgSaving ? tx("Đang lưu...", "Saving...") : tx("Lưu gói thi", "Save package")}{realExamPkgDirty ? " ●" : ""}</button>
                                 </div>
                             </div>
 
@@ -402,7 +424,8 @@
                                     <button className="ebx-soft" onClick={() => setEditingQuiz((prev: any) => prev ? {...prev, _showSettings: !prev._showSettings} : prev)} style={{background: editingQuiz._showSettings ? EB.accent : EB.sheet, color: editingQuiz._showSettings ? '#fff' : EB.ink, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${editingQuiz._showSettings ? EB.accent : EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="gear" size={14} />{t('eb_settings')}</button>
                                 </div>
                                 <div style={{display: 'flex', gap: 10, flexShrink: 0}}>
-                                    <button className="ebx-soft" onClick={() => setEditingQuiz(null)} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
+                                    {examEditorDirty && <span style={{fontSize: 11.5, fontWeight: 800, color: '#B45309', background: '#FEF3C7', border: '1px solid #FDE68A', padding: '5px 10px', borderRadius: 20, display: 'inline-flex', alignItems: 'center'}}>● {tx("Chưa lưu thay đổi", "Unsaved changes")}</span>}
+                                    <button className="ebx-soft" onClick={() => { if (confirmDiscardUnsavedChanges()) setEditingQuiz(null); }} style={{background: EB.sheet, color: EB.sub, padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: EB.radiusSm, border: `1px solid ${EB.line}`, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name="x" size={14} />{t('eb_close')}</button>
                                     <button className="ebx-primary" disabled={examBuilderSaveState === "saving"} onClick={handleForceSave} style={{background: EB.accent, color: '#fff', padding: '9px 22px', fontSize: 13, fontWeight: 700, borderRadius: EB.radiusSm, border: 'none', cursor: examBuilderSaveState === "saving" ? 'wait' : 'pointer', opacity: examBuilderSaveState === "saving" ? .7 : 1, display: 'inline-flex', alignItems: 'center', gap: 7}}><Ico name={examBuilderSaveState === "saving" ? "refresh" : "save"} size={14} />{examBuilderSaveState === "saving" ? "Synchronizing..." : examBuilderSaveState === "saved" ? "Synced" : examBuilderSaveState === "error" ? "Retry save" : t('eb_save')}</button>
                                 </div>
                             </div>
@@ -454,6 +477,19 @@
                                                 <label style={{ fontSize: 10, fontWeight: 800, color: EB.sub }}>MIN. WORDS<input type="number" min={1} value={task.minimumWords} onChange={event => updateWritingTask(task.id, { minimumWords: Math.max(1, Number(event.target.value) || 1) })} style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '7px 8px', border: `1px solid ${EB.line}`, borderRadius: 6 }} /></label>
                                             </div>
                                         </div>
+                                        <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>{tx("DẠNG BÀI VIẾT (QUESTION CATEGORY)", "WRITING QUESTION CATEGORY")}</span>
+                                            <select
+                                                className="ebx-soft"
+                                                value={task.categoryId || inferQuestionCategory(task, editingQuiz).id}
+                                                onChange={e => updateWritingTask(task.id, { categoryId: e.target.value })}
+                                                style={{ padding: '8px 12px', fontSize: 13, borderRadius: EB.radiusSm, fontWeight: 600, border: `1px solid ${EB.line}`, background: EB.sheet, color: EB.ink, width: '100%', boxSizing: 'border-box' }}
+                                            >
+                                                {(CANONICAL_TAXONOMY.Writing || []).filter(c => task.taskNumber === 1 ? c.group === "Task 1" : c.group === "Task 2").map(c => (
+                                                    <option key={c.id} value={c.id}>{c.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
                                         <label style={{ display: 'grid', gap: 6, marginBottom: 12 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>TASK INSTRUCTION</span><input value={task.instructions} onChange={event => updateWritingTask(task.id, { instructions: event.target.value })} style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
                                         <div style={{ marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 800, color: EB.sub, marginBottom: 6 }}>PROMPT</div><div style={{ border: `1px solid ${EB.line}`, borderRadius: 8, overflow: 'hidden', background: EB.sheet }}><RichTextEditor value={task.prompt} onChange={(value: string) => updateWritingTask(task.id, { prompt: value })} placeholder={`Enter ${task.title} prompt`} /></div></div>
                                         <label style={{ display: 'grid', gap: 6 }}><span style={{ fontSize: 11, fontWeight: 800, color: EB.sub }}>OPTIONAL MEDIA URL</span><input type="url" value={task.mediaUrl || ''} onChange={event => updateWritingTask(task.id, { mediaUrl: event.target.value })} placeholder="https://..." style={{ padding: '10px 12px', border: `1px solid ${EB.line}`, borderRadius: 7, background: EB.sheet }} /></label>
@@ -575,18 +611,13 @@
                                                     <option value="DIAGRAM_LABEL">Diagram labelling (free answer boxes)</option>
                                                     <option value="SHORT_ANSWER">Short answer / Sentence completion</option>
                                                 </select>
-                                                <select className="ebx-soft" value={q.subType || ""} onChange={(e: any) => {
-                                                    updateGroup((qItem: any) => ({ ...qItem, subType: e.target.value }));
-                                                }} style={{...selBox, color: EB.sub}}>
-                                                    <option value="">{t('eb_subtype_none')}</option>
-                                                    <option value="True/False/Not Given">True / False / Not Given</option>
-                                                    <option value="Matching Headings">Matching Headings</option>
-                                                    <option value="Multiple Choice">Multiple Choice</option>
-                                                    <option value="Sentence Completion">Sentence Completion</option>
-                                                    <option value="SUMMARY_DRAG">Summary drag (Reading)</option>
-                                                    <option value="COLUMN_DRAG">Matching 2 columns (Listening)</option>
-                                                    <option value="FLOWCHART">Flow-chart (inline input)</option>
-                                                    <option value="FLOWCHART_DRAG">Flow-chart (drag and drop)</option>
+                                                <select className="ebx-soft" value={q.categoryId || inferQuestionCategory(q, editingQuiz).id} onChange={(e: any) => {
+                                                    const chosen = e.target.value;
+                                                    updateGroup((qItem: any) => ({ ...qItem, categoryId: chosen }));
+                                                }} style={{...selBox, color: EB.sub, maxWidth: 260}}>
+                                                    {(CANONICAL_TAXONOMY[quizTaxonomySkill(editingQuiz)] || []).map(catItem => (
+                                                        <option key={catItem.id} value={catItem.id}>{catItem.label}</option>
+                                                    ))}
                                                 </select>
                                             </div>
                                             <div style={{display: 'flex', gap: 7}}>

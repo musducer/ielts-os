@@ -1,4 +1,52 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-24)
+# IELTS OS — Session Handoff (cập nhật 2026-10-25)
+
+## Hệ Thống Phân Loại Dạng Bài Chuẩn (Unified IELTS & Integrated Taxonomy) & Popover Lọc Học Viên — 2026-10-25
+
+- **Nguyên tắc an toàn bất khả xâm phạm (Zero-Breakage Runtime Constraint)**:
+  - Tuyệt đối không thay đổi cách `ACTIVE_EXAM.txt`, hàm chấm `isSingleQuestionCorrect` hay `getQuizScoreSummary` sử dụng `q.type` và `q.subType`.
+  - Bổ sung trường tùy chọn `categoryId?: string` cho `QuizQuestion` và `WritingTaskDefinition`.
+  - Mọi thao tác lọc, biểu đồ điểm yếu Review, báo cáo Student Analytics, và thẻ vị trí Part/Passage đều đọc qua hàm thuần `inferQuestionCategory(q, quiz, sectionIdx)`.
+- **4 Kỹ năng độc lập trong Taxonomy (`src/questionTaxonomy.ts`, `api/index.py`)**:
+  - Tách hẳn `"Integrated"` thành danh mục kỹ năng riêng, không trộn lẫn vào `"Reading"`.
+  - 10 dạng Listening: `L_FORM_NOTE`, `L_TABLE`, `L_SENTENCE_SUMMARY`, `L_FLOWCHART`, `L_SHORT_ANSWER`, `L_MAP_PLAN`, `L_DIAGRAM`, `L_MCQ_SINGLE`, `L_MCQ_MULTI`, `L_MATCHING`.
+  - 12 dạng Reading: `R_TFNG`, `R_YNNG`, `R_MATCHING_HEADINGS`, `R_MATCHING_INFO`, `R_MATCHING_FEATURES`, `R_SENTENCE_ENDINGS`, `R_SUMMARY_BOX`, `R_NOTE_TABLE_SUMMARY`, `R_DIAGRAM_FLOWCHART`, `R_SHORT_ANSWER`, `R_MCQ_SINGLE`, `R_MCQ_MULTI`.
+  - 12 dạng Writing: Task 1 (`W_T1_LINE`, `W_T1_BAR`, `W_T1_PIE`, `W_T1_TABLE`, `W_T1_MIXED`, `W_T1_MAP`, `W_T1_PROCESS`) và Task 2 (`W_T2_OPINION`, `W_T2_DISCUSSION`, `W_T2_ADV_DISADV`, `W_T2_PROBLEM_SOLUTION`, `W_T2_TWO_PART`).
+  - 5 dạng Integrated: `I_LISTENING`, `I_CLOZE_GRAMMAR`, `I_ARRANGEMENT`, `I_READING_COMP`, `I_SENTENCE_TRANSFORM`.
+- **Giao diện Lọc Dạng Bài & Badges Vị Trí Học Viên (`src/components_split/STUDENT_PORTAL.txt`)**:
+  - Nút SVG Phễu lọc kế bên ô tìm kiếm với huy hiệu đếm số dạng bài đang chọn (`stSelectedCategories.length`), popover thả xuống kèm danh sách checkbox tương ứng kỹ năng hiện tại, số lượng đề khả dụng cho từng dạng và nút xóa lọc.
+  - Thẻ đề thi tự động hiển thị pill vị trí nổi bật (`Part 2 · Map / Plan Labelling`) khi đang lọc, hoặc 3 tag tóm tắt dạng bài +N khi không lọc.
+- **Đồng bộ Exam Builder, Review Analytics & DOCX Parser (`EXAM_BUILDER.txt`, `REVIEW_QUIZ.txt`, `STUDENTS.txt`, `api/index.py`)**:
+  - Exam Builder đổi sang selector Category chuẩn theo kỹ năng và thêm selector cho Writing Task 1 & 2.
+  - Review Quiz và phân tích học viên hiển thị tên sư phạm chuẩn hóa.
+  - DOCX Parser tự động nhận diện `sub_t` chuẩn (`TABLE`, `FORM`, `True/False/Not Given`, `Yes/No/Not Given`) và tính toán `categoryId` tự động.
+
+## Gia Cố Bảo Mật Toàn Hệ Thống (6 Hạng Mục Security Audit & Hardening) — 2026-10-24
+
+- **Hạng mục 1: Chống SSRF & Giả mạo MIME trong Proxy Ảnh / Audio (`api/index.py`)**:
+  - Thêm `_is_blocked_ip_address`, `_validate_safe_external_url`, `_SafeRedirectHandler`, `_open_safe_external_url`, và `_detect_valid_image_mime`.
+  - Chặn toàn bộ IP nội bộ, loopback (`127.0.0.1`, `::1`), link-local / cloud metadata (`169.254.169.254`), dải private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) và kiểm tra lại đích đến của mọi HTTP redirect (`301/302/303/307/308`) tại `/api/image_base64`, `_resolve_image_base64_part`, `_download_external_audio_to_file`, và `_download_external_audio_bytes`.
+  - Xác thực magic bytes hình ảnh thực tế (`PNG`, `JPEG`, `GIF`, `WEBP`, `BMP`, `SVG`) trước khi trả dữ liệu từ `/api/image_base64` hoặc gửi sang Vision API.
+
+- **Hạng mục 2: Phân quyền Firestore Security Rules & Cô lập Dữ liệu Nhạy cảm ở Client (`firestore.rules`, `firebase.json`, `src/App.template.tsx`)**:
+  - Khởi tạo và đăng ký `firestore.rules` vào `firebase.json`: yêu cầu đăng nhập (`request.auth != null`) cho toàn bộ workspace, khóa quyền ghi các trường quản trị của giáo viên (`quizzes`, `transactions`, `history`, `schedules`, `examFolders`, `topicAssignments`, `realExamPackages`, `sharedLinks`, `giftCatalog`, `rewardMechanisms`, `bannedIps`, `announcement`) và các subcollection (`quizzes`, `audioUploads`, `examBulkOperations`) chỉ dành riêng cho tài khoản giáo viên (`@ielts.os`).
+  - Tại `applyWorkspaceSnapshot` (`src/App.template.tsx`): Khi đăng nhập dưới vai trò `STUDENT`, tự động lược bỏ dữ liệu PII/tài chính nhạy cảm của các học viên khác (`phone`, `dob`, `rate`, `customRate`, `debtMessage`, `vocabNotebook`, `errorDna`) và ẩn sổ cái `transactions` khỏi bộ nhớ client.
+  - Tại `performSyncData` (`src/App.template.tsx`): Ràng buộc học viên chỉ được phép thêm/cập nhật `quizResults` mang đúng `studentId` của chính mình.
+
+- **Hạng mục 3: Xác thực & Rate-Limit các Endpoint AI, OCR và DOCX mà Không Giới hạn File Nhỏ (`api/index.py`, `src/App.template.tsx`, `src/WritingFeedback.tsx`, `storage.rules`)**:
+  - Bổ sung `_verify_api_request_guard` kiểm soát Origin/Bearer Token Firebase kèm rate-limit theo IP cho `/api/upload_docx*`, `/api/scan_exam_page`, `/api/ai_critique`, `/api/ai_feedback`, `/api/ai_explain`, `/api/analyze_error_dna`, `/api/review_copilot`, `/api/ai_review_chat`, `/api/writing_sandbox_coach`, `/api/ai_vocab`, và `/api/image_base64`.
+  - Bổ sung helper `getAuthHeaders` trong `src/App.template.tsx` và đính kèm `Authorization: Bearer <idToken>` trên toàn bộ lời gọi `fetch` tới backend API.
+  - **Không giới hạn file ở mức 15 MB**: Nâng `MAX_DOCX_UPLOAD_BYTES` lên mặc định **100 MB** (cấu hình tối đa **512 MB**), `MAX_DOCX_UNCOMPRESSED_BYTES` lên **250 MB**, giữ nguyên khả năng upload file lớn cho `/api/scan_exam_page`, và nâng giới hạn audio trong `storage.rules` lên **512 MB** khớp với backend.
+
+- **Hạng mục 4: Thu hẹp CORS trên Firebase Storage Bucket (`api/index.py`)**:
+  - Thay thế cấu hình `origin: ["*"]` và phương thức `"DELETE"` trong `_ensure_storage_bucket_cors` bằng danh sách origin tin cậy `_audio_upload_cors_origins()` và các phương thức `["GET", "HEAD", "PUT", "POST", "OPTIONS"]`.
+  - Chỉ truyền `origin` vào `create_resumable_upload_session` khi khớp với danh sách origin hợp lệ.
+
+- **Hạng mục 5: Khử mã độc DOM XSS trong Bàn Chấm Writing & Xuất PDF (`src/WritingFeedback.tsx`)**:
+  - Bọc `DOMPurify.sanitize(...)` cho `activeTask.prompt` (khi render `dangerouslySetInnerHTML`) và `params.taskPrompt` (trong `buildVectorPdfDossierHtml`), đồng thời dùng `escapeHtml(params.mediaUrl)`.
+
+- **Hạng mục 6: HTTP Security Headers & So sánh Hằng thời gian cho Cron Secret (`vercel.json`, `api/index.py`)**:
+  - Bổ sung `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`, và `Permissions-Policy` vào `vercel.json`.
+  - Sử dụng `hmac.compare_digest` khi kiểm tra `CRON_SECRET` tại `/api/maintenance/cleanup_attempts`.
 
 ## Sửa Lỗi Hiển Thị Chuỗi Thô `tx(...)` Trong Banner Gacha Mystery Box (Student Portal) — 2026-10-24
 
@@ -908,3 +956,19 @@
 - **AI Source-Text Resolution & Concise 3-Line Output (`src/App.template.tsx`, `api/index.py`)**:
   - Added `resolveReviewQuestionContext(q, quiz, activeSectionIdx)` in `src/App.template.tsx` with 4-tier source resolution (`sections[secIdx].transcript || sections[secIdx].passage` -> `passages[secIdx]` -> `quiz.transcript || quiz.passage` -> DOM fallback) and surrounding line extraction for `[BLANK]` questions whose `q.text` is only a number (`"1."`).
   - Updated `/api/ai_explain` in `api/index.py` to enforce a concise 3-bullet structure (`• Bản chất:`, `• Dẫn chứng:`, `• Kết luận:`, max 75–90 words) and never list untouched options `A–H`.
+
+## Review Workbench Refinements, Practice Exit, Unified 3-State Save & Teacher Asset Confiscation — 2026-10-24
+
+- **Review Workbench Simplification & Integrated MCQ Options Fix (`src/components_split/REVIEW_QUIZ.txt`, `src/App.template.tsx`)**:
+  - Top Review header strictly shows two tabs (`Tổng quan` & `Chi tiết`); bottom Part/Passage navigator behaves identically to the active exam room (`ACTIVE_EXAM.txt`), showing question number pills inside the active bottom Part tab and `X of Y` counts for inactive tabs.
+  - Fixed duplicated MCQ option text (`A–H`) on grouped range questions (`26–30`) in Integrated exams during Review by stripping shared `groupOptions` from per-question option pools when a shared group option box is already rendered or when `qOpts` matches the shared pool (`hasSharedPool`).
+- **Practice Exam Exit Without Saving (`src/components_split/ACTIVE_EXAM.txt`, `src/App.template.tsx`)**:
+  - Added `exitPracticeExamWithoutSaving` and a `← Quay lại` button in the exam room header for Practice exams (excluding Real Exam packages and locked non-practice quest stages). Requires user `confirm`, halts audio playback, resets exam session state, and returns to the portal without recording a result.
+- **Unified 3-State Save System (`src/App.template.tsx`, `src/WritingFeedback.tsx`, `src/components_split/EXAM_BUILDER.txt`, `src/components_split/TOPIC_ASSIGNMENTS.txt`, `src/components_split/STUDENTS.txt`)**:
+  - Standardized all save operations with: (1) inline loading state + disabled button (`examBuilderSaveState`, `keyEditorSaving`, `realExamPkgSaving`, `questEditorSaving`, `studentFormSaving`, `WritingFeedback.saveStatus`), (2) floating top-right toast banner (`showSaveToast` / `saveToastOverlay`), and (3) unsaved-changes guard (`beforeunload` + `confirmDiscardUnsavedChanges` on close/back/tab switch when dirty).
+- **Quest Selector Deck, Store Item SVG Icons & Permanent Inventory Categories (`src/components_split/STUDENT_PORTAL.txt`, `src/App.template.tsx`)**:
+  - Replaced vertical stacking of all Quests with a compact **Quest Selector Deck** (search input + `Tất cả / Đang thực hiện / Đã hoàn thành` filter tabs + grid of compact quest cards with progress bars), rendering only the selected quest's `.quest-split-layout` below.
+  - Added `renderGiftStoreIcon` for distinct SVG artwork per reward/item type and sub-category filter pills (`Tất cả`, `Khung Avatar`, `Danh hiệu`, `Linh thú`, `Giao diện`, `Khác`) in the Permanent Inventory modal.
+- **Teacher Confiscation & Anti-Resurrection Tombstone (`src/App.template.tsx`, `src/components_split/STUDENTS.txt`)**:
+  - Extended `CoinOperation` (`revokedConsumables`, `revokedPermanents`, `revokedRewards`, `clearAllInventory`) and `Student.inventory.revokedPermanents`.
+  - **Luật bất di bất dịch**: `mergeMyPermanents` and `performSyncData` union `permanents` across `localStorage` (`ielts_os_perms_<email>`), local state, and server state. When a teacher confiscates a permanent item via `applyCoinOperation`, its name is appended to `inventory.revokedPermanents` (and removed if re-granted later). Both `mergeMyPermanents` and `performSyncData` filter `permanents` against `revokedPermanents` before writing back to `localStorage` and Firestore so confiscated items never resurrect. Confiscating an equipped cosmetic also automatically unequips `equippedTitle`, `equippedTheme`, `equippedFrame`, or `equippedPet`.

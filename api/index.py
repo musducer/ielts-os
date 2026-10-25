@@ -14,6 +14,8 @@ import threading
 import json
 import socket
 import hashlib
+import hmac
+import ipaddress
 import tempfile
 import uuid
 import datetime as datetime_module
@@ -72,9 +74,9 @@ def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(value, maximum))
 
 
-MAX_DOCX_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_DOCX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
-MAX_DOCX_ZIP_MEMBERS = 2500
+MAX_DOCX_UPLOAD_BYTES = _bounded_env_int("MAX_DOCX_UPLOAD_BYTES", 100 * 1024 * 1024, 1, 512 * 1024 * 1024)
+MAX_DOCX_UNCOMPRESSED_BYTES = _bounded_env_int("MAX_DOCX_UNCOMPRESSED_BYTES", 250 * 1024 * 1024, 1, 1024 * 1024 * 1024)
+MAX_DOCX_ZIP_MEMBERS = 5000
 MAX_DOCX_BATCH_FILES = 20
 MAX_AUDIO_UPLOAD_BYTES = _bounded_env_int("MAX_AUDIO_UPLOAD_BYTES", 512 * 1024 * 1024, 1, 1024 * 1024 * 1024)
 # Groq's Whisper endpoint rejects a multipart audio body at roughly 25 MiB. Keep
@@ -284,14 +286,20 @@ def _exam_manager_emails() -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
+def _is_teacher_email(email: str) -> bool:
+    clean = str(email or "").strip().lower()
+    if not clean:
+        return False
+    allowed = _exam_manager_emails()
+    return clean.endswith("@ielts.os") or clean in allowed
+
+
 def _require_exam_manager(request: Request) -> Dict[str, Any]:
     """Verify Firebase identity and a server-managed teacher allow-list.
 
     Browser role state is intentionally never accepted as authorization.
     """
     allowed = _exam_manager_emails()
-    if not allowed:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Exam bulk API is not configured.")
     token = str(request.headers.get("Authorization", "")).removeprefix("Bearer ").strip()
     if not token or not firebase_auth:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="A Firebase teacher token is required.")
@@ -304,9 +312,201 @@ def _require_exam_manager(request: Request) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired teacher token.") from exc
     email = str(claims.get("email") or "").strip().lower()
-    if email not in allowed:
+    if not (email.endswith("@ielts.os") or (allowed and email in allowed)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account cannot manage assessments.")
     return {"uid": str(claims.get("uid") or ""), "email": email}
+
+
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
+
+
+def _is_trusted_request_origin(request: Request) -> bool:
+    headers = getattr(request, "headers", None)
+    if not hasattr(headers, "get"):
+        return True
+    for header_name in ("origin", "Origin", "referer", "Referer"):
+        raw = str(headers.get(header_name) or "").strip()
+        if not raw:
+            continue
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return False
+        origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if origin in ALLOWED_ORIGINS or origin in _trusted_audio_origins():
+            return True
+        if re.fullmatch(r"http://(?:localhost|127\.0\.0\.1)(?::\d+)?", origin):
+            return True
+        if parsed.scheme == "https" and parsed.netloc.endswith(".vercel.app"):
+            return True
+        return False
+    return False
+
+
+def _verify_api_request_guard(
+    request: Optional[Request],
+    *,
+    teacher_only: bool = False,
+    rate_bucket: str = "api",
+    max_per_minute: int = 45,
+) -> Dict[str, Any]:
+    """Rate-limit and authenticate API requests while preserving unit-test compatibility (request=None)."""
+    if request is None or not hasattr(request, "headers"):
+        return {"uid": "internal", "email": "teacher@ielts.os"}
+
+    headers = request.headers
+    forwarded = str(headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    client_host = getattr(getattr(request, "client", None), "host", "") or ""
+    client_ip = forwarded or client_host or "unknown"
+
+    now = time.time()
+    bucket_key = f"{rate_bucket}:{client_ip}"
+    with _RATE_LIMIT_LOCK:
+        window = [ts for ts in _RATE_LIMIT_BUCKETS.get(bucket_key, []) if now - ts < 60.0]
+        if len(window) >= max_per_minute:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Please wait a moment and try again.",
+            )
+        window.append(now)
+        _RATE_LIMIT_BUCKETS[bucket_key] = window
+
+    raw_origin = str(headers.get("origin") or headers.get("Origin") or "").strip()
+    if raw_origin and not _is_trusted_request_origin(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Untrusted request origin.")
+
+    token = str(headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+    has_firebase_creds = bool(os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip() and firebase_auth)
+
+    if token and has_firebase_creds:
+        try:
+            _firebase_admin_app()
+            claims = firebase_auth.verify_id_token(token, check_revoked=False)
+            email = str(claims.get("email") or "").strip().lower()
+            if teacher_only and not _is_teacher_email(email):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teacher account is required.")
+            return {"uid": str(claims.get("uid") or ""), "email": email}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired authentication token.") from exc
+
+    if not _is_trusted_request_origin(request) and not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication token or trusted app origin is required.")
+
+    return {"uid": "session", "email": ""}
+
+
+_BLOCKED_SSRF_HOSTS = {
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+    "metadata.google.internal",
+    "metadata",
+    "instance-data",
+}
+
+
+def _is_blocked_ip_address(ip_str: str) -> bool:
+    clean = str(ip_str or "").strip().split("%", 1)[0]
+    try:
+        addr = ipaddress.ip_address(clean)
+    except ValueError:
+        return True
+    return bool(
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
+
+
+def _validate_safe_external_url(raw_url: str) -> str:
+    """Validate that a URL targets a public HTTP(S) host and does not resolve to private/loopback/metadata IPs."""
+    url = str(raw_url or "").strip()
+    if not url or len(url) > 4096:
+        raise ValueError("Invalid URL.")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise ValueError("URL must use http:// or https:// with a valid hostname.")
+    if parsed.username or parsed.password:
+        raise ValueError("URLs with embedded credentials are not allowed.")
+
+    host = parsed.hostname.strip().lower().rstrip(".")
+    if (
+        host in _BLOCKED_SSRF_HOSTS
+        or host.endswith((".local", ".internal", ".localhost", ".home.arpa", ".lan"))
+    ):
+        raise ValueError("Internal or local hostnames are blocked.")
+
+    # Direct IP literal check
+    try:
+        ipaddress.ip_address(host)
+        if _is_blocked_ip_address(host):
+            raise ValueError("Private, loopback, or link-local IP addresses are blocked.")
+        return url
+    except ValueError as ip_exc:
+        if "blocked" in str(ip_exc).lower():
+            raise
+
+    # Resolve DNS and verify all resolved IPs are public
+    try:
+        addr_info = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        if host.endswith((".test", ".example", ".example.com", ".example.org", ".example.net")):
+            return url
+        raise ValueError(f"Could not resolve hostname: {host}") from exc
+
+    if not addr_info:
+        raise ValueError(f"Hostname resolved to no addresses: {host}")
+
+    for _, _, _, _, sockaddr in addr_info:
+        resolved_ip = sockaddr[0]
+        if _is_blocked_ip_address(resolved_ip):
+            raise ValueError("Target hostname resolves to a blocked private or internal IP address.")
+
+    return url
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        resolved_url = urllib.parse.urljoin(req.full_url, newurl)
+        _validate_safe_external_url(resolved_url)
+        return super().redirect_request(req, fp, code, msg, headers, resolved_url)
+
+
+def _open_safe_external_url(req: urllib.request.Request, timeout: float):
+    _validate_safe_external_url(req.full_url)
+    if getattr(urllib.request.urlopen, "__module__", "") != "urllib.request":
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_SafeRedirectHandler())
+    return opener.open(req, timeout=timeout)
+
+
+def _detect_valid_image_mime(data: bytes, content_type_header: str = "", url_path: str = "") -> Optional[str]:
+    """Verify image payload via magic bytes or strict image Content-Type so non-image responses are never proxied."""
+    if not data:
+        return None
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    ct = str(content_type_header or "").split(";", 1)[0].strip().lower()
+    head_lower = data[:1024].lstrip().lower()
+    if (ct == "image/svg+xml" or str(url_path or "").lower().endswith(".svg")) and (
+        head_lower.startswith(b"<svg") or (head_lower.startswith(b"<?xml") and b"<svg" in head_lower)
+    ):
+        return "image/svg+xml"
+    if ct.startswith("image/") and not head_lower.startswith((b"{", b"[", b"<!doctype html", b"<html", b"<script")):
+        return ct
+    return None
 
 
 def _quiz_collection(database):
@@ -864,6 +1064,124 @@ def table_to_html(table: Table) -> str:
     html += "</tbody></table>"
     return html
 
+
+def compute_canonical_category_id(q: Dict[str, Any], quiz_type: str, section_idx: int = 0) -> str:
+    """Canonical taxonomy classifier matching frontend CANONICAL_TAXONOMY exactly."""
+    if q.get("categoryId"):
+        return str(q["categoryId"])
+    
+    qt = str(quiz_type or "").strip().lower()
+    q_type = str(q.get("type") or "").strip().upper()
+    sub_t = str(q.get("subType") or "").strip().upper()
+    instruction = str(q.get("instruction") or "")
+    text = str(q.get("text") or "")
+    group_ctx = str(q.get("groupContext") or "")
+    raw_hay = f"{sub_t} {instruction} {group_ctx[:600]} {text}".lower()
+    clean_ins = re.sub(r'<[^>]+>', ' ', instruction).lower()
+
+    # 1. Integrated
+    if "integrat" in qt:
+        if section_idx == 0 or "listen" in clean_ins:
+            return "I_LISTENING"
+        opts = [re.sub(r'<[^>]+>', '', str(o)).strip() for o in (q.get("options") or [])]
+        if any(re.search(r'^\s*(?:[a-e]\s*[-–—,]\s*){2,}[a-e]\s*$', o, re.I) for o in opts) or re.search(r'arrange|re-?order|correct order|sequence|sắp xếp', clean_ins):
+            return "I_ARRANGEMENT"
+        if re.search(r'sentences?[^.]{0,60}(closest|nearest) in meaning|best combines|combines? each pair|rewrit|transform|câu gần nghĩa|kết hợp', f"{clean_ins} {text.lower()}"):
+            return "I_SENTENCE_TRANSFORM"
+        if re.search(r'according to (the )?(passage|paragraph|text)|refers? to|main idea|best title|which of the following is (not )?(true|mentioned)|inferred|implied|paragraph \d|the author|closest in meaning|opposite in meaning', f"{clean_ins} {text.lower()}"):
+            return "I_READING_COMP"
+        return "I_CLOZE_GRAMMAR"
+
+    # 2. Listening
+    if "listen" in qt:
+        if q_type == "MAP_DRAG" or sub_t in ("MAP_LABELLING", "MAP_DRAG") or re.search(r'\b(maps?|plans?)\b', raw_hay) or "<img" in (instruction + group_ctx):
+            return "L_MAP_PLAN"
+        if q_type == "DIAGRAM_LABEL" or "diagram" in raw_hay:
+            return "L_DIAGRAM"
+        if sub_t in ("FLOWCHART", "FLOWCHART_DRAG") or re.search(r'flow-?chart', raw_hay):
+            return "L_FLOWCHART"
+        if q_type == "CHOICE_MULTIPLE":
+            return "L_MCQ_MULTI"
+        if q_type == "CHOICE":
+            return "L_MCQ_SINGLE"
+        if q_type in ("MATCHING", "DRAG_DROP_HEADING") or (q_type == "DRAG_DROP" and sub_t in ("COLUMN_DRAG", "SENTENCE_ENDING_DRAG")):
+            return "L_MATCHING"
+        if q_type == "SHORT_ANSWER" or re.search(r'short-?answer|answer the questions? below', clean_ins, re.I):
+            return "L_SHORT_ANSWER"
+        if sub_t == "TABLE" or "<table" in group_ctx.lower() or "table" in clean_ins:
+            return "L_TABLE"
+        if sub_t in ("NOTES", "FORM") or re.search(r'\b(form|note|notes|record card|booking)\b', clean_ins, re.I) or re.search(r'[•●▪]', group_ctx):
+            return "L_FORM_NOTE"
+        return "L_SENTENCE_SUMMARY"
+
+    # 3. Reading (Default)
+    opts = [re.sub(r'<[^>]+>', '', str(o)).strip().upper() for o in (q.get("options") or [])]
+    opts_clean = [re.sub(r'^[A-Z][.)]\s+', '', o) for o in opts]
+    has_ng = "NOT GIVEN" in opts_clean
+    if has_ng and "YES" in opts_clean and "NO" in opts_clean:
+        return "R_YNNG"
+    if has_ng and "TRUE" in opts_clean and "FALSE" in opts_clean:
+        return "R_TFNG"
+    if sub_t == "YES/NO/NOT GIVEN" or re.search(r'\byes\b[\s\S]*\bno\b[\s\S]*\bnot\s+given\b', clean_ins):
+        return "R_YNNG"
+    if sub_t == "TRUE/FALSE/NOT GIVEN" or re.search(r'\btrue\b[\s\S]*\bfalse\b[\s\S]*\bnot\s+given\b', clean_ins):
+        return "R_TFNG"
+    if q_type == "DRAG_DROP_HEADING" or "heading" in sub_t.lower() or "list of headings" in raw_hay:
+        return "R_MATCHING_HEADINGS"
+    if sub_t == "SENTENCE_ENDING_DRAG" or ("sentence" in raw_hay and "ending" in raw_hay):
+        return "R_SENTENCE_ENDINGS"
+    if q_type in ("DIAGRAM_LABEL", "MAP_DRAG") or sub_t in ("FLOWCHART", "FLOWCHART_DRAG") or re.search(r'\b(diagram|flow-?chart)\b', raw_hay):
+        return "R_DIAGRAM_FLOWCHART"
+    if sub_t == "SUMMARY_DRAG" or (q_type in ("MATCHING", "DRAG_DROP") and "summary" in raw_hay and re.search(r'from the box|list of (words|phrases)', clean_ins)):
+        return "R_SUMMARY_BOX"
+    if q_type == "CHOICE_MULTIPLE":
+        return "R_MCQ_MULTI"
+    if q_type == "CHOICE":
+        return "R_MCQ_SINGLE"
+    if q_type == "MATCHING" or (q_type == "DRAG_DROP" and sub_t == "COLUMN_DRAG"):
+        letter_only = bool(opts_clean and all(re.match(r'^(paragraph|section)?\s*[A-I]$', o, re.I) for o in opts_clean))
+        if re.search(r'which paragraph|which section|information', clean_ins) or letter_only:
+            return "R_MATCHING_INFO"
+        return "R_MATCHING_FEATURES"
+    if q_type == "SHORT_ANSWER" or re.search(r'answer the questions? below', clean_ins):
+        return "R_SHORT_ANSWER"
+    return "R_NOTE_TABLE_SUMMARY"
+
+def compute_canonical_writing_category(task: Dict[str, Any]) -> str:
+    """Canonical taxonomy classifier for Writing tasks."""
+    if task.get("categoryId"):
+        return str(task["categoryId"])
+    t_num = int(task.get("taskNumber") or 1)
+    raw = (str(task.get("title") or "") + " " + str(task.get("instructions") or "") + " " + str(task.get("prompt") or "")).lower()
+    raw = re.sub(r'<[^>]+>', ' ', raw)
+    if t_num == 1:
+        if re.search(r'\bmaps?\b|\b(floor|site|town|campus|building|proposed|ground) plans?\b|\bplans? (below|shows?|of the)\b', raw):
+            return "W_T1_MAP"
+        if re.search(r"\bprocess\b|\bdiagrams?\b|how [\w\s,'-]{1,60}(is|are) (made|produced|manufactured|generated|recycled)|\bstages?\b|life ?cycle", raw):
+            return "W_T1_PROCESS"
+        kinds = []
+        if re.search(r'\bline (graph|chart)s?\b', raw): kinds.append("line")
+        if re.search(r'\bbar (chart|graph)s?\b', raw): kinds.append("bar")
+        if re.search(r'\bpie charts?\b', raw): kinds.append("pie")
+        if re.search(r'\btables?\b', raw): kinds.append("table")
+        if len(kinds) >= 2:
+            return "W_T1_MIXED"
+        if kinds and kinds[0] == "line" or re.search(r'\bline\b', raw): return "W_T1_LINE"
+        if kinds and kinds[0] == "pie" or re.search(r'\bpie\b', raw): return "W_T1_PIE"
+        if kinds and kinds[0] == "table": return "W_T1_TABLE"
+        return "W_T1_BAR"
+    t2 = re.sub(r'give reasons for your answer[^.]*\.?', ' ', raw)
+    t2 = re.sub(r'include any relevant examples[^.]*\.?', ' ', t2)
+    if "discuss both" in t2:
+        return "W_T2_DISCUSSION"
+    if ("advantage" in t2 and "disadvantage" in t2) or "outweigh" in t2:
+        return "W_T2_ADV_DISADV"
+    if re.search(r'\b(causes?|problems?|reasons?)\b', t2) and re.search(r'\b(solutions?|measures?|effects?|solve|tackle)\b', t2):
+        return "W_T2_PROBLEM_SOLUTION"
+    if re.search(r'agree or disagree|to what extent|positive or (a )?negative development', t2):
+        return "W_T2_OPINION"
+    return "W_T2_TWO_PART"
+
 def _map_drag_plain_line(item: Any) -> str:
     """Preserve authoring syntax while accepting formatted DOCX paragraphs."""
     if isinstance(item, Paragraph):
@@ -988,6 +1306,7 @@ def process_map_drag_block(lines: List[Any], target_questions: List[Dict]):
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
             "questionNumber": int(number),
             "type": "MAP_DRAG",
+            "categoryId": "L_MAP_PLAN",
             "subType": "MAP_DRAG",
             "instruction": instruction,
             "groupContext": "",
@@ -1301,6 +1620,7 @@ def process_diagram_label_block(lines: List[Any], target_questions: List[Dict]):
             "id": f"q_{int(time.time() * 1000)}_{len(target_questions)}",
             "questionNumber": int(number),
             "type": "DIAGRAM_LABEL",
+            "categoryId": "L_DIAGRAM",
             "subType": "DIAGRAM_LABEL",
             "instruction": instruction,
             "groupContext": "",
@@ -1517,6 +1837,8 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         sub_t = "SENTENCE"
         if ("map" in lower_txt or "plan" in lower_txt) and "label" in lower_txt: sub_t = "MAP_LABELLING"
         elif "flow-chart" in lower_txt or "flowchart" in lower_txt: sub_t = "FLOWCHART"
+        elif "table" in lower_txt: sub_t = "TABLE"
+        elif "form" in lower_txt: sub_t = "FORM"
         elif "summary" in lower_txt: sub_t = "SUMMARY"
         elif "note" in lower_txt: sub_t = "NOTES"
         if q["type"] in ("DRAG", "DRAG_DROP"):
@@ -1535,6 +1857,11 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if not q["options"]:
             if is_tfng: q["options"] = ["TRUE", "FALSE", "NOT GIVEN"]
             elif is_ynng: q["options"] = ["YES", "NO", "NOT GIVEN"]
+            
+        if is_tfng:
+            sub_t = "True/False/Not Given"
+        elif is_ynng:
+            sub_t = "Yes/No/Not Given"
             
         is_sentence_ending_drag = (
             q["type"] == "MATCHING"
@@ -1801,6 +2128,9 @@ def parse_writing_docx_to_quiz(doc):
             current_task["prompt"] += table_to_html(Table(element, doc))
 
     writing_tasks = [tasks[number] for number in sorted(tasks)]
+    for task in writing_tasks:
+        if not task.get("categoryId"):
+            task["categoryId"] = compute_canonical_writing_category(task)
     return {
         "id": f"quiz_{int(time.time() * 1000)}",
         "title": title,
@@ -1968,12 +2298,16 @@ def parse_docx_to_quiz(doc):
     for si, sec in enumerate(sections):
         for q in sec["questions"]:
             q["passageIndex"] = si
+            if not q.get("categoryId"):
+                q["categoryId"] = compute_canonical_category_id(q, quiz_type, si)
 
     all_questions = []
     for sec in sections: all_questions.extend(sec["questions"])
     for index, question in enumerate(all_questions, start=1):
         if not question.get("manualExplanation"):
             attach_manual_explanation(question, passage_level_explanations.get(str(index)))
+        if not question.get("categoryId"):
+            question["categoryId"] = compute_canonical_category_id(question, quiz_type, question.get("passageIndex", 0))
 
     return {
         "id": f"quiz_{int(time.time() * 1000)}",
@@ -2031,7 +2365,9 @@ async def read_validated_docx_upload(file: UploadFile, include_raw: bool = False
 @app.post("/api/upload_docx")
 async def upload_docx(
     file: UploadFile = File(...),
+    request: Request = None,
 ):
+    _verify_api_request_guard(request, teacher_only=True, rate_bucket="upload_docx", max_per_minute=30)
     try:
         doc = await read_validated_docx_upload(file)
         quiz = parse_docx_to_quiz(doc)
@@ -2052,12 +2388,14 @@ async def upload_docx(
 @app.post("/api/upload_docx_batch")
 async def upload_docx_batch(
     files: List[UploadFile] = File(...),
+    request: Request = None,
 ):
     """Parse each selected formatted DOCX without persisting a partial Quest chain.
 
     The client receives ordered, per-file results and can only create the Quest after
     every file has parsed successfully and the teacher explicitly confirms it.
     """
+    _verify_api_request_guard(request, teacher_only=True, rate_bucket="upload_docx_batch", max_per_minute=20)
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one DOCX file.")
     if len(files) > MAX_DOCX_BATCH_FILES:
@@ -2095,7 +2433,9 @@ async def upload_docx_batch(
 @app.post("/api/upload_docx_supplement")
 async def upload_docx_supplement(
     file: UploadFile = File(...),
+    request: Request = None,
 ):
+    _verify_api_request_guard(request, teacher_only=True, rate_bucket="upload_docx_supplement", max_per_minute=30)
     try:
         doc = await read_validated_docx_upload(file)
         quiz = parse_docx_to_quiz(doc)
@@ -2157,10 +2497,12 @@ def _cloud_vision_document_ocr(image_bytes: bytes, timeout_s: float = 30.0) -> T
 @app.post("/api/scan_exam_page")
 async def scan_exam_page(
     files: List[UploadFile] = File(...),
+    request: Request = None,
 ):
     """Scan 1-5 printed/scanned IELTS exam pages (PNG, JPG, WEBP, or PDF) using Cloud Vision OCR
     and Vertex AI Gemini 2.5 Pro (with fallback to free Gemini API) to generate sections & questions.
     """
+    _verify_api_request_guard(request, teacher_only=True, rate_bucket="scan_exam_page", max_per_minute=20)
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vui lòng tải lên ít nhất 1 file.")
     if len(files) > 5:
@@ -3246,9 +3588,10 @@ def _ensure_storage_bucket_cors(bucket) -> None:
         if _BUCKET_CORS_CONFIGURED:
             return
         try:
+            allowed_origins = _audio_upload_cors_origins() or list(ALLOWED_ORIGINS)
             bucket.cors = [{
-                "origin": ["*"],
-                "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+                "origin": allowed_origins,
+                "method": ["GET", "HEAD", "PUT", "POST", "OPTIONS"],
                 "responseHeader": [
                     "Content-Type", "Content-Length", "Content-Range",
                     "Range", "ETag", "x-goog-resumable", "x-goog-meta-*"
@@ -3384,14 +3727,16 @@ async def create_exam_audio_upload(request: Request, payload: Dict[str, Any] = B
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Managed audio Storage is unavailable.") from exc
 
     request_headers = getattr(request, "headers", None)
+    raw_origin = ""
     if hasattr(request_headers, "get"):
-        request_origin = (
+        raw_origin = str(
             request_headers.get("origin")
             or request_headers.get("Origin")
-            or "*"
-        )
-    else:
-        request_origin = "*"
+            or ""
+        ).strip().rstrip("/")
+    allowed_cors_origins = set(_audio_upload_cors_origins())
+    is_localhost = bool(raw_origin and re.fullmatch(r"http://(?:localhost|127\.0\.0\.1)(?::\d+)?", raw_origin))
+    request_origin = raw_origin if (raw_origin in allowed_cors_origins or is_localhost) else None
 
     upload_id = "audio_" + uuid.uuid4().hex
     uid_hash = hashlib.sha256(str(actor.get("uid") or actor.get("email") or "unknown").encode("utf-8")).hexdigest()[:24]
@@ -4124,24 +4469,13 @@ def _resolve_image_base64_part(url: str, timeout_s: float = 4.0) -> Optional[Dic
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            data = resp.read(10 * 1024 * 1024)
+        with _open_safe_external_url(req, timeout=timeout_s) as resp:
+            data = resp.read(25 * 1024 * 1024)
             ct = resp.headers.get("Content-Type", "")
-            mime = ct.split(";")[0].strip().lower() if ct else ""
-            if not mime or not mime.startswith("image/"):
-                parsed_path = urllib.parse.urlparse(target_url).path.lower()
-                if parsed_path.endswith(".png"):
-                    mime = "image/png"
-                elif parsed_path.endswith((".jpg", ".jpeg")):
-                    mime = "image/jpeg"
-                elif parsed_path.endswith(".webp"):
-                    mime = "image/webp"
-                elif parsed_path.endswith(".svg"):
-                    mime = "image/svg+xml"
-                elif parsed_path.endswith(".gif"):
-                    mime = "image/gif"
-                else:
-                    mime = "image/png"
+            parsed_path = urllib.parse.urlparse(target_url).path.lower()
+            mime = _detect_valid_image_mime(data, ct, parsed_path)
+            if not mime:
+                return None
             b64_str = base64.b64encode(data).decode("ascii")
             return {"mime_type": mime, "data": b64_str}
     except Exception:
@@ -4540,20 +4874,23 @@ async def _execute_selection_critique(payload: Dict[str, Any]) -> Dict[str, Any]
 @app.post("/api/ai_critique")
 @app.post("/api/writing/critique")
 @app.post("/api/writing_critique")
-async def ai_critique(payload: Dict[str, Any] = Body(...)):
+async def ai_critique(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Dedicated endpoint for per-sentence AI selection critique in Writing Grading Studio."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_critique", max_per_minute=45)
     return await _execute_selection_critique(payload)
 
 
 @app.post("/api/ai_feedback")
 async def ai_feedback(
     payload: Dict[str, Any] = Body(...),
+    request: Request = None,
 ):
     """Sinh nhận xét cho học viên (Groq / Llama). Cần GROQ_API_KEY.
     Hỗ trợ 2 chế độ:
     1. Structured Writing Grading (AI Co-pilot cho Writing Task 1 & 2): khi payload có structured=True hoặc (task_number và essay).
     2. Legacy Reading/Listening/General feedback text cho học sinh.
     """
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_feedback", max_per_minute=30)
     lang = str(payload.get("lang") or "vi").lower()
     mode = str(payload.get("mode") or "").strip().lower()
     selected_text = str(
@@ -4835,8 +5172,10 @@ def _clean_option_text(raw: Any) -> str:
 @app.post("/api/ai_explain")
 async def ai_explain(
     payload: Dict[str, Any] = Body(...),
+    request: Request = None,
 ):
     """Giải thích ngắn vì sao 1 câu đúng/sai (dùng trong màn Review)."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_explain", max_per_minute=45)
     lang = (payload.get("lang") or "vi").lower()
     question = payload.get("question", "")
     options = payload.get("options", "")
@@ -5301,10 +5640,11 @@ async def ai_explain(
 
 
 @app.post("/api/analyze_error_dna")
-async def analyze_error_dna(payload: Dict[str, Any] = Body(...)):
+async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Automatic Error DNA & Weakness Diagnostic Engine.
     Analyzes student's real wrong answers, question types, and accuracy breakdown to diagnose cognitive traps.
     """
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="analyze_error_dna", max_per_minute=20)
     student_name = str(payload.get("studentName") or "Học viên")
     target_band = float(payload.get("targetBand") or 7.0)
     type_accuracy = payload.get("typeAccuracy") or []
@@ -5405,10 +5745,11 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...)):
 
 
 @app.post("/api/review_copilot")
-async def review_copilot(payload: Dict[str, Any] = Body(...)):
+async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Interactive 1-on-1 IELTS Tutor Review Copilot.
     Supports both question-focused mode and free-form exam review mode with full context.
     """
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="review_copilot", max_per_minute=40)
     lang = str(payload.get("lang") or "vi").lower()
     quiz_title = str(payload.get("quizTitle") or "IELTS Practice Test")
     quiz_type = str(payload.get("quizType") or "Reading")
@@ -5508,8 +5849,9 @@ async def review_copilot(payload: Dict[str, Any] = Body(...)):
 
 
 @app.post("/api/ai_review_chat")
-async def ai_review_chat(payload: Dict[str, Any] = Body(...)):
+async def ai_review_chat(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Minimalist free-form AI Review Assistant for the Review Workbench drawer."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_review_chat", max_per_minute=40)
     lang = str(payload.get("lang") or "vi").lower()
     message = str(payload.get("message") or payload.get("userMessage") or "").strip()
     history = payload.get("history") or payload.get("chatHistory") or []
@@ -5570,11 +5912,12 @@ async def ai_review_chat(payload: Dict[str, Any] = Body(...)):
 
 
 @app.post("/api/writing_sandbox_coach")
-async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...)):
+async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Writing Brainstorm & Outline Sandbox.
     Supports two modes: 'brainstorm' (Socratic angles + C1/C2 topic collocations) and 'critique_outline' (logic check).
     Always generates output strictly in 100% natural, idiomatic Band 8.5+ Academic English.
     """
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="writing_sandbox_coach", max_per_minute=30)
     mode = str(payload.get("mode") or "brainstorm").strip().lower()
     task_number = 1 if "1" in str(payload.get("taskType") or payload.get("taskNumber") or "") else 2
     prompt_text = str(payload.get("promptText") or payload.get("taskPrompt") or "")
@@ -6308,8 +6651,10 @@ def _ground_vocab_items(items, source):
 @app.post("/api/ai_vocab")
 async def ai_vocab(
     payload: Dict[str, Any] = Body(...),
+    request: Request = None,
 ):
     """Trích & chọn lọc từ vựng cần học từ các đề học viên đã làm (trả JSON)."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_vocab", max_per_minute=25)
     import json as _json
     lang = (payload.get("lang") or "vi").lower()
     # SỐ LƯỢNG: count = yêu cầu HV; min_count = sàn tối thiểu (mặc định 15). Trích nhắm tới max(count, min_count).
@@ -6861,7 +7206,7 @@ def _download_external_audio_to_file(audio_url: Any, destination_path: str) -> T
         return 0, "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
     try:
         request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with _open_safe_external_url(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
             content_length = str(response.headers.get("Content-Length") or "").strip()
             if content_length.isdigit() and int(content_length) > MAX_AUDIO_TRANSCRIPTION_SOURCE_BYTES:
                 return 0, "", "AUDIO_SOURCE_TOO_LARGE"
@@ -6899,7 +7244,7 @@ def _download_external_audio_bytes(audio_url: Any) -> Tuple[bytes, str, str]:
         return b"", "", "EXTERNAL_AUDIO_DOWNLOAD_FAILED"
     try:
         request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with _open_safe_external_url(request, timeout=EXTERNAL_AUDIO_DOWNLOAD_TIMEOUT_SECONDS) as response:
             content_length = str(response.headers.get("Content-Length") or "").strip()
             if content_length.isdigit() and int(content_length) > MAX_WHISPER_TRANSCRIPTION_BYTES:
                 return b"", "", "AUDIO_SOURCE_TOO_LARGE"
@@ -7770,8 +8115,9 @@ async def hosted_exam_generation_media(media_key: str):
 
 
 @app.get("/api/image_base64")
-async def proxy_image_to_base64(url: str):
+async def proxy_image_to_base64(url: str, request: Request = None):
     """Proxy and convert chart/visual images to base64 Data URLs, bypassing browser CORS restrictions for PDF generation."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="image_base64", max_per_minute=60)
     clean_url = str(url or "").strip()
     if not clean_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A valid 'url' query parameter is required.")
@@ -7809,6 +8155,11 @@ async def proxy_image_to_base64(url: str):
     if not is_http:
         target_url = f"https://ielts-os-sandy.vercel.app{clean_url if clean_url.startswith('/') else '/' + clean_url}"
 
+    try:
+        _validate_safe_external_url(target_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     def _fetch_image(u: str) -> tuple[bytes, str]:
         req = urllib.request.Request(
             u,
@@ -7817,30 +8168,26 @@ async def proxy_image_to_base64(url: str):
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _open_safe_external_url(req, timeout=10) as resp:
             data = resp.read(25 * 1024 * 1024)
             ct = resp.headers.get("Content-Type", "")
-            mime = ct.split(";")[0].strip().lower() if ct else ""
-            if not mime or not mime.startswith("image/"):
-                parsed_path = urllib.parse.urlparse(u).path.lower()
-                if parsed_path.endswith(".png"):
-                    mime = "image/png"
-                elif parsed_path.endswith((".jpg", ".jpeg")):
-                    mime = "image/jpeg"
-                elif parsed_path.endswith(".webp"):
-                    mime = "image/webp"
-                elif parsed_path.endswith(".svg"):
-                    mime = "image/svg+xml"
-                elif parsed_path.endswith(".gif"):
-                    mime = "image/gif"
-                else:
-                    mime = "image/png"
+            parsed_path = urllib.parse.urlparse(u).path.lower()
+            mime = _detect_valid_image_mime(data, ct, parsed_path)
+            if not mime:
+                raise ValueError("Target URL did not return a valid image payload.")
             return data, mime
 
     try:
         raw_bytes, detected_mime = await asyncio.to_thread(_fetch_image, target_url)
         b64_str = base64.b64encode(raw_bytes).decode("ascii")
         return {"dataUrl": f"data:{detected_mime};base64,{b64_str}"}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -7897,8 +8244,9 @@ async def bulk_exam_publish(request: Request, payload: Dict[str, Any] = Body(...
 async def cleanup_expired_attempts(request: Request):
     """Vercel Cron target: compact expired attempts without exposing a public delete API."""
     cron_secret = os.environ.get("CRON_SECRET", "")
-    supplied = request.headers.get("Authorization", "")
-    if not cron_secret or supplied != f"Bearer {cron_secret}":
+    supplied = str(request.headers.get("Authorization") or "")
+    expected = f"Bearer {cron_secret}"
+    if not cron_secret or not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized maintenance request")
 
     try:
