@@ -1804,12 +1804,258 @@
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10}}>
                 <h3 style={{marginTop: 0, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="monitor" size={18} color={C.accent} /> {t('test_room_title')}</h3>
                 {examRoomTab === "available" && (
-                  <input
-                    placeholder={t('filter_quizzes')}
-                    value={stQuizSearch}
-                    onChange={(e: any) => setStQuizSearch(e.target.value)}
-                    style={{ minWidth: 200, padding: '7px 14px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text }}
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                    <input
+                      placeholder={t('filter_quizzes')}
+                      value={stQuizSearch}
+                      onChange={(e: any) => setStQuizSearch(e.target.value)}
+                      style={{ minWidth: 175, padding: '7px 14px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setStFilterPopoverOpen(prev => !prev)}
+                      style={{
+                        height: 33,
+                        padding: '0 12px',
+                        borderRadius: 8,
+                        border: `1px solid ${stSelectedCategories.length ? C.accent : C.border}`,
+                        background: stSelectedCategories.length ? `${C.accent}15` : C.card,
+                        color: stSelectedCategories.length ? C.accent : C.text,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                        transition: 'all 0.15s ease',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={tx("Lọc theo dạng bài", "Filter by question category")}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                      </svg>
+                      <span>{tx("Dạng bài", "Category")}</span>
+                      {stSelectedCategories.length > 0 && (
+                        <span style={{
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                          background: C.accent,
+                          color: '#fff',
+                          borderRadius: 10,
+                          padding: '0 6px',
+                          lineHeight: '17px',
+                          minWidth: 17,
+                          textAlign: 'center',
+                        }}>
+                          {stSelectedCategories.length}
+                        </span>
+                      )}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.6, transform: stFilterPopoverOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}>
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+
+                    {/* Popover Bento Grid 2 cột */}
+                    {stFilterPopoverOpen && (
+                      <>
+                        <div
+                          onClick={() => setStFilterPopoverOpen(false)}
+                          style={{ position: 'fixed', inset: 0, zIndex: 59 }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 8px)',
+                            right: 0,
+                            width: 540,
+                            maxWidth: 'calc(100vw - 32px)',
+                            background: C.card,
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 12,
+                            boxShadow: '0 16px 40px rgba(0,0,0,0.3)',
+                            zIndex: 60,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {/* Header */}
+                          <div style={{
+                            padding: '12px 16px',
+                            borderBottom: `1px solid ${C.border}`,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            background: C.bg,
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
+                                {tx(`Lọc dạng bài (${studentExamSkillTab})`, `Filter Categories (${studentExamSkillTab})`)}
+                              </span>
+                              {stSelectedCategories.length > 0 && (
+                                <span style={{
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  color: C.accent,
+                                  background: `${C.accent}18`,
+                                  padding: '1px 7px',
+                                  borderRadius: 8,
+                                }}>
+                                  {tx(`Đang chọn ${stSelectedCategories.length}`, `${stSelectedCategories.length} selected`)}
+                                </span>
+                              )}
+                            </div>
+                            {stSelectedCategories.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setStSelectedCategories([])}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: C.warn || '#f59e0b',
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                }}
+                              >
+                                {tx("Bỏ chọn", "Clear all")}
+                              </button>
+                            )}
+                          </div>
+
+                          {/* 2-Column Bento Grid */}
+                          {(() => {
+                            const cats = (CANONICAL_TAXONOMY[studentExamSkillTab] || []).filter(c => (categoryQuizCounts[c.id] || 0) > 0);
+                            if (cats.length === 0) {
+                              return (
+                                <div style={{ padding: '24px 16px', textAlign: 'center', color: C.sub, fontSize: 12.5 }}>
+                                  {tx("Không có dạng bài nào khả dụng cho kỹ năng này.", "No categories available for this skill.")}
+                                </div>
+                              );
+                            }
+                            return (
+                              <div style={{
+                                padding: 12,
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(235px, 1fr))',
+                                gap: 8,
+                                maxHeight: 420,
+                                overflowY: 'auto',
+                              }}>
+                                {cats.map(catItem => {
+                                  const isSelected = stSelectedCategories.includes(catItem.id);
+                                  const count = categoryQuizCounts[catItem.id] || 0;
+                                  return (
+                                    <div
+                                      key={catItem.id}
+                                      onClick={() => {
+                                        setStSelectedCategories(prev =>
+                                          prev.includes(catItem.id)
+                                            ? prev.filter(id => id !== catItem.id)
+                                            : [...prev, catItem.id]
+                                        );
+                                      }}
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        gap: 8,
+                                        padding: '9px 12px',
+                                        borderRadius: 8,
+                                        border: `1px solid ${isSelected ? C.accent : C.border}`,
+                                        background: isSelected ? `${C.accent}14` : C.bg,
+                                        cursor: 'pointer',
+                                        userSelect: 'none',
+                                        transition: 'all 0.12s ease',
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0, flex: 1 }}>
+                                        <div style={{
+                                          width: 17,
+                                          height: 17,
+                                          borderRadius: 4,
+                                          border: `1.5px solid ${isSelected ? C.accent : C.sub}`,
+                                          background: isSelected ? C.accent : 'transparent',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          flexShrink: 0,
+                                          transition: 'all 0.12s ease',
+                                        }}>
+                                          {isSelected && (
+                                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+                                              <polyline points="20 6 9 17 4 12" />
+                                            </svg>
+                                          )}
+                                        </div>
+                                        <span style={{
+                                          fontSize: 12,
+                                          fontWeight: isSelected ? 700 : 500,
+                                          color: isSelected ? C.accent : C.text,
+                                          lineHeight: 1.3,
+                                          wordBreak: 'break-word',
+                                        }}>
+                                          {catItem.label}
+                                        </span>
+                                      </div>
+                                      <span style={{
+                                        fontSize: 11,
+                                        fontWeight: 800,
+                                        padding: '1px 6px',
+                                        borderRadius: 6,
+                                        background: isSelected ? `${C.accent}25` : C.card,
+                                        color: isSelected ? C.accent : C.sub,
+                                        border: `1px solid ${isSelected ? `${C.accent}40` : C.border}`,
+                                        flexShrink: 0,
+                                      }}>
+                                        {count}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
+                          {/* Footer */}
+                          <div style={{
+                            padding: '10px 16px',
+                            borderTop: `1px solid ${C.border}`,
+                            background: C.bg,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}>
+                            <span style={{ fontSize: 12, color: C.sub }}>
+                              {tx(
+                                `Khớp ${activeQuizzesForSkill.length} đề thi`,
+                                `${activeQuizzesForSkill.length} matching test${activeQuizzesForSkill.length === 1 ? '' : 's'}`
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setStFilterPopoverOpen(false)}
+                              style={{
+                                padding: '6px 16px',
+                                borderRadius: 6,
+                                background: C.accent,
+                                color: '#fff',
+                                fontSize: 12,
+                                fontWeight: 800,
+                                border: 'none',
+                                cursor: 'pointer',
+                                boxShadow: `0 2px 8px ${C.accent}40`,
+                              }}
+                            >
+                              {tx("Áp dụng", "Apply")}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
             </div>
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
@@ -1842,108 +2088,6 @@
                 );
               })}
             </div>
-            {/* HORIZONTAL CATEGORY PILL BAR */}
-            {examRoomTab === "available" && (() => {
-              const cats = (CANONICAL_TAXONOMY[studentExamSkillTab] || []).filter(c => (categoryQuizCounts[c.id] || 0) > 0);
-              if (cats.length === 0) return null;
-              const isAllActive = stSelectedCategories.length === 0;
-              const totalTests = rawQuizzesForSkill.length;
-
-              return (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  overflowX: 'auto',
-                  padding: '10px 0 4px 0',
-                  scrollbarWidth: 'none',
-                }}>
-                  {/* Pill: Tất cả */}
-                  <button
-                    type="button"
-                    onClick={() => setStSelectedCategories([])}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '5px 12px',
-                      borderRadius: 999,
-                      border: `1px solid ${isAllActive ? C.accent : C.border}`,
-                      background: isAllActive ? C.accent : C.card,
-                      color: isAllActive ? '#fff' : C.sub,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      flexShrink: 0,
-                      boxShadow: isAllActive ? `0 2px 8px ${C.accent}35` : 'none',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <span>{tx('Tất cả', 'All')}</span>
-                    <span style={{
-                      fontSize: 10.5,
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 10,
-                      background: isAllActive ? 'rgba(255,255,255,0.25)' : C.border,
-                      color: isAllActive ? '#fff' : C.sub,
-                    }}>
-                      {totalTests}
-                    </span>
-                  </button>
-
-                  {/* Pills: Từng dạng bài */}
-                  {cats.map(catItem => {
-                    const isSelected = stSelectedCategories.includes(catItem.id);
-                    const count = categoryQuizCounts[catItem.id] || 0;
-
-                    return (
-                      <button
-                        key={catItem.id}
-                        type="button"
-                        onClick={() => {
-                          setStSelectedCategories(prev =>
-                            prev.includes(catItem.id)
-                              ? prev.filter(id => id !== catItem.id)
-                              : [...prev, catItem.id]
-                          );
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '5px 12px',
-                          borderRadius: 999,
-                          border: `1px solid ${isSelected ? C.accent : C.border}`,
-                          background: isSelected ? C.accent : C.card,
-                          color: isSelected ? '#fff' : C.text,
-                          fontSize: 12,
-                          fontWeight: isSelected ? 800 : 600,
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                          flexShrink: 0,
-                          boxShadow: isSelected ? `0 2px 8px ${C.accent}35` : 'none',
-                          transition: 'all 0.15s ease',
-                        }}
-                      >
-                        <span>{catItem.label}</span>
-                        <span style={{
-                          fontSize: 10.5,
-                          fontWeight: 800,
-                          padding: '1px 6px',
-                          borderRadius: 10,
-                          background: isSelected ? 'rgba(255,255,255,0.25)' : C.border,
-                          color: isSelected ? '#fff' : C.sub,
-                        }}>
-                          {count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })()}
             {examRoomTab === "available" && myRealExamPackages.length > 0 && (
               <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
                 {myRealExamPackages.map((pkg: RealExamPackage) => {
