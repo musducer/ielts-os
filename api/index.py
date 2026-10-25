@@ -4221,7 +4221,7 @@ def _groq_chat(
     preferred = model or os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     groq_models = [preferred] + [m for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m != preferred]
     cerebras_models = list(dict.fromkeys([os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]))
-    gemini_models = list(dict.fromkeys([os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-2.0-flash"]))
+    gemini_models = list(dict.fromkeys([os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.8-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]))
 
     # Existing routes retain their legacy 55-second, provider-first behavior.
     # The raw-DOCX adapter is the only caller which provides a deadline; it gets
@@ -4350,7 +4350,7 @@ def _pedagogical_ai_call(
     temperature: float = 0.2,
     json_mode: bool = False,
     thinking_budget: int = 0,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.8-flash",
     timeout_s: float = 45.0,
 ) -> Tuple[str, str]:
     """Route pedagogical AI calls to Vertex AI first, with automatic fallback to AI Studio / Groq / Cerebras."""
@@ -4372,7 +4372,7 @@ def _pedagogical_ai_call(
         try:
             g_text, g_err = _gemini_chat_once(
                 k,
-                model="gemini-2.5-flash",
+                model=model or "gemini-3.8-flash",
                 sys_prompt=sys_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -5127,6 +5127,192 @@ async def ai_feedback(
 
     if lang == "en":
         sys_prompt = (
+            "You are an experienced IELTS examiner and coach. Based on the per-question data, write a detailed, "
+            "warm, and genuinely useful feedback report for the student (and parent). Structure it as 3 short paragraphs:\n"
+            "1) Open with specific encouragement tied to their band and what they did well.\n"
+            "2) ANALYSE the actual mistakes: group the wrong answers, point out concrete patterns from the data "
+            "(e.g. spelling/plurals in completion, confusing TRUE vs NOT GIVEN, distractors in multiple choice, "
+            "paraphrase/synonym traps in matching). Reference a couple of specific wrong items as examples.\n"
+            "3) Give 2-3 concrete, actionable practice steps targeting those exact weaknesses.\n"
+            "Warm, professional, plain text (no markdown). About 180-260 words. Finish your final sentence."
+        )
+        user_prompt = (
+            f"Student: {student}\nTest: {quiz} ({qtype})\nScore: {score}/{total} (Band {band}), wrong: {wrong_count}\n"
+            f"Accuracy by question type: {weak}\n\nWrong answers (student vs correct):\n{details or '(none provided)'}\n\nWrite in English."
+        )
+    else:
+        sys_prompt = (
+            "Bạn là giám khảo kiêm gia sư IELTS giàu kinh nghiệm. Dựa trên dữ liệu TỪNG CÂU, viết bản nhận xét "
+            "chi tiết, ấm áp, hữu ích cho học viên (và phụ huynh). Bố cục 3 đoạn ngắn:\n"
+            "1) Khích lệ cụ thể, gắn với band và điểm làm tốt.\n"
+            "2) PHÂN TÍCH lỗi thật: gom nhóm câu sai, chỉ quy luật cụ thể từ dữ liệu "
+            "(sai chính tả/số nhiều khi điền từ; nhầm TRUE với NOT GIVEN; bẫy phương án nhiễu ở trắc nghiệm; "
+            "bẫy từ đồng nghĩa/paraphrase khi nối thông tin). Dẫn vài câu sai cụ thể làm ví dụ.\n"
+            "3) 2-3 bước luyện tập cụ thể, làm được ngay, nhắm đúng điểm yếu.\n"
+            "Văn ấm áp, chuyên nghiệp, văn xuôi thuần (không markdown). Khoảng 180-260 từ. Viết trọn câu cuối."
+        )
+        user_prompt = (
+            f"Học viên: {student}\nĐề: {quiz} ({qtype})\nĐiểm: {score}/{total} (Band {band}), số câu sai: {wrong_count}\n"
+            f"Tỉ lệ đúng theo dạng câu: {weak}\n\nCác câu sai (HV trả lời vs đáp án đúng):\n{details or '(không có)'}\n\nViết bằng tiếng Việt."
+        )
+
+    text, err = _gemini_generate(sys_prompt, user_prompt, 2048)
+    if err:
+        return {"success": False, "error": _friendly_err(err, lang)}
+    return {"success": True, "feedback": text}
+
+
+def _clean_option_text(raw: Any) -> str:
+    s = str(raw or "").strip()
+    while re.match(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", s):
+        s = re.sub(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", "", s).strip()
+    return s
+
+
+@app.post("/api/ai_explain")
+async def ai_explain(
+    payload: Dict[str, Any] = Body(...),
+    request: Request = None,
+):
+    """Giải thích ngắn vì sao 1 câu đúng/sai (dùng trong màn Review)."""
+    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_explain", max_per_minute=45)
+    lang = (payload.get("lang") or "vi").lower()
+    question = payload.get("question", "")
+    options = payload.get("options", "")
+    correct = payload.get("correct", "")
+    student_ans = payload.get("studentAnswer", "")
+    context = (payload.get("context", "") or "")[:24000]
+    reading_passage = (payload.get("readingPassage", "") or "")[:24000]
+    has_ctx = bool(context.strip())
+    answer_sequence = payload.get("answerSequence")
+    timestamp_hints = str(payload.get("timestampHints", "") or "")[:8000]
+    question_index_raw = payload.get("questionIndex")
+    try:
+        question_index = int(question_index_raw) if question_index_raw is not None else None
+    except (TypeError, ValueError):
+        question_index = None
+    try:
+        question_count = int(payload.get("questionCount")) if payload.get("questionCount") is not None else None
+    except (TypeError, ValueError):
+        question_count = None
+    question_type = str(payload.get("questionType", "") or "")
+    question_subtype = str(payload.get("questionSubType", "") or "")
+    matching_kind = str(payload.get("matchingKind", "") or "")
+    matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
+    matching_target_text = str(payload.get("matchingTargetText", "") or "")[:12000]
+    is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
+    evidence_passage = matching_target_text if is_paragraph_information_matching else reading_passage
+    integrated_part = int(payload.get("integratedPart", 0) or 0)
+    is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
+    # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
+    is_listening_item = bool(payload.get("isListening"))
+    # Timestamp rules only apply when Whisper's real segment markers are available.
+    is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
+    is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
+    is_unanswered = (
+        not str(student_ans or "").strip()
+        or str(student_ans or "").strip().lower() in [
+            "(trống)", "(bỏ trống)", "(blank)", "no answer", "blank", "none", "null", "undefined"
+        ]
+    )
+    no_audio_guard_en = (
+        " NO-AUDIO FORBIDDEN: If transcript or source text is absent, NEVER state 'no audio was provided', 'without audio', or that "
+        "it is impossible to confirm. Instead, analyze the question prompt and options pedagogically, focusing on qualifying terms, "
+        "lexical traps, and typical IELTS test patterns."
+    )
+    no_audio_guard_vi = (
+        " CẤM BÁO THIẾU AUDIO: Nếu không có transcript hoặc văn bản nguồn, TUYỆT ĐỐI KHÔNG ghi 'không có audio', 'thiếu file nghe' hoặc "
+        "'không thể xác định vì không có audio'. Hãy phân tích sư phạm dựa vào dữ liệu câu hỏi và các phương án, chỉ rõ bẫy từ khóa và suy luận IELTS."
+    )
+    unanswered_rule_en = (
+        " UNANSWERED STRATEGY: The student left this item blank. Do NOT state trivial boilerplate like 'The student answer is blank'. "
+        "Instead, provide an actionable listening/reading strategy on what cue words to anticipate and how to avoid missing the answer."
+    ) if is_unanswered else ""
+    unanswered_rule_vi = (
+        " CHIẾN THUẬT CÂU BỎ TRỐNG: Học viên bỏ trống câu này. TUYỆT ĐỐI KHÔNG viết câu sáo rỗng như 'Học sinh bỏ trống câu này'. "
+        "Thay vào đó, hướng dẫn chiến thuật đón đầu từ khóa (signpost cues) và cách bắt nhịp để không bị trôi mất đáp án."
+    ) if is_unanswered else ""
+    ts_rule_en = (
+        " TIMESTAMP RULE: use the timestamped transcript only to reason from the exact answer-bearing utterance. "
+        "Do not print timestamps, ranges, or clickable links; the interface adds verified audio controls separately. "
+        "Never use a later related sentence, an estimate, or a generic opening line as evidence."
+    ) if is_listening else ""
+    ts_rule_vi = (
+        " LUẬT MỐC THỜI GIAN: dùng transcript có mốc để đối chiếu đúng lời thoại chứa đáp án. "
+        "Không tự in mốc giờ, khoảng giờ hoặc link bấm; giao diện sẽ gắn nút nghe lại đã được kiểm chứng. "
+        "Tuyệt đối không dùng câu liên quan ở phía sau, không ước lượng và không lấy câu mở đầu chung chung làm dẫn chứng."
+    ) if is_listening else ""
+
+    listening_language_en = (
+        " LISTENING TERMINOLOGY RULE: this is an audio task. Refer to evidence as the audio, recording, conversation, speaker, "
+        "or transcript. Never call it a passage, reading, the text, or source text."
+    ) if is_listening_item else ""
+    listening_language_vi = (
+        " QUY TẮC GỌI NGUỒN LISTENING: đây là bài nghe. Hãy gọi dẫn chứng là bài nghe, audio, bản ghi âm, lời thoại, người nói "
+        "hoặc transcript; tuyệt đối không gọi là bài đọc, đoạn văn, văn bản hay nguồn văn bản."
+    ) if is_listening_item else ""
+
+    evidence_rule_en = (
+        " READING EVIDENCE RULE: when you use evidence from the reading passage, include one to three short, continuous, "
+        "word-for-word excerpts from the READING PASSAGE only. Wrap EVERY such excerpt exactly as "
+        "[[EVIDENCE: exact excerpt]]. Do not place the marker around paraphrases, question wording, options, or invented text. "
+        "Each marked excerpt must be the smallest useful proof and must appear exactly in the passage."
+    ) if is_reading_evidence else ""
+    evidence_rule_vi = (
+        " LUAT DAN CHUNG READING: khi dung dan chung tu bai doc, phai dua mot den ba trich doan ngan, lien tuc va dung tung chu "
+        "tu RIENG BAI DOC. Boc MOI trich doan dung cu phap [[EVIDENCE: doan trich chinh xac]]. Khong dung marker cho dien giai, "
+        "loi cau hoi, lua chon hay noi dung tu bia. Moi doan trich phai la bang chung ngan nhat nhung du nghia va xuat hien nguyen van trong bai."
+    ) if is_reading_evidence else ""
+    matching_rule_en = (
+        f" MATCHING INFORMATION RULE: this item is matched to paragraph {matching_target_label}. "
+        "The only valid clickable evidence is an exact excerpt from that target paragraph below; never cite another paragraph merely because it shares a keyword. "
+        "First match the statement's specific detail, then explain the paraphrase link."
+    ) if is_paragraph_information_matching else (
+        " MATCHING HEADINGS RULE: select evidence that states the paragraph's central purpose, not an isolated detail."
+        if matching_kind == "headings" else (
+            " MATCHING FEATURES RULE: identify the exact clue linking the named person, place, event, or feature to the answer; do not use a broadly related detail."
+            if matching_kind == "features" else ""
+        )
+    )
+    matching_rule_vi = (
+        f" QUY TẮC MATCHING INFORMATION: câu này ghép với đoạn {matching_target_label}. "
+        "Dẫn chứng clickable hợp lệ CHỈ được lấy nguyên văn từ đúng đoạn mục tiêu bên dưới; tuyệt đối không trích đoạn khác chỉ vì cùng từ khóa. "
+        "Phải đối chiếu chi tiết riêng của mệnh đề trước, rồi mới giải thích liên hệ paraphrase."
+    ) if is_paragraph_information_matching else (
+        " QUY TẮC MATCHING HEADINGS: dẫn chứng phải cho thấy ý/chức năng trung tâm của đoạn, không phải một chi tiết đơn lẻ."
+        if matching_kind == "headings" else (
+            " QUY TẮC MATCHING FEATURES: phải chỉ ra manh mối chính xác nối người, nơi chốn, sự kiện hoặc đặc điểm với đáp án; không lấy chi tiết chỉ liên quan chung chung."
+            if matching_kind == "features" else ""
+        )
+    )
+
+    integrated_rule_en = (
+        " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
+        "Do NOT force a reading-comprehension template onto it. First identify the actual task family and teach its decision logic: "
+        "for main-idea/title/inference items, test scope, central claim and degree of certainty; for gap-fill items, test grammar "
+        "(word class, tense, clause structure, agreement, preposition) before meaning, then collocation and register; for dialogue/sentence "
+        "ordering, establish the opening, response links, pronoun/reference chains, discourse markers and a coherent ending; for vocabulary, "
+        "use the surrounding syntax and the precise sense, not a loose synonym. Explain the exam trap each wrong option represents."
+    ) % integrated_part if is_vietnamese_high_school_integrated else ""
+    integrated_rule_vi = (
+        " Đây là Integrated Part %d, theo tư duy đề thi tiếng Anh tốt nghiệp THPT Việt Nam. "
+        "KHÔNG được máy móc áp khuôn đọc đoạn văn rồi trích dẫn. Trước hết phải nhận diện đúng dạng và dạy cách ra quyết định: "
+        "với ý chính/tiêu đề/suy luận, xét phạm vi, luận điểm trung tâm và mức độ khẳng định; với điền từ, xét ngữ pháp "
+        "(từ loại, thì, cấu trúc mệnh đề, hòa hợp, giới từ) trước, rồi nghĩa, collocation và sắc thái; với sắp xếp hội thoại/câu, "
+        "xác định câu mở, quan hệ đáp lời, đại từ thay thế, từ nối và câu kết mạch lạc; với từ vựng, dựa vào cú pháp xung quanh "
+        "và nghĩa chính xác, không chọn từ đồng nghĩa chung chung. Chỉ rõ bẫy mà từng phương án sai đang tạo ra."
+    ) % integrated_part if is_vietnamese_high_school_integrated else ""
+    matching_target_prompt_en = (
+        f"TARGET PARAGRAPH {matching_target_label} (ONLY VALID EVIDENCE SOURCE):\n{matching_target_text}\n\n"
+        if is_paragraph_information_matching else ""
+    )
+    matching_target_prompt_vi = (
+        f"ĐOẠN {matching_target_label} MỤC TIÊU (NGUỒN DẪN CHỨNG DUY NHẤT):\n{matching_target_text}\n\n"
+        if is_paragraph_information_matching else ""
+    )
+
+    if lang == "en":
+        sys_prompt = (
             "You are an expert IELTS tutor. Provide a sharp, structured, high-signal pedagogical explanation for the reviewed question.\n"
             "Return strictly a valid JSON object matching this schema:\n"
             "{\n"
@@ -5196,7 +5382,7 @@ async def ai_feedback(
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
         )
 
-    vertex_explain_model = os.environ.get("VERTEX_EXPLAIN_MODEL", "gemini-2.5-flash")
+    vertex_explain_model = os.environ.get("VERTEX_EXPLAIN_MODEL", "gemini-3.8-flash")
     raw_response, err = await asyncio.to_thread(
         _pedagogical_ai_call,
         sys_prompt,

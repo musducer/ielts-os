@@ -6,14 +6,16 @@
   - Gỡ bỏ hoàn toàn nền vàng nâu xỉn cũ (`#FFFBEB` / `#FDE68A` / `#854D0E`), thay bằng thẻ card trắng hiện đại, viền sắc nét `#E2E8F0` và đường viền nhấn xanh cobalt học thuật `#2563EB`.
   - Triệt tiêu hoàn toàn tình trạng bôi vàng cả đoạn trích dẫn (`rgba(254, 240, 138, 0.5)`); dẫn chứng trích dẫn được làm nổi bật tinh tế bằng nền xanh nhạt `#EFF6FF` với đường viền mờ `#DBEAFE` và nhãn bấm định vị trực tiếp trong bài đọc / transcript (`nhấn để định vị trong bài`).
   - Cắt bỏ 100% câu dẫn meta sáo rỗng ("Câu hỏi yêu cầu thí sinh...", "The question tests ability to...") và triệt tiêu lỗi lặp lại 3 lần câu trích dẫn trong cùng một lời giải thích.
-- **Cấu trúc 3 Khối Sư Phạm Chuẩn Mực (`rvRenderDetailedAiExplanation`)**:
+- **Cấu trúc 3 Khối Sư Phạm Chuẩn Mực & Chuẩn Hóa 100% SVG (`rvRenderDetailedAiExplanation`)**:
+  - Gỡ bỏ hoàn toàn các emoji thô (`💡`, `🔄`, `⚠️`, `✓`), thay bằng bộ icon SVG chuẩn mực (Feather/Lucide style): icon bóng đèn học thuật xanh cobalt cho tiêu đề, icon xoay mượt mà cho nút "Phân tích lại", icon tam giác cảnh báo cho bẫy lỗi sai, icon la bàn chiến thuật cho câu bỏ trống và icon tích tròn cho câu làm đúng.
   - **Khối 1: ĐỐI CHIẾU TỪ ĐỒNG NGHĨA (Paraphrase Matching)**: Hiển thị trực quan từng cặp từ khóa đề bài ⇄ bài đọc/lời thoại dưới dạng chip tinh gọn (`Đề bài: "Similar results" ⇄ Bài đọc: "did not vary"`), hỗ trợ chú thích ngữ nghĩa.
   - **Khối 2: DẪN CHỨNG CHÍNH XÁC VÀ GIẢI THÍCH CHI TIẾT (Evidence & Detailed Explanation)**: Ghi rõ vị trí dẫn chứng (`- Đoạn E, dòng 7: "..."`), hỗ trợ click để cuộn định vị ngay lập tức, kèm dòng `- Giải thích chi tiết:` phân tích trực tiếp lý do logic vì sao dẫn chứng chứng minh đáp án đúng.
   - **Khối 3: PHÂN TÍCH THÍCH ỨNG THEO KẾT QUẢ THÍ SINH (Adaptive Trap Analysis)**:
-    - *Nếu làm sai*: Thẻ cảnh báo đỏ nhạt `3. PHÂN TÍCH NGUYÊN DO CHỌN SAI` (`⚠️ Bẫy phạm vi / Bẫy từ khóa: ...`).
-    - *Nếu bỏ trống*: Thẻ chiến thuật xanh lá `3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP` (`💡 Chiến thuật bắt nhịp từ khóa: ...`).
-    - *Nếu làm đúng*: Thẻ ghi chú `3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH` (`✓ Lưu ý bẫy tiềm ẩn: ...`).
-- **Tối ưu Backend Endpoint `/api/ai_explain` (Single-Shot Structured Engine)**:
+    - *Nếu làm sai*: Thẻ cảnh báo đỏ nhạt `3. PHÂN TÍCH NGUYÊN DO CHỌN SAI` (`Bẫy phạm vi / Bẫy từ khóa: ...`).
+    - *Nếu bỏ trống*: Thẻ chiến thuật xanh lá `3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP` (`Chiến thuật bắt nhịp từ khóa: ...`).
+    - *Nếu làm đúng*: Thẻ ghi chú `3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH` (`Lưu ý bẫy tiềm ẩn: ...`).
+- **Tối ưu Backend Endpoint `/api/ai_explain` & Cập Nhật Mô Hình Gemini 3.8 Flash**:
+  - Khắc phục lỗi Google deprecate `gemini-2.5-flash` và `gemini-2.0-flash` (gây lỗi 404): nâng cấp pool mô hình sang `gemini-3.8-flash` và `gemini-3-flash-preview` tốc độ cao, khả dụng tức thì.
   - Gom 2 lần gọi AI tuần tự trước đây thành 1 lần gọi duy nhất với schema JSON có cấu trúc (`paraphrasePairs`, `evidence`: `{location, quote}`, `detailedExplanation`, `trapAnalysis`: `{trapTitle, trapReason}`), giảm 50% độ trễ (từ ~8s xuống ~3s).
   - Tự động kiểm chứng dẫn chứng nguyên văn với bài đọc (`evidence_passage`) và liên kết mốc thời gian bài nghe (`audio_evidence_segments`).
   - Đồng bộ hoá toàn bộ payload trả về: cung cấp cả `structured`, `explanation` (markdown tương thích ngược) và `deconstruction` để bảo toàn khả năng tương thích 100%.

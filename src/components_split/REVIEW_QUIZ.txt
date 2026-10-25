@@ -740,13 +740,29 @@
           const sourceLabel = rvActiveIsListening ? "Lời thoại" : "Bài đọc";
 
           let block3Title = "3. PHÂN TÍCH NGUYÊN DO CHỌN SAI";
-          let block3Badge = "⚠️";
+          let block3Icon = (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+          );
           if (isBlank) {
               block3Title = "3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP";
-              block3Badge = "💡";
+              block3Icon = (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                      <circle cx="12" cy="12" r="10" />
+                      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+                  </svg>
+              );
           } else if (isCorrect) {
               block3Title = "3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH";
-              block3Badge = "✓";
+              block3Icon = (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                      <polyline points="22 4 12 14.01 9 11.01" />
+                  </svg>
+              );
           }
 
           return (
@@ -764,7 +780,12 @@
                                           <span className="rv-ai-para-tag q">Đề bài:</span>
                                           <span className="rv-ai-para-term">"{pair.questionTerm}"</span>
                                       </div>
-                                      <span className="rv-ai-para-arrow" aria-hidden="true">⇄</span>
+                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="rv-ai-para-arrow" aria-hidden="true" style={{ margin: "0 2px" }}>
+                                          <polyline points="17 11 21 7 17 3" />
+                                          <line x1="21" y1="7" x2="9" y2="7" />
+                                          <polyline points="7 21 3 17 7 13" />
+                                          <line x1="15" y1="17" x2="3" y2="17" />
+                                      </svg>
                                       <div className="rv-ai-para-side">
                                           <span className="rv-ai-para-tag p">{sourceLabel}:</span>
                                           <span className="rv-ai-para-term">"{pair.passageTerm}"</span>
@@ -829,7 +850,7 @@
                           </div>
                           <div className="rv-ai-trap-content">
                               <div className="rv-ai-trap-card">
-                                  <span className="rv-ai-trap-badge" aria-hidden="true">{block3Badge}</span>
+                                  <span className="rv-ai-trap-badge" aria-hidden="true">{block3Icon}</span>
                                   <div className="rv-ai-trap-body">
                                       {trapTitle && <strong className="rv-ai-trap-title">{trapTitle}: </strong>}
                                       <span className="rv-ai-trap-reason">{trapReason}</span>
@@ -905,7 +926,11 @@
               <div className="inline-explain-drawer ai" onClick={e => e.stopPropagation()}>
                   <div className="rv-drawer-head">
                       <span className="rv-drawer-title">
-                          <span style={{ fontSize: 15, lineHeight: 1 }}>💡</span>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                              <path d="M9 18h6" />
+                              <path d="M10 22h4" />
+                              <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                          </svg>
                           GIẢI THÍCH CHI TIẾT — CÂU {qNum}
                       </span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -915,7 +940,11 @@
                                   className="rv-drawer-reanalyze-btn"
                                   onClick={() => void handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)}
                               >
-                                  <span style={{ marginRight: 3 }}>🔄</span> Phân tích lại
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 5 }}>
+                                      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                      <path d="M3 3v5h5" />
+                                  </svg>
+                                  Phân tích lại
                               </button>
                           )}
                           <button
