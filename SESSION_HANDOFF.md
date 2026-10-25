@@ -12,9 +12,10 @@
   - 12 dạng Reading: `R_TFNG`, `R_YNNG`, `R_MATCHING_HEADINGS`, `R_MATCHING_INFO`, `R_MATCHING_FEATURES`, `R_SENTENCE_ENDINGS`, `R_SUMMARY_BOX`, `R_NOTE_TABLE_SUMMARY`, `R_DIAGRAM_FLOWCHART`, `R_SHORT_ANSWER`, `R_MCQ_SINGLE`, `R_MCQ_MULTI`.
   - 12 dạng Writing: Task 1 (`W_T1_LINE`, `W_T1_BAR`, `W_T1_PIE`, `W_T1_TABLE`, `W_T1_MIXED`, `W_T1_MAP`, `W_T1_PROCESS`) và Task 2 (`W_T2_OPINION`, `W_T2_DISCUSSION`, `W_T2_ADV_DISADV`, `W_T2_PROBLEM_SOLUTION`, `W_T2_TWO_PART`).
   - 5 dạng Integrated: `I_LISTENING`, `I_CLOZE_GRAMMAR`, `I_ARRANGEMENT`, `I_READING_COMP`, `I_SENTENCE_TRANSFORM`.
-- **Giao diện Lọc Dạng Bài & Badges Vị Trí Học Viên (`src/components_split/STUDENT_PORTAL.txt`)**:
-  - Nút SVG Phễu lọc kế bên ô tìm kiếm với huy hiệu đếm số dạng bài đang chọn (`stSelectedCategories.length`), popover thả xuống kèm danh sách checkbox tương ứng kỹ năng hiện tại, số lượng đề khả dụng cho từng dạng và nút xóa lọc.
-  - Thẻ đề thi tự động hiển thị pill vị trí nổi bật (`Part 2 · Map / Plan Labelling`) khi đang lọc, hoặc 3 tag tóm tắt dạng bài +N khi không lọc.
+- **Giao diện Lọc Dạng Bài (Dải Chip Lướt Ngang / Horizontal Pill Bar) & Thẻ Đề Tinh Gọn (`src/components_split/STUDENT_PORTAL.txt`)**:
+  - Loại bỏ hoàn toàn popover dạng menu trôi và nút phễu lọc cồng kềnh; thay thế bằng thanh dải chip cuộn ngang mượt mà đặt ngay dưới 4 tab kỹ năng (`Listening`, `Reading`, `Writing`, `Integrated`).
+  - Bao gồm nút `[ Tất cả (Count) ]` và các chip bấm 1-chạm cho từng dạng bài xuất hiện trong tab kỹ năng hiện tại kèm số lượng bài thi thực tế. Thiết kế chip chữ hiển thị trọn vẹn 100% không bị cắt `...`, trạng thái kích hoạt nổi bật với màu accent + số đếm tương phản.
+  - Tinh gọn thẻ đề thi: Khi không lọc (`stSelectedCategories.length === 0`), ẩn hoàn toàn cụm tag dạng bài cồng kềnh để thẻ đề thi giữ layout gọn gàng, thanh lịch; khi lọc (`stSelectedCategories.length > 0`), hiển thị chính xác badge vị trí được lọc (ví dụ: `Part 2 · Map / Plan Labelling`).
 - **Đồng bộ Exam Builder, Review Analytics & DOCX Parser (`EXAM_BUILDER.txt`, `REVIEW_QUIZ.txt`, `STUDENTS.txt`, `api/index.py`)**:
   - Exam Builder đổi sang selector Category chuẩn theo kỹ năng và thêm selector cho Writing Task 1 & 2.
   - Review Quiz và phân tích học viên hiển thị tên sư phạm chuẩn hóa.

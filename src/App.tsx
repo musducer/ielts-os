@@ -5715,9 +5715,8 @@ export default function IeltsSupremeOS() {
   const [stQuizSearch, setStQuizSearch] = useState("");
   // Bộ lọc dạng bài (taxonomy) trong Phòng thi học sinh — reset khi đổi kỹ năng.
   const [stSelectedCategories, setStSelectedCategories] = useState<string[]>([]);
-  const [stFilterPopoverOpen, setStFilterPopoverOpen] = useState<boolean>(false);
   const [stCategoryMatchMode, setStCategoryMatchMode] = useState<"ANY" | "ALL">("ANY");
-  useEffect(() => { setStSelectedCategories([]); setStFilterPopoverOpen(false); }, [studentExamSkillTab]);
+  useEffect(() => { setStSelectedCategories([]); }, [studentExamSkillTab]);
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
   const [examFolders, setExamFolders] = useState<string[]>(() => {
@@ -21564,170 +21563,12 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10}}>
                 <h3 style={{marginTop: 0, color: C.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8}}><Ico name="monitor" size={18} color={C.accent} /> {t('test_room_title')}</h3>
                 {examRoomTab === "available" && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
-                    <input
-                      placeholder={t('filter_quizzes')}
-                      value={stQuizSearch}
-                      onChange={(e: any) => setStQuizSearch(e.target.value)}
-                      style={{ minWidth: 170, padding: '6px 12px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setStFilterPopoverOpen(prev => !prev)}
-                      style={{
-                        height: 32,
-                        padding: '0 10px',
-                        borderRadius: 7,
-                        border: `1px solid ${stSelectedCategories.length ? C.accent : C.border}`,
-                        background: stSelectedCategories.length ? `${C.accent}12` : C.card,
-                        color: stSelectedCategories.length ? C.accent : C.sub,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title={tx("Lọc theo dạng bài", "Filter by question category")}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
-                      </svg>
-                      <span>{tx("Dạng bài", "Category")}</span>
-                      {stSelectedCategories.length > 0 && (
-                        <span style={{
-                          fontSize: 10,
-                          fontWeight: 900,
-                          background: C.accent,
-                          color: '#fff',
-                          borderRadius: 9,
-                          padding: '0 5px',
-                          lineHeight: '16px',
-                          minWidth: 16,
-                          textAlign: 'center',
-                        }}>
-                          {stSelectedCategories.length}
-                        </span>
-                      )}
-                    </button>
-
-                    {/* Multi-Select Category Popover */}
-                    {stFilterPopoverOpen && (
-                      <>
-                        <div
-                          onClick={() => setStFilterPopoverOpen(false)}
-                          style={{ position: 'fixed', inset: 0, zIndex: 59 }}
-                        />
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: 'calc(100% + 6px)',
-                            right: 0,
-                            width: 290,
-                            maxHeight: 380,
-                            background: C.card,
-                            border: `1px solid ${C.border}`,
-                            borderRadius: 10,
-                            boxShadow: '0 10px 30px rgba(0,0,0,0.12)',
-                            zIndex: 60,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            overflow: 'hidden',
-                          }}
-                        >
-                          <div style={{
-                            padding: '10px 14px',
-                            borderBottom: `1px solid ${C.border}`,
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            background: C.bg,
-                          }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: C.text }}>
-                              {tx(`Lọc dạng bài (${studentExamSkillTab})`, `Filter Category (${studentExamSkillTab})`)}
-                            </div>
-                            {stSelectedCategories.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setStSelectedCategories([])}
-                                style={{
-                                  background: 'transparent',
-                                  border: 'none',
-                                  color: C.accent,
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: 'pointer',
-                                  padding: 0,
-                                }}
-                              >
-                                {tx("Xóa lọc", "Clear")}
-                              </button>
-                            )}
-                          </div>
-
-                          <div style={{ padding: '8px 10px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                            {(CANONICAL_TAXONOMY[studentExamSkillTab] || []).map(catItem => {
-                              const isSelected = stSelectedCategories.includes(catItem.id);
-                              const count = categoryQuizCounts[catItem.id] || 0;
-                              return (
-                                <label
-                                  key={catItem.id}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    padding: '6px 8px',
-                                    borderRadius: 6,
-                                    background: isSelected ? `${C.accent}12` : 'transparent',
-                                    cursor: 'pointer',
-                                    fontSize: 12,
-                                    userSelect: 'none',
-                                  }}
-                                >
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={isSelected}
-                                      onChange={() => {
-                                        setStSelectedCategories(prev =>
-                                          prev.includes(catItem.id)
-                                            ? prev.filter(id => id !== catItem.id)
-                                            : [...prev, catItem.id]
-                                        );
-                                      }}
-                                      style={{ accentColor: C.accent, cursor: 'pointer' }}
-                                    />
-                                    <span style={{
-                                      color: isSelected ? C.accent : C.text,
-                                      fontWeight: isSelected ? 700 : 500,
-                                      whiteSpace: 'nowrap',
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                    }}>
-                                      {catItem.label}
-                                    </span>
-                                  </div>
-                                  <span style={{
-                                    fontSize: 10.5,
-                                    fontWeight: 700,
-                                    color: count > 0 ? C.sub : `${C.sub}60`,
-                                    background: C.bg,
-                                    padding: '1px 6px',
-                                    borderRadius: 4,
-                                    marginLeft: 6,
-                                    flexShrink: 0,
-                                  }}>
-                                    {count}
-                                  </span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <input
+                    placeholder={t('filter_quizzes')}
+                    value={stQuizSearch}
+                    onChange={(e: any) => setStQuizSearch(e.target.value)}
+                    style={{ minWidth: 200, padding: '7px 14px', fontSize: 12.5, borderRadius: 8, border: `1px solid ${C.border}`, background: C.bg, color: C.text }}
+                  />
                 )}
             </div>
             {/* SUB-TABS: Đề khả dụng | Kết quả & Review — mỗi danh sách ngắn, không cuộn qua nhau */}
@@ -21760,6 +21601,108 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 );
               })}
             </div>
+            {/* HORIZONTAL CATEGORY PILL BAR */}
+            {examRoomTab === "available" && (() => {
+              const cats = (CANONICAL_TAXONOMY[studentExamSkillTab] || []).filter(c => (categoryQuizCounts[c.id] || 0) > 0);
+              if (cats.length === 0) return null;
+              const isAllActive = stSelectedCategories.length === 0;
+              const totalTests = rawQuizzesForSkill.length;
+
+              return (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  overflowX: 'auto',
+                  padding: '10px 0 4px 0',
+                  scrollbarWidth: 'none',
+                }}>
+                  {/* Pill: Tất cả */}
+                  <button
+                    type="button"
+                    onClick={() => setStSelectedCategories([])}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '5px 12px',
+                      borderRadius: 999,
+                      border: `1px solid ${isAllActive ? C.accent : C.border}`,
+                      background: isAllActive ? C.accent : C.card,
+                      color: isAllActive ? '#fff' : C.sub,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                      boxShadow: isAllActive ? `0 2px 8px ${C.accent}35` : 'none',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>{tx('Tất cả', 'All')}</span>
+                    <span style={{
+                      fontSize: 10.5,
+                      fontWeight: 800,
+                      padding: '1px 6px',
+                      borderRadius: 10,
+                      background: isAllActive ? 'rgba(255,255,255,0.25)' : C.border,
+                      color: isAllActive ? '#fff' : C.sub,
+                    }}>
+                      {totalTests}
+                    </span>
+                  </button>
+
+                  {/* Pills: Từng dạng bài */}
+                  {cats.map(catItem => {
+                    const isSelected = stSelectedCategories.includes(catItem.id);
+                    const count = categoryQuizCounts[catItem.id] || 0;
+
+                    return (
+                      <button
+                        key={catItem.id}
+                        type="button"
+                        onClick={() => {
+                          setStSelectedCategories(prev =>
+                            prev.includes(catItem.id)
+                              ? prev.filter(id => id !== catItem.id)
+                              : [...prev, catItem.id]
+                          );
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '5px 12px',
+                          borderRadius: 999,
+                          border: `1px solid ${isSelected ? C.accent : C.border}`,
+                          background: isSelected ? C.accent : C.card,
+                          color: isSelected ? '#fff' : C.text,
+                          fontSize: 12,
+                          fontWeight: isSelected ? 800 : 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                          boxShadow: isSelected ? `0 2px 8px ${C.accent}35` : 'none',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <span>{catItem.label}</span>
+                        <span style={{
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                          padding: '1px 6px',
+                          borderRadius: 10,
+                          background: isSelected ? 'rgba(255,255,255,0.25)' : C.border,
+                          color: isSelected ? '#fff' : C.sub,
+                        }}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             {examRoomTab === "available" && myRealExamPackages.length > 0 && (
               <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
                 {myRealExamPackages.map((pkg: RealExamPackage) => {
@@ -21845,35 +21788,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                 )}
                             </div>
                             {(() => {
+                              if (stSelectedCategories.length === 0) return null;
                               const breakdown = getQuizCategoryBreakdown(q);
-                              const matched = stSelectedCategories.length > 0
-                                ? breakdown.filter(b => stSelectedCategories.includes(b.categoryId))
-                                : [];
-                              if (stSelectedCategories.length > 0) {
-                                if (matched.length === 0) return null;
-                                return (
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
-                                    {matched.map(item => (
-                                      <span key={item.categoryId} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 5, background: `${C.accent}12`, color: C.accent, fontWeight: 700, border: `1px solid ${C.accent}30` }}>
-                                        {item.partLabels.join(', ')} · {item.label}
-                                      </span>
-                                    ))}
-                                  </div>
-                                );
-                              }
-                              if (breakdown.length === 0) return null;
+                              const matched = breakdown.filter(b => stSelectedCategories.includes(b.categoryId));
+                              if (matched.length === 0) return null;
                               return (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
-                                  {breakdown.slice(0, 3).map(item => (
-                                    <span key={item.categoryId} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 5, color: C.sub, background: C.card, border: `1px solid ${C.border}`, fontWeight: 600 }}>
+                                  {matched.map(item => (
+                                    <span key={item.categoryId} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 5, background: `${C.accent}15`, color: C.accent, fontWeight: 700, border: `1px solid ${C.accent}30` }}>
                                       {item.partLabels.join(', ')} · {item.label}
                                     </span>
                                   ))}
-                                  {breakdown.length > 3 && (
-                                    <span style={{ fontSize: 10.5, padding: '2px 6px', borderRadius: 5, color: C.sub, background: C.card, border: `1px solid ${C.border}`, fontWeight: 600 }}>
-                                      +{breakdown.length - 3}
-                                    </span>
-                                  )}
                                 </div>
                               );
                             })()}

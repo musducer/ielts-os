@@ -5715,9 +5715,8 @@ export default function IeltsSupremeOS() {
   const [stQuizSearch, setStQuizSearch] = useState("");
   // Bộ lọc dạng bài (taxonomy) trong Phòng thi học sinh — reset khi đổi kỹ năng.
   const [stSelectedCategories, setStSelectedCategories] = useState<string[]>([]);
-  const [stFilterPopoverOpen, setStFilterPopoverOpen] = useState<boolean>(false);
   const [stCategoryMatchMode, setStCategoryMatchMode] = useState<"ANY" | "ALL">("ANY");
-  useEffect(() => { setStSelectedCategories([]); setStFilterPopoverOpen(false); }, [studentExamSkillTab]);
+  useEffect(() => { setStSelectedCategories([]); }, [studentExamSkillTab]);
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
   const [examFolders, setExamFolders] = useState<string[]>(() => {

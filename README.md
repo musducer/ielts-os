@@ -370,7 +370,7 @@ Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm tr
 - **Teacher Confiscation of Coins & All Gift Types (`src/App.template.tsx`, `src/components_split/STUDENTS.txt`)**:
   - Teachers can confiscate any amount of OS Coins (or reset to `0`), consumables (`-1` or revoke all), permanent cosmetics (automatically unequipping active items and recording a `revokedPermanents` tombstone so anti-loss sync / `localStorage` never resurrects them), redeemed rewards (`myRewards`), or clear a student's entire inventory at once.
 
-## Unified IELTS & Integrated Question Taxonomy & Student Portal Filter Popover
+## Unified IELTS & Integrated Question Taxonomy & Student Portal Filter Pill Bar
 
 - **Pure Non-Destructive Question Classifier (`src/questionTaxonomy.ts`, `src/App.template.tsx`, `api/index.py`)**:
   - Automatically classifies 100% of questions and Writing tasks in runtime without mutating `q.type` or `q.subType` (0% risk of breaking exam room layout or scoring).
@@ -379,10 +379,10 @@ Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm tr
     - **Reading**: `R_TFNG`, `R_YNNG`, `R_MATCHING_HEADINGS`, `R_MATCHING_INFO`, `R_MATCHING_FEATURES`, `R_SENTENCE_ENDINGS`, `R_SUMMARY_BOX`, `R_NOTE_TABLE_SUMMARY`, `R_DIAGRAM_FLOWCHART`, `R_SHORT_ANSWER`, `R_MCQ_SINGLE`, `R_MCQ_MULTI`.
     - **Writing**: Task 1 (`W_T1_LINE`, `W_T1_BAR`, `W_T1_PIE`, `W_T1_TABLE`, `W_T1_MIXED`, `W_T1_MAP`, `W_T1_PROCESS`) and Task 2 (`W_T2_OPINION`, `W_T2_DISCUSSION`, `W_T2_ADV_DISADV`, `W_T2_PROBLEM_SOLUTION`, `W_T2_TWO_PART`).
     - **Integrated**: `I_LISTENING`, `I_CLOZE_GRAMMAR`, `I_ARRANGEMENT`, `I_READING_COMP`, `I_SENTENCE_TRANSFORM`.
-- **Dedicated "Integrated" Skill Tab & Compact SVG Filter Popover (`src/components_split/STUDENT_PORTAL.txt`)**:
+- **Dedicated "Integrated" Skill Tab & Sleek Horizontal Category Pill Bar (`src/components_split/STUDENT_PORTAL.txt`)**:
   - Integrated tests receive their own dedicated tab alongside Listening, Reading, and Writing in both Exam Room and Progress sections.
-  - Compact SVG Filter button with counter badge next to the search input, opening a floating multi-select popover listing only the canonical categories for the active skill with available test counts and clear button.
-  - Matching test cards display compact location badges (e.g. `Part 2 · Map / Plan Labelling` in accent color when filtered, or up to 3 muted summary tags +N when unfiltered).
+  - Horizontal scrolling category pill bar directly beneath the 4 skill tabs: `[ Tất cả (Count) ]` + 1-click pills with dynamic test counters for each canonical category present in the active skill tab.
+  - Slim card presentation: When unfiltered, cards stay clean and compact with zero noisy tag clutter; when filtered, matching test cards display high-visibility accent location badges (e.g. `Part 2 · Map / Plan Labelling`).
 - **Exam Builder & Review Analytics Standardization (`src/components_split/EXAM_BUILDER.txt`, `src/components_split/REVIEW_QUIZ.txt`, `src/components_split/STUDENTS.txt`)**:
   - Exam Builder replaces the hardcoded subType dropdown with a canonical Category dropdown populated dynamically by skill, and adds Task 1 / Task 2 category selectors for Writing tasks.
   - Review Quiz and Student Weakness Analytics display human-readable canonical IELTS category names.
