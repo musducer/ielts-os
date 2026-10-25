@@ -387,3 +387,14 @@ Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm tr
 - **Exam Builder & Review Analytics Standardization (`src/components_split/EXAM_BUILDER.txt`, `src/components_split/REVIEW_QUIZ.txt`, `src/components_split/STUDENTS.txt`)**:
   - Exam Builder replaces the hardcoded subType dropdown with a canonical Category dropdown populated dynamically by skill, and adds Task 1 / Task 2 category selectors for Writing tasks.
   - Review Quiz and Student Weakness Analytics display human-readable canonical IELTS category names.
+
+## Modern Academic Studio Login Screen
+
+- **EdTech Academic UI Redesign (`src/App.template.tsx`)**:
+  - Eliminated the previous pitch-black and gold-champagne palette ("Editorial Luxe") in favor of a clean, trustworthy, and student-friendly **Modern Academic Studio** aesthetic (Oxford/Cambridge × Notion/Duolingo Max).
+  - Background palette: Warm off-white (`#F8FAFC`) with subtle ambient blue-indigo glows, deep slate typography (`#0F172A`), and academic cobalt royal blue accents (`#2563EB`).
+  - Left column feature showcase: Replaced raw numbers with clean modern icon cards highlighting 3 core student values:
+    1. **Mô phỏng thi thật**: Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.
+    2. **AI chữa đề thông minh**: Dẫn chứng chính xác, giải thích cặn kẽ từng câu.
+    3. **Phân tích điểm yếu theo dạng bài**: Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.
+  - Right column login form: Crisp white card with soft elevation, clean form labels, clear email and password inputs with eye toggle, and high-contrast royal blue submit button. Fully responsive on mobile with clean authenticating modal overlay.

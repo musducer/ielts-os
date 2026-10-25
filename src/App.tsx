@@ -12500,176 +12500,308 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   if (!currentUser) {
     // ==========================================
-    // ĐĂNG NHẬP — "EDITORIAL LUXE": nền đen tuyền, 1 màu nhấn vàng champagne,
-    // bố cục bất đối xứng kiểu tạp chí, serif Fraunces, hiệu ứng wow (spotlight
-    // theo con trỏ + aurora trôi + thẻ nghiêng 3D + entrance animation).
+    // ĐĂNG NHẬP — "MODERN ACADEMIC STUDIO" (Chuẩn EdTech Oxford/Cambridge x Notion)
+    // Tông màu: Nền Off-white ấm áp (#F8FAFC), chữ Slate đậm (#0F172A),
+    // Màu nhấn: Xanh Cobalt học thuật (#2563EB) & Xanh Indigo (#4F46E5).
+    // Bố cục 2 cột cân đối, thân thiện, triệt tiêu hoàn toàn tông vàng đen đa cấp.
     // ==========================================
-    const GOLD = "#E7C470", GOLD_BRIGHT = "#F4DFA8", GOLD_DEEP = "#B8923E";
-    const CREAM = "#F6EBCB", CREAM_DIM = "rgba(246,235,203,0.56)", INK = "#1a1305";
     const lxYear = new Date().getFullYear();
-    const lxFeats: [string, string, string][] = [
-      ["01", tx("Phòng thi chuẩn IDP", "Standard IDP Test Room"), tx("Giao diện computer-based mô phỏng phòng thi thật.", "Computer-based interface simulating real exam conditions.")],
-      ["02", tx("Chấm & phân tích tức thì", "Instant Scoring & Analytics"), tx("Band điểm, hạn chế và lộ trình cải thiện ngay sau khi nộp.", "Band scores, bottlenecks, and action plans right after submission.")],
-      ["03", tx("Chống gian lận", "Anti-Cheat Protection"), tx("Tích hợp Safe Exam Browser, khoá môi trường thi.", "Integrated Safe Exam Browser with secure test lockdown.")],
+    const lxFeats = [
+      {
+        num: "01",
+        title: tx("Mô phỏng thi thật", "Standard Mock Exam"),
+        desc: tx("Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.", "Computer-delivered exam environment to build real test reflexes."),
+        icon: "monitor"
+      },
+      {
+        num: "02",
+        title: tx("AI chữa đề thông minh", "Smart AI Explanations"),
+        desc: tx("Dẫn chứng chính xác, giải thích cặn kẽ từng câu.", "Precise passage evidence and comprehensive answer breakdown."),
+        icon: "sparkles"
+      },
+      {
+        num: "03",
+        title: tx("Phân tích điểm yếu theo dạng bài", "Question-Type Diagnostics"),
+        desc: tx("Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.", "Automatically detect weak question types and underlying cognitive traps."),
+        icon: "target"
+      },
     ];
-    const lxNoise = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`;
-    // WOW #1: spotlight bám con trỏ — cập nhật CSS var trực tiếp lên DOM (không re-render).
-    const lxStageMove = (e: any) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
-      e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
-    };
-    // WOW #2: thẻ form nghiêng 3D nhẹ theo vị trí con trỏ.
-    const lxCardMove = (e: any) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      e.currentTarget.style.setProperty("--rx", `${px * 7}deg`);
-      e.currentTarget.style.setProperty("--ry", `${-py * 7}deg`);
-    };
-    const lxCardLeave = (e: any) => {
-      e.currentTarget.style.setProperty("--rx", "0deg");
-      e.currentTarget.style.setProperty("--ry", "0deg");
-    };
+
     return (
-      <div onMouseMove={lxStageMove} style={{ minHeight: "100dvh", display: "flex", position: "relative", overflow: "hidden", background: "#060507", ["--mx" as any]: "60%", ["--my" as any]: "28%" } as any}>
+      <div style={{
+        minHeight: "100dvh",
+        display: "flex",
+        position: "relative",
+        background: "#F8FAFC",
+        color: "#0F172A",
+        fontFamily: "var(--sans, system-ui, -apple-system, sans-serif)",
+        overflow: "hidden",
+      }}>
         {globalStyles}
         <style>{`
           @media (max-width: 980px){
-            .lx-hero{ display:none !important; }
-            .lx-form-col{ flex:1 1 100% !important; flex-direction:column !important; justify-content:flex-start !important; align-items:center !important; padding:34px 22px 42px !important; overflow-y:auto !important; }
-            .lx-mhero{ display:flex !important; }
-            .lx-card{ transform:none !important; }
+            .ac-hero { display: none !important; }
+            .ac-form-col { flex: 1 1 100% !important; padding: 32px 20px !important; }
+            .ac-mhero { display: flex !important; }
           }
-          @media (max-width: 420px){
-            .lx-cardinner{ padding:30px 22px !important; border-radius:20px !important; }
-            .lx-mhero h1{ font-size:clamp(28px,8.5vw,36px) !important; }
+          @keyframes acFadeIn {
+            from { opacity: 0; transform: translateY(14px); }
+            to { opacity: 1; transform: translateY(0); }
           }
-          @keyframes lxRise{ from{ opacity:0; transform:translateY(20px);} to{ opacity:1; transform:translateY(0);} }
-          @keyframes lxAurora1{ 0%{ transform:translate(-8%,-6%) scale(1);} 50%{ transform:translate(10%,8%) scale(1.25);} 100%{ transform:translate(-8%,-6%) scale(1);} }
-          @keyframes lxAurora2{ 0%{ transform:translate(6%,8%) scale(1.1);} 50%{ transform:translate(-9%,-7%) scale(1.32);} 100%{ transform:translate(6%,8%) scale(1.1);} }
-          @keyframes lxShimmer{ 0%{ background-position:-160% 0;} 100%{ background-position:260% 0;} }
-          @keyframes lxVerifySpin{ to{ transform:rotate(360deg); } }
-          @keyframes lxVerifyPulse{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
-          .lx-rise{ opacity:0; animation:lxRise .9s cubic-bezier(.22,.61,.36,1) forwards; }
-          .lx-card{ transform:perspective(1200px) rotateX(var(--ry,0deg)) rotateY(var(--rx,0deg)); transition:transform .18s ease-out; transform-style:preserve-3d; }
-          .lx-input{ width:100%; padding:14px 16px; font-size:15px; border:1px solid rgba(231,196,112,0.18); border-radius:13px; background:rgba(255,255,255,0.03); outline:none; color:${CREAM}; transition:border-color .2s, box-shadow .2s, background .2s; box-sizing:border-box; font-family:var(--heading); letter-spacing:.3px; }
-          .lx-input::placeholder{ color:rgba(246,235,203,0.28); letter-spacing:0; }
-          .lx-input:focus{ border-color:rgba(231,196,112,0.6); background:rgba(231,196,112,0.05); box-shadow:0 0 0 4px rgba(231,196,112,0.13); }
-          .lx-feat{ display:flex; gap:18px; align-items:baseline; padding:15px 2px; border-top:1px solid rgba(231,196,112,0.13); }
-          .lx-feat:last-child{ border-bottom:1px solid rgba(231,196,112,0.13); }
-          .lx-num{ font-family:var(--mono); font-size:13px; font-weight:700; color:${GOLD}; letter-spacing:1px; }
-          .lx-submit{ position:relative; overflow:hidden; }
-          .lx-submit:hover{ transform:translateY(-2px); box-shadow:0 18px 42px rgba(231,196,112,0.32) !important; }
-          .lx-submit > span{ position:relative; z-index:2; }
-          .lx-submit::after{ content:""; position:absolute; inset:0; z-index:1; background:linear-gradient(110deg, transparent 25%, rgba(255,255,255,0.5) 50%, transparent 75%); background-size:200% 100%; animation:lxShimmer 4s ease-in-out infinite; }
-          .lx-submit:disabled{ cursor:wait !important; opacity:.7; transform:none !important; }
-          .lx-eye:hover{ color:${GOLD} !important; }
+          @keyframes acSpin {
+            to { transform: rotate(360deg); }
+          }
+          .ac-rise {
+            opacity: 0;
+            animation: acFadeIn 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+          }
+          .ac-input {
+            width: 100%;
+            height: 46px;
+            padding: 0 14px;
+            font-size: 14.5px;
+            border: 1.5px solid #CBD5E1;
+            border-radius: 10px;
+            background: #F8FAFC;
+            outline: none;
+            color: #0F172A;
+            transition: all 0.18s ease;
+            box-sizing: border-box;
+          }
+          .ac-input:focus {
+            border-color: #2563EB;
+            background: #FFFFFF;
+            box-shadow: 0 0 0 3.5px rgba(37, 99, 235, 0.12);
+          }
+          .ac-submit {
+            width: 100%;
+            height: 48px;
+            border-radius: 10px;
+            border: none;
+            background: #2563EB;
+            color: #FFFFFF;
+            font-size: 14.5px;
+            font-weight: 800;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+            transition: all 0.18s ease;
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .ac-submit:hover:not(:disabled) {
+            background: #1D4ED8;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+          }
+          .ac-submit:disabled {
+            cursor: wait;
+            opacity: 0.75;
+          }
+          .ac-feat-card {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 14px 16px;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+            transition: all 0.2s ease;
+          }
+          .ac-feat-card:hover {
+            border-color: #BFDBFE;
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.08);
+            transform: translateY(-1px);
+          }
         `}</style>
 
-        {loginLoading && <div role="status" aria-live="assertive" aria-label={tx("Đang xác thực thông tin đăng nhập", "Verifying login credentials")} style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(6,5,7,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
-          <div style={{ width: "min(360px, 100%)", textAlign: "center", color: CREAM }}>
-            <div style={{ width: 82, height: 82, margin: "0 auto 28px", display: "grid", placeItems: "center", border: `1px solid ${GOLD}55`, borderRadius: "50%", boxShadow: `0 0 0 12px ${GOLD}0d, 0 20px 54px ${GOLD}22` }}>
-              <BrandLogo size={38} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} />
+        {loginLoading && (
+          <div role="status" aria-live="assertive" aria-label={tx("Đang xác thực thông tin đăng nhập", "Verifying login credentials")} style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(248, 250, 252, 0.85)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+            <div style={{ width: "min(360px, 100%)", textAlign: "center", background: "#FFFFFF", padding: "36px 28px", borderRadius: 20, border: "1px solid #E2E8F0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.12)" }}>
+              <div style={{ width: 68, height: 68, margin: "0 auto 20px", display: "grid", placeItems: "center", background: "#EFF6FF", border: "1px solid #DBEAFE", borderRadius: "50%" }}>
+                <BrandLogo size={36} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+              </div>
+              <div style={{ width: 32, height: 32, margin: "0 auto 18px", border: "3px solid #DBEAFE", borderTopColor: "#2563EB", borderRadius: "50%", animation: "acSpin .8s linear infinite" }} />
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#0F172A", marginBottom: 6 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
+              <div style={{ color: "#64748B", fontSize: 13.5, lineHeight: 1.5 }}>{tx("Vui lòng chờ trong giây lát...", "Please wait a moment...")}</div>
             </div>
-            <div style={{ width: 36, height: 36, margin: "0 auto 24px", border: `3px solid ${GOLD}2e`, borderTopColor: GOLD_BRIGHT, borderRadius: "50%", animation: "lxVerifySpin .8s linear infinite" }} />
-            <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 2.4, color: GOLD, marginBottom: 12 }}>VERIFYING ACCESS</div>
-            <div style={{ fontFamily: "var(--display)", fontSize: 27, fontWeight: 500, letterSpacing: 0.1 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
-            <div style={{ marginTop: 12, color: CREAM_DIM, fontSize: 14, lineHeight: 1.6, animation: "lxVerifyPulse 1.6s ease-in-out infinite" }}>{tx("Vui lòng chờ trong giây lát.", "Please wait a moment.")}</div>
           </div>
-        </div>}
+        )}
 
-        {/* WOW #2: aurora vàng trôi chậm sau lớp tối */}
-        <div aria-hidden style={{ position: "absolute", inset: "-20%", zIndex: 0, pointerEvents: "none" }}>
-            <div style={{ position: "absolute", width: "62vw", height: "62vw", left: "-12%", top: "-16%", background: `radial-gradient(circle, ${GOLD}24, transparent 62%)`, filter: "blur(46px)", animation: "lxAurora1 19s ease-in-out infinite" }} />
-            <div style={{ position: "absolute", width: "52vw", height: "52vw", right: "-14%", bottom: "-20%", background: `radial-gradient(circle, ${GOLD}1c, transparent 60%)`, filter: "blur(54px)", animation: "lxAurora2 23s ease-in-out infinite" }} />
-        </div>
-        {/* Chất liệu hạt — phá cảm giác phẳng "số hoá" */}
-        <div aria-hidden style={{ position: "absolute", inset: 0, zIndex: 1, opacity: 0.45, mixBlendMode: "overlay", backgroundImage: lxNoise, pointerEvents: "none" }} />
-        {/* WOW #1: spotlight bám con trỏ */}
-        <div aria-hidden style={{ position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none", background: `radial-gradient(560px circle at var(--mx) var(--my), ${GOLD}1f, transparent 60%)` }} />
-        {/* Vignette làm sâu rìa */}
-        <div aria-hidden style={{ position: "absolute", inset: 0, zIndex: 1, pointerEvents: "none", background: "radial-gradient(125% 125% at 50% -10%, transparent 52%, rgba(0,0,0,0.72) 100%)" }} />
-
-        {/* CỘT TRÁI — EDITORIAL */}
-        <div className="lx-hero" style={{ flex: "1.12 1 0", position: "relative", zIndex: 2, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "60px 4vw 54px 6vw", color: CREAM }}>
-            <div className="lx-rise" style={{ display: "flex", alignItems: "center", gap: 14, animationDelay: ".05s" }}>
-                <div style={{ filter: `drop-shadow(0 10px 22px ${GOLD}33)` }}><BrandLogo size={46} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} /></div>
-                <BrandWordmark size={20} color={CREAM} light />
-            </div>
-            <div style={{ position: "relative" }}>
-                {/* số thứ tự khổng lồ kiểu tạp chí, mờ phía sau */}
-                <div aria-hidden style={{ position: "absolute", top: -88, left: -14, fontFamily: "var(--display)", fontSize: "clamp(160px, 20vw, 260px)", fontWeight: 600, lineHeight: 1, color: "rgba(231,196,112,0.055)", pointerEvents: "none", userSelect: "none" }}>№</div>
-                <div className="lx-rise" style={{ position: "relative", fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: GOLD, marginBottom: 24, animationDelay: ".15s" }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 className="lx-rise" style={{ position: "relative", fontFamily: "var(--display)", fontSize: "clamp(44px, 5vw, 70px)", lineHeight: 1.02, fontWeight: 500, margin: "0 0 24px", letterSpacing: -1, color: CREAM, animationDelay: ".25s" }}>{tx("Vừa học vừa thi", "Practice & Test")}<br/><span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("Tiến bộ tức thì!", "Instant Progress!")}</span></h1>
-                <p className="lx-rise" style={{ position: "relative", fontSize: 16.5, lineHeight: 1.75, color: CREAM_DIM, maxWidth: 460, margin: "0 0 36px", animationDelay: ".35s" }}>{tx("Hệ thống thi thử chuẩn IDP, chấm điểm tức thì, sổ từ vựng thông minh và quản lý lớp học.", "Standard IDP computer-based mock tests, instant grading, smart vocabulary notebook, and classroom management.")}</p>
-                <div className="lx-rise" style={{ maxWidth: 480, animationDelay: ".45s" }}>
-                    {lxFeats.map(([n, h, d]) => (
-                        <div key={n} className="lx-feat">
-                            <span className="lx-num">{n}</span>
-                            <div>
-                                <div style={{ fontFamily: "var(--heading)", fontSize: 15.5, fontWeight: 700, color: CREAM, marginBottom: 4 }}>{h}</div>
-                                <div style={{ fontSize: 13.5, lineHeight: 1.55, color: CREAM_DIM }}>{d}</div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-            <div className="lx-rise" style={{ fontFamily: "var(--mono)", fontSize: 11.5, letterSpacing: 0.5, color: "rgba(246,235,203,0.4)", animationDelay: ".55s" }}>© {lxYear} IELTS OS — Computer-based Testing Platform</div>
+        {/* Soft Ambient Academic Background Glows */}
+        <div aria-hidden style={{ position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", overflow: "hidden" }}>
+          <div style={{ position: "absolute", width: "50vw", height: "50vw", left: "-10%", top: "-10%", background: "radial-gradient(circle, rgba(99, 102, 241, 0.08), transparent 60%)", filter: "blur(50px)" }} />
+          <div style={{ position: "absolute", width: "45vw", height: "45vw", right: "-5%", bottom: "-10%", background: "radial-gradient(circle, rgba(37, 99, 235, 0.07), transparent 60%)", filter: "blur(50px)" }} />
         </div>
 
-        {/* CỘT PHẢI — THẺ KÍNH NỔI, NGHIÊNG 3D */}
-        <div className="lx-form-col" style={{ flex: "0.9 1 0", position: "relative", zIndex: 2, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 5vw" }}>
-            {/* MOBILE HERO — chỉ hiện ≤980px (cột trái bị ẩn) */}
-            <div className="lx-mhero lx-rise" style={{ display: "none", flexDirection: "column", width: "100%", maxWidth: 430, marginBottom: 22, color: CREAM, animationDelay: ".15s" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 18 }}>
-                    <div style={{ filter: `drop-shadow(0 8px 18px ${GOLD}33)` }}><BrandLogo size={34} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} /></div>
-                    <BrandWordmark size={16} color={CREAM} light />
-                </div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, fontWeight: 700, letterSpacing: 2.5, textTransform: "uppercase", color: GOLD, marginBottom: 10 }}>Computer-based IELTS · Since {lxYear}</div>
-                <h1 style={{ fontFamily: "var(--display)", fontSize: "clamp(30px, 8vw, 40px)", lineHeight: 1.05, fontWeight: 500, margin: "0 0 12px", letterSpacing: -0.6 }}>{tx("Vừa học vừa thi ", "Practice & Test ")}<span style={{ fontStyle: "italic", background: `linear-gradient(100deg, ${GOLD_BRIGHT}, ${GOLD_DEEP})`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>{tx("tiến bộ tức thì.", "instant progress.")}</span></h1>
-                <p style={{ fontSize: 14, lineHeight: 1.6, color: CREAM_DIM, margin: 0 }}>{tx("Thi thử chuẩn IDP · chấm điểm tức thì · sổ từ vựng thông minh.", "Standard IDP mock tests · instant grading · smart vocabulary.")}</p>
+        {/* CỘT TRÁI — SHOWCASE HỌC THUẬT */}
+        <div className="ac-hero" style={{ flex: "1.1 1 0", position: "relative", zIndex: 2, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "52px 4vw 48px 6vw" }}>
+          <div className="ac-rise" style={{ display: "flex", alignItems: "center", gap: 12, animationDelay: ".05s" }}>
+            <BrandLogo size={42} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+            <BrandWordmark size={20} color="#0F172A" osColor="#2563EB" />
+          </div>
+
+          <div style={{ maxWidth: 520, margin: "36px 0" }}>
+            <div className="ac-rise" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", background: "#EFF6FF", border: "1px solid #DBEAFE", borderRadius: 999, color: "#2563EB", fontSize: 11.5, fontWeight: 700, letterSpacing: 0.5, marginBottom: 20, animationDelay: ".12s" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563EB" }} />
+              <span>{tx("HỆ THỐNG LUYỆN THI CHUẨN MỰC · SINH VIÊN & HỌC VIÊN", "COMPUTER-DELIVERED TESTING & DIAGNOSTICS")}</span>
             </div>
-            <div onMouseMove={lxCardMove} onMouseLeave={lxCardLeave} className="lx-card lx-rise" style={{ width: 430, maxWidth: "100%", animationDelay: ".35s" }}>
-                <div className="lx-cardinner" style={{ position: "relative", background: "linear-gradient(165deg, rgba(30,25,15,0.74), rgba(10,9,7,0.84))", border: "1px solid rgba(231,196,112,0.18)", borderRadius: 24, padding: "42px 38px", boxShadow: "0 44px 96px -34px rgba(0,0,0,0.92), inset 0 1px 0 rgba(231,196,112,0.13)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)" }}>
-                    <div aria-hidden style={{ position: "absolute", top: 0, left: 30, right: 30, height: 1, background: `linear-gradient(90deg, transparent, ${GOLD}aa, transparent)` }} />
-                    <form onSubmit={handleLogin}>
-                        <div className="lx-mobile-brand" style={{ display: "none", alignItems: "center", gap: 11, marginBottom: 26 }}>
-                            <BrandLogo size={36} stops={[GOLD_BRIGHT, GOLD, GOLD_DEEP]} mark={INK} />
-                            <BrandWordmark size={16} color={CREAM} light />
-                        </div>
-                        <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: GOLD, marginBottom: 14 }}>Secure Access</div>
-                        <h2 style={{ fontFamily: "var(--display)", fontSize: 32, fontWeight: 500, color: CREAM, margin: "0 0 8px", letterSpacing: -0.5 }}>{t('login_heading')}</h2>
-                        <p style={{ color: CREAM_DIM, fontSize: 14.5, margin: "0 0 30px", lineHeight: 1.6 }}>{t('login_welcome')}</p>
-                        {loginError && <div style={{ background: "rgba(229,144,114,0.12)", color: "#E59072", border: "1px solid rgba(229,144,114,0.3)", padding: "12px 14px", borderRadius: 12, fontSize: 13, marginBottom: 20, fontWeight: 600, textAlign: "center" }}>{loginError}</div>}
-                        <div style={{ display: "grid", gap: 18 }}>
-                            <div>
-                                <label style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: CREAM_DIM, marginBottom: 9, display: "block" }}>{t('email_label')}</label>
-                                <input className="lx-input" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} disabled={loginLoading} required placeholder="name@example.com" />
-                            </div>
-                            <div>
-                                <label style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: CREAM_DIM, marginBottom: 9, display: "block" }}>{t('pwd_label')}</label>
-                                <div style={{ position: "relative" }}>
-                                    <input className="lx-input" type={showPwd ? "text" : "password"} value={password} onChange={(e: any) => setPassword(e.target.value)} disabled={loginLoading} required placeholder="••••••••" style={{ paddingRight: 46 }} />
-                                    <button type="button" className="lx-eye" onClick={() => setShowPwd(!showPwd)} disabled={loginLoading} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: loginLoading ? "wait" : "pointer", padding: 6, color: CREAM_DIM, display: "flex", transition: "color .2s" }} title={t('show_hide_pwd')}>
-                                        {showPwd
-                                            ? <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                                            : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                        }
-                                    </button>
-                                </div>
-                            </div>
-                            <button type="submit" className="lx-submit" disabled={loginLoading} style={{ background: `linear-gradient(180deg, ${GOLD_BRIGHT}, ${GOLD})`, color: INK, padding: "15px", marginTop: 8, fontSize: 15, fontWeight: 800, borderRadius: 13, border: "none", cursor: loginLoading ? "wait" : "pointer", boxShadow: `0 12px 32px ${GOLD}3d`, transition: "transform .15s, box-shadow .15s", letterSpacing: 0.5, fontFamily: "var(--heading)" }}><span>{loginLoading ? "VERIFYING..." : t('login_btn')}</span></button>
-                        </div>
-                    </form>
+
+            <h1 className="ac-rise" style={{ fontSize: "clamp(34px, 4.2vw, 50px)", lineHeight: 1.15, fontWeight: 800, margin: "0 0 16px", letterSpacing: "-0.8px", color: "#0F172A", animationDelay: ".2s" }}>
+              {tx("Vừa học vừa thi,", "Practice & Test,")}<br/>
+              <span style={{ color: "#2563EB" }}>{tx("tiến bộ vững vàng.", "consistent progress.")}</span>
+            </h1>
+
+            <p className="ac-rise" style={{ fontSize: 15.5, lineHeight: 1.65, color: "#475569", margin: "0 0 28px", animationDelay: ".28s" }}>
+              {tx("Hệ thống thi thử máy tính chuẩn mực, chữa đề chi tiết với dẫn chứng rõ ràng, và phân tích lỗ hổng tư duy theo từng dạng bài.", "Standard computer-based IELTS testing platform with smart AI explanations, instant evidence location, and in-depth question diagnostics.")}
+            </p>
+
+            <div className="ac-rise" style={{ display: "grid", gap: 10, animationDelay: ".36s" }}>
+              {lxFeats.map((feat) => (
+                <div key={feat.num} className="ac-feat-card">
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "#EFF6FF", border: "1px solid #DBEAFE", display: "grid", placeItems: "center", flexShrink: 0, marginTop: 2 }}>
+                    {feat.icon === "monitor" && (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    )}
+                    {feat.icon === "sparkles" && (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                    )}
+                    {feat.icon === "target" && (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0F172A", marginBottom: 3 }}>
+                      {feat.title}
+                    </div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, color: "#64748B" }}>
+                      {feat.desc}
+                    </div>
+                  </div>
                 </div>
+              ))}
             </div>
+          </div>
+
+          <div className="ac-rise" style={{ fontSize: 12, color: "#94A3B8", animationDelay: ".44s" }}>
+            © {lxYear} IELTS OS — Computer-based Testing & Learning Platform
+          </div>
+        </div>
+
+        {/* CỘT PHẢI — THẺ ĐĂNG NHẬP SẠCH SẼ */}
+        <div className="ac-form-col" style={{ flex: "0.9 1 0", position: "relative", zIndex: 2, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 5vw" }}>
+          {/* Mobile Hero Header */}
+          <div className="ac-mhero ac-rise" style={{ display: "none", flexDirection: "column", width: "100%", maxWidth: 420, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
+              <BrandLogo size={36} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+              <BrandWordmark size={18} color="#0F172A" osColor="#2563EB" />
+            </div>
+            <h1 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px", color: "#0F172A", letterSpacing: -0.5 }}>
+              {tx("Vừa học vừa thi, ", "Practice & Test, ")}<span style={{ color: "#2563EB" }}>{tx("tiến bộ vững vàng.", "consistent progress.")}</span>
+            </h1>
+            <p style={{ fontSize: 13.5, color: "#64748B", margin: 0 }}>
+              {tx("Phòng thi máy tính chuẩn mực · AI chữa đề thông minh · Phân tích điểm yếu.", "Standard mock tests · smart AI explanations · question diagnostics.")}
+            </p>
+          </div>
+
+          {/* Login Card */}
+          <div className="ac-rise" style={{ width: 420, maxWidth: "100%", animationDelay: ".2s" }}>
+            <div style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 20, padding: "38px 34px", boxShadow: "0 20px 45px -12px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(226, 232, 240, 0.6)" }}>
+              <form onSubmit={handleLogin}>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 999, background: "#EFF6FF", color: "#2563EB", fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 14 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  <span>{tx("Đăng nhập tài khoản", "Secure Sign In")}</span>
+                </div>
+                <h2 style={{ fontSize: 26, fontWeight: 800, color: "#0F172A", margin: "0 0 6px", letterSpacing: -0.5 }}>
+                  {t('login_heading')}
+                </h2>
+                <p style={{ color: "#64748B", fontSize: 13.5, margin: "0 0 24px", lineHeight: 1.5 }}>
+                  {t('login_welcome')}
+                </p>
+
+                {loginError && (
+                  <div style={{ background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginBottom: 18, fontWeight: 600, textAlign: "center" }}>
+                    {loginError}
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gap: 16 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: "#475569", textTransform: "uppercase", marginBottom: 7, display: "block" }}>
+                      {t('email_label')}
+                    </label>
+                    <input
+                      className="ac-input"
+                      type="email"
+                      value={email}
+                      onChange={(e: any) => setEmail(e.target.value)}
+                      disabled={loginLoading}
+                      required
+                      placeholder="name@example.com"
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: "#475569", textTransform: "uppercase", marginBottom: 7, display: "block" }}>
+                      {t('pwd_label')}
+                    </label>
+                    <div style={{ position: "relative" }}>
+                      <input
+                        className="ac-input"
+                        type={showPwd ? "text" : "password"}
+                        value={password}
+                        onChange={(e: any) => setPassword(e.target.value)}
+                        disabled={loginLoading}
+                        required
+                        placeholder="••••••••"
+                        style={{ paddingRight: 44 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPwd(!showPwd)}
+                        disabled={loginLoading}
+                        style={{
+                          position: "absolute",
+                          right: 10,
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          background: "none",
+                          border: "none",
+                          cursor: loginLoading ? "wait" : "pointer",
+                          padding: 6,
+                          color: "#94A3B8",
+                          display: "flex",
+                          transition: "color .15s",
+                        }}
+                        title={t('show_hide_pwd')}
+                      >
+                        {showPwd
+                          ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                          : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        }
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="ac-submit"
+                    disabled={loginLoading}
+                  >
+                    <span>{loginLoading ? (tx("Đang xác thực...", "VERIFYING...")) : t('login_btn')}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!loaded) return renderBootScreen('sync');
+    if (!loaded) return renderBootScreen('sync');
 
   // #7: Lớp phủ hiệu ứng mừng (level-up / band cao) — dùng chung cho mọi màn hình
   const confettiColors = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#0A84FF', '#5856D6', '#FF2D55'];

@@ -1,5 +1,19 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-25)
 
+## Tái Thiết Kế Màn Hình Đăng Nhập "Modern Academic Studio" (Chuẩn EdTech Oxford/Cambridge x Notion) — 2026-10-25
+
+- **Loại bỏ triệt để phong cách vàng đen ("Editorial Luxe" gây cảm giác đa cấp/casino)**:
+  - Thay thế toàn bộ nền đen kịt `#060507` và màu vàng gold champagne `#E7C470`, serif uốn lượn, spotlight và hiệu ứng aurora nặng nề.
+  - Áp dụng hệ màu chuẩn giáo dục quốc tế: Nền Off-white ấm áp `#F8FAFC`, chữ Slate đậm `#0F172A`, màu nhấn Xanh Cobalt học thuật `#2563EB` và Xanh Indigo `#4F46E5`.
+- **Cột trái — Showcase giá trị học thuật thực chất với 3 cam kết chuẩn**:
+  1. **Mô phỏng thi thật**: Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.
+  2. **AI chữa đề thông minh**: Dẫn chứng chính xác, giải thích cặn kẽ từng câu.
+  3. **Phân tích điểm yếu theo dạng bài**: Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.
+  - Sử dụng thẻ card trắng bo cong mềm mại kèm icon SVG trực quan, loại bỏ các chữ số to thô ráp.
+- **Cột phải — Thẻ đăng nhập hiện đại, tin cậy**:
+  - Thẻ trắng nổi nhẹ trên nền xám ấm, border 1px tinh tế `#E2E8F0`, padding rộng rãi, input bo góc 10px với focus ring xanh cobalt.
+  - Nút đăng nhập xanh phẳng thanh lịch, màn hình loading xác thực dạng modal kính mờ tao nhã. Tương thích responsive hoàn hảo trên mọi kích thước màn hình điện thoại và máy tính.
+
 ## Hệ Thống Phân Loại Dạng Bài Chuẩn (Unified IELTS & Integrated Taxonomy) & Popover Lọc Học Viên — 2026-10-25
 
 - **Nguyên tắc an toàn bất khả xâm phạm (Zero-Breakage Runtime Constraint)**:
