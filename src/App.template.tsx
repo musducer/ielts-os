@@ -12500,32 +12500,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
   if (!currentUser) {
     // ==========================================
-    // ĐĂNG NHẬP — "MODERN ACADEMIC STUDIO" (Chuẩn EdTech Oxford/Cambridge x Notion)
-    // Tông màu: Nền Off-white ấm áp (#F8FAFC), chữ Slate đậm (#0F172A),
-    // Màu nhấn: Xanh Cobalt học thuật (#2563EB) & Xanh Indigo (#4F46E5).
-    // Bố cục 2 cột cân đối, thân thiện, triệt tiêu hoàn toàn tông vàng đen đa cấp.
+    // ĐĂNG NHẬP — "LIVE EXAM WORKBENCH" (Chuẩn EdTech Thực Chiến)
+    // Cột trái: Mockup trực quan hóa bài thi thật + Dẫn chứng AI + 3 điểm cốt lõi.
+    // Cột phải: Form đăng nhập tinh gọn tuyệt đối, không khẩu hiệu sáo rỗng.
     // ==========================================
     const lxYear = new Date().getFullYear();
-    const lxFeats = [
-      {
-        num: "01",
-        title: tx("Mô phỏng thi thật", "Standard Mock Exam"),
-        desc: tx("Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.", "Computer-delivered exam environment to build real test reflexes."),
-        icon: "monitor"
-      },
-      {
-        num: "02",
-        title: tx("AI chữa đề thông minh", "Smart AI Explanations"),
-        desc: tx("Dẫn chứng chính xác, giải thích cặn kẽ từng câu.", "Precise passage evidence and comprehensive answer breakdown."),
-        icon: "sparkles"
-      },
-      {
-        num: "03",
-        title: tx("Phân tích điểm yếu theo dạng bài", "Question-Type Diagnostics"),
-        desc: tx("Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.", "Automatically detect weak question types and underlying cognitive traps."),
-        icon: "target"
-      },
-    ];
 
     return (
       <div style={{
@@ -12541,11 +12520,11 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         <style>{`
           @media (max-width: 980px){
             .ac-hero { display: none !important; }
-            .ac-form-col { flex: 1 1 100% !important; padding: 32px 20px !important; }
+            .ac-form-col { flex: 1 1 100% !important; padding: 28px 18px !important; }
             .ac-mhero { display: flex !important; }
           }
           @keyframes acFadeIn {
-            from { opacity: 0; transform: translateY(14px); }
+            from { opacity: 0; transform: translateY(12px); }
             to { opacity: 1; transform: translateY(0); }
           }
           @keyframes acSpin {
@@ -12553,7 +12532,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           }
           .ac-rise {
             opacity: 0;
-            animation: acFadeIn 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            animation: acFadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
           }
           .ac-input {
             width: 100%;
@@ -12578,12 +12557,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             height: 48px;
             border-radius: 10px;
             border: none;
-            background: #2563EB;
+            background: #0F172A;
             color: #FFFFFF;
             font-size: 14.5px;
-            font-weight: 800;
+            font-weight: 700;
             cursor: pointer;
-            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
             transition: all 0.18s ease;
             letter-spacing: 0.3px;
             display: flex;
@@ -12591,135 +12570,141 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             justify-content: center;
           }
           .ac-submit:hover:not(:disabled) {
-            background: #1D4ED8;
+            background: #1E293B;
             transform: translateY(-1px);
-            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.25);
           }
           .ac-submit:disabled {
             cursor: wait;
             opacity: 0.75;
-          }
-          .ac-feat-card {
-            display: flex;
-            align-items: flex-start;
-            gap: 14px;
-            padding: 14px 16px;
-            background: #FFFFFF;
-            border: 1px solid #E2E8F0;
-            border-radius: 12px;
-            box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
-            transition: all 0.2s ease;
-          }
-          .ac-feat-card:hover {
-            border-color: #BFDBFE;
-            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.08);
-            transform: translateY(-1px);
           }
         `}</style>
 
         {loginLoading && (
           <div role="status" aria-live="assertive" aria-label={tx("Đang xác thực thông tin đăng nhập", "Verifying login credentials")} style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(248, 250, 252, 0.85)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
             <div style={{ width: "min(360px, 100%)", textAlign: "center", background: "#FFFFFF", padding: "36px 28px", borderRadius: 20, border: "1px solid #E2E8F0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.12)" }}>
-              <div style={{ width: 68, height: 68, margin: "0 auto 20px", display: "grid", placeItems: "center", background: "#EFF6FF", border: "1px solid #DBEAFE", borderRadius: "50%" }}>
-                <BrandLogo size={36} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+              <div style={{ width: 64, height: 64, margin: "0 auto 18px", display: "grid", placeItems: "center", background: "#EFF6FF", border: "1px solid #DBEAFE", borderRadius: "50%" }}>
+                <BrandLogo size={34} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
               </div>
-              <div style={{ width: 32, height: 32, margin: "0 auto 18px", border: "3px solid #DBEAFE", borderTopColor: "#2563EB", borderRadius: "50%", animation: "acSpin .8s linear infinite" }} />
-              <div style={{ fontSize: 18, fontWeight: 800, color: "#0F172A", marginBottom: 6 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
-              <div style={{ color: "#64748B", fontSize: 13.5, lineHeight: 1.5 }}>{tx("Vui lòng chờ trong giây lát...", "Please wait a moment...")}</div>
+              <div style={{ width: 30, height: 30, margin: "0 auto 16px", border: "3px solid #DBEAFE", borderTopColor: "#2563EB", borderRadius: "50%", animation: "acSpin .8s linear infinite" }} />
+              <div style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 6 }}>{tx("Đang xác thực đăng nhập", "Authenticating")}</div>
+              <div style={{ color: "#64748B", fontSize: 13, lineHeight: 1.5 }}>{tx("Vui lòng chờ trong giây lát...", "Please wait a moment...")}</div>
             </div>
           </div>
         )}
 
-        {/* Soft Ambient Academic Background Glows */}
-        <div aria-hidden style={{ position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none", overflow: "hidden" }}>
-          <div style={{ position: "absolute", width: "50vw", height: "50vw", left: "-10%", top: "-10%", background: "radial-gradient(circle, rgba(99, 102, 241, 0.08), transparent 60%)", filter: "blur(50px)" }} />
-          <div style={{ position: "absolute", width: "45vw", height: "45vw", right: "-5%", bottom: "-10%", background: "radial-gradient(circle, rgba(37, 99, 235, 0.07), transparent 60%)", filter: "blur(50px)" }} />
-        </div>
-
-        {/* CỘT TRÁI — SHOWCASE HỌC THUẬT */}
-        <div className="ac-hero" style={{ flex: "1.1 1 0", position: "relative", zIndex: 2, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "52px 4vw 48px 6vw" }}>
+        {/* CỘT TRÁI — MÔ PHỎNG WORKBENCH THỰC CHIẾN */}
+        <div className="ac-hero" style={{ flex: "1.15 1 0", position: "relative", zIndex: 2, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "48px 4vw 40px 6vw" }}>
           <div className="ac-rise" style={{ display: "flex", alignItems: "center", gap: 12, animationDelay: ".05s" }}>
-            <BrandLogo size={42} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
-            <BrandWordmark size={20} color="#0F172A" osColor="#2563EB" />
+            <BrandLogo size={40} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+            <BrandWordmark size={19} color="#0F172A" osColor="#2563EB" />
           </div>
 
-          <div style={{ maxWidth: 520, margin: "36px 0" }}>
-            <div className="ac-rise" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 12px", background: "#EFF6FF", border: "1px solid #DBEAFE", borderRadius: 999, color: "#2563EB", fontSize: 11.5, fontWeight: 700, letterSpacing: 0.5, marginBottom: 20, animationDelay: ".12s" }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563EB" }} />
-              <span>{tx("HỆ THỐNG LUYỆN THI CHUẨN MỰC · SINH VIÊN & HỌC VIÊN", "COMPUTER-DELIVERED TESTING & DIAGNOSTICS")}</span>
-            </div>
-
-            <h1 className="ac-rise" style={{ fontSize: "clamp(34px, 4.2vw, 50px)", lineHeight: 1.15, fontWeight: 800, margin: "0 0 16px", letterSpacing: "-0.8px", color: "#0F172A", animationDelay: ".2s" }}>
-              {tx("Vừa học vừa thi,", "Practice & Test,")}<br/>
-              <span style={{ color: "#2563EB" }}>{tx("tiến bộ vững vàng.", "consistent progress.")}</span>
+          <div style={{ maxWidth: 520, margin: "24px 0" }}>
+            <h1 className="ac-rise" style={{ fontSize: "clamp(30px, 3.6vw, 44px)", lineHeight: 1.18, fontWeight: 800, margin: "0 0 14px", letterSpacing: "-0.6px", color: "#0F172A", animationDelay: ".15s" }}>
+              {tx("Luyện thi trên máy tính,", "Computer-delivered IELTS,")}<br/>
+              <span style={{ color: "#2563EB" }}>{tx("chuẩn xác như thi thật.", "built for real test reflexes.")}</span>
             </h1>
 
-            <p className="ac-rise" style={{ fontSize: 15.5, lineHeight: 1.65, color: "#475569", margin: "0 0 28px", animationDelay: ".28s" }}>
-              {tx("Hệ thống thi thử máy tính chuẩn mực, chữa đề chi tiết với dẫn chứng rõ ràng, và phân tích lỗ hổng tư duy theo từng dạng bài.", "Standard computer-based IELTS testing platform with smart AI explanations, instant evidence location, and in-depth question diagnostics.")}
-            </p>
+            {/* Simulated IELTS Exam & AI Evidence Workbench */}
+            <div className="ac-rise" style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", boxShadow: "0 10px 30px -8px rgba(15, 23, 42, 0.07)", margin: "22px 0 24px", animationDelay: ".25s" }}>
+              {/* Window Header */}
+              <div style={{ background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", padding: "9px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#CBD5E1" }} />
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#E2E8F0" }} />
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#E2E8F0" }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#475569", marginLeft: 8 }}>
+                    Reading Passage 2 · Climate Economics
+                  </span>
+                </div>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#EFF6FF", border: "1px solid #DBEAFE", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#2563EB" }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span>42:15</span>
+                </div>
+              </div>
 
-            <div className="ac-rise" style={{ display: "grid", gap: 10, animationDelay: ".36s" }}>
-              {lxFeats.map((feat) => (
-                <div key={feat.num} className="ac-feat-card">
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "#EFF6FF", border: "1px solid #DBEAFE", display: "grid", placeItems: "center", flexShrink: 0, marginTop: 2 }}>
-                    {feat.icon === "monitor" && (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                    )}
-                    {feat.icon === "sparkles" && (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-                    )}
-                    {feat.icon === "target" && (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                    )}
+              {/* Passage & Highlight Area */}
+              <div style={{ padding: "14px 16px" }}>
+                <div style={{ fontSize: 13, lineHeight: 1.65, color: "#334155" }}>
+                  "...the report indicated that{" "}
+                  <mark style={{ background: "rgba(254, 240, 138, 0.65)", color: "#0F172A", padding: "2px 5px", borderRadius: 4, borderBottom: "2px solid #EAB308", fontWeight: 600 }}>
+                    adoption costs fell by 40% across urban areas
+                  </mark>{" "}
+                  over the last decade, primarily driven by localized supply chain innovations..."
+                </div>
+
+                {/* AI Explanation / Evidence Callout */}
+                <div style={{ marginTop: 12, background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                      <span style={{ fontSize: 11.5, fontWeight: 800, color: "#166534" }}>AI GIẢI THÍCH CHI TIẾT · CÂU 16: TRUE</span>
+                    </div>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, background: "#DCFCE7", color: "#15803D", padding: "1px 6px", borderRadius: 4 }}>Dạng True/False/Not Given</span>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 14.5, fontWeight: 700, color: "#0F172A", marginBottom: 3 }}>
-                      {feat.title}
-                    </div>
-                    <div style={{ fontSize: 13, lineHeight: 1.5, color: "#64748B" }}>
-                      {feat.desc}
-                    </div>
+                  <div style={{ fontSize: 11.5, lineHeight: 1.55, color: "#14532D" }}>
+                    • <strong>Dẫn chứng:</strong> Cụm <em>"fell by 40%"</em> khớp trực tiếp với <em>"sharp decrease"</em> trong đề.<br/>
+                    • <strong>Bản chất:</strong> Thông tin khẳng định rõ ràng, không có yếu tố mâu thuẫn hay suy đoán.
                   </div>
                 </div>
-              ))}
+              </div>
+            </div>
+
+            {/* 3 Core Points Finalized by User */}
+            <div className="ac-rise" style={{ display: "grid", gap: 9, animationDelay: ".35s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 20, height: 20, borderRadius: "50%", background: "#EFF6FF", border: "1px solid #DBEAFE", display: "grid", placeItems: "center", flexShrink: 0, color: "#2563EB" }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span style={{ fontSize: 13.5, fontWeight: 600, color: "#1E293B" }}>
+                  {tx("Phòng thi máy tính chuẩn xác", "Accurate computer-based exam room")}
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 20, height: 20, borderRadius: "50%", background: "#EFF6FF", border: "1px solid #DBEAFE", display: "grid", placeItems: "center", flexShrink: 0, color: "#2563EB" }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span style={{ fontSize: 13.5, fontWeight: 600, color: "#1E293B" }}>
+                  {tx("Hệ thống AI giải thích lỗi sai cặn kẽ, chi tiết", "Comprehensive AI explanations for every mistake")}
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 20, height: 20, borderRadius: "50%", background: "#EFF6FF", border: "1px solid #DBEAFE", display: "grid", placeItems: "center", flexShrink: 0, color: "#2563EB" }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </span>
+                <span style={{ fontSize: 13.5, fontWeight: 600, color: "#1E293B" }}>
+                  {tx("Kho đề Actual Tests phong phú, cập nhật liên tục", "Rich Actual Tests library continuously updated")}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="ac-rise" style={{ fontSize: 12, color: "#94A3B8", animationDelay: ".44s" }}>
-            © {lxYear} IELTS OS — Computer-based Testing & Learning Platform
+          <div className="ac-rise" style={{ fontSize: 12, color: "#94A3B8", animationDelay: ".45s" }}>
+            © {lxYear} IELTS OS — Computer-based Testing Platform
           </div>
         </div>
 
-        {/* CỘT PHẢI — THẺ ĐĂNG NHẬP SẠCH SẼ */}
-        <div className="ac-form-col" style={{ flex: "0.9 1 0", position: "relative", zIndex: 2, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 5vw" }}>
+        {/* CỘT PHẢI — THẺ ĐĂNG NHẬP TINH GỌN */}
+        <div className="ac-form-col" style={{ flex: "0.85 1 0", position: "relative", zIndex: 2, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 5vw" }}>
           {/* Mobile Hero Header */}
-          <div className="ac-mhero ac-rise" style={{ display: "none", flexDirection: "column", width: "100%", maxWidth: 420, marginBottom: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 12 }}>
-              <BrandLogo size={36} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
-              <BrandWordmark size={18} color="#0F172A" osColor="#2563EB" />
+          <div className="ac-mhero ac-rise" style={{ display: "none", flexDirection: "column", width: "100%", maxWidth: 390, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <BrandLogo size={34} stops={["#3B82F6", "#2563EB", "#1D4ED8"]} mark="#FFFFFF" />
+              <BrandWordmark size={17} color="#0F172A" osColor="#2563EB" />
             </div>
-            <h1 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px", color: "#0F172A", letterSpacing: -0.5 }}>
-              {tx("Vừa học vừa thi, ", "Practice & Test, ")}<span style={{ color: "#2563EB" }}>{tx("tiến bộ vững vàng.", "consistent progress.")}</span>
+            <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: "#0F172A", letterSpacing: -0.5 }}>
+              {tx("Luyện thi trên máy tính", "Computer-delivered IELTS")}
             </h1>
-            <p style={{ fontSize: 13.5, color: "#64748B", margin: 0 }}>
-              {tx("Phòng thi máy tính chuẩn mực · AI chữa đề thông minh · Phân tích điểm yếu.", "Standard mock tests · smart AI explanations · question diagnostics.")}
-            </p>
           </div>
 
           {/* Login Card */}
-          <div className="ac-rise" style={{ width: 420, maxWidth: "100%", animationDelay: ".2s" }}>
-            <div style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 20, padding: "38px 34px", boxShadow: "0 20px 45px -12px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(226, 232, 240, 0.6)" }}>
+          <div className="ac-rise" style={{ width: 390, maxWidth: "100%", animationDelay: ".15s" }}>
+            <div style={{ background: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: 18, padding: "36px 32px", boxShadow: "0 18px 40px -12px rgba(15, 23, 42, 0.08)" }}>
               <form onSubmit={handleLogin}>
-                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 999, background: "#EFF6FF", color: "#2563EB", fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 14 }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  <span>{tx("Đăng nhập tài khoản", "Secure Sign In")}</span>
-                </div>
-                <h2 style={{ fontSize: 26, fontWeight: 800, color: "#0F172A", margin: "0 0 6px", letterSpacing: -0.5 }}>
+                <h2 style={{ fontSize: 26, fontWeight: 800, color: "#0F172A", margin: "0 0 24px", letterSpacing: -0.6 }}>
                   {t('login_heading')}
                 </h2>
-                <p style={{ color: "#64748B", fontSize: 13.5, margin: "0 0 24px", lineHeight: 1.5 }}>
-                  {t('login_welcome')}
-                </p>
 
                 {loginError && (
                   <div style={{ background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", padding: "10px 14px", borderRadius: 10, fontSize: 13, marginBottom: 18, fontWeight: 600, textAlign: "center" }}>
@@ -12790,7 +12775,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                     className="ac-submit"
                     disabled={loginLoading}
                   >
-                    <span>{loginLoading ? (tx("Đang xác thực...", "VERIFYING...")) : t('login_btn')}</span>
+                    <span>{loginLoading ? tx("Đang xác thực...", "VERIFYING...") : t('login_btn')}</span>
                   </button>
                 </div>
               </form>
@@ -12801,7 +12786,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     );
   }
 
-    if (!loaded) return renderBootScreen('sync');
+      if (!loaded) return renderBootScreen('sync');
 
   // #7: Lớp phủ hiệu ứng mừng (level-up / band cao) — dùng chung cho mọi màn hình
   const confettiColors = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#0A84FF', '#5856D6', '#FF2D55'];

@@ -1,18 +1,19 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-25)
 
-## Tái Thiết Kế Màn Hình Đăng Nhập "Modern Academic Studio" (Chuẩn EdTech Oxford/Cambridge x Notion) — 2026-10-25
+## Tái Thiết Kế Màn Hình Đăng Nhập "Live Exam Workbench" (Chuẩn EdTech Thực Chiến) — 2026-10-25
 
-- **Loại bỏ triệt để phong cách vàng đen ("Editorial Luxe" gây cảm giác đa cấp/casino)**:
-  - Thay thế toàn bộ nền đen kịt `#060507` và màu vàng gold champagne `#E7C470`, serif uốn lượn, spotlight và hiệu ứng aurora nặng nề.
-  - Áp dụng hệ màu chuẩn giáo dục quốc tế: Nền Off-white ấm áp `#F8FAFC`, chữ Slate đậm `#0F172A`, màu nhấn Xanh Cobalt học thuật `#2563EB` và Xanh Indigo `#4F46E5`.
-- **Cột trái — Showcase giá trị học thuật thực chất với 3 cam kết chuẩn**:
-  1. **Mô phỏng thi thật**: Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.
-  2. **AI chữa đề thông minh**: Dẫn chứng chính xác, giải thích cặn kẽ từng câu.
-  3. **Phân tích điểm yếu theo dạng bài**: Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.
-  - Sử dụng thẻ card trắng bo cong mềm mại kèm icon SVG trực quan, loại bỏ các chữ số to thô ráp.
-- **Cột phải — Thẻ đăng nhập hiện đại, tin cậy**:
-  - Thẻ trắng nổi nhẹ trên nền xám ấm, border 1px tinh tế `#E2E8F0`, padding rộng rãi, input bo góc 10px với focus ring xanh cobalt.
-  - Nút đăng nhập xanh phẳng thanh lịch, màn hình loading xác thực dạng modal kính mờ tao nhã. Tương thích responsive hoàn hảo trên mọi kích thước màn hình điện thoại và máy tính.
+- **Loại bỏ triệt để phong cách vàng đen đa cấp và bố cục rập khuôn ("mùi AI")**:
+  - Gỡ bỏ hoàn toàn các card icon bo tròn xếp chồng rập khuôn, các badge pill rườm rà và từ ngữ thiếu tự nhiên (*"chuẩn mực"*, *"tiến bộ vững vàng"*).
+  - Áp dụng hệ màu chuẩn giáo dục quốc tế: Nền Off-white ấm áp `#F8FAFC`, chữ Slate đậm `#0F172A`, màu nhấn Xanh Cobalt học thuật `#2563EB`.
+- **Cột trái — Trực quan hóa phòng thi thật (Live Exam Workbench)**:
+  - Hiển thị bản demo thu nhỏ của phòng thi IELTS máy tính: Trích đoạn bài đọc Reading với cụm từ được tô vàng (`<mark>`) kèm nhãn ghim dẫn chứng câu hỏi, kết hợp thẻ thông báo AI màu xanh lá phân tích chi tiết dẫn chứng và bản chất câu hỏi True/False/Not Given.
+  - 3 Điểm nổi bật chuẩn xác:
+    1. **Phòng thi máy tính chuẩn xác**: Giao diện và môi trường thi sát với kỳ thi thực tế.
+    2. **Hệ thống AI giải thích lỗi sai cặn kẽ, chi tiết**: Dẫn chứng chính xác, phân tích cặn kẽ vì sao đúng / vì sao sai.
+    3. **Kho đề Actual Tests phong phú, cập nhật liên tục**: Thư viện đề thi thực chiến phong phú được cập nhật liên tục.
+- **Cột phải — Thẻ đăng nhập tinh gọn tuyệt đối**:
+  - Tiêu đề **Đăng nhập** / **Sign in** dứt khoát, bỏ hoàn toàn câu phụ đề thừa thãi ("Nhập tài khoản học viên để vào làm bài").
+  - Ô nhập liệu email & mật khẩu hiện đại, nút đăng nhập màu đen than chì (`#0F172A`) đầm chắc, tin cậy và chuyên nghiệp.
 
 ## Hệ Thống Phân Loại Dạng Bài Chuẩn (Unified IELTS & Integrated Taxonomy) & Popover Lọc Học Viên — 2026-10-25
 

@@ -388,13 +388,14 @@ Chi tiết lịch sử lỗi nghiêm trọng và quy tắc phục hồi nằm tr
   - Exam Builder replaces the hardcoded subType dropdown with a canonical Category dropdown populated dynamically by skill, and adds Task 1 / Task 2 category selectors for Writing tasks.
   - Review Quiz and Student Weakness Analytics display human-readable canonical IELTS category names.
 
-## Modern Academic Studio Login Screen
+## Live Exam Workbench Login Screen
 
 - **EdTech Academic UI Redesign (`src/App.template.tsx`)**:
-  - Eliminated the previous pitch-black and gold-champagne palette ("Editorial Luxe") in favor of a clean, trustworthy, and student-friendly **Modern Academic Studio** aesthetic (Oxford/Cambridge × Notion/Duolingo Max).
-  - Background palette: Warm off-white (`#F8FAFC`) with subtle ambient blue-indigo glows, deep slate typography (`#0F172A`), and academic cobalt royal blue accents (`#2563EB`).
-  - Left column feature showcase: Replaced raw numbers with clean modern icon cards highlighting 3 core student values:
-    1. **Mô phỏng thi thật**: Phòng thi máy tính chuẩn mực, quen tay trước ngày thi.
-    2. **AI chữa đề thông minh**: Dẫn chứng chính xác, giải thích cặn kẽ từng câu.
-    3. **Phân tích điểm yếu theo dạng bài**: Tự động nhận diện những dạng câu hỏi cần cải thiện và lỗi tư duy phía sau.
-  - Right column login form: Crisp white card with soft elevation, clean form labels, clear email and password inputs with eye toggle, and high-contrast royal blue submit button. Fully responsive on mobile with clean authenticating modal overlay.
+  - Eliminated the previous pitch-black and gold-champagne palette ("Editorial Luxe") as well as generic AI template slop in favor of the **Live Exam Workbench** design archetype.
+  - Background palette: Warm off-white (`#F8FAFC`), deep slate typography (`#0F172A`), and academic cobalt royal blue accents (`#2563EB`).
+  - Left column interactive demo: Replaces generic AI cards with an authentic mini-workbench of the actual IELTS test room: a realistic Reading passage snippet with yellow-highlighted text and evidence pin tag, paired with a green AI callout card displaying question explanation, evidence mapping, and trap avoidance.
+  - 3 Core student highlights:
+    1. **Phòng thi máy tính chuẩn xác**: Giao diện và môi trường thi sát với kỳ thi thực tế.
+    2. **Hệ thống AI giải thích lỗi sai cặn kẽ, chi tiết**: Dẫn chứng chính xác, phân tích cặn kẽ vì sao đúng / vì sao sai.
+    3. **Kho đề Actual Tests phong phú, cập nhật liên tục**: Thư viện đề thi thực chiến phong phú được cập nhật liên tục.
+  - Right column login form: Centered, minimal card displaying only the title **Đăng nhập** / **Sign in** (no redundant subtitles), crisp inputs with focus ring, and an obsidian slate button. Fully responsive on mobile with clean authenticating modal overlay.
