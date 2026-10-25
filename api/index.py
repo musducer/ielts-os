@@ -5127,197 +5127,27 @@ async def ai_feedback(
 
     if lang == "en":
         sys_prompt = (
-            "You are an experienced IELTS examiner and coach. Based on the per-question data, write a detailed, "
-            "warm, and genuinely useful feedback report for the student (and parent). Structure it as 3 short paragraphs:\n"
-            "1) Open with specific encouragement tied to their band and what they did well.\n"
-            "2) ANALYSE the actual mistakes: group the wrong answers, point out concrete patterns from the data "
-            "(e.g. spelling/plurals in completion, confusing TRUE vs NOT GIVEN, distractors in multiple choice, "
-            "paraphrase/synonym traps in matching). Reference a couple of specific wrong items as examples.\n"
-            "3) Give 2-3 concrete, actionable practice steps targeting those exact weaknesses.\n"
-            "Warm, professional, plain text (no markdown). About 180-260 words. Finish your final sentence."
-        )
-        user_prompt = (
-            f"Student: {student}\nTest: {quiz} ({qtype})\nScore: {score}/{total} (Band {band}), wrong: {wrong_count}\n"
-            f"Accuracy by question type: {weak}\n\nWrong answers (student vs correct):\n{details or '(none provided)'}\n\nWrite in English."
-        )
-    else:
-        sys_prompt = (
-            "Bạn là giám khảo kiêm gia sư IELTS giàu kinh nghiệm. Dựa trên dữ liệu TỪNG CÂU, viết bản nhận xét "
-            "chi tiết, ấm áp, hữu ích cho học viên (và phụ huynh). Bố cục 3 đoạn ngắn:\n"
-            "1) Khích lệ cụ thể, gắn với band và điểm làm tốt.\n"
-            "2) PHÂN TÍCH lỗi thật: gom nhóm câu sai, chỉ quy luật cụ thể từ dữ liệu "
-            "(sai chính tả/số nhiều khi điền từ; nhầm TRUE với NOT GIVEN; bẫy phương án nhiễu ở trắc nghiệm; "
-            "bẫy từ đồng nghĩa/paraphrase khi nối thông tin). Dẫn vài câu sai cụ thể làm ví dụ.\n"
-            "3) 2-3 bước luyện tập cụ thể, làm được ngay, nhắm đúng điểm yếu.\n"
-            "Văn ấm áp, chuyên nghiệp, văn xuôi thuần (không markdown). Khoảng 180-260 từ. Viết trọn câu cuối."
-        )
-        user_prompt = (
-            f"Học viên: {student}\nĐề: {quiz} ({qtype})\nĐiểm: {score}/{total} (Band {band}), số câu sai: {wrong_count}\n"
-            f"Tỉ lệ đúng theo dạng câu: {weak}\n\nCác câu sai (HV trả lời vs đáp án đúng):\n{details or '(không có)'}\n\nViết bằng tiếng Việt."
-        )
-
-    text, err = _gemini_generate(sys_prompt, user_prompt, 2048)
-    if err:
-        return {"success": False, "error": _friendly_err(err, lang)}
-    return {"success": True, "feedback": text}
-
-
-def _clean_option_text(raw: Any) -> str:
-    s = str(raw or "").strip()
-    while re.match(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", s):
-        s = re.sub(r"^\s*\(?[A-Za-z0-9]+[\.\)\:]\s*", "", s).strip()
-    return s
-
-
-@app.post("/api/ai_explain")
-async def ai_explain(
-    payload: Dict[str, Any] = Body(...),
-    request: Request = None,
-):
-    """Giải thích ngắn vì sao 1 câu đúng/sai (dùng trong màn Review)."""
-    _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_explain", max_per_minute=45)
-    lang = (payload.get("lang") or "vi").lower()
-    question = payload.get("question", "")
-    options = payload.get("options", "")
-    correct = payload.get("correct", "")
-    student_ans = payload.get("studentAnswer", "")
-    context = (payload.get("context", "") or "")[:24000]
-    reading_passage = (payload.get("readingPassage", "") or "")[:24000]
-    has_ctx = bool(context.strip())
-    answer_sequence = payload.get("answerSequence")
-    timestamp_hints = str(payload.get("timestampHints", "") or "")[:8000]
-    question_index_raw = payload.get("questionIndex")
-    try:
-        question_index = int(question_index_raw) if question_index_raw is not None else None
-    except (TypeError, ValueError):
-        question_index = None
-    try:
-        question_count = int(payload.get("questionCount")) if payload.get("questionCount") is not None else None
-    except (TypeError, ValueError):
-        question_count = None
-    question_type = str(payload.get("questionType", "") or "")
-    question_subtype = str(payload.get("questionSubType", "") or "")
-    matching_kind = str(payload.get("matchingKind", "") or "")
-    matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
-    matching_target_text = str(payload.get("matchingTargetText", "") or "")[:12000]
-    is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
-    evidence_passage = matching_target_text if is_paragraph_information_matching else reading_passage
-    integrated_part = int(payload.get("integratedPart", 0) or 0)
-    is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
-    # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
-    is_listening_item = bool(payload.get("isListening"))
-    # Timestamp rules only apply when Whisper's real segment markers are available.
-    is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
-    is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
-    is_unanswered = (
-        not str(student_ans or "").strip()
-        or str(student_ans or "").strip().lower() in [
-            "(trống)", "(bỏ trống)", "(blank)", "no answer", "blank", "none", "null", "undefined"
-        ]
-    )
-    no_audio_guard_en = (
-        " NO-AUDIO FORBIDDEN: If transcript or source text is absent, NEVER state 'no audio was provided', 'without audio', or that "
-        "it is impossible to confirm. Instead, analyze the question prompt and options pedagogically, focusing on qualifying terms, "
-        "lexical traps, and typical IELTS test patterns."
-    )
-    no_audio_guard_vi = (
-        " CẤM BÁO THIẾU AUDIO: Nếu không có transcript hoặc văn bản nguồn, TUYỆT ĐỐI KHÔNG ghi 'không có audio', 'thiếu file nghe' hoặc "
-        "'không thể xác định vì không có audio'. Hãy phân tích sư phạm dựa vào dữ liệu câu hỏi và các phương án, chỉ rõ bẫy từ khóa và suy luận IELTS."
-    )
-    unanswered_rule_en = (
-        " UNANSWERED STRATEGY: The student left this item blank. Do NOT state trivial boilerplate like 'The student answer is blank'. "
-        "Instead, provide an actionable listening/reading strategy on what cue words to anticipate and how to avoid missing the answer."
-    ) if is_unanswered else ""
-    unanswered_rule_vi = (
-        " CHIẾN THUẬT CÂU BỎ TRỐNG: Học viên bỏ trống câu này. TUYỆT ĐỐI KHÔNG viết câu sáo rỗng như 'Học sinh bỏ trống câu này'. "
-        "Thay vào đó, hướng dẫn chiến thuật đón đầu từ khóa (signpost cues) và cách bắt nhịp để không bị trôi mất đáp án."
-    ) if is_unanswered else ""
-    ts_rule_en = (
-        " TIMESTAMP RULE: use the timestamped transcript only to reason from the exact answer-bearing utterance. "
-        "Do not print timestamps, ranges, or clickable links; the interface adds verified audio controls separately. "
-        "Never use a later related sentence, an estimate, or a generic opening line as evidence."
-    ) if is_listening else ""
-    ts_rule_vi = (
-        " LUẬT MỐC THỜI GIAN: dùng transcript có mốc để đối chiếu đúng lời thoại chứa đáp án. "
-        "Không tự in mốc giờ, khoảng giờ hoặc link bấm; giao diện sẽ gắn nút nghe lại đã được kiểm chứng. "
-        "Tuyệt đối không dùng câu liên quan ở phía sau, không ước lượng và không lấy câu mở đầu chung chung làm dẫn chứng."
-    ) if is_listening else ""
-
-    listening_language_en = (
-        " LISTENING TERMINOLOGY RULE: this is an audio task. Refer to evidence as the audio, recording, conversation, speaker, "
-        "or transcript. Never call it a passage, reading, the text, or source text."
-    ) if is_listening_item else ""
-    listening_language_vi = (
-        " QUY TẮC GỌI NGUỒN LISTENING: đây là bài nghe. Hãy gọi dẫn chứng là bài nghe, audio, bản ghi âm, lời thoại, người nói "
-        "hoặc transcript; tuyệt đối không gọi là bài đọc, đoạn văn, văn bản hay nguồn văn bản."
-    ) if is_listening_item else ""
-
-    evidence_rule_en = (
-        " READING EVIDENCE RULE: when you use evidence from the reading passage, include one to three short, continuous, "
-        "word-for-word excerpts from the READING PASSAGE only. Wrap EVERY such excerpt exactly as "
-        "[[EVIDENCE: exact excerpt]]. Do not place the marker around paraphrases, question wording, options, or invented text. "
-        "Each marked excerpt must be the smallest useful proof and must appear exactly in the passage."
-    ) if is_reading_evidence else ""
-    evidence_rule_vi = (
-        " LUAT DAN CHUNG READING: khi dung dan chung tu bai doc, phai dua mot den ba trich doan ngan, lien tuc va dung tung chu "
-        "tu RIENG BAI DOC. Boc MOI trich doan dung cu phap [[EVIDENCE: doan trich chinh xac]]. Khong dung marker cho dien giai, "
-        "loi cau hoi, lua chon hay noi dung tu bia. Moi doan trich phai la bang chung ngan nhat nhung du nghia va xuat hien nguyen van trong bai."
-    ) if is_reading_evidence else ""
-    matching_rule_en = (
-        f" MATCHING INFORMATION RULE: this item is matched to paragraph {matching_target_label}. "
-        "The only valid clickable evidence is an exact excerpt from that target paragraph below; never cite another paragraph merely because it shares a keyword. "
-        "First match the statement's specific detail, then explain the paraphrase link."
-    ) if is_paragraph_information_matching else (
-        " MATCHING HEADINGS RULE: select evidence that states the paragraph's central purpose, not an isolated detail."
-        if matching_kind == "headings" else (
-            " MATCHING FEATURES RULE: identify the exact clue linking the named person, place, event, or feature to the answer; do not use a broadly related detail."
-            if matching_kind == "features" else ""
-        )
-    )
-    matching_rule_vi = (
-        f" QUY TẮC MATCHING INFORMATION: câu này ghép với đoạn {matching_target_label}. "
-        "Dẫn chứng clickable hợp lệ CHỈ được lấy nguyên văn từ đúng đoạn mục tiêu bên dưới; tuyệt đối không trích đoạn khác chỉ vì cùng từ khóa. "
-        "Phải đối chiếu chi tiết riêng của mệnh đề trước, rồi mới giải thích liên hệ paraphrase."
-    ) if is_paragraph_information_matching else (
-        " QUY TẮC MATCHING HEADINGS: dẫn chứng phải cho thấy ý/chức năng trung tâm của đoạn, không phải một chi tiết đơn lẻ."
-        if matching_kind == "headings" else (
-            " QUY TẮC MATCHING FEATURES: phải chỉ ra manh mối chính xác nối người, nơi chốn, sự kiện hoặc đặc điểm với đáp án; không lấy chi tiết chỉ liên quan chung chung."
-            if matching_kind == "features" else ""
-        )
-    )
-
-    integrated_rule_en = (
-        " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
-        "Do NOT force a reading-comprehension template onto it. First identify the actual task family and teach its decision logic: "
-        "for main-idea/title/inference items, test scope, central claim and degree of certainty; for gap-fill items, test grammar "
-        "(word class, tense, clause structure, agreement, preposition) before meaning, then collocation and register; for dialogue/sentence "
-        "ordering, establish the opening, response links, pronoun/reference chains, discourse markers and a coherent ending; for vocabulary, "
-        "use the surrounding syntax and the precise sense, not a loose synonym. Explain the exam trap each wrong option represents."
-    ) % integrated_part if is_vietnamese_high_school_integrated else ""
-    integrated_rule_vi = (
-        " Đây là Integrated Part %d, theo tư duy đề thi tiếng Anh tốt nghiệp THPT Việt Nam. "
-        "KHÔNG được máy móc áp khuôn đọc đoạn văn rồi trích dẫn. Trước hết phải nhận diện đúng dạng và dạy cách ra quyết định: "
-        "với ý chính/tiêu đề/suy luận, xét phạm vi, luận điểm trung tâm và mức độ khẳng định; với điền từ, xét ngữ pháp "
-        "(từ loại, thì, cấu trúc mệnh đề, hòa hợp, giới từ) trước, rồi nghĩa, collocation và sắc thái; với sắp xếp hội thoại/câu, "
-        "xác định câu mở, quan hệ đáp lời, đại từ thay thế, từ nối và câu kết mạch lạc; với từ vựng, dựa vào cú pháp xung quanh "
-        "và nghĩa chính xác, không chọn từ đồng nghĩa chung chung. Chỉ rõ bẫy mà từng phương án sai đang tạo ra."
-    ) % integrated_part if is_vietnamese_high_school_integrated else ""
-    matching_target_prompt_en = (
-        f"TARGET PARAGRAPH {matching_target_label} (ONLY VALID EVIDENCE SOURCE):\n{matching_target_text}\n\n"
-        if is_paragraph_information_matching else ""
-    )
-    matching_target_prompt_vi = (
-        f"ĐOẠN {matching_target_label} MỤC TIÊU (NGUỒN DẪN CHỨNG DUY NHẤT):\n{matching_target_text}\n\n"
-        if is_paragraph_information_matching else ""
-    )
-
-    if lang == "en":
-        sys_prompt = (
-            "You are an expert IELTS tutor. Give a sharp, concise, high-signal explanation for one reviewed question in strictly 3 short bullet lines (maximum 75-90 words total).\n"
-            "STRICT FORMAT (use these exact 3 bullet prefixes):\n"
-            "• Core logic: State the exact grammar requirement, collocation, spatial cue, or cognitive trap being tested.\n"
-            "• Evidence: Quote the exact key phrase from the passage/transcript (include [MM:SS] for Listening or [[EVIDENCE: \"...\"]] for Reading) and map the paraphrase (Question phrase = Source phrase).\n"
-            "• Conclusion: Explain concisely why the correct answer fits and why the student's chosen answer fails. NEVER list or explain untouched options (e.g., do NOT walk through A-H when the student only picked one option)."
+            "You are an expert IELTS tutor. Provide a sharp, structured, high-signal pedagogical explanation for the reviewed question.\n"
+            "Return strictly a valid JSON object matching this schema:\n"
+            "{\n"
+            '  "paraphrasePairs": [\n'
+            '    { "questionTerm": "key phrase in question/option", "passageTerm": "equivalent phrase in passage/transcript", "note": "" }\n'
+            '  ],\n'
+            '  "evidence": {\n'
+            '    "location": "e.g. Paragraph E, line 7 or Section 2 [01:23]",\n'
+            '    "quote": "Short verbatim continuous proof from passage/transcript (10-250 chars)."\n'
+            '  },\n'
+            '  "detailedExplanation": "1-3 concise sentences explaining why the evidence proves the correct answer.",\n'
+            '  "trapAnalysis": {\n'
+            '    "trapTitle": "Trap name (e.g. Scope Trap, Premature Match, or Signpost Cue Strategy)",\n'
+            '    "trapReason": "1-2 sentences explaining why the student answer is wrong, or actionable strategy if blank, or potential distractor trap if correct."\n'
+            '  }\n'
+            "}\n"
+            "CRITICAL RULES:\n"
+            "1. NO META-FILLER: NEVER start detailedExplanation with 'The question tests...', 'The question asks the candidate...', or 'The passage mentions...'. State the logical proof directly.\n"
+            "2. NO QUOTE DUPLICATION: Do not repeat the exact quote verbatim inside detailedExplanation; detailedExplanation must only explain the logical meaning.\n"
+            "3. ACCURACY: evidence.quote MUST be a continuous verbatim excerpt from the source text/transcript.\n"
+            "4. LANGUAGE: 100% English for all explanations and labels.\n"
             + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
@@ -5328,14 +5158,31 @@ async def ai_explain(
             f"{matching_target_prompt_en}"
             f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
-            f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nExplain in English using the 3-bullet format."
+            f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nOutput ONLY the JSON object."
         )
     else:
         sys_prompt = (
-            "Bạn là gia sư IELTS 8.5+ sắc bén. Hãy giải thích câu hỏi này cực kỳ ngắn gọn, súc tích trong ĐÚNG 3 gạch đầu dòng (tối đa 75-90 từ, đi thẳng vào trọng tâm, tuyệt đối không chào hỏi hay viết lời dẫn rườm rà):\n"
-            "• Bản chất: Nêu rõ yêu cầu ngữ pháp (từ loại/thì), collocation, mốc vị trí (Map/Diagram) hoặc bẫy nhận thức của câu hỏi.\n"
-            "• Dẫn chứng: Trích dẫn chính xác cụm từ khóa trong bài đọc/transcript (kèm mốc [MM:SS] nếu là Listening hoặc [[EVIDENCE: \"...\"]] nếu là Reading) và chỉ rõ cặp paraphrase (Cụm trong đề = Cụm trong bài).\n"
-            "• Kết luận: Khẳng định vì sao đáp án đúng khớp hoàn toàn và chỉ ra lỗi sai trực tiếp trong đáp án của học viên. TUYỆT ĐỐI KHÔNG liệt kê hay phân tích lan man các phương án A-H mà học viên không chọn."
+            "Bạn là chuyên gia luyện thi IELTS 8.5+. Hãy phân tích câu hỏi thi theo cấu trúc sư phạm 3 khối chuẩn mực, sắc bén, loại bỏ hoàn toàn từ thừa.\n"
+            "Trả về DUY NHẤT một JSON object theo đúng cấu trúc sau:\n"
+            "{\n"
+            '  "paraphrasePairs": [\n'
+            '    { "questionTerm": "cụm từ trong câu hỏi/phương án", "passageTerm": "cụm từ tương đương trong bài đọc/bài nghe", "note": "" }\n'
+            '  ],\n'
+            '  "evidence": {\n'
+            '    "location": "ví dụ: Đoạn E, dòng 7 hoặc Lời thoại [01:23]",\n'
+            '    "quote": "Đoạn trích NGUYÊN VĂN từ bài đọc/transcript chứng minh đáp án (10-250 ký tự)."\n'
+            '  },\n'
+            '  "detailedExplanation": "1-3 câu giải thích chi tiết, cặn kẽ vì sao dẫn chứng này chứng minh đáp án đúng.",\n'
+            '  "trapAnalysis": {\n'
+            '    "trapTitle": "Tên bẫy (ví dụ: Bẫy phạm vi / Bẫy từ khóa gây nhiễu / Bẫy suy diễn thái quá / Chiến thuật bắt nhịp từ khóa)",\n'
+            '    "trapReason": "1-2 câu chỉ rõ tại sao phương án học viên chọn bị sai hoặc cách phòng tránh bẫy; nếu học viên bỏ trống, hướng dẫn chiến thuật bắt nhịp từ khóa."\n'
+            '  }\n'
+            "}\n"
+            "QUY TẮC SƯ PHẠM BẮT BUỘC:\n"
+            "1. TUYỆT ĐỐI KHÔNG DÙNG CÂU DẪN RƯỜM RÀ: Không bao giờ mở đầu detailedExplanation bằng 'Câu hỏi kiểm tra...', 'Câu hỏi yêu cầu thí sinh...', 'Bài đọc đề cập...'. Đi thẳng vào logic chứng minh.\n"
+            "2. KHÔNG LẶP LẠI DẪN CHỨNG: Không chép lại toàn bộ câu trích dẫn trong detailedExplanation; detailedExplanation chỉ giải thích bản chất nghĩa và mối liên kết logic.\n"
+            "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC phải là trích đoạn liên tục, đúng từng từ trong bài đọc/transcript.\n"
+            "4. NGÔN NGỮ: 100% tiếng Việt cho phần diễn giải và tên bẫy. Các từ trích dẫn trong đề thi tiếng Anh giữ nguyên tiếng Anh.\n"
             + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
@@ -5346,25 +5193,53 @@ async def ai_explain(
             f"{matching_target_prompt_vi}"
             f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
-            f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nGiải thích bằng tiếng Việt đúng 3 dòng (• Bản chất / • Dẫn chứng / • Kết luận)."
+            f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
         )
 
-    # Primary Route: Vertex AI Gemini 2.5 Flash (high quota, fast explanations)
     vertex_explain_model = os.environ.get("VERTEX_EXPLAIN_MODEL", "gemini-2.5-flash")
-    text, err = _vertex_gemini_generate(
+    raw_response, err = await asyncio.to_thread(
+        _pedagogical_ai_call,
+        sys_prompt,
         user_prompt,
-        system_instruction=sys_prompt,
+        max_tokens=1000,
+        temperature=0.15,
+        json_mode=True,
         model=vertex_explain_model,
-        temperature=0.7,
-        max_output_tokens=800,
-        thinking_budget=0,
-        timeout_s=45.0,
+        timeout_s=35.0,
     )
-    if not text:
-        # Fallback Route: free key pool (_gemini_generate / _groq_chat)
-        text, err = _gemini_generate(sys_prompt, user_prompt, 800)
-    if err and not text:
+    if not raw_response and err:
         return {"success": False, "error": _friendly_err(err, lang)}
+
+    parsed_json = _extract_json_object(raw_response) if raw_response else None
+    if not isinstance(parsed_json, dict):
+        parsed_json = {}
+
+    # Extract & clean paraphrasePairs
+    cleaned_pairs = []
+    for p in parsed_json.get("paraphrasePairs") or []:
+        if isinstance(p, dict):
+            q_term = str(p.get("questionTerm") or p.get("questionPhrase") or "").strip()
+            p_term = str(p.get("passageTerm") or p.get("sourcePhrase") or "").strip()
+            p_note = str(p.get("note") or p.get("explanation") or "").strip()
+            if q_term and p_term and q_term != "-" and p_term != "-":
+                cleaned_pairs.append({"questionTerm": q_term, "passageTerm": p_term, "note": p_note})
+
+    # Extract & clean evidence
+    raw_ev = parsed_json.get("evidence")
+    if not isinstance(raw_ev, dict):
+        raw_ev = {}
+    ev_loc = str(raw_ev.get("location") or "").strip()
+    ev_quote = str(raw_ev.get("quote") or "").strip()
+    if not ev_quote and raw_response:
+        q_m = (
+            re.search(r"\[\[EVIDENCE:\s*\"?([\s\S]*?)\"?\s*\]\]", raw_response, re.I)
+            or re.search(r"“([^”\n]{8,260})”", raw_response)
+            or re.search(r'"([^"\n]{8,260})"', raw_response)
+        )
+        if q_m:
+            ev_quote = q_m.group(1).strip()
+
+    # Audio evidence calculation
     audio_evidence_segments = _audio_evidence_segments(
         context,
         correct if is_listening_item else "",
@@ -5372,270 +5247,137 @@ async def ai_explain(
         question_index if is_listening_item else None,
         timestamp_hints if is_listening_item else "",
         question_count if is_listening_item else None,
-        model_explanation=text if is_listening_item else "",
+        model_explanation=raw_response if is_listening_item else "",
     ) if is_listening_item else []
-    # Backward-compatible single control for saved clients; new clients use the
-    # complete verified segment array below.
+
     audio_evidence = (
         {"timestamp": audio_evidence_segments[0]["timestamp"], "quote": audio_evidence_segments[0]["quote"]}
         if audio_evidence_segments else None
     )
-    if is_listening_item:
-        # Keep the wording honest even if a model falls back to generic reading language.
-        text = re.sub(r"\bsource text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
-        text = re.sub(r"\bthe passage\b", "the recording" if lang == "en" else "bài nghe", text, flags=re.I)
-        text = re.sub(r"\bthe text\b", "the transcript" if lang == "en" else "transcript bài nghe", text, flags=re.I)
-        if lang == "vi":
-            text = re.sub(r"\bbài đọc\b|\bđoạn văn\b|\bvăn bản\b", "bài nghe", text, flags=re.I)
+
+    if is_listening_item and audio_evidence and not ev_loc:
+        ev_loc = f"Lời thoại [{audio_evidence['timestamp']}]" if lang == "vi" else f"Audio [{audio_evidence['timestamp']}]"
+
+    # Reading passage evidence verification
     if is_reading_evidence:
-        def _norm_evidence(value: str) -> str:
-            return re.sub(r"\s+", " ", str(value or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
+        def _norm_ev(val: str) -> str:
+            return re.sub(r"\s+", " ", str(val or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
 
-        passage_norm = _norm_evidence(evidence_passage)
+        passage_norm = _norm_ev(evidence_passage)
+        ev_norm = _norm_ev(ev_quote)
 
-        def _valid_evidence(raw: str) -> list[str]:
-            kept = []
-            seen = set()
-            for quote in re.findall(r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]", raw or "", flags=re.IGNORECASE):
-                quote = quote.strip()
-                quote_norm = _norm_evidence(quote)
-                if not (4 <= len(quote_norm) <= 300 and quote_norm in passage_norm) or quote_norm in seen:
-                    continue
-                kept.append(quote)
-                seen.add(quote_norm)
-                if len(kept) == 3:
-                    break
-            return kept
-
-        # Only explicit, verifier-approved markers are interactive. A sentence
-        # echoed in the tutor's prose can be a chapeau or a related detail, so it
-        # must never silently become clickable evidence.
-        valid_evidence = _valid_evidence(text)
-        if not valid_evidence:
-            evidence_prompt = (
-                "You are a strict IELTS reading evidence verifier. Select one to three SHORT, CONTINUOUS, "
-                "word-for-word excerpts from the passage that directly prove the correct answer to this exact item. "
-                "Do not select generic background, a merely related topic sentence, or a sentence that only repeats a keyword. "
-                "Never select a title, chapeau, italic introduction, heading, list label, question wording, or closing summary. "
-                "For an inference, choose the precise premise or premises that logically require the answer. "
-                "Output ONLY markers in this exact form, one per line: [[EVIDENCE: exact passage excerpt]]."
-            )
-            evidence_request = (
-                f"PASSAGE:\n{evidence_passage}\n\nQUESTION: {question}\nOPTIONS: {options or '(n/a)'}\n"
-                f"CORRECT ANSWER: {correct}\n"
-            )
-            verified_raw, verified_err = _gemini_generate(evidence_prompt, evidence_request, 650)
-            valid_evidence = _valid_evidence(verified_raw) if not verified_err else []
-
-        def _evidence_words(value: str) -> set:
-            return {
-                word for word in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(value or "").lower())
-                if word not in {
-                    "the", "and", "for", "with", "that", "this", "from", "which", "what", "when", "where",
-                    "does", "were", "was", "are", "has", "have", "had", "into", "than", "then", "only",
-                    "answer", "correct", "question", "option", "student", "read", "reading", "passage",
+        if not (ev_norm and 4 <= len(ev_norm) <= 350 and ev_norm in passage_norm):
+            def _ev_words(val: str) -> set:
+                return {
+                    w for w in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(val or "").lower())
+                    if w not in {"the", "and", "for", "with", "that", "this", "from", "which", "what", "answer", "passage"}
                 }
-            }
-
-        if not valid_evidence:
-            query_words = _evidence_words(question) | _evidence_words(correct) | _evidence_words(options)
-            candidates = [
-                re.sub(r"\s+", " ", sentence).strip(" -\t\r\n")
-                for sentence in re.split(r"(?<=[.!?])\s+|\n+", evidence_passage)
+            query_words = _ev_words(ev_quote) | _ev_words(question) | _ev_words(correct)
+            sentences = [
+                re.sub(r"\s+", " ", s).strip(" -\t\r\n")
+                for s in re.split(r"(?<=[.!?])\s+|\n+", evidence_passage)
+                if len(_norm_ev(s)) >= 6
             ]
-            candidates = [sentence for sentence in candidates if len(_norm_evidence(sentence)) >= 4]
-            if candidates:
-                correct_norm = _norm_evidence(correct)
+            if sentences:
+                def _score_s(s: str) -> tuple:
+                    swords = _ev_words(s)
+                    overlap = len(swords & query_words)
+                    exact_ans = int(bool(correct and len(correct) > 2 and _norm_ev(correct) in _norm_ev(s)))
+                    return (exact_ans, overlap, -abs(len(s) - 140))
+                best_s = max(sentences, key=_score_s)
+                if len(best_s) > 300:
+                    best_s = best_s[:300].rsplit(" ", 1)[0].strip()
+                if len(_norm_ev(best_s)) >= 6:
+                    ev_quote = best_s
 
-                def _score_evidence(sentence: str) -> tuple:
-                    words = _evidence_words(sentence)
-                    overlap = len(words & query_words)
-                    exact_answer = int(bool(correct_norm and len(correct_norm) > 2 and correct_norm in _norm_evidence(sentence)))
-                    return (exact_answer, overlap, -abs(len(sentence) - 150))
+    # Clean detailed explanation
+    detailed_exp = str(parsed_json.get("detailedExplanation") or "").strip()
+    detailed_exp = re.sub(r"^(Câu hỏi (này )?(kiểm tra|yêu cầu|đòi hỏi)|The question (tests|asks|requires))\s*[^.]*\.\s*", "", detailed_exp, flags=re.I).strip()
+    if not detailed_exp and raw_response:
+        for line in raw_response.splitlines():
+            clean_l = re.sub(r"^[•*-]\s*", "", line).strip()
+            if clean_l and not clean_l.startswith("{") and not clean_l.startswith('"') and len(clean_l) > 20:
+                detailed_exp = clean_l
+                break
 
-                fallback = max(candidates, key=_score_evidence)
-                if len(fallback) > 300:
-                    fallback = fallback[:300].rsplit(" ", 1)[0].strip()
-                if len(_norm_evidence(fallback)) >= 4:
-                    valid_evidence = [fallback]
+    # Clean trapAnalysis
+    raw_trap = parsed_json.get("trapAnalysis")
+    if not isinstance(raw_trap, dict):
+        raw_trap = {}
+    trap_title = str(raw_trap.get("trapTitle") or "").strip()
+    trap_reason = str(raw_trap.get("trapReason") or "").strip()
 
-        # Remove unverified draft markers from the prose. Curly quotes preserve
-        # readability while ensuring the client only highlights verified proof.
-        text = re.sub(
-            r"\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]",
-            lambda match: f"“{match.group(1).strip()}”",
-            text,
-            flags=re.IGNORECASE,
+    if not trap_title or re.search(r"no audio|without (the )?audio|kh[oô]ng c[oó] audio|thi[eế]u audio", trap_title, re.IGNORECASE):
+        trap_title = (
+            ("Chiến thuật bắt nhịp từ khóa (Signpost Cue Strategy)" if is_unanswered else "Bẫy từ khóa gây nhiễu (Keyword Distractor Trap)")
+            if lang == "vi"
+            else ("Signpost Cue Strategy" if is_unanswered else "Keyword Distractor Trap")
         )
-        if valid_evidence:
-            text = text.rstrip() + "\n\n" + "\n".join(
-                f"[[EVIDENCE: {quote}]]" for quote in valid_evidence
+
+    if not trap_reason or re.search(r"student('s)? answer is blank|h[oọ]c sinh (b[oỏ] tr[oố]ng|ch[uư]a tr[aả] l[oờ]i)|c[aâ]u n[aà]y b[oỏ] tr[oố]ng|without (the )?audio|kh[oô]ng c[oó] audio", trap_reason, re.IGNORECASE):
+        if is_unanswered:
+            trap_reason = (
+                "Cần chú ý các từ nối chuyển ý (signpost words) và nắm bắt thông tin chính trước khi người nói/bài đọc chuyển sang phân đoạn tiếp theo."
+                if lang == "vi"
+                else "Anticipate key signpost words and predict answer forms to catch the cue window before the speaker moves on."
+            )
+        else:
+            trap_reason = (
+                "Phương án này chứa từ khóa gây nhiễu hoặc sai lệch về phạm vi khẳng định so với dẫn chứng thực tế."
+                if lang == "vi"
+                else "This option contains a distractor keyword or an unwarranted scope shift compared to the actual evidence."
             )
 
-    deconstruction = None
-    try:
-        decon_sys = (
-            "You are an expert IELTS Distractor Deconstructor and Paraphrase Analyst. "
-            "Given an IELTS question, options, correct answer, student answer, and the source text/transcript, "
-            "break down the cognitive trap and paraphrase mapping.\n"
-            "Return ONLY a JSON object with this exact structure:\n"
-            "{\n"
-            '  "trapType": "<Short Trap Name, e.g. Bẫy bắt từ khóa sớm (Premature Keyword Match) / Self-Correction Trap / Out-of-Scope / Implicit Negation>",\n'
-            '  "whyStudentWrong": "<Direct 1-2 sentence explanation of why the student choice is wrong/trapped, or actionable strategy if unanswered>",\n'
-            '  "paraphrasePairs": [\n'
-            '    { "questionTerm": "<Short keyword/phrase in question or option>", "passageTerm": "<Equivalent keyword/phrase in passage or audio>", "explanation": "<Short 2-4 word gloss or note>" }\n'
-            '  ],\n'
-            '  "distractorBreakdown": [\n'
-            '    { "option": "<Option label and clean text, e.g. A. refer to course notes>", "status": "ELIMINATE" or "CORRECT", "reason": "<Concise 1-sentence explanation of why this option is wrong or why it fits>" }\n'
-            '  ]\n'
-            "}\n"
-            "CRITICAL RULES:\n"
-            "1. ACCURACY FOR STATUS: Only the single option matching the official Correct Answer must have status 'CORRECT'. "
-            "ALL other options must strictly have status 'ELIMINATE'. Never mark an incorrect distractor as 'CORRECT'.\n"
-            "2. NO AUDIO EXCUSES: NEVER output 'TRAP: No Audio Provided', 'No Audio', or say 'Without the audio...' or 'không có audio'. "
-            "If transcript is brief or missing, analyze question keywords and option logic directly to infer the distractor traps.\n"
-            "3. OPTION PREFIXES: In 'option', use single letter format (e.g. 'A. text'). NEVER duplicate prefixes like 'A. A. text'.\n"
-            "4. UNANSWERED HANDLING: If student answer is blank/unanswered, in 'whyStudentWrong' explain what signpost cue words "
-            "to anticipate to prevent missing the answer window. In 'trapType', give a strategy focus like 'Bẫy tốc độ chuyển ý & từ nối (Rapid Transition Trap)'."
-        )
-        decon_user = (
-            f"SOURCE TEXT / TRANSCRIPT:\n{context[:6000] if has_ctx else reading_passage[:6000]}\n\n"
-            f"Question: {question}\nOptions: {options or '(none)'}\n"
-            f"Correct Answer: {correct}\nStudent Answer: {student_ans or '(blank)'}\n\n"
-            f"Analyze and break down in {'English' if lang == 'en' else 'Vietnamese'}."
-        )
-        decon_raw, _ = await asyncio.to_thread(
-            _pedagogical_ai_call,
-            decon_sys,
-            decon_user,
-            max_tokens=900,
-            temperature=0.1,
-            json_mode=True,
-            model="gemini-2.5-flash",
-            timeout_s=30.0,
-        )
-        if decon_raw:
-            raw_parsed = _extract_json_object(decon_raw)
-            if isinstance(raw_parsed, dict):
-                # Normalize paraphrasePairs
-                cleaned_pairs = []
-                for p in raw_parsed.get("paraphrasePairs") or []:
-                    if isinstance(p, dict):
-                        q_t = str(p.get("questionTerm") or p.get("questionPhrase") or "").strip()
-                        p_t = str(p.get("passageTerm") or p.get("sourcePhrase") or "").strip()
-                        note = str(p.get("explanation") or p.get("note") or "").strip()
-                        if q_t and p_t and q_t != "-" and p_t != "-":
-                            cleaned_pairs.append({"questionTerm": q_t, "passageTerm": p_t, "explanation": note})
-                raw_parsed["paraphrasePairs"] = cleaned_pairs
+    # Sanitize listening terminology
+    if is_listening_item:
+        detailed_exp = re.sub(r"\bsource text\b", "the transcript" if lang == "en" else "transcript bài nghe", detailed_exp, flags=re.I)
+        detailed_exp = re.sub(r"\bthe passage\b", "the recording" if lang == "en" else "bài nghe", detailed_exp, flags=re.I)
+        detailed_exp = re.sub(r"\bthe text\b", "the transcript" if lang == "en" else "transcript bài nghe", detailed_exp, flags=re.I)
+        if lang == "vi":
+            detailed_exp = re.sub(r"\bbài đọc\b|\bđoạn văn\b|\bvăn bản\b", "bài nghe", detailed_exp, flags=re.I)
+            trap_reason = re.sub(r"\bbài đọc\b|\bđoạn văn\b|\bvăn bản\b", "bài nghe", trap_reason, flags=re.I)
 
-                # Normalize distractorBreakdown
-                cleaned_d = []
-                corr_str = str(correct or "").strip()
-                corr_upper = corr_str.upper()
-                clean_corr_stem = _clean_option_text(corr_str).lower()
-                corr_tokens = [t.strip().upper() for t in re.split(r"[,;\s/]+", corr_str) if t.strip()]
+    # Build backward-compatible markdown text
+    text_lines = []
+    if cleaned_pairs:
+        text_lines.append("• " + ("Đối chiếu từ đồng nghĩa:" if lang == "vi" else "Paraphrase matching:"))
+        for p in cleaned_pairs:
+            n_str = f" ({p['note']})" if p.get("note") else ""
+            text_lines.append(f"  - \"{p['questionTerm']}\" ⇄ \"{p['passageTerm']}\"{n_str}")
+    if ev_quote:
+        loc_str = f"{ev_loc}: " if ev_loc else ""
+        text_lines.append(f"• {('Dẫn chứng:' if lang == 'vi' else 'Evidence:')} {loc_str}[[EVIDENCE: \"{ev_quote}\"]]")
+    if detailed_exp:
+        text_lines.append(f"• {('Giải thích chi tiết:' if lang == 'vi' else 'Detailed explanation:')} {detailed_exp}")
+    if trap_reason:
+        t_str = f"{trap_title}: " if trap_title else ""
+        text_lines.append(f"• {('Phân tích:' if lang == 'vi' else 'Trap analysis:')} {t_str}{trap_reason}")
+    text = "\n".join(text_lines)
 
-                raw_distractors = raw_parsed.get("distractorBreakdown") or []
-                for d_idx, d in enumerate(raw_distractors):
-                    if isinstance(d, dict):
-                        raw_opt = str(d.get("option") or "").strip()
-                        raw_status = str(d.get("status") or d.get("verdict") or "").strip()
-                        raw_reason = str(d.get("reason") or d.get("trapReason") or "").strip()
-
-                        # Determine option letter and clean body
-                        default_letter = chr(65 + d_idx) if d_idx < 26 else ""
-                        p_match = re.match(r"^\s*\(?([A-Za-z0-9]+)[\.\)\:]\s*(.*)$", raw_opt)
-                        if p_match and len(p_match.group(1)) == 1 and p_match.group(1).isalpha():
-                            opt_letter = p_match.group(1).upper()
-                            opt_body = _clean_option_text(p_match.group(2))
-                        else:
-                            opt_letter = default_letter
-                            opt_body = _clean_option_text(raw_opt)
-
-                        clean_opt_str = f"{opt_letter}. {opt_body}" if opt_letter and opt_body else (opt_body or raw_opt)
-
-                        is_corr = False
-                        if corr_str.isdigit() and int(corr_str) == d_idx:
-                            is_corr = True
-                        elif len(corr_upper) == 1 and "A" <= corr_upper <= "Z" and (opt_letter == corr_upper or d_idx == (ord(corr_upper) - 65)):
-                            is_corr = True
-                        elif any(t == opt_letter or (t.isdigit() and int(t) == d_idx) for t in corr_tokens):
-                            is_corr = True
-                        elif opt_body and clean_corr_stem and (opt_body.lower() == clean_corr_stem or (len(clean_corr_stem) > 3 and clean_corr_stem in opt_body.lower()) or (len(opt_body) > 3 and opt_body.lower() in clean_corr_stem)):
-                            is_corr = True
-                        else:
-                            tfng_map = {
-                                "T": "TRUE", "TRUE": "TRUE", "F": "FALSE", "FALSE": "FALSE",
-                                "NG": "NOT GIVEN", "NOT GIVEN": "NOT GIVEN", "Y": "YES", "YES": "YES", "N": "NO", "NO": "NO"
-                            }
-                            if tfng_map.get(opt_body.upper()) and tfng_map.get(opt_body.upper()) == tfng_map.get(corr_upper):
-                                is_corr = True
-
-                        if not is_corr and ("CORRECT" in raw_status.upper() and not any(k in raw_status.upper() for k in ["ELIMINATE", "INCORRECT", "WRONG", "FALSE", "TRAP", "DISTRACTOR"])):
-                            if not correct:
-                                is_corr = True
-
-                        clean_status = "CORRECT" if is_corr else "ELIMINATE"
-
-                        # Sanitize reason against "no audio"
-                        if re.search(r"without (the )?audio|kh[oô]ng c[oó] audio|impossible to confirm", raw_reason, re.IGNORECASE):
-                            if is_corr:
-                                raw_reason = (
-                                    "Phương án này trả lời trực tiếp và phù hợp nhất với trọng tâm câu hỏi."
-                                    if lang == "vi"
-                                    else "This option directly and correctly satisfies the question prompt."
-                                )
-                            else:
-                                raw_reason = (
-                                    "Phương án này chứa bẫy từ khóa gây nhiễu hoặc thông tin bị bóp méo so với yêu cầu câu hỏi."
-                                    if lang == "vi"
-                                    else "This option is a distractor containing distorted keywords or unwarranted assumptions."
-                                )
-
-                        if clean_opt_str:
-                            cleaned_d.append({"option": clean_opt_str, "status": clean_status, "reason": raw_reason})
-
-                # Fallback: ensure designated correct answer is marked CORRECT
-                if cleaned_d and not any(x["status"] == "CORRECT" for x in cleaned_d):
-                    target_idx = -1
-                    if corr_str.isdigit() and 0 <= int(corr_str) < len(cleaned_d):
-                        target_idx = int(corr_str)
-                    elif len(corr_upper) == 1 and "A" <= corr_upper <= "Z":
-                        idx_from_letter = ord(corr_upper) - 65
-                        if 0 <= idx_from_letter < len(cleaned_d):
-                            target_idx = idx_from_letter
-                    if target_idx >= 0:
-                        cleaned_d[target_idx]["status"] = "CORRECT"
-
-                raw_parsed["distractorBreakdown"] = cleaned_d
-
-                # Sanitize trapType and whyStudentWrong
-                trap_val = str(raw_parsed.get("trapType") or "").strip()
-                if not trap_val or re.search(r"no audio|without (the )?audio|kh[oô]ng c[oó] audio|thi[eế]u audio", trap_val, re.IGNORECASE):
-                    raw_parsed["trapType"] = (
-                        ("Chiến thuật bắt nhịp từ khóa (Signpost Cue Strategy)" if is_unanswered else "Bẫy từ khóa gây nhiễu (Keyword Distractor Trap)")
-                        if lang == "vi"
-                        else ("Signpost Cue Strategy" if is_unanswered else "Keyword Distractor Trap")
-                    )
-
-                why_wrong_val = str(raw_parsed.get("whyStudentWrong") or "").strip()
-                if not why_wrong_val or re.search(r"student('s)? answer is blank|h[oọ]c sinh (b[oỏ] tr[oố]ng|ch[uư]a tr[aả] l[oờ]i)|c[aâ]u n[aà]y b[oỏ] tr[oố]ng|without (the )?audio|kh[oô]ng c[oó] audio", why_wrong_val, re.IGNORECASE):
-                    if is_unanswered:
-                        raw_parsed["whyStudentWrong"] = (
-                            "Cần chú ý từ khóa dẫn đường (signpost words) và bắt nhịp thông tin trước khi đáp án xuất hiện để không bị lỡ khoảng thời gian then chốt."
-                            if lang == "vi"
-                            else "Focus on signpost language and predict key answer categories before the speaker moves past the critical cue window."
-                        )
-                deconstruction = raw_parsed
-    except Exception as exc:
-        print(f"[Deconstruction Error] {exc}")
+    structured_data = {
+        "paraphrasePairs": cleaned_pairs,
+        "evidence": {
+            "location": ev_loc,
+            "quote": ev_quote,
+        },
+        "detailedExplanation": detailed_exp,
+        "trapAnalysis": {
+            "trapTitle": trap_title,
+            "trapReason": trap_reason,
+        },
+    }
 
     return {
         "success": True,
         "explanation": text,
         "audioEvidence": audio_evidence,
         "audioEvidenceSegments": audio_evidence_segments,
-        "deconstruction": deconstruction,
+        "deconstruction": {
+            "trapType": trap_title,
+            "whyStudentWrong": trap_reason,
+            "paraphrasePairs": cleaned_pairs,
+        },
+        "structured": structured_data,
     }
 
 

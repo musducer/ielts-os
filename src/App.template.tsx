@@ -4142,7 +4142,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -8175,18 +8175,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) {
+      if (data.success && (data.explanation || data.structured)) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
           ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
           : undefined;
         setExplainMap(prev => ({ ...prev, [q.id]: {
           loading: false,
-          text: data.explanation,
+          text: data.explanation || "",
           audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
             ? { ...data.audioEvidence, segments: audioEvidenceSegments }
             : undefined,
           audioEvidenceSegments,
           deconstruction: data.deconstruction || undefined,
+          structured: data.structured || undefined,
         } }));
       }
       else {

@@ -4142,7 +4142,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -8175,18 +8175,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         })
       });
       const data = await resp.json();
-      if (data.success && data.explanation) {
+      if (data.success && (data.explanation || data.structured)) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
           ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
           : undefined;
         setExplainMap(prev => ({ ...prev, [q.id]: {
           loading: false,
-          text: data.explanation,
+          text: data.explanation || "",
           audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
             ? { ...data.audioEvidence, segments: audioEvidenceSegments }
             : undefined,
           audioEvidenceSegments,
           deconstruction: data.deconstruction || undefined,
+          structured: data.structured || undefined,
         } }));
       }
       else {
@@ -13194,7 +13195,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           const aiQuotes = Array.from(String(aiState?.text || "").matchAll(/\[\[EVIDENCE:\s*([\s\S]*?)\s*\]\]|"([^"\n]{4,240})"/gi))
               .map(m => (m[1] || m[2] || "").trim())
               .filter(Boolean);
-          const quotes = [...(manual?.parsedQuotes || []), ...aiQuotes].filter(q => String(q || "").trim().length >= 4);
+          const structuredQuote = String(aiState?.structured?.evidence?.quote || "").trim();
+          const quotes = [...(manual?.parsedQuotes || []), ...aiQuotes, ...(structuredQuote ? [structuredQuote] : [])].filter(q => String(q || "").trim().length >= 4);
           const tsLabel = manual?.parsedTimestamps?.[0]?.label || aiState?.audioEvidence?.timestamp || aiState?.audioEvidenceSegments?.[0]?.timestamp || "";
 
           if (rvActiveIsListening) {
@@ -13594,6 +13596,175 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           );
       };
 
+      const rvRenderDetailedAiExplanation = (aiState: any, question: any, studentAnswer: any) => {
+          let paraphrasePairs: Array<{ questionTerm: string; passageTerm: string; note?: string }> = [];
+          let evidenceLoc = "";
+          let evidenceQuote = "";
+          let detailedExplanation = "";
+          let trapTitle = "";
+          let trapReason = "";
+
+          if (aiState?.structured) {
+              paraphrasePairs = Array.isArray(aiState.structured.paraphrasePairs) ? aiState.structured.paraphrasePairs : [];
+              evidenceLoc = String(aiState.structured.evidence?.location || "").trim();
+              evidenceQuote = String(aiState.structured.evidence?.quote || "").trim();
+              detailedExplanation = String(aiState.structured.detailedExplanation || "").trim();
+              trapTitle = String(aiState.structured.trapAnalysis?.trapTitle || "").trim();
+              trapReason = String(aiState.structured.trapAnalysis?.trapReason || "").trim();
+          } else {
+              if (aiState?.deconstruction) {
+                  if (Array.isArray(aiState.deconstruction.paraphrasePairs)) {
+                      paraphrasePairs = aiState.deconstruction.paraphrasePairs.map((p: any) => ({
+                          questionTerm: p.questionTerm || p.questionPhrase || "",
+                          passageTerm: p.passageTerm || p.sourcePhrase || "",
+                          note: p.explanation || p.note || ""
+                      })).filter((p: any) => p.questionTerm && p.passageTerm);
+                  }
+                  trapTitle = String(aiState.deconstruction.trapType || "").trim();
+                  trapReason = String(aiState.deconstruction.whyStudentWrong || "").trim();
+              }
+              const rawText = String(aiState?.text || "");
+              const quoteMatch = rawText.match(/\[\[EVIDENCE:\s*"?([\s\S]*?)"?\s*\]\]/i) || rawText.match(/“([^”\n]{8,260})”/) || rawText.match(/"([^"\n]{8,260})"/);
+              if (quoteMatch) {
+                  evidenceQuote = quoteMatch[1].trim();
+              }
+              const locMatch = rawText.match(/(Đoạn\s+[A-Za-z0-9]+(?:,\s*dòng\s+\d+)?|Paragraph\s+[A-Za-z0-9]+(?:,\s*line\s+\d+)?|Lời thoại\s*\[\d+:\d+\])/i);
+              if (locMatch) {
+                  evidenceLoc = locMatch[1].trim();
+              }
+              const expMatch = rawText.match(/(?:Giải thích chi tiết|Detailed explanation|Kết luận|Conclusion|Bản chất|Core logic)\s*:\s*([^\n•]+)/i);
+              if (expMatch) {
+                  detailedExplanation = expMatch[1].trim();
+              } else {
+                  const lines = rawText.split("\n").map(l => l.replace(/^[•*-]\s*/, "").trim()).filter(Boolean);
+                  if (lines.length > 0) detailedExplanation = lines[0];
+              }
+              if (!trapReason) {
+                  const trapMatch = rawText.match(/(?:Bẫy|Lỗi sai|Trap|Why wrong)\s*:\s*([^\n•]+)/i);
+                  if (trapMatch) trapReason = trapMatch[1].trim();
+              }
+          }
+
+          if (!detailedExplanation && !evidenceQuote && !paraphrasePairs.length && !trapReason) {
+              return rvRenderRichText(aiState?.text, question);
+          }
+
+          const corr = String(question?.correctAnswer || question?.correct || "").trim();
+          const stu = String(studentAnswer !== undefined && studentAnswer !== null ? studentAnswer : "").trim();
+          const isBlank = !stu || ["(trống)", "(bỏ trống)", "(blank)", "no answer", "blank", "none", "null"].includes(stu.toLowerCase());
+          let isCorrect = false;
+          if (!isBlank && typeof isSingleQuestionCorrect === "function") {
+              isCorrect = Boolean(isSingleQuestionCorrect(question, studentAnswer));
+          } else if (!isBlank && corr) {
+              isCorrect = corr.toLowerCase() === stu.toLowerCase();
+          }
+          const isWrong = !isBlank && !isCorrect;
+
+          const sourceLabel = rvActiveIsListening ? "Lời thoại" : "Bài đọc";
+
+          let block3Title = "3. PHÂN TÍCH NGUYÊN DO CHỌN SAI";
+          let block3Badge = "⚠️";
+          if (isBlank) {
+              block3Title = "3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP";
+              block3Badge = "💡";
+          } else if (isCorrect) {
+              block3Title = "3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH";
+              block3Badge = "✓";
+          }
+
+          return (
+              <div className="rv-ai-structured-body">
+                  {paraphrasePairs.length > 0 && (
+                      <div className="rv-ai-block rv-ai-block-para">
+                          <div className="rv-ai-block-title">
+                              <span className="rv-ai-block-num">1.</span>
+                              ĐỐI CHIẾU TỪ ĐỒNG NGHĨA
+                          </div>
+                          <div className="rv-ai-para-list">
+                              {paraphrasePairs.map((pair, pIdx) => (
+                                  <div key={pIdx} className="rv-ai-para-row">
+                                      <div className="rv-ai-para-side">
+                                          <span className="rv-ai-para-tag q">Đề bài:</span>
+                                          <span className="rv-ai-para-term">"{pair.questionTerm}"</span>
+                                      </div>
+                                      <span className="rv-ai-para-arrow" aria-hidden="true">⇄</span>
+                                      <div className="rv-ai-para-side">
+                                          <span className="rv-ai-para-tag p">{sourceLabel}:</span>
+                                          <span className="rv-ai-para-term">"{pair.passageTerm}"</span>
+                                      </div>
+                                      {pair.note ? <span className="rv-ai-para-note">({pair.note})</span> : null}
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+
+                  <div className="rv-ai-block rv-ai-block-evidence">
+                      <div className="rv-ai-block-title">
+                          <span className="rv-ai-block-num">{paraphrasePairs.length > 0 ? "2." : "1."}</span>
+                          DẪN CHỨNG CHÍNH XÁC VÀ GIẢI THÍCH CHI TIẾT
+                      </div>
+                      <div className="rv-ai-evidence-content">
+                          {evidenceQuote ? (
+                              <div className="rv-ai-evidence-quote-row">
+                                  <span className="rv-ai-dash">–</span>
+                                  <div className="rv-ai-quote-container">
+                                      {evidenceLoc && <strong className="rv-ai-loc-label">{evidenceLoc}: </strong>}
+                                      <span
+                                          className="rv-ai-quote-text is-clickable"
+                                          onClick={() => {
+                                              if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote);
+                                          }}
+                                          title="Nhấn để định vị câu trích dẫn trong bài"
+                                      >
+                                          “{evidenceQuote}”
+                                      </span>
+                                      <span
+                                          className="rv-ai-jump-hint"
+                                          onClick={() => {
+                                              if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote);
+                                          }}
+                                      >
+                                          (nhấn để định vị trong bài)
+                                      </span>
+                                  </div>
+                              </div>
+                          ) : null}
+                          {detailedExplanation ? (
+                              <div className="rv-ai-explanation-row">
+                                  <span className="rv-ai-dash">–</span>
+                                  <div className="rv-ai-explanation-container">
+                                      <strong className="rv-ai-exp-label">Giải thích chi tiết: </strong>
+                                      <span className="rv-ai-exp-text">{detailedExplanation}</span>
+                                  </div>
+                              </div>
+                          ) : null}
+                      </div>
+                  </div>
+
+                  {(trapTitle || trapReason) && (
+                      <div className={`rv-ai-block rv-ai-block-trap ${isWrong ? "is-wrong" : isBlank ? "is-blank" : "is-correct"}`}>
+                          <div className="rv-ai-block-title">
+                              <span className="rv-ai-block-num">{paraphrasePairs.length > 0 ? "3." : "2."}</span>
+                              {block3Title}
+                          </div>
+                          <div className="rv-ai-trap-content">
+                              <div className="rv-ai-trap-card">
+                                  <span className="rv-ai-trap-badge" aria-hidden="true">{block3Badge}</span>
+                                  <div className="rv-ai-trap-body">
+                                      {trapTitle && <strong className="rv-ai-trap-title">{trapTitle}: </strong>}
+                                      <span className="rv-ai-trap-reason">{trapReason}</span>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+              </div>
+          );
+      };
+
       // Render Expandable Inline Drawer (Teacher or AI) directly below the question line/row
       const rvRenderInlineDrawer = (question: any, studentAnswer?: any, aiQuestion?: any) => {
           if (!question?.id) return null;
@@ -13657,19 +13828,17 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               <div className="inline-explain-drawer ai" onClick={e => e.stopPropagation()}>
                   <div className="rv-drawer-head">
                       <span className="rv-drawer-title">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1" />
-                          </svg>
-                          Phân tích AI — Câu {qNum}
+                          <span style={{ fontSize: 15, lineHeight: 1 }}>💡</span>
+                          GIẢI THÍCH CHI TIẾT — CÂU {qNum}
                       </span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           {!aiState?.loading && (
                               <button
                                   type="button"
-                                  className="rv-drawer-link-btn"
+                                  className="rv-drawer-reanalyze-btn"
                                   onClick={() => void handleAiExplain(aiQuestion || question, studentAnswer, reviewQuiz.quiz)}
                               >
-                                  Phân tích lại
+                                  <span style={{ marginRight: 3 }}>🔄</span> Phân tích lại
                               </button>
                           )}
                           <button
@@ -13683,12 +13852,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       </div>
                   </div>
                   {aiState?.loading ? (
-                      <div className="rv-drawer-loading">Đang trích xuất dẫn chứng và phân tích câu {qNum}...</div>
-                  ) : aiState?.text ? (
-                      rvRenderRichText(aiState.text, question)
+                      <div className="rv-drawer-loading">Đang phân tích cấu trúc và trích xuất dẫn chứng câu {qNum}...</div>
+                  ) : (aiState?.structured || aiState?.text) ? (
+                      rvRenderDetailedAiExplanation(aiState, question, studentAnswer)
                   ) : (
                       <div className="rv-drawer-empty">
-                          <span>Nhấn để tạo phân tích 3 dòng súc tích từ văn bản nguồn.</span>
+                          <span>Nhấn để tạo giải thích chi tiết 3 khối chuẩn mực từ AI.</span>
                           <button
                               type="button"
                               className="rv-drawer-switch-ai"
@@ -14368,9 +14537,213 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       border-left: 3px solid #EAB308;
                   }
                   .inline-explain-drawer.ai {
-                      background: #FFFBEB;
-                      border: 1px solid #FDE68A;
-                      border-left: 3px solid #D97706;
+                      background: #FFFFFF;
+                      border: 1px solid #E2E8F0;
+                      border-left: 4px solid #2563EB;
+                      box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+                      padding: 13px 15px;
+                  }
+                  .inline-explain-drawer.ai .rv-drawer-head {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      margin-bottom: 8px;
+                      padding-bottom: 8px;
+                      border-bottom: 1px solid #F1F5F9;
+                  }
+                  .inline-explain-drawer.ai .rv-drawer-title {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 6px;
+                      font-size: 12.5px;
+                      font-weight: 800;
+                      color: #0F172A;
+                      text-transform: uppercase;
+                      letter-spacing: 0.03em;
+                  }
+                  .inline-explain-drawer.ai .rv-drawer-reanalyze-btn {
+                      border: 1px solid #E2E8F0;
+                      background: #F8FAFC;
+                      color: #2563EB;
+                      font-size: 11.5px;
+                      font-weight: 700;
+                      padding: 3px 9px;
+                      border-radius: 6px;
+                      cursor: pointer;
+                      display: inline-flex;
+                      align-items: center;
+                      transition: all 0.15s ease;
+                  }
+                  .inline-explain-drawer.ai .rv-drawer-reanalyze-btn:hover {
+                      background: #EFF6FF;
+                      border-color: #BFDBFE;
+                      color: #1D4ED8;
+                  }
+                  /* 3-block structured layout */
+                  .rv-ai-structured-body {
+                      display: flex;
+                      flex-direction: column;
+                  }
+                  .rv-ai-block {
+                      padding: 9px 0;
+                      border-top: 1px solid #F1F5F9;
+                  }
+                  .rv-ai-block:first-of-type {
+                      border-top: none;
+                      padding-top: 2px;
+                  }
+                  .rv-ai-block-title {
+                      font-size: 12px;
+                      font-weight: 800;
+                      color: #0F172A;
+                      letter-spacing: 0.03em;
+                      margin-bottom: 7px;
+                      display: flex;
+                      align-items: center;
+                      gap: 5px;
+                  }
+                  .rv-ai-block-num {
+                      color: #2563EB;
+                      font-weight: 800;
+                  }
+                  /* Block 1: Paraphrase pairs */
+                  .rv-ai-para-list {
+                      display: flex;
+                      flex-direction: column;
+                      gap: 5px;
+                  }
+                  .rv-ai-para-row {
+                      display: flex;
+                      align-items: center;
+                      flex-wrap: wrap;
+                      gap: 7px;
+                      background: #F8FAFC;
+                      border: 1px solid #E2E8F0;
+                      border-radius: 6px;
+                      padding: 5px 10px;
+                      font-size: 12.5px;
+                  }
+                  .rv-ai-para-side {
+                      display: inline-flex;
+                      align-items: center;
+                      gap: 5px;
+                  }
+                  .rv-ai-para-tag {
+                      font-size: 11px;
+                      font-weight: 700;
+                      text-transform: uppercase;
+                      color: #64748B;
+                  }
+                  .rv-ai-para-term {
+                      font-weight: 600;
+                      color: #0F172A;
+                      background: #FFFFFF;
+                      border: 1px solid #CBD5E1;
+                      border-radius: 4px;
+                      padding: 1px 6px;
+                  }
+                  .rv-ai-para-arrow {
+                      color: #2563EB;
+                      font-weight: 800;
+                      font-size: 13px;
+                  }
+                  .rv-ai-para-note {
+                      font-size: 11.5px;
+                      color: #64748B;
+                      font-style: italic;
+                  }
+                  /* Block 2: Evidence & detailed explanation */
+                  .rv-ai-evidence-content {
+                      display: flex;
+                      flex-direction: column;
+                      gap: 7px;
+                      font-size: 13px;
+                      line-height: 1.6;
+                  }
+                  .rv-ai-evidence-quote-row, .rv-ai-explanation-row {
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 6px;
+                  }
+                  .rv-ai-dash {
+                      color: #94A3B8;
+                      font-weight: 700;
+                      line-height: 1.6;
+                  }
+                  .rv-ai-quote-container {
+                      flex: 1;
+                  }
+                  .rv-ai-loc-label {
+                      color: #1E293B;
+                      font-weight: 700;
+                  }
+                  .rv-ai-quote-text {
+                      font-style: italic;
+                      color: #1E40AF;
+                      background: #EFF6FF;
+                      border: 1px solid #DBEAFE;
+                      border-radius: 4px;
+                      padding: 1px 5px;
+                      cursor: pointer;
+                      transition: all 0.15s ease;
+                  }
+                  .rv-ai-quote-text:hover {
+                      background: #DBEAFE;
+                      border-color: #93C5FD;
+                  }
+                  .rv-ai-jump-hint {
+                      font-size: 11px;
+                      color: #3B82F6;
+                      margin-left: 6px;
+                      cursor: pointer;
+                      text-decoration: underline dotted #93C5FD;
+                  }
+                  .rv-ai-jump-hint:hover {
+                      color: #1D4ED8;
+                  }
+                  .rv-ai-explanation-container {
+                      flex: 1;
+                      color: #334155;
+                  }
+                  .rv-ai-exp-label {
+                      color: #0F172A;
+                      font-weight: 700;
+                  }
+                  /* Block 3: Trap Analysis */
+                  .rv-ai-trap-card {
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 8px;
+                      border-radius: 6px;
+                      padding: 8px 12px;
+                      font-size: 13px;
+                      line-height: 1.55;
+                  }
+                  .rv-ai-block-trap.is-wrong .rv-ai-trap-card {
+                      background: #FEF2F2;
+                      border: 1px solid #FECACA;
+                      color: #991B1B;
+                  }
+                  .rv-ai-block-trap.is-blank .rv-ai-trap-card {
+                      background: #F0FDF4;
+                      border: 1px solid #BBF7D0;
+                      color: #166534;
+                  }
+                  .rv-ai-block-trap.is-correct .rv-ai-trap-card {
+                      background: #F8FAFC;
+                      border: 1px solid #E2E8F0;
+                      color: #334155;
+                  }
+                  .rv-ai-trap-badge {
+                      font-size: 14px;
+                      line-height: 1.4;
+                      flex-shrink: 0;
+                  }
+                  .rv-ai-trap-body {
+                      flex: 1;
+                  }
+                  .rv-ai-trap-title {
+                      font-weight: 800;
                   }
                   .rv-drawer-head {
                       display: flex;
