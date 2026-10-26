@@ -2246,8 +2246,7 @@
                 let isAvailable = false;
                 let badgeText = "";
                 
-                if (q.isLocked) { statusText = t('status_locked'); badgeText = t('status_locked'); }
-                else if (now < startTime) { 
+                if (now < startTime) { 
                     statusText = `${t('opens_at')}: ${new Date(startTime).toLocaleString('vi-VN')}`; 
                     badgeText = t('not_available'); 
                 } 

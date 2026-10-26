@@ -1,5 +1,35 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-26)
 
+## Khắc Phục 5 Vấn Đề Production Then Chốt (5 Critical Production Hardening Fixes) — 2026-10-26
+
+### 1. Tối Ưu Tốc Độ `/api/ai_explain` Sau Khi Nâng Cấp Gemini 3.8 Flash (`api/index.py`)
+- **Vô hiệu hóa Thinking Budget triệt để cho dòng Flash**: Cập nhật `_gemini_chat_once` và `_vertex_gemini_generate` để tự động set `thinkingConfig: {"thinkingBudget": 0}` cho tất cả các mô hình chứa `2.5`, `3.`, hoặc `flash`. Thêm cơ chế tự động thử lại 1 lần không kèm `thinkingConfig` nếu API trả mã HTTP 400.
+- **Triệt tiêu lệnh gọi LLM đồng bộ lần 2**: Loại bỏ hoàn toàn lượt gọi LLM thứ 2 khi xác minh dẫn chứng reading. Thay bằng thuật toán tìm kiếm mờ (fuzzy substring 6+ từ) và bộ xếp hạng câu Python thuần (`_score_evidence`) phản hồi tức thì trong `< 1ms`.
+- **Siết gọn Context & Token Budget**: Giới hạn trần `context` và `readingPassage` từ 24.000 xuống 12.000 ký tự; hạ `max_tokens` từ 1.000 xuống 500 (`timeout_s=25.0`). Bổ sung quy tắc sư phạm trọng tâm cho câu hỏi trắc nghiệm/nối: chỉ phân tích vì sao đáp án đúng là chính xác và vì sao lựa chọn của học viên bị sai, không phân tích lan man các lựa chọn học viên không chọn.
+
+### 2. Triệt Tiêu Đơ Giật UI & Tràn Bộ Nhớ Trong Exam Builder (`src/App.template.tsx`, `EXAM_BUILDER.txt`)
+- **Tối ưu `RichTextEditor`**: Bọc component bằng `React.memo` và debounce sự kiện `onInput` 250ms qua `debounceTimerRef`, đồng thời flush cập nhật ngay lập tức khi `onBlur` hoặc kích hoạt các nút định dạng toolbar.
+- **Bảo vệ lưu nháp an toàn `ielts_exam_draft`**: Bọc `localStorage.setItem` trong khối `try/catch`. Nếu gặp `QuotaExceededError`, tự động lược bỏ các chuỗi dữ liệu ảnh Base64 kích thước lớn trước khi lưu nháp, tránh làm sập ứng dụng. Tăng thời gian chờ debounce từ 2s lên 4s.
+- **Tránh re-render toàn bộ cây component khi bấm Lưu**: Trong `handleForceSave`, chỉ cập nhật các trường metadata (`revision`, `updatedAt`) vào state `editingQuiz`, giữ nguyên con trỏ và vùng chọn của người dùng trong editor.
+- **Chuyển dịch 100% sang Delta Upsert**: Thay thế các lệnh ghi đè danh mục `syncData({ quizzes: nx })` bằng `persistBulkQuizUpdates` và `syncData({ __quizUpserts: [...] })` (khi lưu Key đáp án hoặc tạo bản sao đề).
+
+### 3. Sửa Lỗi Thanh Tiến Trình Audio Đứng Yên Ở Chế Độ Luyện Tập (`src/components_split/ACTIVE_EXAM.txt`, `src/App.template.tsx`)
+- **Chuẩn hóa điều kiện kiểm tra Practice Mode**: Đồng bộ thống nhất trên toàn codebase: `isPracticeListeningMode = isPracticeQuiz(activeExam) || (activeExam as any)?.audioMode === "practice"`.
+- **Đồng bộ liên tục thời lượng `audioDur`**: Trong `publishAudioProgress` và `handleExamAudioPlaying`, tự động cập nhật `audioDur` từ `audioRef.current.duration` ngay khi có dữ liệu. Cho phép tua tiến/lùi qua MediaSession.
+- **Khắc phục kẹp giá trị 0 trên thanh trượt**: Khi `audioDur` chưa sẵn sàng, tính toán `liveDur` và `effectiveMax` an toàn để không kẹp `safeCur` về 0, đảm bảo thanh trượt tua và nhãn thời gian phản hồi liên tục khi audio phát.
+
+### 4. Chống Hồi Sinh Gói Đề Thi Thật Đã Xóa & Xử Lý Hàng Đợi Đột Biến (`src/App.template.tsx`)
+- **Bộ ghi nhớ Tombstone phía Client & Firestore**: Lưu trữ danh sách ID gói đề thi thật đã xóa vào `localStorage` (`ielts_deleted_real_exam_packages`). Khi xóa gói đề, phát sinh tombstone và đồng bộ marker `__realExamPackageDeletedIds`.
+- **Hợp nhất Transactional trong `performSyncData`**: Merge mảng `realExamPackageTombstones` trên Firestore và loại trừ triệt để các package đã xóa khi hợp nhất danh sách.
+- **Bộ lọc phòng vệ tại `applyWorkspaceSnapshot`**: Lọc bỏ các gói thi nằm trong tombstone trước khi nạp vào React state, ngăn chặn tình trạng gói đề cũ bị hồi sinh từ các snapshot trễ.
+- **Circuit Breaker trong `flushPendingWorkspaceMutations`**: Tự động phát hiện và loại bỏ các mutation "độc" (bị lỗi retry >= 5 lần hoặc chứa mảng `quizzes` cồng kềnh lỗi thời), giải tỏa tắc nghẽn hàng đợi đồng bộ ngoại tuyến.
+
+### 5. Loại Bỏ Triệt Để Cơ Chế Khóa/Mở Khóa Đề Cũ (`isLocked`)
+- **Gỡ bỏ `isLocked` khỏi dữ liệu**: Xóa thuộc tính `isLocked` khỏi interface `Quiz`, các hàm khởi tạo đề thi và hàm nhân bản `duplicateQuiz`.
+- **Dọn dẹp giao diện Exam Builder**: Xóa bỏ các nút bấm Khóa/Mở khóa hàng loạt, xóa icon ổ khóa trên tiêu đề thẻ đề thi và nhãn trạng thái khóa.
+- **Đơn giản hóa quyền truy cập ở Student Portal**: Gỡ bỏ kiểm tra `q.isLocked` trong logic hiển thị trạng thái đề thi của học viên.
+- **Bảo toàn phòng thủ chống gian lận**: Giữ nguyên vẹn 100% cơ chế khóa cứng phiên làm bài khi phát hiện thi đồng thời trên thiết bị khác (`isLockedByOtherDevice`).
+
 ## Tinh Gọn Khối Nhận Diện Điểm Yếu & Chuyển Sang Tab Tiến Độ Học (Weakness Analysis Bento & Sub-Tab Architecture) — 2026-10-26
 
 - **Đặt tên giản dị, xóa bỏ thuật ngữ AI khoa trương**:

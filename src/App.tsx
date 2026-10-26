@@ -1744,7 +1744,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; categoryId?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
 interface AiGenerationBatchState {
   batch_id: string;
@@ -3746,8 +3746,15 @@ const VocabBlitz = ({ cards, C, onReview, onAward, awardsLeft = 0 }: any) => {
 // ==========================================
 // COMPONENT: RICH TEXT EDITOR (GOOGLE DOCS VERSION)
 // ==========================================
-const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onChange: (v: string) => void, placeholder?: string }) => {
+const RichTextEditor = React.memo(({ value, onChange, placeholder }: { value: string, onChange: (v: string) => void, placeholder?: string }) => {
     const editorRef = useRef<HTMLDivElement>(null);
+    const debounceTimerRef = useRef<any>(null);
+
+    useEffect(() => {
+        return () => {
+            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        };
+    }, []);
 
     useEffect(() => {
         // MAGIC FIX: Chỉ đồng bộ dữ liệu từ cha xuống con nếu ô Editor đang KHÔNG ĐƯỢC FOCUS
@@ -3756,10 +3763,27 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
         }
     }, [value]);
 
-    const triggerChange = () => {
+    const flushChange = () => {
+        if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+            debounceTimerRef.current = null;
+        }
         if (editorRef.current && editorRef.current.innerHTML !== value) {
             onChange(editorRef.current.innerHTML);
         }
+    };
+
+    const handleInput = () => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => {
+            if (editorRef.current && editorRef.current.innerHTML !== value) {
+                onChange(editorRef.current.innerHTML);
+            }
+        }, 250);
+    };
+
+    const triggerChange = () => {
+        flushChange();
     };
 
     const exec = (cmd: string, val: string | undefined = undefined) => {
@@ -3886,10 +3910,10 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7V4h16v3"/><path d="M5 20h6"/><path d="M13 4L8 20"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="21" y1="15" x2="15" y2="21"/></svg>
                 </button>
             </div>
-            <div ref={editorRef} contentEditable suppressContentEditableWarning onBlur={triggerChange} onInput={triggerChange} style={{ minHeight: 180, padding: 16, outline: 'none', whiteSpace: 'pre-wrap', color: '#000', background: '#fff', lineHeight: 1.6 }} data-placeholder={placeholder || "Paste or type content here..."} />
+            <div ref={editorRef} contentEditable suppressContentEditableWarning onBlur={flushChange} onInput={handleInput} style={{ minHeight: 180, padding: 16, outline: 'none', whiteSpace: 'pre-wrap', color: '#000', background: '#fff', lineHeight: 1.6 }} data-placeholder={placeholder || "Paste or type content here..."} />
         </div>
     );
-};
+});
 
 export default function IeltsSupremeOS() {
   const { t, i18n } = useTranslation();
@@ -5465,6 +5489,16 @@ export default function IeltsSupremeOS() {
   const clearPendingCoinOperation = () => {
     try { localStorage.removeItem(pendingCoinOperationKey()); } catch (e) {}
   };
+  const readLocalDeletedPackageIds = (): string[] => {
+    try { return JSON.parse(localStorage.getItem('ielts_deleted_real_exam_packages') || '[]'); } catch { return []; }
+  };
+  const addLocalDeletedPackageIds = (ids: string[]) => {
+    try {
+      const current = new Set(readLocalDeletedPackageIds());
+      ids.forEach(id => current.add(String(id)));
+      localStorage.setItem('ielts_deleted_real_exam_packages', JSON.stringify(Array.from(current).slice(-200)));
+    } catch { }
+  };
   const pendingWorkspaceMutationsKey = () => `ielts_pending_workspace_mutations_${String(currentUser?.email || "user").toLowerCase()}`;
   const readPendingWorkspaceMutations = (): { id: string; payload: any; createdAt: number; retryCount?: number }[] => {
     try {
@@ -5853,7 +5887,7 @@ export default function IeltsSupremeOS() {
   const hasListeningAudio = () => isListeningExamAudio() || isListeningReviewAudio();
 
   const isStrictExamAudio = () => {
-    return isListeningExamAudio() && (activeExam as any).audioMode !== "practice";
+    return isListeningExamAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice";
   };
 
   const clearExamAudioResumeTimer = () => {
@@ -5896,13 +5930,20 @@ export default function IeltsSupremeOS() {
     const channel: "exam" | "review" = review ? "review" : "exam";
     const now = performance.now();
     const current = Math.max(0, audio.currentTime || 0);
+    const dur = Number(audio.duration || 0);
+    if (!review && dur > 0 && Math.abs(audioDur - dur) > 0.5) {
+      setAudioDur(dur);
+    }
     if (now - audioProgressPaintRef.current[channel] < 450) {
       updateExamMediaSessionPosition(audio);
       return;
     }
     audioProgressPaintRef.current[channel] = now;
     if (review) setRvAudioCur(current);
-    else if ((activeExam as any)?.audioMode === "practice") setAudioCur(current);
+    else if (isPracticeQuiz(activeExam) || (activeExam as any)?.audioMode === "practice") {
+      setAudioCur(current);
+      if (dur > 0 && audioDur <= 0) setAudioDur(dur);
+    }
     updateExamMediaSessionPosition(audio);
   };
 
@@ -6114,6 +6155,10 @@ export default function IeltsSupremeOS() {
     examAudioShouldPlayRef.current = true;
     examAudioRecoveryAttemptsRef.current = 0;
     audioReloadAttemptsRef.current = 0;
+    const curAudioDur = Number(audioRef.current?.duration || 0);
+    if (curAudioDur > 0 && Math.abs(audioDur - curAudioDur) > 0.5) {
+      setAudioDur(curAudioDur);
+    }
     if (activeExam && shouldDelayListeningExamTimer(activeExam, isPreview) && !examStartTime) {
       const startedAt = getRealTime();
       setExamStartTime(startedAt);
@@ -6532,7 +6577,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
-    setRealExamPackages(clean(d.realExamPackages));
+    const localDeletedPkgIds = new Set(readLocalDeletedPackageIds());
+    const remotePkgTombstones = new Set((Array.isArray(d.realExamPackageTombstones) ? d.realExamPackageTombstones : []).map(String));
+    const incomingPackages = (clean(d.realExamPackages) || []).filter((p: any) => p && p.id && !localDeletedPkgIds.has(String(p.id)) && !remotePkgTombstones.has(String(p.id)));
+    setRealExamPackages(incomingPackages);
     if (Array.isArray(d.examFolders)) {
       const folderTombstones = new Set(
         (Array.isArray(d.examFolderTombstones) ? d.examFolderTombstones : [])
@@ -7176,9 +7224,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   useEffect(() => {
     if (editingQuiz) {
-        const timeout = setTimeout(() => { localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz)); }, 2000);
+        const timeout = setTimeout(() => {
+            try {
+                localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
+            } catch (err: any) {
+                try {
+                    // Quota exceeded: strip large base64 data URLs before caching draft
+                    const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
+                        if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
+                            return '';
+                        }
+                        return value;
+                    }));
+                    localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
+                } catch {
+                    // Gracefully ignore local draft caching if still over quota
+                }
+            }
+        }, 4000);
         const handleSaveShortcut = (e: KeyboardEvent) => {
-            if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); alert("Saved draft Ctrl+S!"); }
+            if (e.ctrlKey && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+            }
         };
         window.addEventListener('keydown', handleSaveShortcut);
         return () => { clearTimeout(timeout); window.removeEventListener('keydown', handleSaveShortcut); };
@@ -7275,7 +7342,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
               if (audio && examAudioShouldPlayRef.current) recoverInterruptedExamAudio(audio);
           });
           navigator.mediaSession.setActionHandler("seekbackward", (details: MediaSessionActionDetails) => {
-              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              if (!isListeningReviewAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice") return;
               const audio = audioRef.current;
               if (!audio) return;
               audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
@@ -7284,7 +7351,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
               updateExamMediaSessionPosition(audio);
           });
           navigator.mediaSession.setActionHandler("seekforward", (details: MediaSessionActionDetails) => {
-              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              if (!isListeningReviewAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice") return;
               const audio = audioRef.current;
               if (!audio) return;
               audio.currentTime = Math.min(audio.duration || Number.MAX_SAFE_INTEGER, audio.currentTime + (details.seekOffset || 10));
@@ -7376,6 +7443,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const deletedScheduleIds = Array.isArray(newData.__deletedScheduleIds) ? newData.__deletedScheduleIds.map(String) : [];
     const deletedTransactionIds = Array.isArray(newData.__deletedTransactionIds) ? newData.__deletedTransactionIds.map(String) : [];
     const examFolderTombstones = Array.isArray(newData.__examFolderTombstones) ? newData.__examFolderTombstones.map(normalizeFolderPath) : [];
+    const realExamPackageDeletedIds = Array.isArray(newData.__realExamPackageDeletedIds) ? newData.__realExamPackageDeletedIds.map(String) : [];
     const coinOperation = newData.__coinOperation?.id && newData.__coinOperation?.studentId
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
@@ -7406,7 +7474,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       newData = { ...newData };
       delete newData.quizzes;
       delete newData.__quizUpserts;
-      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__quizUpserts", "__vocabPending", "__coinOperation", "__deletedHistoryIds", "__deletedScheduleIds", "__deletedTransactionIds", "__examFolderTombstones"].includes(key))
+      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__quizUpserts", "__vocabPending", "__coinOperation", "__deletedHistoryIds", "__deletedScheduleIds", "__deletedTransactionIds", "__examFolderTombstones", "__realExamPackageDeletedIds"].includes(key))
           && !coinOperation && !pendingVocab) return true;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
@@ -7420,6 +7488,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           delete initialData.__deletedScheduleIds;
           delete initialData.__deletedTransactionIds;
           delete initialData.__examFolderTombstones;
+          delete initialData.__realExamPackageDeletedIds;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
             initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
             initialData.quizTombstones = quizDeleteIds.slice(-1000);
@@ -7475,10 +7544,18 @@ const applyWorkspaceSnapshot = (snap: any) => {
           ...examFolderTombstones,
         ].map(normalizeFolderPath))).slice(-500);
 
+        const localDeletedPkgIds = readLocalDeletedPackageIds();
+        const mergedRealExamPackageTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.realExamPackageTombstones) ? serverData.realExamPackageTombstones : []),
+          ...realExamPackageDeletedIds,
+          ...localDeletedPkgIds,
+        ].map(String))).slice(-1000);
+
         if (mergedHistoryTombstones.length) finalUpdate.deletedHistoryIds = mergedHistoryTombstones;
         if (mergedScheduleTombstones.length) finalUpdate.deletedScheduleIds = mergedScheduleTombstones;
         if (mergedTransactionTombstones.length) finalUpdate.deletedTransactionIds = mergedTransactionTombstones;
         if (mergedFolderTombstones.length) finalUpdate.examFolderTombstones = mergedFolderTombstones;
+        if (mergedRealExamPackageTombstones.length) finalUpdate.realExamPackageTombstones = mergedRealExamPackageTombstones;
 
         const mergeEntityArray = (serverArr: any[], localArr: any[], tombstoneSet: Set<string>) => {
           const map = new Map<string, any>();
@@ -7517,6 +7594,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           if (key === "__deletedScheduleIds") return;
           if (key === "__deletedTransactionIds") return;
           if (key === "__examFolderTombstones") return;
+          if (key === "__realExamPackageDeletedIds") return;
           const localVal = newData[key];
           const serverVal = key === "students" ? serverStudents : serverData[key];
 
@@ -7575,7 +7653,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
             } else if (key === "topicAssignments") {
               finalUpdate.topicAssignments = mergeEntityArray(serverArr, localVal, new Set());
             } else if (key === "realExamPackages") {
-              finalUpdate.realExamPackages = mergeEntityArray(serverArr, localVal, new Set());
+              finalUpdate.realExamPackages = mergeEntityArray(serverArr, localVal, new Set(mergedRealExamPackageTombstones));
             } else if (key === "sharedLinks") {
               finalUpdate.sharedLinks = mergeEntityArray(serverArr, localVal, new Set());
             } else if (key === "students") {
@@ -8396,8 +8474,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (data.success && data.transcript) {
         const transcript = data.transcript;
         setEditingQuiz((prev: any) => prev ? { ...prev, transcript } : prev);
-        const nx = quizzes.map(q => q.id === quiz.id ? { ...q, transcript } : q);
-        setQuizzes(nx); syncData({ quizzes: nx });
+        const updatedQuiz = { ...quiz, transcript, updatedAt: getTrueTime() };
+        const nx = quizzes.map(q => q.id === quiz.id ? updatedQuiz : q);
+        setQuizzes(nx); syncData({ __quizUpserts: [updatedQuiz] });
         alert(`Đã nghe & tạo transcript (${transcript.length} ký tự) và lưu vào đề. Nút "Vì sao" giờ trích dẫn được lời thoại.`);
       } else {
         alert("" + (data.error || "Lỗi tạo transcript"));
@@ -9537,7 +9616,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       audience: "ALL",
       targetStudentIds: [],
       maxAttempts: Math.max(1, Number(imported.maxAttempts) || 1),
-      isLocked: false,
       folder: item.targetFolder || "Root",
       updatedAt: getTrueTime(),
     };
@@ -10472,20 +10550,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               ? `quiz_${crypto.randomUUID()}`
               : `quiz_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           title: q.title + " (Copy)",
-          active: false,
-          isLocked: true
+          active: false
       })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
-      void syncData({ quizzes: [newQuiz] }).then(saved => {
+      void syncData({ __quizUpserts: [newQuiz] }).then(saved => {
           alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
   };
 
-  const handleBulkLock = (locked: boolean) => {
-      if(!confirm(tx(`Xác nhận Khóa / Mở khóa ${selectedQuizzes.length} đề thi?`, `Confirm Lock / Unlock ${selectedQuizzes.length} exams?`))) return;
-      const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
-      setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
-  }
+
 
   const persistBulkQuizUpdates = async (updates: Quiz[], action: string) => {
       if (!updates.length) return;
@@ -10686,9 +10759,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   const deleteRealExamPackage = async (pkgId: string) => {
     if (!confirm(tx("Xóa gói bài thi thật này?", "Delete this real exam package?"))) return;
-    const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
+    addLocalDeletedPackageIds([pkgId]);
+    const nx = (realExamPackages || []).filter(pkg => pkg.id !== pkgId);
     setRealExamPackages(nx);
-    await syncData({ realExamPackages: nx });
+    await syncData({ realExamPackages: nx, __realExamPackageDeletedIds: [pkgId] });
   };
   const updateRealExamPackage = async (pkg: RealExamPackage, patch: Partial<RealExamPackage>) => {
     const nx = realExamPackages.map(item => item.id === pkg.id ? { ...item, ...patch, updatedAt: Date.now() } : item);
@@ -11026,7 +11100,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       scheduledStart: undefined,
       scheduledEnd: undefined,
       passcode: undefined,
-      isLocked: false,
       practiceMode: false,
       audioMode: String(source.type || "").toLowerCase().includes("listen") ? "strict" : source.audioMode,
       realExamContext: {
@@ -11260,7 +11333,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           isSEBRequired: node.mode === "practice" ? false : sourceQuiz.isSEBRequired,
           scheduledStart: undefined,
           scheduledEnd: undefined,
-          isLocked: false,
           passcode: undefined,
           questContext: { topicAssignmentId: assignment.id, nodeId: node.id },
       };
@@ -11888,7 +11960,26 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!navigator.onLine) return;
     const run = async () => {
       const pending = readPendingWorkspaceMutations();
-      for (const entry of pending) {
+      if (!pending.length) return;
+
+      // Circuit breaker: discard poison pills exceeding 5 retries or legacy oversized quizzes arrays
+      const validPending = pending.filter(entry => {
+        if ((entry.retryCount || 0) >= 5) {
+          console.warn("Discarding poison pill workspace mutation exceeding retry limit:", entry.id);
+          return false;
+        }
+        if (entry.payload && Array.isArray(entry.payload.quizzes) && entry.payload.quizzes.length > 50) {
+          console.warn("Discarding oversized legacy quizzes payload in workspace queue:", entry.id);
+          return false;
+        }
+        return true;
+      });
+
+      if (validPending.length !== pending.length) {
+        writePendingWorkspaceMutations(validPending);
+      }
+
+      for (const entry of validPending) {
         if (inFlightMutationIdsRef.current.has(entry.id)) continue;
         inFlightMutationIdsRef.current.add(entry.id);
         try {
@@ -11898,13 +11989,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           } else {
             const current = readPendingWorkspaceMutations();
             const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
-            writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+            writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 5));
           }
         } catch (err) {
           console.warn("Pending workspace mutation failed:", err);
           const current = readPendingWorkspaceMutations();
           const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
-          writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+          writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 5));
         } finally {
           inFlightMutationIdsRef.current.delete(entry.id);
         }
@@ -17978,13 +18069,13 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                       </div>
                                   )}
                                   {/* STRICT: chỉ báo tĩnh "Audio is Playing" (không có thanh tua) */}
-                                  {isListening && (activeExam as any).audioMode !== 'practice' && audioStatus === "PLAYING" && (
+                                  {isListening && !isPracticeQuiz(activeExam) && (activeExam as any).audioMode !== 'practice' && audioStatus === "PLAYING" && (
                                       <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Audio is Playing
                                       </div>
                                   )}
                                   {/* PRACTICE: chỉ báo nhẹ trên header — player đầy đủ nằm ở thanh dưới (trên nav bar) */}
-                                  {isListening && (activeExam as any).audioMode === 'practice' && audioStatus === "PLAYING" && (
+                                  {isListening && (isPracticeQuiz(activeExam) || (activeExam as any).audioMode === 'practice') && audioStatus === "PLAYING" && (
                                       <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg> Audio is Playing
                                       </div>
@@ -18355,7 +18446,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           {!isWriting && <div className="exam-two-column" style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative', cursor: isDraggingSplitter ? 'ew-resize' : 'default' }} onMouseMove={(e: any) => { if (isDraggingSplitter) { const nr = (e.clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onMouseUp={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onMouseLeave={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchMove={(e: any) => { if (isDraggingSplitter && e.touches && e.touches[0]) { e.preventDefault(); const nr = (e.touches[0].clientX / window.innerWidth) * 100; if (nr > 20 && nr < 80) setSplitRatio(nr); } }} onTouchEnd={() => setIsDraggingSplitter && setIsDraggingSplitter(false)} onTouchCancel={() => setIsDraggingSplitter && setIsDraggingSplitter(false)}>
               
               {/* 1. MÀN HÌNH CHỜ AUDIO (CHO LISTENING) */}
-              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
+              {(String(activeExam.type).toLowerCase().includes("listen") || (activeExam.type === "Integrated" && currentSectionIndex === 0)) && !isPracticeQuiz(activeExam) && (activeExam as any).audioMode !== 'practice' && (audioStatus === "IDLE" || audioStatus === "LOADING" || audioStatus === "PAUSED") && (
                   <div style={{ position: 'fixed', inset: 0, background: '#4c4c4c', zIndex: 2147480000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {/* Màn chờ audio — sao chép Inspera: overlay mờ, icon tai nghe TRẮNG (SVG, không emoji), 2 dòng text, nút ⏵ Play trắng */}
                       <div style={{ color: '#fff', textAlign: 'center', maxWidth: 760, width: '92%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -18363,7 +18454,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               <path fill="#fff" d="M80.5 24.5A52 52 0 0 0 28.5 76.5C28.7 79.5 29.3 82.5 30.5 84.5C30.9 87.2 31.3 89.1 32.2 91.1C33.2 93.4 34.2 94.5 36 96C39.2 98.5 43.4 100.2 47.4 101.7C49.4 102.5 50.5 103.7 51 105C53.5 106.8 57 108.5 61 108.7V112.5H68.5V72.5H61V80C58 79.4 55.3 79.2 53 79.8C49.8 80.5 47.8 82.2 47 84.2C45 84.6 43.2 84.9 42 85.2C41 82 40.4 79 40.5 76.5A40 40 0 0 1 120.5 76.5C120.6 79 120 82 119 85.2C117.8 84.9 116 84.6 114 84.2C113.2 82.2 111.2 80.5 108 79.8C105.7 79.2 103 79.4 100 80V72.5H92.5V112.5H100V108.7C104 108.5 107.5 106.8 110 105C110.5 103.7 111.6 102.5 113.6 101.7C117.6 100.2 121.8 98.5 125 96C126.8 94.5 127.8 93.4 128.8 91.1C129.7 89.1 130.1 87.2 130.5 84.5C131.7 82.5 132.3 79.5 132.5 76.5A52 52 0 0 0 80.5 24.5Z" />
                           </svg>
                           <div style={{ fontSize: 15, lineHeight: 1.5, marginBottom: 14 }}>
-                              {(activeExam as any).audioMode === 'practice'
+                              {(isPracticeQuiz(activeExam) || (activeExam as any).audioMode === 'practice')
                                   ? 'You will be listening to an audio clip during this test. Practice mode: you may pause, rewind and replay the audio while answering the questions.'
                                   : 'You will be listening to an audio clip during this test. You will not be permitted to pause or rewind the audio while answering the questions.'}
                           </div>
@@ -19614,19 +19705,21 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       </div>
                   </div>}
                  {/* THANH AUDIO (chỉ practice) — nằm ngay TRÊN nav bar: play/pause · thời gian · thanh tua · tốc độ */}
-                 {isListening && (activeExam as any).audioMode === 'practice' && ["IDLE", "LOADING", "PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
-                     const safeCur = Math.min(audioCur, audioDur || 0);
-                     const pct = audioDur ? (safeCur / audioDur) * 100 : 0;
+                 {isListening && (isPracticeQuiz(activeExam) || (activeExam as any).audioMode === 'practice') && ["IDLE", "LOADING", "PLAYING", "PAUSED", "ENDED"].includes(audioStatus) && (() => {
+                     const liveDur = audioDur > 0 ? audioDur : (audioRef?.current?.duration && !isNaN(audioRef.current.duration) ? audioRef.current.duration : 0);
+                     const effectiveMax = liveDur > 0 ? liveDur : Math.max(audioCur, 100);
+                     const safeCur = liveDur > 0 ? Math.min(Math.max(0, audioCur), liveDur) : Math.max(0, audioCur);
+                     const pct = effectiveMax > 0 ? (safeCur / effectiveMax) * 100 : 0;
                      return (
                          <div className="idp-audio-bar">
                              <button className="idp-audio-play" title="Play / Pause" onClick={() => { const a = audioRef.current; if (!a) return; if (a.paused) void requestExamAudioPlayback(); else pauseExamAudioPlayback(); }}>
                                  {audioStatus === 'PLAYING' ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>}
                              </button>
                              <span className="idp-audio-time">{fmtTime(Math.floor(safeCur))}</span>
-                             <input type="range" className="idp-audio-range" min={0} max={audioDur || 0} step={0.1} value={safeCur}
-                                 onChange={(e: any) => { const a = audioRef.current; if (a) { a.currentTime = Number(e.target.value); setAudioCur(Number(e.target.value)); } }}
+                             <input type="range" className="idp-audio-range" min={0} max={effectiveMax} step={0.1} value={safeCur}
+                                 onChange={(e: any) => { const a = audioRef.current; const val = Number(e.target.value); if (a) { a.currentTime = val; setAudioCur(val); } }}
                                  style={{ background: `linear-gradient(to right, var(--etext) 0%, var(--etext) ${pct}%, var(--eborder) ${pct}%, var(--eborder) 100%)` }} />
-                             <span className="idp-audio-time">{fmtTime(Math.floor(audioDur))}</span>
+                             <span className="idp-audio-time">{fmtTime(Math.floor(liveDur))}</span>
                              <div style={{ display: 'flex', gap: 5, flex: 'none', marginLeft: 4 }}>
                                  {[1, 1.25, 1.5, 2].map(r => (
                                      <button key={r} className={`idp-rate-btn ${audioRate === r ? 'on' : ''}`} title={`Speed ${r}x`} onClick={() => { setAudioRate(r); const a = audioRef.current; if (a) a.playbackRate = r; }}>{r}×</button>
@@ -22528,8 +22621,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 let isAvailable = false;
                 let badgeText = "";
                 
-                if (q.isLocked) { statusText = t('status_locked'); badgeText = t('status_locked'); }
-                else if (now < startTime) { 
+                if (now < startTime) { 
                     statusText = `${t('opens_at')}: ${new Date(startTime).toLocaleString('vi-VN')}`; 
                     badgeText = t('not_available'); 
                 } 
@@ -23727,7 +23819,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                     const nx = [...quizzesRef.current];
                     if (idx > -1) nx[idx] = persisted;
                     else nx.unshift(persisted);
-                    setEditingQuiz(persisted);
+                    editingQuizRef.current = { ...currentLatestQuiz, revision: persisted.revision, updatedAt: persisted.updatedAt };
+                    setEditingQuiz((prev: any) => prev ? { ...prev, revision: persisted.revision, updatedAt: persisted.updatedAt } : persisted);
                     setQuizCatalogState(nx);
                     setExamBuilderSaveState("saved");
                     const { _activePassageTab, ...comparable } = persisted as any;
@@ -23866,9 +23959,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             if (keyEditorSaving) return;
                             setKeyEditorSaving(true);
                             try {
-                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
+                              const updatedKeyQuiz = { ...keyEditingQuiz!, updatedAt: getTrueTime() };
+                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? updatedKeyQuiz : x);
                               setQuizzes(nx);
-                              const saved = typeof syncData === 'function' ? await syncData({ quizzes: nx }) : true;
+                              let saved = true;
+                              if (typeof persistBulkQuizUpdates === 'function') {
+                                await persistBulkQuizUpdates([updatedKeyQuiz], "Save Answer Key");
+                              } else if (typeof syncData === 'function') {
+                                saved = await syncData({ __quizUpserts: [updatedKeyQuiz] });
+                              }
                               keyEditingQuizBaselineRef.current = null;
                               setKeyEditorDirty(false);
                               setKeyEditingQuiz(null);
@@ -23878,8 +23977,9 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                             }
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: keyEditorSaving ? 'wait' : 'pointer', opacity: keyEditorSaving ? 0.7 : 1, fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name={keyEditorSaving ? "refresh" : "save"} size={15} />{keyEditorSaving ? tx("Đang lưu Key...", "Saving Key...") : t('eb_save_key')}</button>
                         {false && <button onClick={() => {
-                            const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
-                            setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
+                            const updatedKeyQuiz = { ...keyEditingQuiz!, updatedAt: getTrueTime() };
+                            const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? updatedKeyQuiz : x);
+                            setQuizzes(nx); if (typeof syncData === 'function') syncData({ __quizUpserts: [updatedKeyQuiz] }); setKeyEditingQuiz(null);
                             alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>}
                       </div>
@@ -25323,12 +25423,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                             <button className="ebx-soft" onClick={() => setFolderModal({ mode: "MOVE_QUIZZES", inputValue: "", selectedDest: builderFolder })} style={{background: 'transparent', color: EB.accent, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
                                                 <Ico name="folder" size={13} /> {t('eb_move_folder') || 'Move to…'}
                                             </button>
-                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
-                                                <Ico name="lock" size={13} /> Lock
-                                            </button>
-                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
-                                                <Ico name="unlock" size={13} /> Unlock
-                                            </button>
+
                                             <button className="ebx-soft" onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>
                                                 Real package
                                             </button>
@@ -25385,7 +25480,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <span style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 15, color: EB.ink, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                                                                 {q.title}
                                                             </span>
-                                                            {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 12, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={12} color={EB.sub} /></span>}
+
                                                             <span style={{display: 'inline-flex', verticalAlign: 'middle', padding: '1px 6px', borderRadius: 999, border: `1px solid ${getDeliveryMode(q) === 'practice' ? C.succ : EB.line}`, color: getDeliveryMode(q) === 'practice' ? C.succ : EB.sub, fontFamily: EB.fMono, fontSize: 9.5, letterSpacing: '.04em'}}>
                                                                 {getDeliveryMode(q).toUpperCase()}
                                                             </span>
@@ -25399,12 +25494,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                             <span><span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')}</span>
                                                             <span style={{opacity: .4}}>·</span>
                                                             <span><span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')}</span>
-                                                            {q.isLocked ? (
-                                                                <>
-                                                                    <span style={{opacity: .4}}>·</span>
-                                                                    <span style={{color: C.err, fontSize: 11}}>{t('eb_st_locked')}</span>
-                                                                </>
-                                                            ) : null}
+
                                                             {builderSearch && q.folder && (
                                                                 <>
                                                                     <span style={{opacity: .4}}>·</span>

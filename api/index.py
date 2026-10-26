@@ -3942,9 +3942,30 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
     except _urlerr.HTTPError as e:
         detail = ""
         try:
-            detail = e.read().decode("utf-8")[:200]
+            detail = e.read().decode("utf-8")[:400]
         except Exception:
             pass
+        if e.code == 400 and "thinkingConfig" in detail and "thinkingConfig" in gen:
+            body_no_tc = dict(body)
+            gen_no_tc = dict(gen)
+            gen_no_tc.pop("thinkingConfig", None)
+            body_no_tc["generationConfig"] = gen_no_tc
+            try:
+                req_retry = _urlreq.Request(url, data=_json.dumps(body_no_tc).encode("utf-8"), method="POST",
+                                           headers={"Content-Type": "application/json"})
+                with _urlreq.urlopen(req_retry, timeout=timeout_s) as resp_retry:
+                    data_retry = _json.loads(resp_retry.read().decode("utf-8"))
+                cands_retry = data_retry.get("candidates") or []
+                text_retry = ""
+                if cands_retry:
+                    if cands_retry[0].get("finishReason") == "MAX_TOKENS":
+                        return "", "PROVIDER_TRUNCATED_OUTPUT"
+                    parts_retry = ((cands_retry[0].get("content") or {}).get("parts") or [])
+                    text_retry = "".join(p.get("text", "") for p in parts_retry if not p.get("thought")).strip()
+                text_retry = re.sub(r"<think>.*?</think>", "", text_retry, flags=re.S).strip()
+                return (text_retry, "") if text_retry else ("", f"gemini {model}: rỗng")
+            except Exception:
+                pass
         if e.code == 429:
             return "", "RATE_LIMIT"
         if e.code in (401, 403):
@@ -4017,18 +4038,13 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
     if json_mode:
         gen["responseMimeType"] = "application/json"
 
-    if "2.5" in model:
-        if "2.5-pro" in model:
-            if thinking_budget > 0:
-                tb = max(1024, thinking_budget)
-                gen["thinkingConfig"] = {"thinkingBudget": tb}
-                effective_max_tokens = max_tokens + tb
-        else:
-            if thinking_budget > 0:
-                gen["thinkingConfig"] = {"thinkingBudget": thinking_budget}
-                effective_max_tokens = max_tokens + thinking_budget
-            else:
-                gen["thinkingConfig"] = {"thinkingBudget": 0}
+    model_lower = str(model or "").lower()
+    if thinking_budget > 0:
+        tb = max(1024, thinking_budget) if "pro" in model_lower else thinking_budget
+        gen["thinkingConfig"] = {"thinkingBudget": tb}
+        effective_max_tokens = max_tokens + tb
+    elif any(tag in model_lower for tag in ("2.5", "3.", "flash")):
+        gen["thinkingConfig"] = {"thinkingBudget": 0}
 
     gen["maxOutputTokens"] = effective_max_tokens
     user_parts = [{"text": user_prompt}]
@@ -4117,18 +4133,13 @@ def _vertex_gemini_generate(
         gen_config["responseMimeType"] = response_mime_type
 
     effective_max_tokens = max_output_tokens
-    if "2.5" in model:
-        if "2.5-pro" in model:
-            if thinking_budget > 0:
-                tb = max(1024, thinking_budget)
-                gen_config["thinkingConfig"] = {"thinkingBudget": tb}
-                effective_max_tokens = max_output_tokens + tb
-        else:
-            if thinking_budget > 0:
-                gen_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
-                effective_max_tokens = max_output_tokens + thinking_budget
-            else:
-                gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+    model_lower = str(model or "").lower()
+    if thinking_budget > 0:
+        tb = max(1024, thinking_budget) if "pro" in model_lower else thinking_budget
+        gen_config["thinkingConfig"] = {"thinkingBudget": tb}
+        effective_max_tokens = max_output_tokens + tb
+    elif any(tag in model_lower for tag in ("2.5", "3.", "flash")):
+        gen_config["thinkingConfig"] = {"thinkingBudget": 0}
 
     gen_config["maxOutputTokens"] = effective_max_tokens
 
@@ -5181,8 +5192,8 @@ async def ai_explain(
     options = payload.get("options", "")
     correct = payload.get("correct", "")
     student_ans = payload.get("studentAnswer", "")
-    context = (payload.get("context", "") or "")[:24000]
-    reading_passage = (payload.get("readingPassage", "") or "")[:24000]
+    context = (payload.get("context", "") or "")[:12000]
+    reading_passage = (payload.get("readingPassage", "") or "")[:12000]
     has_ctx = bool(context.strip())
     answer_sequence = payload.get("answerSequence")
     timestamp_hints = str(payload.get("timestampHints", "") or "")[:8000]
@@ -5334,6 +5345,7 @@ async def ai_explain(
             "2. NO QUOTE DUPLICATION: Do not repeat the exact quote verbatim inside detailedExplanation; detailedExplanation must only explain the logical meaning.\n"
             "3. ACCURACY: evidence.quote MUST be a continuous verbatim excerpt from the source text/transcript.\n"
             "4. LANGUAGE: 100% English for all explanations and labels.\n"
+            "5. FOCUSED SCOPE FOR MULTIPLE CHOICE / MATCHING: Only explain (1) why the correct answer is right and (2) why the student's selected answer is wrong. Do NOT analyze unselected options.\n"
             + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
         source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
@@ -5369,6 +5381,7 @@ async def ai_explain(
             "2. KHÔNG LẶP LẠI DẪN CHỨNG: Không chép lại toàn bộ câu trích dẫn trong detailedExplanation; detailedExplanation chỉ giải thích bản chất nghĩa và mối liên kết logic.\n"
             "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC phải là trích đoạn liên tục, đúng từng từ trong bài đọc/transcript.\n"
             "4. NGÔN NGỮ: 100% tiếng Việt cho phần diễn giải và tên bẫy. Các từ trích dẫn trong đề thi tiếng Anh giữ nguyên tiếng Anh.\n"
+            "5. PHẠM VI TRỌNG TÂM CHO TRẮC NGHIỆM / NỐI: Chỉ giải thích (1) vì sao đáp án đúng là chính xác và (2) vì sao phương án học viên chọn bị sai. TUYỆT ĐỐI KHÔNG phân tích lan man các lựa chọn mà học viên không chọn.\n"
             + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
         source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
@@ -5387,11 +5400,11 @@ async def ai_explain(
         _pedagogical_ai_call,
         sys_prompt,
         user_prompt,
-        max_tokens=1000,
+        max_tokens=500,
         temperature=0.15,
         json_mode=True,
         model=vertex_explain_model,
-        timeout_s=35.0,
+        timeout_s=25.0,
     )
     if not raw_response and err:
         return {"success": False, "error": _friendly_err(err, lang)}
@@ -5444,15 +5457,50 @@ async def ai_explain(
     if is_listening_item and audio_evidence and not ev_loc:
         ev_loc = f"Lời thoại [{audio_evidence['timestamp']}]" if lang == "vi" else f"Audio [{audio_evidence['timestamp']}]"
 
-    # Reading passage evidence verification
+    # Reading passage evidence verification (deterministic verbatim fuzzy window + fast ranker in <1ms)
     if is_reading_evidence:
-        def _norm_ev(val: str) -> str:
-            return re.sub(r"\s+", " ", str(val or "").replace("’", "'").replace("“", '"').replace("”", '"')).strip().lower()
+        def _clean_str(val: str) -> str:
+            return re.sub(r"[\s\u200b]+", " ", str(val or "").replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')).strip()
 
-        passage_norm = _norm_ev(evidence_passage)
+        def _norm_ev(val: str) -> str:
+            return _clean_str(val).lower()
+
+        passage_clean = _clean_str(evidence_passage)
+        passage_norm = passage_clean.lower()
         ev_norm = _norm_ev(ev_quote)
 
-        if not (ev_norm and 4 <= len(ev_norm) <= 350 and ev_norm in passage_norm):
+        matched_verbatim = ""
+        # 1. Exact or normalized continuous match
+        if ev_norm and 10 <= len(ev_norm) <= 350 and ev_norm in passage_norm:
+            p_idx = passage_norm.find(ev_norm)
+            if p_idx >= 0:
+                matched_verbatim = passage_clean[p_idx:p_idx + len(ev_norm)]
+
+        # 2. Contiguous 6+ word window fuzzy substring match
+        if not matched_verbatim and ev_norm:
+            words = ev_norm.split()
+            for window_size in range(min(len(words), 12), 5, -1):
+                found = False
+                for start_idx in range(len(words) - window_size + 1):
+                    sub = " ".join(words[start_idx:start_idx + window_size])
+                    if len(sub) >= 25 and sub in passage_norm:
+                        p_idx = passage_norm.find(sub)
+                        s_start = passage_clean.rfind(".", 0, p_idx)
+                        s_start = 0 if s_start == -1 else s_start + 1
+                        s_end = passage_clean.find(".", p_idx + len(sub))
+                        s_end = len(passage_clean) if s_end == -1 else s_end + 1
+                        cand = passage_clean[s_start:s_end].strip()
+                        if 15 <= len(cand) <= 350:
+                            matched_verbatim = cand
+                            found = True
+                            break
+                if found:
+                    break
+
+        if matched_verbatim:
+            ev_quote = matched_verbatim
+        else:
+            # 3. Deterministic Python sentence ranker (_score_evidence in <1ms)
             def _ev_words(val: str) -> set:
                 return {
                     w for w in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(val or "").lower())

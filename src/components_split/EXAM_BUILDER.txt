@@ -119,7 +119,8 @@
                     const nx = [...quizzesRef.current];
                     if (idx > -1) nx[idx] = persisted;
                     else nx.unshift(persisted);
-                    setEditingQuiz(persisted);
+                    editingQuizRef.current = { ...currentLatestQuiz, revision: persisted.revision, updatedAt: persisted.updatedAt };
+                    setEditingQuiz((prev: any) => prev ? { ...prev, revision: persisted.revision, updatedAt: persisted.updatedAt } : persisted);
                     setQuizCatalogState(nx);
                     setExamBuilderSaveState("saved");
                     const { _activePassageTab, ...comparable } = persisted as any;
@@ -258,9 +259,15 @@
                             if (keyEditorSaving) return;
                             setKeyEditorSaving(true);
                             try {
-                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
+                              const updatedKeyQuiz = { ...keyEditingQuiz!, updatedAt: getTrueTime() };
+                              const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? updatedKeyQuiz : x);
                               setQuizzes(nx);
-                              const saved = typeof syncData === 'function' ? await syncData({ quizzes: nx }) : true;
+                              let saved = true;
+                              if (typeof persistBulkQuizUpdates === 'function') {
+                                await persistBulkQuizUpdates([updatedKeyQuiz], "Save Answer Key");
+                              } else if (typeof syncData === 'function') {
+                                saved = await syncData({ __quizUpserts: [updatedKeyQuiz] });
+                              }
                               keyEditingQuizBaselineRef.current = null;
                               setKeyEditorDirty(false);
                               setKeyEditingQuiz(null);
@@ -270,8 +277,9 @@
                             }
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: keyEditorSaving ? 'wait' : 'pointer', opacity: keyEditorSaving ? 0.7 : 1, fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name={keyEditorSaving ? "refresh" : "save"} size={15} />{keyEditorSaving ? tx("Đang lưu Key...", "Saving Key...") : t('eb_save_key')}</button>
                         {false && <button onClick={() => {
-                            const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? keyEditingQuiz! : x);
-                            setQuizzes(nx); if (typeof syncData === 'function') syncData({ quizzes: nx }); setKeyEditingQuiz(null);
+                            const updatedKeyQuiz = { ...keyEditingQuiz!, updatedAt: getTrueTime() };
+                            const nx = quizzes.map((x: any) => x.id === keyEditingQuiz!.id ? updatedKeyQuiz : x);
+                            setQuizzes(nx); if (typeof syncData === 'function') syncData({ __quizUpserts: [updatedKeyQuiz] }); setKeyEditingQuiz(null);
                             alert(tx("Đã đồng bộ Key!", "Key synced successfully!"));
                         }} style={{background: C.succ, color: '#fff', padding: '13px 24px', width: '100%', fontWeight: 700, border: 'none', borderRadius: EB.radiusSm, cursor: 'pointer', fontSize: 15, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8}}><Ico name="save" size={15} />{t('eb_save_key')}</button>}
                       </div>
@@ -1715,12 +1723,7 @@
                                             <button className="ebx-soft" onClick={() => setFolderModal({ mode: "MOVE_QUIZZES", inputValue: "", selectedDest: builderFolder })} style={{background: 'transparent', color: EB.accent, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
                                                 <Ico name="folder" size={13} /> {t('eb_move_folder') || 'Move to…'}
                                             </button>
-                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(true)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
-                                                <Ico name="lock" size={13} /> Lock
-                                            </button>
-                                            <button className="ebx-soft" onClick={() => typeof handleBulkLock === 'function' && handleBulkLock(false)} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5}}>
-                                                <Ico name="unlock" size={13} /> Unlock
-                                            </button>
+
                                             <button className="ebx-soft" onClick={() => typeof createRealExamPackageFromSelection === 'function' && createRealExamPackageFromSelection()} style={{background: 'transparent', color: EB.ink, padding: '5px 9px', fontSize: 12, border: `1px solid ${EB.line}`, borderRadius: 6, fontWeight: 600, cursor: 'pointer'}}>
                                                 Real package
                                             </button>
@@ -1777,7 +1780,7 @@
                                                             <span style={{fontFamily: EB.fDisplay, fontWeight: 600, fontSize: 15, color: EB.ink, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                                                                 {q.title}
                                                             </span>
-                                                            {q.isLocked && <span title={t('eb_locked_title')} style={{fontSize: 12, display: 'inline-flex', verticalAlign: 'middle'}}><Ico name="lock" size={12} color={EB.sub} /></span>}
+
                                                             <span style={{display: 'inline-flex', verticalAlign: 'middle', padding: '1px 6px', borderRadius: 999, border: `1px solid ${getDeliveryMode(q) === 'practice' ? C.succ : EB.line}`, color: getDeliveryMode(q) === 'practice' ? C.succ : EB.sub, fontFamily: EB.fMono, fontSize: 9.5, letterSpacing: '.04em'}}>
                                                                 {getDeliveryMode(q).toUpperCase()}
                                                             </span>
@@ -1791,12 +1794,7 @@
                                                             <span><span style={{fontFamily: EB.fMono}}>{q.timeLimit}</span> {t('eb_minutes')}</span>
                                                             <span style={{opacity: .4}}>·</span>
                                                             <span><span style={{fontFamily: EB.fMono}}>{(q.questions || []).length}</span> {t('eb_questions_short')}</span>
-                                                            {q.isLocked ? (
-                                                                <>
-                                                                    <span style={{opacity: .4}}>·</span>
-                                                                    <span style={{color: C.err, fontSize: 11}}>{t('eb_st_locked')}</span>
-                                                                </>
-                                                            ) : null}
+
                                                             {builderSearch && q.folder && (
                                                                 <>
                                                                     <span style={{opacity: .4}}>·</span>

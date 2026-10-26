@@ -1744,7 +1744,7 @@ interface RealExamSession { packageId: string; packageAttemptId: string; testTak
 interface RealExamInstructionGate { packageId: string; quizId: string; skill: "Listening" | "Reading" | "Writing"; videoUrl: string; ready: boolean; nonce: number; currentTime?: number; duration?: number; }
 interface QuizQuestion { id: string; questionNumber?: number; type: QuestionType; subType?: string; categoryId?: string; instruction?: string; groupContext?: string; leftTitle?: string; rightTitle?: string; text: string; options?: string[]; correctAnswer: string | number | number[]; passageIndex?: number; mapImageUrl?: string; mapSlots?: Record<string, MapDragSlot>; diagramImageUrl?: string; diagramImageMode?: "BOXES" | "OVERLAY" | "TEXT_BOXES"; diagramImageAspectRatio?: string; diagramMaxWidth?: string | number; diagramImageBounds?: { x?: number; y?: number; width?: number; height?: number }; diagramBoxes?: Record<string, DiagramLabelBox>; diagramTextBoxes?: DiagramTextBox[]; manualExplanation?: ManualExplanation; aiExplanation?: string; }
 interface QuizSection { passage: string; questions: QuizQuestion[]; }
-interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; isLocked?: boolean; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
+interface Quiz { _activePassageTab?: number; _showSettings?: boolean; updatedAt?: number; revision?: number; id: string; title: string; type: "Reading" | "Listening" | "Writing" | "Integrated" | string; timeLimit: number; maxAttempts: number; questions: QuizQuestion[]; sections?: QuizSection[]; writingTasks?: WritingTaskDefinition[]; active: boolean; passage?: string; transcript?: string; images?: string[]; audioUrl?: string; audioMode?: 'strict' | 'practice'; practiceMode?: boolean; deliveryMode?: DeliveryMode; examPolicy?: StoredExamPolicy; pipelineValidation?: { state?: string; status?: string; jobId?: string; roundTripState?: string }; audience?: "ALL" | "SPECIFIC"; targetStudentIds?: string[]; scheduledStart?: string; scheduledEnd?: string; passcode?: string; internalNote?: string; tag?: string; isSEBRequired?: boolean; folder?: string; questContext?: QuestLaunchContext; realExamContext?: RealExamContext; allowWritingSandbox?: boolean; }
 interface ExamDocxBatchItem { id: string; file: File; targetFolder: string; status: "parsing" | "ready" | "error"; quiz?: Quiz; catalogQuiz?: Quiz; error?: string; }
 interface AiGenerationBatchState {
   batch_id: string;
@@ -3746,8 +3746,15 @@ const VocabBlitz = ({ cards, C, onReview, onAward, awardsLeft = 0 }: any) => {
 // ==========================================
 // COMPONENT: RICH TEXT EDITOR (GOOGLE DOCS VERSION)
 // ==========================================
-const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onChange: (v: string) => void, placeholder?: string }) => {
+const RichTextEditor = React.memo(({ value, onChange, placeholder }: { value: string, onChange: (v: string) => void, placeholder?: string }) => {
     const editorRef = useRef<HTMLDivElement>(null);
+    const debounceTimerRef = useRef<any>(null);
+
+    useEffect(() => {
+        return () => {
+            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        };
+    }, []);
 
     useEffect(() => {
         // MAGIC FIX: Chỉ đồng bộ dữ liệu từ cha xuống con nếu ô Editor đang KHÔNG ĐƯỢC FOCUS
@@ -3756,10 +3763,27 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
         }
     }, [value]);
 
-    const triggerChange = () => {
+    const flushChange = () => {
+        if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+            debounceTimerRef.current = null;
+        }
         if (editorRef.current && editorRef.current.innerHTML !== value) {
             onChange(editorRef.current.innerHTML);
         }
+    };
+
+    const handleInput = () => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => {
+            if (editorRef.current && editorRef.current.innerHTML !== value) {
+                onChange(editorRef.current.innerHTML);
+            }
+        }, 250);
+    };
+
+    const triggerChange = () => {
+        flushChange();
     };
 
     const exec = (cmd: string, val: string | undefined = undefined) => {
@@ -3886,10 +3910,10 @@ const RichTextEditor = ({ value, onChange, placeholder }: { value: string, onCha
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7V4h16v3"/><path d="M5 20h6"/><path d="M13 4L8 20"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="21" y1="15" x2="15" y2="21"/></svg>
                 </button>
             </div>
-            <div ref={editorRef} contentEditable suppressContentEditableWarning onBlur={triggerChange} onInput={triggerChange} style={{ minHeight: 180, padding: 16, outline: 'none', whiteSpace: 'pre-wrap', color: '#000', background: '#fff', lineHeight: 1.6 }} data-placeholder={placeholder || "Paste or type content here..."} />
+            <div ref={editorRef} contentEditable suppressContentEditableWarning onBlur={flushChange} onInput={handleInput} style={{ minHeight: 180, padding: 16, outline: 'none', whiteSpace: 'pre-wrap', color: '#000', background: '#fff', lineHeight: 1.6 }} data-placeholder={placeholder || "Paste or type content here..."} />
         </div>
     );
-};
+});
 
 export default function IeltsSupremeOS() {
   const { t, i18n } = useTranslation();
@@ -5465,6 +5489,16 @@ export default function IeltsSupremeOS() {
   const clearPendingCoinOperation = () => {
     try { localStorage.removeItem(pendingCoinOperationKey()); } catch (e) {}
   };
+  const readLocalDeletedPackageIds = (): string[] => {
+    try { return JSON.parse(localStorage.getItem('ielts_deleted_real_exam_packages') || '[]'); } catch { return []; }
+  };
+  const addLocalDeletedPackageIds = (ids: string[]) => {
+    try {
+      const current = new Set(readLocalDeletedPackageIds());
+      ids.forEach(id => current.add(String(id)));
+      localStorage.setItem('ielts_deleted_real_exam_packages', JSON.stringify(Array.from(current).slice(-200)));
+    } catch { }
+  };
   const pendingWorkspaceMutationsKey = () => `ielts_pending_workspace_mutations_${String(currentUser?.email || "user").toLowerCase()}`;
   const readPendingWorkspaceMutations = (): { id: string; payload: any; createdAt: number; retryCount?: number }[] => {
     try {
@@ -5853,7 +5887,7 @@ export default function IeltsSupremeOS() {
   const hasListeningAudio = () => isListeningExamAudio() || isListeningReviewAudio();
 
   const isStrictExamAudio = () => {
-    return isListeningExamAudio() && (activeExam as any).audioMode !== "practice";
+    return isListeningExamAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice";
   };
 
   const clearExamAudioResumeTimer = () => {
@@ -5896,13 +5930,20 @@ export default function IeltsSupremeOS() {
     const channel: "exam" | "review" = review ? "review" : "exam";
     const now = performance.now();
     const current = Math.max(0, audio.currentTime || 0);
+    const dur = Number(audio.duration || 0);
+    if (!review && dur > 0 && Math.abs(audioDur - dur) > 0.5) {
+      setAudioDur(dur);
+    }
     if (now - audioProgressPaintRef.current[channel] < 450) {
       updateExamMediaSessionPosition(audio);
       return;
     }
     audioProgressPaintRef.current[channel] = now;
     if (review) setRvAudioCur(current);
-    else if ((activeExam as any)?.audioMode === "practice") setAudioCur(current);
+    else if (isPracticeQuiz(activeExam) || (activeExam as any)?.audioMode === "practice") {
+      setAudioCur(current);
+      if (dur > 0 && audioDur <= 0) setAudioDur(dur);
+    }
     updateExamMediaSessionPosition(audio);
   };
 
@@ -6114,6 +6155,10 @@ export default function IeltsSupremeOS() {
     examAudioShouldPlayRef.current = true;
     examAudioRecoveryAttemptsRef.current = 0;
     audioReloadAttemptsRef.current = 0;
+    const curAudioDur = Number(audioRef.current?.duration || 0);
+    if (curAudioDur > 0 && Math.abs(audioDur - curAudioDur) > 0.5) {
+      setAudioDur(curAudioDur);
+    }
     if (activeExam && shouldDelayListeningExamTimer(activeExam, isPreview) && !examStartTime) {
       const startedAt = getRealTime();
       setExamStartTime(startedAt);
@@ -6532,7 +6577,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
     setQuizResults(Array.from(recoveredQuizResults.values()));
     const incomingTopicAssignments = clean(d.topicAssignments) as TopicAssignment[];
     setTopicAssignments(incomingTopicAssignments);
-    setRealExamPackages(clean(d.realExamPackages));
+    const localDeletedPkgIds = new Set(readLocalDeletedPackageIds());
+    const remotePkgTombstones = new Set((Array.isArray(d.realExamPackageTombstones) ? d.realExamPackageTombstones : []).map(String));
+    const incomingPackages = (clean(d.realExamPackages) || []).filter((p: any) => p && p.id && !localDeletedPkgIds.has(String(p.id)) && !remotePkgTombstones.has(String(p.id)));
+    setRealExamPackages(incomingPackages);
     if (Array.isArray(d.examFolders)) {
       const folderTombstones = new Set(
         (Array.isArray(d.examFolderTombstones) ? d.examFolderTombstones : [])
@@ -7176,9 +7224,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
 
   useEffect(() => {
     if (editingQuiz) {
-        const timeout = setTimeout(() => { localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz)); }, 2000);
+        const timeout = setTimeout(() => {
+            try {
+                localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
+            } catch (err: any) {
+                try {
+                    // Quota exceeded: strip large base64 data URLs before caching draft
+                    const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
+                        if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
+                            return '';
+                        }
+                        return value;
+                    }));
+                    localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
+                } catch {
+                    // Gracefully ignore local draft caching if still over quota
+                }
+            }
+        }, 4000);
         const handleSaveShortcut = (e: KeyboardEvent) => {
-            if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); alert("Saved draft Ctrl+S!"); }
+            if (e.ctrlKey && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+            }
         };
         window.addEventListener('keydown', handleSaveShortcut);
         return () => { clearTimeout(timeout); window.removeEventListener('keydown', handleSaveShortcut); };
@@ -7275,7 +7342,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
               if (audio && examAudioShouldPlayRef.current) recoverInterruptedExamAudio(audio);
           });
           navigator.mediaSession.setActionHandler("seekbackward", (details: MediaSessionActionDetails) => {
-              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              if (!isListeningReviewAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice") return;
               const audio = audioRef.current;
               if (!audio) return;
               audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
@@ -7284,7 +7351,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
               updateExamMediaSessionPosition(audio);
           });
           navigator.mediaSession.setActionHandler("seekforward", (details: MediaSessionActionDetails) => {
-              if (!isListeningReviewAudio() && (activeExam as any)?.audioMode !== "practice") return;
+              if (!isListeningReviewAudio() && !isPracticeQuiz(activeExam) && (activeExam as any)?.audioMode !== "practice") return;
               const audio = audioRef.current;
               if (!audio) return;
               audio.currentTime = Math.min(audio.duration || Number.MAX_SAFE_INTEGER, audio.currentTime + (details.seekOffset || 10));
@@ -7376,6 +7443,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const deletedScheduleIds = Array.isArray(newData.__deletedScheduleIds) ? newData.__deletedScheduleIds.map(String) : [];
     const deletedTransactionIds = Array.isArray(newData.__deletedTransactionIds) ? newData.__deletedTransactionIds.map(String) : [];
     const examFolderTombstones = Array.isArray(newData.__examFolderTombstones) ? newData.__examFolderTombstones.map(normalizeFolderPath) : [];
+    const realExamPackageDeletedIds = Array.isArray(newData.__realExamPackageDeletedIds) ? newData.__realExamPackageDeletedIds.map(String) : [];
     const coinOperation = newData.__coinOperation?.id && newData.__coinOperation?.studentId
       ? newData.__coinOperation as CoinOperation : null;
     const pendingVocab = newData.__vocabPending && Array.isArray(newData.__vocabPending.notebook)
@@ -7406,7 +7474,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       newData = { ...newData };
       delete newData.quizzes;
       delete newData.__quizUpserts;
-      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__quizUpserts", "__vocabPending", "__coinOperation", "__deletedHistoryIds", "__deletedScheduleIds", "__deletedTransactionIds", "__examFolderTombstones"].includes(key))
+      if (!Object.keys(newData).some(key => !["__quizDeletedIds", "__quizUpserts", "__vocabPending", "__coinOperation", "__deletedHistoryIds", "__deletedScheduleIds", "__deletedTransactionIds", "__examFolderTombstones", "__realExamPackageDeletedIds"].includes(key))
           && !coinOperation && !pendingVocab) return true;
       await runTransaction(db, async (transaction) => {
         const sfDoc = await transaction.get(DB_DOC_REF);
@@ -7420,6 +7488,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           delete initialData.__deletedScheduleIds;
           delete initialData.__deletedTransactionIds;
           delete initialData.__examFolderTombstones;
+          delete initialData.__realExamPackageDeletedIds;
           if (Array.isArray(initialData.quizzes) && quizDeleteIds.length) {
             initialData.quizzes = mergeQuizCatalog([], initialData.quizzes, quizDeleteIds);
             initialData.quizTombstones = quizDeleteIds.slice(-1000);
@@ -7475,10 +7544,18 @@ const applyWorkspaceSnapshot = (snap: any) => {
           ...examFolderTombstones,
         ].map(normalizeFolderPath))).slice(-500);
 
+        const localDeletedPkgIds = readLocalDeletedPackageIds();
+        const mergedRealExamPackageTombstones = Array.from(new Set([
+          ...(Array.isArray(serverData.realExamPackageTombstones) ? serverData.realExamPackageTombstones : []),
+          ...realExamPackageDeletedIds,
+          ...localDeletedPkgIds,
+        ].map(String))).slice(-1000);
+
         if (mergedHistoryTombstones.length) finalUpdate.deletedHistoryIds = mergedHistoryTombstones;
         if (mergedScheduleTombstones.length) finalUpdate.deletedScheduleIds = mergedScheduleTombstones;
         if (mergedTransactionTombstones.length) finalUpdate.deletedTransactionIds = mergedTransactionTombstones;
         if (mergedFolderTombstones.length) finalUpdate.examFolderTombstones = mergedFolderTombstones;
+        if (mergedRealExamPackageTombstones.length) finalUpdate.realExamPackageTombstones = mergedRealExamPackageTombstones;
 
         const mergeEntityArray = (serverArr: any[], localArr: any[], tombstoneSet: Set<string>) => {
           const map = new Map<string, any>();
@@ -7517,6 +7594,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           if (key === "__deletedScheduleIds") return;
           if (key === "__deletedTransactionIds") return;
           if (key === "__examFolderTombstones") return;
+          if (key === "__realExamPackageDeletedIds") return;
           const localVal = newData[key];
           const serverVal = key === "students" ? serverStudents : serverData[key];
 
@@ -7575,7 +7653,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
             } else if (key === "topicAssignments") {
               finalUpdate.topicAssignments = mergeEntityArray(serverArr, localVal, new Set());
             } else if (key === "realExamPackages") {
-              finalUpdate.realExamPackages = mergeEntityArray(serverArr, localVal, new Set());
+              finalUpdate.realExamPackages = mergeEntityArray(serverArr, localVal, new Set(mergedRealExamPackageTombstones));
             } else if (key === "sharedLinks") {
               finalUpdate.sharedLinks = mergeEntityArray(serverArr, localVal, new Set());
             } else if (key === "students") {
@@ -8396,8 +8474,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
       if (data.success && data.transcript) {
         const transcript = data.transcript;
         setEditingQuiz((prev: any) => prev ? { ...prev, transcript } : prev);
-        const nx = quizzes.map(q => q.id === quiz.id ? { ...q, transcript } : q);
-        setQuizzes(nx); syncData({ quizzes: nx });
+        const updatedQuiz = { ...quiz, transcript, updatedAt: getTrueTime() };
+        const nx = quizzes.map(q => q.id === quiz.id ? updatedQuiz : q);
+        setQuizzes(nx); syncData({ __quizUpserts: [updatedQuiz] });
         alert(`Đã nghe & tạo transcript (${transcript.length} ký tự) và lưu vào đề. Nút "Vì sao" giờ trích dẫn được lời thoại.`);
       } else {
         alert("" + (data.error || "Lỗi tạo transcript"));
@@ -9537,7 +9616,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       audience: "ALL",
       targetStudentIds: [],
       maxAttempts: Math.max(1, Number(imported.maxAttempts) || 1),
-      isLocked: false,
       folder: item.targetFolder || "Root",
       updatedAt: getTrueTime(),
     };
@@ -10472,20 +10550,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               ? `quiz_${crypto.randomUUID()}`
               : `quiz_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           title: q.title + " (Copy)",
-          active: false,
-          isLocked: true
+          active: false
       })));
       setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
-      void syncData({ quizzes: [newQuiz] }).then(saved => {
+      void syncData({ __quizUpserts: [newQuiz] }).then(saved => {
           alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
   };
 
-  const handleBulkLock = (locked: boolean) => {
-      if(!confirm(tx(`Xác nhận Khóa / Mở khóa ${selectedQuizzes.length} đề thi?`, `Confirm Lock / Unlock ${selectedQuizzes.length} exams?`))) return;
-      const nx = quizzes.map(q => selectedQuizzes.includes(q.id) ? { ...q, isLocked: locked } : q);
-      setQuizzes(nx); syncData({quizzes: nx}); setSelectedQuizzes([]);
-  }
+
 
   const persistBulkQuizUpdates = async (updates: Quiz[], action: string) => {
       if (!updates.length) return;
@@ -10686,9 +10759,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   const deleteRealExamPackage = async (pkgId: string) => {
     if (!confirm(tx("Xóa gói bài thi thật này?", "Delete this real exam package?"))) return;
-    const nx = realExamPackages.filter(pkg => pkg.id !== pkgId);
+    addLocalDeletedPackageIds([pkgId]);
+    const nx = (realExamPackages || []).filter(pkg => pkg.id !== pkgId);
     setRealExamPackages(nx);
-    await syncData({ realExamPackages: nx });
+    await syncData({ realExamPackages: nx, __realExamPackageDeletedIds: [pkgId] });
   };
   const updateRealExamPackage = async (pkg: RealExamPackage, patch: Partial<RealExamPackage>) => {
     const nx = realExamPackages.map(item => item.id === pkg.id ? { ...item, ...patch, updatedAt: Date.now() } : item);
@@ -11026,7 +11100,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       scheduledStart: undefined,
       scheduledEnd: undefined,
       passcode: undefined,
-      isLocked: false,
       practiceMode: false,
       audioMode: String(source.type || "").toLowerCase().includes("listen") ? "strict" : source.audioMode,
       realExamContext: {
@@ -11260,7 +11333,6 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           isSEBRequired: node.mode === "practice" ? false : sourceQuiz.isSEBRequired,
           scheduledStart: undefined,
           scheduledEnd: undefined,
-          isLocked: false,
           passcode: undefined,
           questContext: { topicAssignmentId: assignment.id, nodeId: node.id },
       };
@@ -11888,7 +11960,26 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     if (!navigator.onLine) return;
     const run = async () => {
       const pending = readPendingWorkspaceMutations();
-      for (const entry of pending) {
+      if (!pending.length) return;
+
+      // Circuit breaker: discard poison pills exceeding 5 retries or legacy oversized quizzes arrays
+      const validPending = pending.filter(entry => {
+        if ((entry.retryCount || 0) >= 5) {
+          console.warn("Discarding poison pill workspace mutation exceeding retry limit:", entry.id);
+          return false;
+        }
+        if (entry.payload && Array.isArray(entry.payload.quizzes) && entry.payload.quizzes.length > 50) {
+          console.warn("Discarding oversized legacy quizzes payload in workspace queue:", entry.id);
+          return false;
+        }
+        return true;
+      });
+
+      if (validPending.length !== pending.length) {
+        writePendingWorkspaceMutations(validPending);
+      }
+
+      for (const entry of validPending) {
         if (inFlightMutationIdsRef.current.has(entry.id)) continue;
         inFlightMutationIdsRef.current.add(entry.id);
         try {
@@ -11898,13 +11989,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           } else {
             const current = readPendingWorkspaceMutations();
             const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
-            writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+            writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 5));
           }
         } catch (err) {
           console.warn("Pending workspace mutation failed:", err);
           const current = readPendingWorkspaceMutations();
           const updated = current.map(item => item.id === entry.id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item);
-          writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 3));
+          writePendingWorkspaceMutations(updated.filter(item => (item.retryCount || 0) < 5));
         } finally {
           inFlightMutationIdsRef.current.delete(entry.id);
         }
