@@ -8183,7 +8183,10 @@ const applyWorkspaceSnapshot = (snap: any) => {
         if (matchingKind === 'headings') {
           const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
           if (m) return m[1].toUpperCase();
-          if (timestampQuestionIndex >= 0) return String.fromCharCode(65 + timestampQuestionIndex);
+          const activeSecQs = Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []);
+          const headingQs = activeSecQs.filter((item: any) => item?.type === 'DRAG_DROP_HEADING');
+          const hIdx = headingQs.findIndex((item: any) => String(item?.id || "") === String(q.id || ""));
+          if (hIdx >= 0) return String.fromCharCode(65 + hIdx);
         }
         return '';
       })();

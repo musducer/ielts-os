@@ -391,6 +391,89 @@
                   ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
               ]);
               const headingOptions = Array.from(headingCatalog.values());
+              return isSingleQuestionCorrect({ ...q, options: headingOptions }, ans) ? "correct" : "wrong";
+          }
+          return isSingleQuestionCorrect(q, ans) ? "correct" : "wrong";
+      };
+
+      const rvCompletionAnswer = (q: any) => {
+          const raw = rvEffectiveAnswers?.[q?.id];
+          const blank = raw === undefined || raw === null || String(raw).trim() === "";
+          const given = blank ? "" : String(raw).trim();
+          const accepted = String(q?.correctAnswer ?? "").split("/").map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
+          return {
+              blank,
+              given,
+              expected: String(q?.correctAnswer ?? "").split("/")[0].trim(),
+              correct: !blank && accepted.includes(given.toLocaleLowerCase()),
+          };
+      };
+
+      const rvFormatOptionWithLetter = (q: any, rawValue: any): string => {
+          const rawStr = String(rawValue ?? "").trim();
+          if (!rawStr) return "";
+          const options = Array.isArray(q?.options) ? q.options : [];
+          if (!options.length) return rawStr;
+          let idx = -1;
+          if (/^[A-Za-z]$/.test(rawStr)) {
+              idx = rawStr.toUpperCase().charCodeAt(0) - 65;
+          } else if (/^\d+$/.test(rawStr) && Number(rawStr) < options.length) {
+              idx = Number(rawStr);
+          } else {
+              idx = options.findIndex((opt: any, oIdx: number) =>
+                  normalizeComparableAnswer(opt) === normalizeComparableAnswer(rawStr)
+                  || matchingOptionLabel(opt, oIdx).toLowerCase() === rawStr.toLowerCase()
+              );
+          }
+          if (idx >= 0 && idx < options.length) {
+              const letter = matchingOptionLabel(options[idx], idx);
+              const text = cleanOptionAnswerText(options[idx]);
+              if (!text || text.toUpperCase() === letter) return letter;
+              return `${letter}. ${text}`;
+          }
+          return resolveMatchingAnswerText(q, rawValue) || rawStr;
+      };
+
+      const rvFormatDisplayAnswers = (q: any, answerMap: Record<string, any> = rvSubmittedAnswers) => {
+          const raw = answerMap?.[q?.id];
+          const blank = raw === undefined || raw === null || String(raw).trim() === "" || (Array.isArray(raw) && raw.length === 0);
+          if (q?.type === "CHOICE") {
+              const cIdx = Number(q.correctAnswer);
+              const cLetter = !isNaN(cIdx) ? String.fromCharCode(65 + cIdx) : String(q.correctAnswer || "").trim().toUpperCase();
+              const cText = (!isNaN(cIdx) && q.options?.[cIdx]) ? cleanOptionAnswerText(q.options[cIdx]) : "";
+              const sIdx = Number(raw);
+              const sLetter = !blank && !isNaN(sIdx) ? String.fromCharCode(65 + sIdx) : (!blank ? String(raw).trim().toUpperCase() : "");
+              const isCorr = !blank && (sLetter === cLetter || isSingleQuestionCorrect(q, raw));
+              return {
+                  blank,
+                  given: blank ? "(bỏ trống)" : sLetter,
+                  expected: cLetter,
+                  expectedFull: cText ? `${cLetter}. ${cText}` : cLetter,
+                  expectedShort: cLetter,
+                  correct: isCorr,
+              };
+          }
+          if (q?.type === "CHOICE_MULTIPLE") {
+              const multi = getChoiceMultipleOutcome([q], { [q.id]: raw });
+              const sLetters = (multi.selected || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
+              const cLetters = (multi.correct || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
+              return {
+                  blank: !sLetters,
+                  given: sLetters || "(bỏ trống)",
+                  expected: cLetters,
+                  expectedFull: cLetters,
+                  expectedShort: cLetters,
+                  correct: Boolean(multi.isFullyCorrect),
+              };
+          }
+          if (q?.type === "DRAG_DROP_HEADING") {
+              const headingCatalog = getHeadingCatalog([
+                  q,
+                  reviewQuiz.quiz,
+                  ...rvAllQuestions,
+                  ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
+              ]);
+              const headingOptions = Array.from(headingCatalog.values());
               const givenMeta = blank ? { id: "", text: "" } : resolveHeadingAnswerMeta({ ...q, options: headingOptions }, raw);
               const expectedMeta = resolveHeadingAnswerMeta({ ...q, options: headingOptions }, q.correctAnswer);
               const givenId = normalizeHeadingId(givenMeta.id) || String(raw || "").trim();
@@ -3118,7 +3201,7 @@
                                                                </React.Fragment>
                                                            );
                                                        })}
-                                                       {chunks.slice(headingQs.length + 1).map((extraChunk, cIdx) => (
+                                                       {chunks.slice(headingQs.length + 1).map((extraChunk: any, cIdx: number) => (
                                                            cleanChunk(extraChunk).trim() ? (
                                                                <div key={`extra-${cIdx}`} dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(extraChunk)) }} />
                                                            ) : null
