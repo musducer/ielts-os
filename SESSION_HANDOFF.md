@@ -1,5 +1,20 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-26)
 
+## Tinh Gọn Khối Nhận Diện Điểm Yếu & Chuyển Sang Tab Tiến Độ Học (Weakness Analysis Bento & Sub-Tab Architecture) — 2026-10-26
+
+- **Đặt tên giản dị, xóa bỏ thuật ngữ AI khoa trương**:
+  - Tiêu đề cũ *"Error DNA & Weakness Diagnostic Engine / Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy"* được chuẩn hóa thành **"Nhận diện điểm yếu & Bẫy đề"** (`Weakness & Trap Analysis`).
+  - Phụ đề sư phạm gần gũi: *"Thống kê từ lịch sử làm bài để chỉ ra dạng bài và bẫy đề bạn hay mất điểm nhất."*.
+- **Tái thiết kế Bento Grid 2 Cột Đối Xứng (Anti-Scroll & Clean Information Architecture)**:
+  - Thay thế 3 hộp căn nguyên lỗi dàn ngang cồng kềnh bằng 1 thanh **Segmented Bar 3 màu trực quan** (Indigo `#4338ca` Lỗ hổng từ vựng | Amber `#d97706` Bẫy đề/Nhiễu | Rose `#e11d48` Đọc sai phạm vi) kèm 3 dòng số liệu tinh gọn.
+  - Sắp xếp tự động các dạng bài theo thứ tự ưu tiên cần cải thiện gấp (dạng có tỷ lệ chính xác % thấp nhất lên đầu tiên), thanh mini bar 4px tinh tế.
+  - Kế hoạch hành động 7 ngày (`AI Action Plan`) chuyển thành khối collapsible accordion `[ + Xem lộ trình cải thiện 7 ngày từ AI ]`, học viên cần xem mới bấm mở ra.
+- **Kiến trúc Sub-tab Tinh Gọn Trong Tab Tiến Độ (Progress Sub-tabs)**:
+  - Chuyển hoàn toàn khối phân tích này ra khỏi Dashboard (giúp Dashboard quay về đúng vai trò Overview gọn gàng).
+  - Tích hợp 2 Sub-tab dạng Pill Switcher ngay đầu trang Tiến độ:
+    - **Năng lực & Điểm yếu** (`Performance & Weaknesses`): Biểu đồ Band điểm (`BandTrendChart`) đặt ngay trên, Bảng Nhận diện điểm yếu & Bẫy đề đặt ngay dưới -> xem trọn vẹn trong 1 màn hình không cần cuộn trang.
+    - **Tài liệu & Lịch sử lớp** (`Resources & History`): Chứa Drive tài liệu chia sẻ và Lịch sử buổi học lớp, tách biệt hoàn toàn để trang không bị kéo dài vô tận.
+
 ## Khắc Phục Lỗi Tràn Viền Thanh Điều Hướng & Biến Mất Nút Đăng Xuất Khi Đổi Ngôn Ngữ (Student Portal Responsive Navbar) — 2026-10-26
 
 - **Nguyên nhân gốc rễ (Root Cause)**:

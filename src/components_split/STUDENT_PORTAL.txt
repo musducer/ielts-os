@@ -1178,8 +1178,7 @@
             </div>
           </div>
 
-          {/* ERROR DNA & WEAKNESS DIAGNOSTIC ENGINE */}
-          {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
+
           </>)}
 
           {/* ===== TAB: PHẦN THƯỞNG ===== */}
@@ -1481,51 +1480,145 @@
           </div>
           </>)}
 
-          {/* ===== TAB: TIẾN ĐỘ ===== */}
+          {/* ===== TAB: TIẾN ĐỘ (UNIFIED PROGRESS WITH SUB-TABS) ===== */}
           {portalTab === "progress" && (<>
-          {myQuizResults.length > 0 && (() => {
-            const filteredForProgress = progressSkillFilter === 'All' 
-              ? myQuizResults 
-              : myQuizResults.filter(r => quizSkill(quizzes.find(q => q.id === r.quizId)) === progressSkillFilter);
-            return (
-              <div className="card" style={{ marginBottom: 24, border: `1px solid ${C.border}`, borderRadius: 14, padding: '20px 24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
-                  <h3 style={{ margin: 0, fontSize: 14, color: C.sub, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Ico name="trending" size={15} color={C.accent} />
-                    <span>{t('chart_my_progress')}</span>
-                  </h3>
-                  {/* SKILL FILTER PILLS */}
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {(['All', 'Listening', 'Reading', 'Writing', 'Integrated'] as const).map(sk => {
-                      const active = progressSkillFilter === sk;
-                      return (
-                        <button
-                          key={sk}
-                          onClick={() => setProgressSkillFilter(sk)}
-                          style={{
-                            padding: '5px 12px',
-                            borderRadius: 18,
-                            border: `1px solid ${active ? C.accent : C.border}`,
-                            background: active ? C.accent : C.card,
-                            color: active ? '#fff' : C.sub,
-                            fontSize: 11.5,
-                            fontWeight: 800,
-                            cursor: 'pointer',
-                            transition: 'all .15s ease'
-                          }}
-                        >
-                          {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
-                        </button>
-                      );
-                    })}
+            {/* SUB-TAB SELECTOR (Segmented Pill Switcher) */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+              <div style={{ display: 'inline-flex', background: C.card, padding: 4, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: '0 1px 3px rgba(0,0,0,0.04)', gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => setProgressSubTab('analytics')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 18px',
+                    borderRadius: 9,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: progressSubTab === 'analytics' ? C.accent : 'transparent',
+                    color: progressSubTab === 'analytics' ? '#fff' : C.sub,
+                    boxShadow: progressSubTab === 'analytics' ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
+                    transition: 'all .15s ease'
+                  }}
+                >
+                  <Ico name="trending" size={15} color={progressSubTab === 'analytics' ? '#fff' : C.sub} />
+                  <span>{tx("Năng lực & Điểm yếu", "Performance & Weaknesses")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProgressSubTab('resources')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 18px',
+                    borderRadius: 9,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: progressSubTab === 'resources' ? C.accent : 'transparent',
+                    color: progressSubTab === 'resources' ? '#fff' : C.sub,
+                    boxShadow: progressSubTab === 'resources' ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
+                    transition: 'all .15s ease'
+                  }}
+                >
+                  <Ico name="folder" size={15} color={progressSubTab === 'resources' ? '#fff' : C.sub} />
+                  <span>{tx("Tài liệu & Lịch sử lớp", "Resources & History")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SUB-TAB 1: NĂNG LỰC & ĐIỂM YẾU */}
+            {progressSubTab === 'analytics' && (<>
+              {myQuizResults.length > 0 && (() => {
+                const filteredForProgress = progressSkillFilter === 'All' 
+                  ? myQuizResults 
+                  : myQuizResults.filter(r => quizSkill(quizzes.find(q => q.id === r.quizId)) === progressSkillFilter);
+                return (
+                  <div className="card" style={{ marginBottom: 16, border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+                      <h3 style={{ margin: 0, fontSize: 13.5, color: C.sub, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, letterSpacing: 0.5 }}>
+                        <Ico name="trending" size={15} color={C.accent} />
+                        <span>{t('chart_my_progress')}</span>
+                      </h3>
+                      {/* SKILL FILTER PILLS */}
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {(['All', 'Listening', 'Reading', 'Writing', 'Integrated'] as const).map(sk => {
+                          const active = progressSkillFilter === sk;
+                          return (
+                            <button
+                              key={sk}
+                              onClick={() => setProgressSkillFilter(sk)}
+                              style={{
+                                padding: '4px 11px',
+                                borderRadius: 16,
+                                border: `1px solid ${active ? C.accent : C.border}`,
+                                background: active ? C.accent : C.card,
+                                color: active ? '#fff' : C.sub,
+                                fontSize: 11,
+                                fontWeight: 800,
+                                cursor: 'pointer',
+                                transition: 'all .15s ease'
+                              }}
+                            >
+                              {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <BandTrendChart data={bandSeries(filteredForProgress)} color={C.accent} height={170} />
+                    </div>
                   </div>
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <BandTrendChart data={bandSeries(filteredForProgress)} color={C.accent} height={190} />
+                );
+              })()}
+
+              {/* WEAKNESS ANALYSIS SECTION */}
+              {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
+            </>)}
+
+            {/* SUB-TAB 2: TÀI LIỆU & LỊCH SỬ LỚP */}
+            {progressSubTab === 'resources' && (<>
+              <div className="card" style={{ marginBottom: 20 }}>
+                <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}><Ico name="folder" size={18} color={C.accent} /> {t('drive_hub_title')}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 15, marginTop: 15 }}>
+                  {myLinks.map(l => (
+                    <div key={l.id} style={{ background: C.bg, padding: 15, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                      <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: 35 }}>
+                          {getFileIcon(l.url)} {l.title}
+                      </div>
+                      <div style={{display: 'flex', gap: 8}}>
+                        <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, background: C.accent, color: "#fff", padding: "8px", borderRadius: 6, fontSize: 11, textDecoration: "none", textAlign:'center', fontWeight: 700 }}>{t('open_download')}</a>
+                      </div>
+                    </div>
+                  ))}
+                  {myLinks.length === 0 && <div style={{color: C.sub, fontSize: 13, gridColumn: '1 / -1', textAlign: 'center', padding: 20}}>{t('no_shared_links')}</div>}
                 </div>
               </div>
-            );
-          })()}
+
+              <div className="card">
+                <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
+                {myHistory.map(h => (
+                  <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
+                      <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
+                    </div>
+                    <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
+                    <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
+                    <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+                      {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
+                    </div>
+                  </div>
+                ))}
+                {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
+              </div>
+            </>)}
           </>)}
 
 
@@ -2526,45 +2619,7 @@
           </div>
           </>)}
 
-          {/* ===== TAB: TIẾN ĐỘ (tiếp) — tài nguyên & lịch sử buổi học ===== */}
-          {portalTab === "progress" && (<>
-          <div className="card" style={{ marginBottom: 24 }}>
-            <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}><Ico name="folder" size={18} color={C.accent} /> {t('drive_hub_title')}</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 15, marginTop: 15 }}>
-              {myLinks.map(l => {
-                return (
-                <div key={l.id} style={{ background: C.bg, padding: 15, borderRadius: 10, border: `1px solid ${C.border}` }}>
-                  <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: 35 }}>
-                      {getFileIcon(l.url)} {l.title}
-                  </div>
-                  <div style={{display: 'flex', gap: 8}}>
-                    <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, background: C.accent, color: "#fff", padding: "8px", borderRadius: 6, fontSize: 11, textDecoration: "none", textAlign:'center', fontWeight: 700 }}>{t('open_download')}</a>
-                  </div>
-                </div>
-              )})}
-              {myLinks.length === 0 && <div style={{color: C.sub, fontSize: 13, gridColumn: '1 / -1', textAlign: 'center', padding: 20}}>{t('no_shared_links')}</div>}
-            </div>
-          </div>
 
-          <div className="card">
-            <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
-            {myHistory.map(h => {
-              return (
-              <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
-                  <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
-                </div>
-                <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
-                <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
-                <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-                  {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
-                </div>
-              </div>
-            )})}
-            {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
-          </div>
-          </>)}
         </main>
         {/* MOBILE BOTTOM TABS */}
         {isMobile && (

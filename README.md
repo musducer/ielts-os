@@ -1,5 +1,23 @@
 # IELTS OS
 
+## Tinh Gọn Khối Nhận Diện Điểm Yếu & Chuyển Sang Tab Tiến Độ Học (Weakness Analysis Bento & Sub-Tab Architecture) — 2026-10-26
+
+- **Đặt tên giản dị, chuẩn mực sư phạm (Bỏ thuật ngữ AI khoa trương)**:
+  - Thay thế tiêu đề cũ *"Error DNA & Weakness Diagnostic Engine / Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy"* thành **"Nhận diện điểm yếu & Bẫy đề"** (`Weakness & Trap Analysis`).
+  - Phụ đề gần gũi: *"Thống kê từ lịch sử làm bài để chỉ ra dạng bài và bẫy đề bạn hay mất điểm nhất."* (`Identified from your test history to highlight question types and traps where you lose points.`).
+- **Tái thiết kế Bento Grid 2 Cột Đối Xứng (Anti-Scroll & Clean Visualization)**:
+  - **Cột trái — Căn nguyên lỗi sai & Bẫy thường gặp**:
+    - Thay thế 3 khối hộp to đùng dàn ngang cũ bằng 1 thanh **Segmented Bar 3 màu trực quan** (Indigo `#4338ca` Từ vựng | Amber `#d97706` Bẫy đề | Rose `#e11d48` Phạm vi) kèm 3 dòng số liệu tinh gọn.
+    - Danh sách bẫy thường gặp (`Recurring Traps`) dạng thẻ card nhỏ gọn, có huy hiệu tần suất (`Tần suất cao` / `Thường gặp`).
+  - **Cột phải — Dạng bài ưu tiên cải thiện & Lộ trình 7 ngày**:
+    - Sắp xếp tự động các dạng bài theo thứ tự ưu tiên (dạng có tỷ lệ chính xác % thấp nhất đưa lên đầu) với thanh mini bar 4px tinh tế.
+    - Kế hoạch hành động 7 ngày (`AI Action Plan`) chuyển thành khối collapsible accordion `[ + Xem lộ trình cải thiện 7 ngày từ AI ]`, học viên cần xem mới mở, không chiếm dụng không gian cố định.
+- **Kiến trúc Sub-tab Tinh Gọn Trong Tab Tiến Độ (Progress Sub-tabs)**:
+  - Chuyển toàn bộ khối phân tích điểm yếu ra khỏi Dashboard (giúp Dashboard quay về đúng vai trò Overview gọn gàng).
+  - Tích hợp 2 Sub-tab dạng Pill Switcher ngay đầu trang Tiến độ:
+    - **Năng lực & Điểm yếu** (`Performance & Weaknesses`): Biểu đồ Band điểm (`BandTrendChart`) đặt ngay trên, Bảng Nhận diện điểm yếu & Bẫy đề đặt ngay dưới -> học viên thấy ngay xu hướng điểm và căn nguyên mất điểm trong cùng 1 màn hình mà không cần cuộn trang.
+    - **Tài liệu & Lịch sử lớp** (`Resources & History`): Chứa Drive tài liệu chia sẻ và Lịch sử buổi học lớp, tách biệt hoàn toàn để trang không bị kéo dài vô tận.
+
 ## Tối Ưu Đáp Ứng & Chống Tràn Viền Thanh Điều Hướng Học Viên (Responsive Student Navbar) — 2026-10-26
 
 - **Khắc phục triệt để lỗi tràn viền và mất nút Đăng xuất (Logout Button Clipping)**:

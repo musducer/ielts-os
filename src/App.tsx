@@ -5069,6 +5069,7 @@ export default function IeltsSupremeOS() {
   const [useCodeObj, setUseCodeObj] = useState<{name: string, code: string}|null>(null);
   const [dismissedPmId, setDismissedPmId] = useState<string | null>(null);
   const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|TaxonomySkill>("All");
+  const [progressSubTab, setProgressSubTab] = useState<"analytics"|"resources">("analytics");
   const [dailyExpSavedFeedback, setDailyExpSavedFeedback] = useState(false);
 
   const [unlockKey, setUnlockKey] = useState("");
@@ -12015,30 +12016,30 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         const hasTests = studentResults.length > 0;
 
         return (
-          <div className="card" style={{ padding: "22px 26px", border: `1px solid ${C.border}`, borderRadius: 14, background: C.card, marginTop: 18, marginBottom: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 18 }}>
+          <div className="card" style={{ padding: "18px 22px", border: `1px solid ${C.border}`, borderRadius: 14, background: C.card, marginTop: 14, marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ display: 'inline-flex', padding: 6, borderRadius: 8, background: `${C.accent}14`, color: C.accent }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V6a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v14a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2v-4a2 2 0 0 1 2-2h2"/></svg>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="m10 15 5-3-5-3v6z"/></svg>
                   </span>
-                  <h3 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 18, fontWeight: 700, color: C.text }}>
-                    {tx("Chẩn đoán DNA Lỗi sai & Lỗ hổng Tư duy", "Error DNA & Weakness Diagnostic Engine")}
+                  <h3 style={{ margin: 0, fontFamily: 'var(--display)', fontSize: 17, fontWeight: 700, color: C.text }}>
+                    {tx("Nhận diện điểm yếu & Bẫy đề", "Weakness & Trap Analysis")}
                   </h3>
                 </div>
                 <p style={{ margin: '4px 0 0 0', fontSize: 12.5, color: C.sub }}>
-                  {tx("Hệ thống tự động phân tích đa chiều từ lịch sử làm bài để định vị chính xác lỗ hổng nhận thức.", "Automatically diagnosed from real exam submissions to pinpoint cognitive vulnerabilities.")}
+                  {tx("Thống kê từ lịch sử làm bài để chỉ ra dạng bài và bẫy đề bạn hay mất điểm nhất.", "Identified from your test history to highlight question types and traps where you lose points.")}
                 </p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {dna && (
                   <>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '4px 10px', borderRadius: 20, color: C.sub }}>
-                      {dna.totalAnalyzedAttempts} {tx("bài thi", "tests")} ({dna.totalQuestionsAnalyzed} {tx("câu hỏi", "questions")})
+                    <span style={{ fontSize: 11, fontWeight: 700, background: C.bg, border: `1px solid ${C.border}`, padding: '3px 9px', borderRadius: 20, color: C.sub }}>
+                      {dna.totalAnalyzedAttempts} {tx("bài thi", "tests")} ({dna.totalQuestionsAnalyzed} {tx("câu", "qs")})
                     </span>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, background: isAnalyzing ? `${C.warn}15` : `${C.succ}15`, border: `1px solid ${isAnalyzing ? C.warn : C.succ}35`, color: isAnalyzing ? C.warn : C.succ, padding: '4px 10px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      {isAnalyzing && <Ico name="refresh" size={12} />}
-                      {isAnalyzing ? tx("Đang cập nhật...", "Analyzing...") : tx("AI đã phân tích", "AI Diagnosed")}
+                    <span style={{ fontSize: 11, fontWeight: 700, background: isAnalyzing ? `${C.warn}15` : `${C.succ}15`, border: `1px solid ${isAnalyzing ? C.warn : C.succ}35`, color: isAnalyzing ? C.warn : C.succ, padding: '3px 9px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {isAnalyzing && <Ico name="refresh" size={11} />}
+                      {isAnalyzing ? tx("Đang phân tích...", "Analyzing...") : tx("AI đã phân tích", "AI Diagnosed")}
                     </span>
                   </>
                 )}
@@ -12050,10 +12051,10 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       if (onRefresh) onRefresh();
                       else void triggerErrorDnaAnalysis(student, true);
                     }}
-                    style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 600, color: C.sub, cursor: isAnalyzing ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    title={tx("Phân tích lại DNA lỗi sai", "Re-diagnose Error DNA")}
+                    style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 8, padding: '4px 9px', fontSize: 11, fontWeight: 600, color: C.sub, cursor: isAnalyzing ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    title={tx("Phân tích lại điểm yếu", "Re-diagnose weaknesses")}
                   >
-                    <Ico name="refresh" size={12} />
+                    <Ico name="refresh" size={11} />
                     <span>{tx("Chẩn đoán lại", "Re-diagnose")}</span>
                   </button>
                 )}
@@ -12061,145 +12062,147 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
             </div>
 
             {!hasTests ? (
-              <div style={{ textAlign: 'center', padding: '24px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
-                {tx("Chưa có kết quả bài thi Reading/Listening nào để chẩn đoán. Hãy hoàn thành ít nhất 1 bài thi.", "No Reading or Listening exam results yet. Complete at least 1 test to generate your Error DNA profile.")}
+              <div style={{ textAlign: 'center', padding: '20px 16px', color: C.sub, fontSize: 12.5, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                {tx("Chưa có kết quả bài thi Reading/Listening nào để chẩn đoán. Hãy hoàn thành ít nhất 1 bài thi.", "No Reading or Listening exam results yet. Complete at least 1 test to generate your weakness profile.")}
               </div>
             ) : !dna ? (
-              <div style={{ textAlign: 'center', padding: '30px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <Ico name="refresh" size={20} color={C.accent} />
-                <div>{tx("Đang tự động tính toán dữ liệu và phân tích DNA lỗi sai...", "Automatically calculating mistake patterns and diagnosing Error DNA...")}</div>
+              <div style={{ textAlign: 'center', padding: '24px 16px', color: C.sub, fontSize: 12.5, background: C.bg, borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                <Ico name="refresh" size={18} color={C.accent} />
+                <div>{tx("Đang tự động tính toán dữ liệu và phân tích điểm yếu...", "Automatically calculating mistake patterns and analyzing weaknesses...")}</div>
               </div>
-            ) : (
-              <div style={{ display: 'grid', gap: 20 }}>
-                {/* 1. THREE COGNITIVE CATEGORIES */}
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
-                    {tx("1. Phân loại căn nguyên lỗi sai (Cognitive Error Breakdown)", "1. Cognitive Error Breakdown")}
+            ) : (() => {
+              const lex = dna.categoryBreakdown?.lexicalGap ?? 0;
+              const dis = dna.categoryBreakdown?.distractorTrap ?? 0;
+              const sco = dna.categoryBreakdown?.scopeMisread ?? 0;
+              const sortedAccuracy = [...(dna.typeAccuracy || [])].sort((a, b) => a.accuracy - b.accuracy);
+              const actionPlanList = (i18n.language === "vi" ? (dna.actionPlanVi || dna.actionPlanEn || []) : (dna.actionPlanEn || dna.actionPlanVi || []));
+
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, alignItems: 'start' }}>
+                  {/* CỘT TRÁI: CĂN NGUYÊN LỖI & BẪY ĐỀ */}
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    {/* 1. TỶ LỆ CĂN NGUYÊN LỖI SAI */}
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.7, color: C.sub, marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{tx("1. Căn nguyên lỗi sai (Tỷ lệ %)", "1. Root Cause Breakdown (%)")}</span>
+                      </div>
+
+                      {/* Segmented bar 3 màu */}
+                      <div style={{ height: 8, borderRadius: 4, overflow: 'hidden', display: 'flex', background: 'rgba(0,0,0,0.06)', marginBottom: 10 }}>
+                        {lex > 0 && <div title={`${tx("Từ vựng", "Lexical")}: ${lex}%`} style={{ width: `${lex}%`, background: '#4338ca', transition: 'width 0.3s' }} />}
+                        {dis > 0 && <div title={`${tx("Bẫy đề", "Distractor")}: ${dis}%`} style={{ width: `${dis}%`, background: '#d97706', transition: 'width 0.3s' }} />}
+                        {sco > 0 && <div title={`${tx("Phạm vi", "Scope")}: ${sco}%`} style={{ width: `${sco}%`, background: '#e11d48', transition: 'width 0.3s' }} />}
+                      </div>
+
+                      {/* 3 dòng chi tiết */}
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11.5 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: C.text, fontWeight: 600 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4338ca', flexShrink: 0 }} />
+                            <span>{tx("Lỗ hổng Từ vựng / Paraphrase", "Lexical & Paraphrase Gap")}</span>
+                          </span>
+                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 800, color: '#4338ca' }}>{lex}%</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11.5 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: C.text, fontWeight: 600 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#d97706', flexShrink: 0 }} />
+                            <span>{tx("Bẫy Nhiễu & Phủ định Ngầm", "Distractor & Negative Trap")}</span>
+                          </span>
+                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 800, color: '#d97706' }}>{dis}%</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11.5 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: C.text, fontWeight: 600 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#e11d48', flexShrink: 0 }} />
+                            <span>{tx("Đọc sai Phạm vi & Chi tiết", "Scope Misread & Extrapolation")}</span>
+                          </span>
+                          <span style={{ fontFamily: 'var(--mono)', fontWeight: 800, color: '#e11d48' }}>{sco}%</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 2. BẪY ĐỀ THƯỜNG MẮC */}
+                    {dna.recurringTraps && dna.recurringTraps.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.7, color: C.sub, marginBottom: 8 }}>
+                          {tx("Bẫy đề học viên thường mắc", "Recurring Traps Identified")}
+                        </div>
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {dna.recurringTraps.slice(0, 3).map((trap: any, index: number) => {
+                            const isHigh = trap.severity === "high";
+                            return (
+                              <div key={index} style={{ padding: '9px 12px', borderRadius: 8, background: isHigh ? '#fff5f5' : '#fffbeb', border: `1px solid ${isHigh ? '#fed7d7' : '#fef08a'}`, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                    {tx(trap.titleVi, trap.titleEn)}
+                                  </span>
+                                  <span style={{ fontSize: 9.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, padding: '2px 6px', borderRadius: 4, background: isHigh ? '#fed7d7' : '#fef08a', color: isHigh ? '#9b2c2c' : '#854d0e' }}>
+                                    {isHigh ? tx("Tần suất cao", "High") : tx("Thường gặp", "Moderate")}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
+                                  {tx(trap.detailVi, trap.detailEn)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                    {/* Lexical Gap */}
-                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#eef2ff', border: '1px solid #c7d2fe', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#3730a3' }}>
-                          {tx("Lỗ hổng Từ vựng / Paraphrase", "Lexical & Paraphrase Gap")}
-                        </span>
-                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#4338ca' }}>
-                          {dna.categoryBreakdown?.lexicalGap ?? 0}%
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
-                        {tx("Chưa nhận diện được từ đồng nghĩa hoặc thiếu vốn từ vựng học thuật.", "Unrecognized synonyms, collocations, or vocabulary deficit.")}
-                      </div>
-                    </div>
 
-                    {/* Distractor Trap */}
-                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#92400e' }}>
-                          {tx("Bẫy Nhiễu & Phủ định Ngầm", "Distractor & Negative Trap")}
-                        </span>
-                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#b45309' }}>
-                          {dna.categoryBreakdown?.distractorTrap ?? 0}%
-                        </span>
+                  {/* CỘT PHẢI: DẠNG BÀI CẦN CẢI THIỆN & KẾ HOẠCH HÀNH ĐỘNG */}
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    {/* DẠNG BÀI ƯU TIÊN CẢI THIỆN (SẮP XẾP TỪ YẾU NHẤT) */}
+                    {sortedAccuracy.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.7, color: C.sub, marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
+                          <span>{tx("2. Dạng câu hỏi cần cải thiện gấp", "2. Priority Question Types")}</span>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: C.sub }}>{tx("(Ưu tiên dạng % thấp)", "(Lowest accuracy first)")}</span>
+                        </div>
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          {sortedAccuracy.slice(0, 5).map((ct: any) => {
+                            const barColor = ct.accuracy >= 70 ? C.succ : ct.accuracy >= 50 ? C.warn : C.err;
+                            return (
+                              <div key={ct.key || ct.label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: '7px 10px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11.5, fontWeight: 600, marginBottom: 4 }}>
+                                  <span style={{ color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '72%' }} title={ct.label}>{ct.label}</span>
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: barColor, fontWeight: 800 }}>
+                                    {ct.accuracy}% <span style={{ color: C.sub, fontWeight: 400, fontSize: 10 }}>({ct.correct}/{ct.total})</span>
+                                  </span>
+                                </div>
+                                <div style={{ height: 4, background: 'rgba(0,0,0,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, ct.accuracy))}%`, background: barColor, borderRadius: 2, transition: 'width 0.3s ease' }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
-                        {tx("Mắc bẫy từ trùng lặp nguyên văn hoặc người nói tự đính chính sau đó.", "Fell for verbatim surface matches or speaker self-corrections.")}
-                      </div>
-                    </div>
+                    )}
 
-                    {/* Scope Misread */}
-                    <div style={{ padding: '14px 16px', borderRadius: 10, background: '#fff1f2', border: '1px solid #fecdd3', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#9f1239' }}>
-                          {tx("Đọc sai Phạm vi & Chi tiết", "Scope Misread & Overgeneralization")}
-                        </span>
-                        <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'var(--mono)', color: '#be123c' }}>
-                          {dna.categoryBreakdown?.scopeMisread ?? 0}%
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: '#4b5563', lineHeight: 1.4 }}>
-                        {tx("Suy diễn quá phạm vi, bỏ sót mạo từ hoặc từ hạn định giới hạn (only, all).", "Overgeneralization, extrapolation, or overlooked qualifiers.")}
-                      </div>
-                    </div>
+                    {/* 4. KẾ HOẠCH HÀNH ĐỘNG 7 NGÀY (COLLAPSIBLE ACCORDION) */}
+                    {actionPlanList.length > 0 && (
+                      <details style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px' }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: C.accent, display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none' }}>
+                          <Ico name="calendar" size={13} color={C.accent} />
+                          <span>{tx("Xem lộ trình cải thiện 7 ngày từ AI", "View 7-Day AI Action Plan")}</span>
+                        </summary>
+                        <div style={{ display: 'grid', gap: 6, marginTop: 8, paddingTop: 6, borderTop: `1px dashed ${C.border}` }}>
+                          {actionPlanList.map((step: string, index: number) => (
+                            <div key={index} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11.5, color: C.text, lineHeight: 1.4 }}>
+                              <span style={{ display: 'inline-flex', width: 17, height: 17, borderRadius: '50%', background: `${C.accent}20`, color: C.accent, fontSize: 10, fontWeight: 800, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                                {index + 1}
+                              </span>
+                              <span>{step}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 </div>
-
-                {/* 2. QUESTION TYPE ACCURACY BARS */}
-                {dna.typeAccuracy && dna.typeAccuracy.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
-                      {tx("2. Độ chính xác theo dạng câu hỏi (Question Type Accuracy)", "2. Question Type Accuracy")}
-                    </div>
-                    <div style={{ display: 'grid', gap: 9 }}>
-                      {dna.typeAccuracy.map((ct: any) => {
-                        const barColor = ct.accuracy >= 70 ? C.succ : ct.accuracy >= 50 ? C.warn : C.err;
-                        return (
-                          <div key={ct.key || ct.label} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 14px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
-                              <span style={{ color: C.text }}>{ct.label}</span>
-                              <span style={{ fontFamily: 'var(--mono)', color: barColor }}>
-                                {ct.accuracy}% <span style={{ color: C.sub, fontWeight: 400 }}>({ct.correct}/{ct.total})</span>
-                              </span>
-                            </div>
-                            <div style={{ height: 6, background: 'rgba(0,0,0,0.06)', borderRadius: 3, overflow: 'hidden' }}>
-                              <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, ct.accuracy))}%`, background: barColor, borderRadius: 3, transition: 'width 0.4s ease' }} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. RECURRING TRAPS IDENTIFIED */}
-                {dna.recurringTraps && dna.recurringTraps.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
-                      {tx("3. Các bẫy đề học viên thường mắc (Recurring Traps Identified)", "3. Recurring Traps Identified")}
-                    </div>
-                    <div style={{ display: 'grid', gap: 10 }}>
-                      {dna.recurringTraps.map((trap: any, index: number) => {
-                        const isHigh = trap.severity === "high";
-                        return (
-                          <div key={index} style={{ padding: '12px 16px', borderRadius: 10, background: isHigh ? '#fff5f5' : '#fffbeb', border: `1px solid ${isHigh ? '#fed7d7' : '#fef08a'}`, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                              <span style={{ fontSize: 13, fontWeight: 700, color: isHigh ? '#9b2c2c' : '#854d0e' }}>
-                                {tx(trap.titleVi, trap.titleEn)}
-                              </span>
-                              <span style={{ fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, padding: '2px 8px', borderRadius: 4, background: isHigh ? '#fed7d7' : '#fef08a', color: isHigh ? '#9b2c2c' : '#854d0e' }}>
-                                {isHigh ? tx("Tần suất cao", "High Frequency") : tx("Thường gặp", "Moderate")}
-                              </span>
-                            </div>
-                            <div style={{ fontSize: 12, color: '#4b5563', lineHeight: 1.45 }}>
-                              {tx(trap.detailVi, trap.detailEn)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 4. 7-DAY ACTION PLAN */}
-                {((dna.actionPlanVi && dna.actionPlanVi.length > 0) || (dna.actionPlanEn && dna.actionPlanEn.length > 0)) && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, color: C.sub, marginBottom: 10 }}>
-                      {tx("4. Kế hoạch hành động 7 ngày từ AI (AI Action Plan)", "4. 7-Day AI Action Plan")}
-                    </div>
-                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 18px', display: 'grid', gap: 8 }}>
-                      {(i18n.language === "vi" ? (dna.actionPlanVi || dna.actionPlanEn || []) : (dna.actionPlanEn || dna.actionPlanVi || [])).map((step: string, index: number) => (
-                        <div key={index} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12.5, color: C.text, lineHeight: 1.5 }}>
-                          <span style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: `${C.accent}20`, color: C.accent, fontSize: 11, fontWeight: 800, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                            {index + 1}
-                          </span>
-                          <span>{step}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+              );
+            })()}
           </div>
         );
       };
@@ -21457,8 +21460,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             </div>
           </div>
 
-          {/* ERROR DNA & WEAKNESS DIAGNOSTIC ENGINE */}
-          {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
+
           </>)}
 
           {/* ===== TAB: PHẦN THƯỞNG ===== */}
@@ -21760,51 +21762,145 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           </div>
           </>)}
 
-          {/* ===== TAB: TIẾN ĐỘ ===== */}
+          {/* ===== TAB: TIẾN ĐỘ (UNIFIED PROGRESS WITH SUB-TABS) ===== */}
           {portalTab === "progress" && (<>
-          {myQuizResults.length > 0 && (() => {
-            const filteredForProgress = progressSkillFilter === 'All' 
-              ? myQuizResults 
-              : myQuizResults.filter(r => quizSkill(quizzes.find(q => q.id === r.quizId)) === progressSkillFilter);
-            return (
-              <div className="card" style={{ marginBottom: 24, border: `1px solid ${C.border}`, borderRadius: 14, padding: '20px 24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
-                  <h3 style={{ margin: 0, fontSize: 14, color: C.sub, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Ico name="trending" size={15} color={C.accent} />
-                    <span>{t('chart_my_progress')}</span>
-                  </h3>
-                  {/* SKILL FILTER PILLS */}
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {(['All', 'Listening', 'Reading', 'Writing', 'Integrated'] as const).map(sk => {
-                      const active = progressSkillFilter === sk;
-                      return (
-                        <button
-                          key={sk}
-                          onClick={() => setProgressSkillFilter(sk)}
-                          style={{
-                            padding: '5px 12px',
-                            borderRadius: 18,
-                            border: `1px solid ${active ? C.accent : C.border}`,
-                            background: active ? C.accent : C.card,
-                            color: active ? '#fff' : C.sub,
-                            fontSize: 11.5,
-                            fontWeight: 800,
-                            cursor: 'pointer',
-                            transition: 'all .15s ease'
-                          }}
-                        >
-                          {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
-                        </button>
-                      );
-                    })}
+            {/* SUB-TAB SELECTOR (Segmented Pill Switcher) */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
+              <div style={{ display: 'inline-flex', background: C.card, padding: 4, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: '0 1px 3px rgba(0,0,0,0.04)', gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => setProgressSubTab('analytics')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 18px',
+                    borderRadius: 9,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: progressSubTab === 'analytics' ? C.accent : 'transparent',
+                    color: progressSubTab === 'analytics' ? '#fff' : C.sub,
+                    boxShadow: progressSubTab === 'analytics' ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
+                    transition: 'all .15s ease'
+                  }}
+                >
+                  <Ico name="trending" size={15} color={progressSubTab === 'analytics' ? '#fff' : C.sub} />
+                  <span>{tx("Năng lực & Điểm yếu", "Performance & Weaknesses")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProgressSubTab('resources')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 18px',
+                    borderRadius: 9,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: progressSubTab === 'resources' ? C.accent : 'transparent',
+                    color: progressSubTab === 'resources' ? '#fff' : C.sub,
+                    boxShadow: progressSubTab === 'resources' ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
+                    transition: 'all .15s ease'
+                  }}
+                >
+                  <Ico name="folder" size={15} color={progressSubTab === 'resources' ? '#fff' : C.sub} />
+                  <span>{tx("Tài liệu & Lịch sử lớp", "Resources & History")}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SUB-TAB 1: NĂNG LỰC & ĐIỂM YẾU */}
+            {progressSubTab === 'analytics' && (<>
+              {myQuizResults.length > 0 && (() => {
+                const filteredForProgress = progressSkillFilter === 'All' 
+                  ? myQuizResults 
+                  : myQuizResults.filter(r => quizSkill(quizzes.find(q => q.id === r.quizId)) === progressSkillFilter);
+                return (
+                  <div className="card" style={{ marginBottom: 16, border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+                      <h3 style={{ margin: 0, fontSize: 13.5, color: C.sub, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, letterSpacing: 0.5 }}>
+                        <Ico name="trending" size={15} color={C.accent} />
+                        <span>{t('chart_my_progress')}</span>
+                      </h3>
+                      {/* SKILL FILTER PILLS */}
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {(['All', 'Listening', 'Reading', 'Writing', 'Integrated'] as const).map(sk => {
+                          const active = progressSkillFilter === sk;
+                          return (
+                            <button
+                              key={sk}
+                              onClick={() => setProgressSkillFilter(sk)}
+                              style={{
+                                padding: '4px 11px',
+                                borderRadius: 16,
+                                border: `1px solid ${active ? C.accent : C.border}`,
+                                background: active ? C.accent : C.card,
+                                color: active ? '#fff' : C.sub,
+                                fontSize: 11,
+                                fontWeight: 800,
+                                cursor: 'pointer',
+                                transition: 'all .15s ease'
+                              }}
+                            >
+                              {sk === 'All' ? tx('Tất cả kỹ năng', 'All Skills') : sk}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <BandTrendChart data={bandSeries(filteredForProgress)} color={C.accent} height={170} />
+                    </div>
                   </div>
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <BandTrendChart data={bandSeries(filteredForProgress)} color={C.accent} height={190} />
+                );
+              })()}
+
+              {/* WEAKNESS ANALYSIS SECTION */}
+              {renderErrorDnaSection(me, dnaInFlightRef.current.has(me.id))}
+            </>)}
+
+            {/* SUB-TAB 2: TÀI LIỆU & LỊCH SỬ LỚP */}
+            {progressSubTab === 'resources' && (<>
+              <div className="card" style={{ marginBottom: 20 }}>
+                <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}><Ico name="folder" size={18} color={C.accent} /> {t('drive_hub_title')}</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 15, marginTop: 15 }}>
+                  {myLinks.map(l => (
+                    <div key={l.id} style={{ background: C.bg, padding: 15, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                      <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: 35 }}>
+                          {getFileIcon(l.url)} {l.title}
+                      </div>
+                      <div style={{display: 'flex', gap: 8}}>
+                        <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, background: C.accent, color: "#fff", padding: "8px", borderRadius: 6, fontSize: 11, textDecoration: "none", textAlign:'center', fontWeight: 700 }}>{t('open_download')}</a>
+                      </div>
+                    </div>
+                  ))}
+                  {myLinks.length === 0 && <div style={{color: C.sub, fontSize: 13, gridColumn: '1 / -1', textAlign: 'center', padding: 20}}>{t('no_shared_links')}</div>}
                 </div>
               </div>
-            );
-          })()}
+
+              <div className="card">
+                <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
+                {myHistory.map(h => (
+                  <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
+                      <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
+                    </div>
+                    <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
+                    <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
+                    <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+                      {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
+                    </div>
+                  </div>
+                ))}
+                {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
+              </div>
+            </>)}
           </>)}
 
 
@@ -22805,45 +22901,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           </div>
           </>)}
 
-          {/* ===== TAB: TIẾN ĐỘ (tiếp) — tài nguyên & lịch sử buổi học ===== */}
-          {portalTab === "progress" && (<>
-          <div className="card" style={{ marginBottom: 24 }}>
-            <h3 style={{marginTop: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}><Ico name="folder" size={18} color={C.accent} /> {t('drive_hub_title')}</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 15, marginTop: 15 }}>
-              {myLinks.map(l => {
-                return (
-                <div key={l.id} style={{ background: C.bg, padding: 15, borderRadius: 10, border: `1px solid ${C.border}` }}>
-                  <div style={{ fontWeight: 800, marginBottom: 10, fontSize: 13, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', height: 35 }}>
-                      {getFileIcon(l.url)} {l.title}
-                  </div>
-                  <div style={{display: 'flex', gap: 8}}>
-                    <a href={l.url} target="_blank" rel="noreferrer" style={{ flex: 1, background: C.accent, color: "#fff", padding: "8px", borderRadius: 6, fontSize: 11, textDecoration: "none", textAlign:'center', fontWeight: 700 }}>{t('open_download')}</a>
-                  </div>
-                </div>
-              )})}
-              {myLinks.length === 0 && <div style={{color: C.sub, fontSize: 13, gridColumn: '1 / -1', textAlign: 'center', padding: 20}}>{t('no_shared_links')}</div>}
-            </div>
-          </div>
 
-          <div className="card">
-            <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
-            {myHistory.map(h => {
-              return (
-              <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
-                  <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
-                </div>
-                <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
-                <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
-                <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-                  {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
-                </div>
-              </div>
-            )})}
-            {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
-          </div>
-          </>)}
         </main>
         {/* MOBILE BOTTOM TABS */}
         {isMobile && (
