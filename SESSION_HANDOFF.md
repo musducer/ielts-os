@@ -1,5 +1,16 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-26)
 
+## Khắc Phục Lỗi Trắng Trang Minified React Error #310 (Hook Order Mismatch) — 2026-10-26
+
+- **Nguyên nhân gốc rễ (Root Cause)**:
+  - Lỗi `Minified React error #310` ("Rendered more hooks than during the previous render"): xảy ra khi React phát hiện sự chênh lệch về số lượng Hook giữa các lần re-render.
+  - Do `src/components_split/REVIEW_QUIZ.txt` được tiêm thẳng vào bên trong khối điều kiện `if (reviewQuiz) { ... }` của `App.template.tsx`, việc đặt hook `useEffect` phục vụ lắng nghe sự kiện đóng/cuộn của Popover bên trong `REVIEW_QUIZ.txt` đã vi phạm nghiêm trọng **Luật của Hook** (Rules of Hooks).
+  - Khi học viên ở màn hình khác (ví dụ `/student/exams`, `reviewQuiz` là `null`), hook này không được gọi; nhưng khi vào màn Review hoặc re-render, hook lại được kích hoạt, làm lệch thứ tự hook nội bộ của React và gây crash trắng trang.
+- **Giải pháp & Luật bất biến (Core Fix & Law)**:
+  - **Đưa 100% React Hooks lên Top-Level của `IeltsSupremeOS`**: Di chuyển toàn bộ hàm `updateHeadingPopoverPosition` và `useEffect` xử lý Escape / click outside / scroll của Popover lên phần đầu của `IeltsSupremeOS` trong `src/App.template.tsx` (ngay cạnh `useState` của `activeHeadingPopover`), đảm bảo React luôn thực thi chính xác số lượng Hook trên mọi lần render.
+  - Xóa bỏ hoàn toàn lệnh gọi `useEffect` trong `src/components_split/REVIEW_QUIZ.txt`.
+  - **Luật bất biến**: Tuyệt đối **KHÔNG BAO GIỜ** khai báo bất kỳ React Hook nào (`useState`, `useEffect`, `useMemo`, `useCallback`, `useRef`) bên trong các tệp `components_split/*.txt` vì toàn bộ các tệp này đều được nhúng sau các khối rẽ nhánh điều kiện của component chính.
+
 ## Cải Tiến Trải Nghiệm Xem Lại Bài Matching Headings & Tinh Chỉnh Bảng Từ Đồng Nghĩa AI (`REVIEW_QUIZ.txt`, `api/index.py`, `App.template.tsx`) — 2026-10-26
 
 - **Chuyển Toàn Bộ Khối Review Matching Headings (`DRAG_DROP_HEADING`) Sang Cột Trái Bài Đọc**:

@@ -4237,6 +4237,73 @@ export default function IeltsSupremeOS() {
     anchorEl?: HTMLElement | null;
     anchorRect?: { top: number; bottom: number; left: number; right: number; width: number; height: number };
   } | null>(null);
+
+  const updateHeadingPopoverPosition = (anchorEl: HTMLElement) => {
+    const barEl = (anchorEl.closest('.rv-heading-slot-review-bar') as HTMLElement) || anchorEl;
+    const barRect = barEl.getBoundingClientRect();
+    const leftPaneEl = document.querySelector('.rv-pane-left-scroll') as HTMLElement;
+    const paneRect = leftPaneEl ? leftPaneEl.getBoundingClientRect() : {
+      top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth * 0.5, width: window.innerWidth * 0.5
+    };
+
+    const spaceBelow = window.innerHeight - barRect.bottom - 16;
+    const spaceAbove = barRect.top - 16;
+    const placeBelow = spaceBelow >= 260 || spaceBelow >= spaceAbove;
+
+    const popoverWidth = Math.min(520, Math.max(320, paneRect.width - 24));
+    const left = Math.max(paneRect.left + 12, Math.min(barRect.left, paneRect.right - popoverWidth - 12));
+
+    const popoverTop = placeBelow ? barRect.bottom + 8 : undefined;
+    const popoverBottom = !placeBelow ? (window.innerHeight - barRect.top + 8) : undefined;
+    const maxHeight = Math.min(360, Math.max(spaceBelow, spaceAbove) - 24);
+
+    return {
+      top: popoverTop !== undefined ? popoverTop : 0,
+      bottom: popoverBottom !== undefined ? popoverBottom : 0,
+      left,
+      right: left + popoverWidth,
+      width: popoverWidth,
+      height: maxHeight,
+    };
+  };
+
+  useEffect(() => {
+    if (!activeHeadingPopover) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveHeadingPopover(null);
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      const popEl = document.getElementById("rv-heading-popover");
+      if (popEl && !popEl.contains(e.target as Node)) {
+        const target = e.target as HTMLElement;
+        if (!target.closest('.micro-btn-bulb') && !target.closest('.micro-btn-ai')) {
+          setActiveHeadingPopover(null);
+        }
+      }
+    };
+    const onScrollOrResize = () => {
+      if (!activeHeadingPopover?.anchorEl) return;
+      const barRect = activeHeadingPopover.anchorEl.getBoundingClientRect();
+      if (barRect.bottom < 0 || barRect.top > window.innerHeight) {
+        setActiveHeadingPopover(null);
+        return;
+      }
+      const newRect = updateHeadingPopoverPosition(activeHeadingPopover.anchorEl);
+      setActiveHeadingPopover(prev => prev ? { ...prev, anchorRect: newRect } : null);
+    };
+
+    const leftPaneEl = document.querySelector('.rv-pane-left-scroll');
+    leftPaneEl?.addEventListener('scroll', onScrollOrResize, { passive: true });
+    window.addEventListener('resize', onScrollOrResize, { passive: true });
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      leftPaneEl?.removeEventListener('scroll', onScrollOrResize);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeHeadingPopover?.anchorEl, activeHeadingPopover?.qId]);
   const [rvFlashQuestionNum, setRvFlashQuestionNum] = useState<number | null>(null);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
