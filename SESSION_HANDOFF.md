@@ -1,5 +1,31 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-26)
 
+## Cải Tiến Trải Nghiệm Xem Lại Bài Matching Headings & Tinh Chỉnh Bảng Từ Đồng Nghĩa AI (`REVIEW_QUIZ.txt`, `api/index.py`, `App.template.tsx`) — 2026-10-26
+
+- **Chuyển Toàn Bộ Khối Review Matching Headings (`DRAG_DROP_HEADING`) Sang Cột Trái Bài Đọc**:
+  - Bóc tách mã `[HEADING_SLOT]` kiên cố bằng regex đa thẻ (`(?:<(?:div|p)[^>]*>\s*)?(?:<(?:span|strong|b|em|i)[^>]*>\s*)*\[HEADING_SLOT\]...`), triệt tiêu 100% hiện tượng rò rỉ mã `[HEADING_SLOT]` ra văn bản bài đọc.
+  - Hiển thị thanh Heading Bar tương tác trực tiếp phía trên mỗi đoạn văn (Paragraph A, B, C...):
+    - Huy hiệu số thứ tự câu hỏi (`rv-qnum-badge`), nhãn tên đoạn (`Paragraph A`).
+    - Trạng thái trả lời rõ ràng: gạch ngang đỏ nếu chọn sai (hoặc màu cam nếu bỏ trống), mũi tên trỏ tới đáp án đúng màu xanh lá.
+    - Hàm chuẩn hóa `formatCleanHeadingLabel` loại bỏ triệt để tiền tố lặp thừa (`ii. B. The department...` -> `ii. The department...`).
+    - Cụm micro-button thao tác nhanh đặt thẳng hàng: `[💡 Giáo viên]`, `[📍 Định vị]` và `[💡 AI]` (kèm đầy đủ icon bóng đèn SVG và chữ in đậm, không bị rớt dòng).
+- **Đơn Giản Hóa Cột Phải Bài Thi Cho Dạng Nối Tiêu Đề**:
+  - Loại bỏ hoàn toàn các thẻ card câu hỏi nối tiêu đề riêng lẻ gây choán chỗ ở cột phải.
+  - Tinh gọn thành 1 thẻ duy nhất: **"List of Headings"** (danh mục tiêu đề) với các phương án đúng được tô nền xanh lá và gắn nhãn `✓ Đúng`. Kèm 1 dòng chỉ dẫn trực quan hướng dẫn học viên bấm nút giải thích trực tiếp tại từng đoạn bên cột bài đọc.
+- **Cửa Sổ Giải Thích Nổi Tự Động Định Vị Thông Minh (Smart Auto-Flip Popover)**:
+  - Thay thế việc chèn inline accordion làm xô lệch dòng bài đọc bằng popover nổi thông minh (`#rv-heading-popover`).
+  - Tự động đo khoảng trống khả dụng (trên/dưới), auto-flip lật lên trên hoặc xuống dưới thanh heading bar để không bị che khuất. Kẹp biên ngang an toàn trong cột bài đọc.
+  - Tự động đóng khi nhấn phím `Escape`, nhấp chuột ra ngoài (click outside) hoặc khi cuộn trang vượt quá tầm nhìn.
+- **Bảo Vệ Văn Bản Bài Đọc Khỏi Ô Nhiễm Highlight ("Highlight Pollution")**:
+  - Chặn đứng hàm `rvLocateQuestionEvidence` đối với `DRAG_DROP_HEADING`, ngăn việc lấy toàn bộ câu tiêu đề heading đem đi highlight tràn lan trong văn bản đoạn văn.
+  - Bổ sung hàm riêng biệt `rvLocateHeadingEvidence`: chỉ highlight khi có câu trích dẫn chứng minh cụ thể từ AI hoặc Giáo viên; nếu không có, tự động cuộn mượt và nháy viền nhẹ (`rv-flash-ring`) tại thanh tiêu đề đoạn tương ứng.
+- **Chuẩn Hóa Option B Cho Bảng Đối Chiếu Từ Đồng Nghĩa (Synonym/Paraphrase Table)**:
+  - Dạng bài Matching Headings và Main Idea kiểm tra ý chính toàn đoạn văn chứ không kiểm tra từ vựng đơn lẻ -> Lược bỏ hoàn toàn `"1. ĐỐI CHIẾU TỪ ĐỒNG NGHĨA"` (cả phía backend Prompt lẫn frontend Render). Khối dẫn chứng được đổi thành `"Ý CHÍNH CỦA ĐOẠN & DẪN CHỨNG CỐT LÕI"`.
+  - Đối với các câu hỏi chi tiết:
+    - **Rule A (True Source Membership)**: Bắt buộc từ khóa câu hỏi phải thực sự xuất hiện trong đề bài/phương án, từ khóa dẫn chứng phải thực sự nằm trong bài đọc. Tự động đảo vị trí nếu AI trả ngược cột (`auto-swap`).
+    - **Rule B (No Echoes)**: Loại trừ các cặp từ giống nhau hoặc trùng lặp >= 70% số từ (ví dụ `education` ⇄ `education`).
+    - **Rule C (Graceful Auto-Hide)**: Nếu 0 cặp từ nào vượt qua kiểm duyệt, tự động ẩn Khối 1 và hiển thị khối dẫn chứng bắt đầu sạch sẽ bằng `"DẪN CHỨNG CHÍNH XÁC VÀ GIẢI THÍCH CHI TIẾT"`, không bao giờ hiển thị nhãn số `"2."` bơ vơ.
+
 ## Tối Ưu Tốc Độ `/api/ai_explain` Xuống 1.0 – 2.2s & Caching Tức Thì < 50ms (Sub-2s Cold / <50ms Cached AI Explanations) — 2026-10-26
 
 - **Triệt tiêu nhân đôi bài đọc & Siết gọn cửa sổ Transcript bài nghe**:

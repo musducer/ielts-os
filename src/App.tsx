@@ -4231,6 +4231,12 @@ export default function IeltsSupremeOS() {
   const [rvRetryMode, setRvRetryMode] = useState(false);
   const [rvRetryAnswers, setRvRetryAnswers] = useState<Record<string, any>>({});
   const [rvOpenDrawers, setRvOpenDrawers] = useState<Record<string, "teacher" | "ai" | null>>({});
+  const [activeHeadingPopover, setActiveHeadingPopover] = useState<{
+    qId: string;
+    mode: 'teacher' | 'ai';
+    anchorEl?: HTMLElement | null;
+    anchorRect?: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+  } | null>(null);
   const [rvFlashQuestionNum, setRvFlashQuestionNum] = useState<number | null>(null);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
@@ -8087,7 +8093,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const headingLabel = (value: any) => {
           const heading = headingFor(value);
           const id = heading?.id || normalizeHeadingId(value);
-          return heading?.text ? `${id}. ${headingPlainText(heading.text)}` : String(value ?? "");
+          const rawText = heading?.text ? headingPlainText(heading.text) : String(value ?? "");
+          const cleanText = rawText.replace(/^\s*(?:[ivxlcdm]+[\.\)]\s*)?(?:[A-Z][\.\)]\s*)?(?:[ivxlcdm]+[\.\)]\s*)?/i, "").trim();
+          return id ? `${id}. ${cleanText}` : cleanText;
         };
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
@@ -8170,7 +8178,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
         return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
       })();
-      const matchingTargetLabel = matchingKind === 'paragraph_information' ? correctStr.trim().toUpperCase().replace(/[.)]$/, '') : '';
+      const matchingTargetLabel = (() => {
+        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
+        if (matchingKind === 'headings') {
+          const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
+          if (m) return m[1].toUpperCase();
+          if (timestampQuestionIndex >= 0) return String.fromCharCode(65 + timestampQuestionIndex);
+        }
+        return '';
+      })();
       const matchingTargetText = (() => {
         if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
         const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
@@ -13059,6 +13075,72 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       }
 
       const cleanMediaUrl = (url: any) => normalizeExternalMediaUrl(url);
+
+      const formatCleanHeadingLabel = (id: string, rawText: string) => {
+          const cleanId = normalizeHeadingId(id);
+          const cleanHeadingText = headingPlainText(rawText)
+              .replace(/^\s*(?:[ivxlcdm]+[\.\)]\s*)?(?:[A-Z][\.\)]\s*)?(?:[ivxlcdm]+[\.\)]\s*)?/i, "")
+              .trim();
+          return cleanId ? `${cleanId}. ${cleanHeadingText}` : cleanHeadingText;
+      };
+
+      const validateParaphrasePairs = (
+          rawPairs: Array<{ questionTerm?: string; passageTerm?: string; note?: string }>,
+          qText: string,
+          ansText: string,
+          sourceText: string
+      ) => {
+          if (!Array.isArray(rawPairs) || !rawPairs.length) return [];
+          const normText = (s: any) => String(s || "").toLowerCase().replace(/['"“”‘’]/g, "").replace(/[.,!?;:()\[\]{}]/g, " ").replace(/\s+/g, " ").trim();
+          const stripArticles = (s: string) => s.replace(/\b(the|a|an|of|to|in|for|on|with|at|by|from|and|or)\b\s+/g, " ").replace(/\s+/g, " ").trim();
+
+          const qHay = normText(`${qText} ${ansText}`);
+          const sHay = normText(sourceText);
+          const stopWords = new Set(["the", "a", "an", "of", "to", "in", "for", "on", "with", "at", "by", "from", "and", "or"]);
+
+          return rawPairs.map(p => {
+              let qTerm = String(p.questionTerm || "").trim();
+              let pTerm = String(p.passageTerm || "").trim();
+              if (!qTerm || !pTerm) return null;
+
+              let nQ = normText(qTerm);
+              let nP = normText(pTerm);
+
+              // Auto-swap if inverted
+              if (!qHay.includes(nQ) && sHay.includes(nQ) && qHay.includes(nP) && !sHay.includes(nP)) {
+                  const temp = qTerm;
+                  qTerm = pTerm;
+                  pTerm = temp;
+                  nQ = normText(qTerm);
+                  nP = normText(pTerm);
+              }
+
+              // Rule A: True Source Membership
+              const qWords = stripArticles(nQ).split(" ").filter(w => w.length >= 3 && !stopWords.has(w));
+              const pWords = stripArticles(nP).split(" ").filter(w => w.length >= 3 && !stopWords.has(w));
+              const qInStem = qHay ? (qHay.includes(nQ) || (qWords.length >= 2 && qWords.every(w => qHay.includes(w)))) : true;
+              const pInSource = sHay ? (sHay.includes(nP) || (pWords.length >= 2 && pWords.every(w => sHay.includes(w)))) : true;
+
+              if (!qInStem || !pInSource) return null;
+
+              // Rule B: No Identical or Trivial Substring Echoes
+              const cleanQ = stripArticles(nQ);
+              const cleanP = stripArticles(nP);
+              if (cleanQ === cleanP) return null;
+
+              const setQ = new Set(cleanQ.split(" ").filter(Boolean));
+              const setP = new Set(cleanP.split(" ").filter(Boolean));
+              if (!setQ.size || !setP.size) return null;
+
+              const intersection = new Set([...setQ].filter(x => setP.has(x)));
+              const maxWords = Math.max(setQ.size, setP.size);
+              const minWords = Math.min(setQ.size, setP.size);
+              if (maxWords > 0 && intersection.size / maxWords >= 0.7) return null;
+              if (minWords > 0 && intersection.size / minWords >= 0.85 && (cleanQ.includes(cleanP) || cleanP.includes(cleanQ))) return null;
+
+              return { questionTerm: qTerm, passageTerm: pTerm, note: p.note || "" };
+          }).filter(Boolean) as Array<{ questionTerm: string; passageTerm: string; note: string }>;
+      };
       const rvRawSections = Array.isArray(reviewQuiz.quiz.sections) ? reviewQuiz.quiz.sections : [];
       const rvAllQuestions: any[] = Array.isArray(reviewQuiz.quiz.questions) && reviewQuiz.quiz.questions.length > 0
           ? reviewQuiz.quiz.questions
@@ -13335,7 +13417,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               return;
           }
           const expected = String(question?.correctAnswer || "").split("/")[0].trim();
-          if (expected.length >= 4) rvJumpToEvidence([expected]);
+          if (expected.length >= 4 && question?.type !== "DRAG_DROP_HEADING") rvJumpToEvidence([expected]);
       };
 
       const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
@@ -13369,99 +13451,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
               ]);
               const headingOptions = Array.from(headingCatalog.values());
-              return isSingleQuestionCorrect({ ...q, options: headingOptions }, ans) ? "correct" : "wrong";
-          }
-          return isSingleQuestionCorrect(q, ans) ? "correct" : "wrong";
-      };
-
-      const rvCompletionAnswer = (q: any) => {
-          const raw = rvEffectiveAnswers?.[q?.id];
-          const blank = raw === undefined || raw === null || String(raw).trim() === "";
-          const given = blank ? "" : String(raw).trim();
-          const accepted = String(q?.correctAnswer ?? "").split("/").map((value: string) => value.trim().toLocaleLowerCase()).filter(Boolean);
-          return {
-              blank,
-              given,
-              expected: String(q?.correctAnswer ?? "").split("/")[0].trim(),
-              correct: !blank && accepted.includes(given.toLocaleLowerCase()),
-          };
-      };
-
-      const rvFormatOptionWithLetter = (q: any, rawValue: any): string => {
-          const rawStr = String(rawValue ?? "").trim();
-          if (!rawStr) return "";
-          const options = Array.isArray(q?.options) ? q.options : [];
-          if (!options.length) return rawStr;
-          let idx = -1;
-          if (/^[A-Za-z]$/.test(rawStr)) {
-              idx = rawStr.toUpperCase().charCodeAt(0) - 65;
-          } else if (/^\d+$/.test(rawStr) && Number(rawStr) < options.length) {
-              idx = Number(rawStr);
-          } else {
-              idx = options.findIndex((opt: any, oIdx: number) =>
-                  normalizeComparableAnswer(opt) === normalizeComparableAnswer(rawStr)
-                  || matchingOptionLabel(opt, oIdx).toLowerCase() === rawStr.toLowerCase()
-              );
-          }
-          if (idx >= 0 && idx < options.length) {
-              const letter = matchingOptionLabel(options[idx], idx);
-              const text = cleanOptionAnswerText(options[idx]);
-              if (!text || text.toUpperCase() === letter) return letter;
-              return `${letter}. ${text}`;
-          }
-          return resolveMatchingAnswerText(q, rawValue) || rawStr;
-      };
-
-      const rvFormatDisplayAnswers = (q: any, answerMap: Record<string, any> = rvSubmittedAnswers) => {
-          const raw = answerMap?.[q?.id];
-          const blank = raw === undefined || raw === null || String(raw).trim() === "" || (Array.isArray(raw) && raw.length === 0);
-          if (q?.type === "CHOICE") {
-              const cIdx = Number(q.correctAnswer);
-              const cLetter = !isNaN(cIdx) ? String.fromCharCode(65 + cIdx) : String(q.correctAnswer || "").trim().toUpperCase();
-              const cText = (!isNaN(cIdx) && q.options?.[cIdx]) ? cleanOptionAnswerText(q.options[cIdx]) : "";
-              const sIdx = Number(raw);
-              const sLetter = !blank && !isNaN(sIdx) ? String.fromCharCode(65 + sIdx) : (!blank ? String(raw).trim().toUpperCase() : "");
-              const isCorr = !blank && (sLetter === cLetter || isSingleQuestionCorrect(q, raw));
-              return {
-                  blank,
-                  given: blank ? "(bỏ trống)" : sLetter,
-                  expected: cLetter,
-                  expectedFull: cText ? `${cLetter}. ${cText}` : cLetter,
-                  expectedShort: cLetter,
-                  correct: isCorr,
-              };
-          }
-          if (q?.type === "CHOICE_MULTIPLE") {
-              const multi = getChoiceMultipleOutcome([q], { [q.id]: raw });
-              const sLetters = (multi.selected || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
-              const cLetters = (multi.correct || []).map((idx: number) => String.fromCharCode(65 + Number(idx))).join(", ");
-              return {
-                  blank: !sLetters,
-                  given: sLetters || "(bỏ trống)",
-                  expected: cLetters,
-                  expectedFull: cLetters,
-                  expectedShort: cLetters,
-                  correct: Boolean(multi.isFullyCorrect),
-              };
-          }
-          if (q?.type === "DRAG_DROP_HEADING") {
-              const headingCatalog = getHeadingCatalog([
-                  q,
-                  reviewQuiz.quiz,
-                  ...rvAllQuestions,
-                  ...rvSections.flatMap((s: any) => [s, ...(s?.questions || [])]),
-              ]);
-              const headingOptions = Array.from(headingCatalog.values());
               const givenMeta = blank ? { id: "", text: "" } : resolveHeadingAnswerMeta({ ...q, options: headingOptions }, raw);
               const expectedMeta = resolveHeadingAnswerMeta({ ...q, options: headingOptions }, q.correctAnswer);
-              const givenId = normalizeHeadingId(givenMeta.id) || String(raw || "");
-              const expectedId = normalizeHeadingId(expectedMeta.id) || String(q.correctAnswer || "");
-              const expectedFull = expectedMeta.text ? `${expectedId}. ${headingPlainText(expectedMeta.text)}` : expectedId;
+              const givenId = normalizeHeadingId(givenMeta.id) || String(raw || "").trim();
+              const expectedId = normalizeHeadingId(expectedMeta.id) || String(q.correctAnswer || "").trim();
+              const expectedFormatted = formatCleanHeadingLabel(expectedId, expectedMeta.text || q.correctAnswer);
+              const givenFormatted = givenId ? formatCleanHeadingLabel(givenId, givenMeta.text || raw) : "";
               return {
                   blank,
                   given: blank ? "(bỏ trống)" : givenId,
-                  expected: expectedFull,
-                  expectedFull,
+                  givenFull: givenFormatted,
+                  expected: expectedFormatted,
+                  expectedFull: expectedFormatted,
                   expectedShort: expectedId,
                   correct: !blank && isSingleQuestionCorrect({ ...q, options: headingOptions }, raw),
               };
@@ -13537,6 +13538,84 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           ? `${String(Math.floor(rvTimeSpentSecs / 60)).padStart(2, "0")}:${String(rvTimeSpentSecs % 60).padStart(2, "0")}`
           : "--:--";
 
+      const rvLocateHeadingEvidence = (hq: any, hi: number, chunkHtml: string) => {
+          const manual = rvManualExplanationOf(hq);
+          const aiState = explainMap[hq?.id];
+          const aiQuote = String(aiState?.structured?.evidence?.quote || "").trim();
+          const manualQuote = manual?.parsedQuotes?.[0] || "";
+          const candidateQuote = aiQuote || manualQuote;
+
+          const normCorr = rvNormalizeEvidenceText(hq.correctAnswer);
+          const headingCatalog = getHeadingCatalog([hq, reviewQuiz.quiz]);
+          const headingMeta = resolveHeadingAnswerMeta({ ...hq, options: Array.from(headingCatalog.values()) }, hq.correctAnswer);
+          const normHeadingText = rvNormalizeEvidenceText(headingMeta.text);
+
+          const normCand = rvNormalizeEvidenceText(candidateQuote);
+          const isHeadingTextEcho = normCand === normCorr || normCand === normHeadingText || normCand === normalizeHeadingId(hq.correctAnswer);
+
+          if (candidateQuote && candidateQuote.length >= 10 && !isHeadingTextEcho) {
+              rvJumpToEvidence([candidateQuote]);
+              return;
+          }
+
+          const slotEl = document.getElementById(`heading-slot-review-${hq.id}`);
+          if (slotEl) {
+              slotEl.scrollIntoView({ behavior: "smooth", block: "center" });
+              slotEl.classList.add("rv-flash-ring");
+              setTimeout(() => {
+                  slotEl.classList.remove("rv-flash-ring");
+              }, 1600);
+          }
+      };
+
+      const updateHeadingPopoverPosition = (anchorEl: HTMLElement) => {
+          const barEl = (anchorEl.closest('.rv-heading-slot-review-bar') as HTMLElement) || anchorEl;
+          const barRect = barEl.getBoundingClientRect();
+          const leftPaneEl = document.querySelector('.rv-pane-left-scroll') as HTMLElement;
+          const paneRect = leftPaneEl ? leftPaneEl.getBoundingClientRect() : {
+              top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth * 0.5, width: window.innerWidth * 0.5
+          };
+
+          const spaceBelow = window.innerHeight - barRect.bottom - 16;
+          const spaceAbove = barRect.top - 16;
+          const placeBelow = spaceBelow >= 260 || spaceBelow >= spaceAbove;
+
+          const popoverWidth = Math.min(520, Math.max(320, paneRect.width - 24));
+          const left = Math.max(paneRect.left + 12, Math.min(barRect.left, paneRect.right - popoverWidth - 12));
+
+          const popoverTop = placeBelow ? barRect.bottom + 8 : undefined;
+          const popoverBottom = !placeBelow ? (window.innerHeight - barRect.top + 8) : undefined;
+          const maxHeight = Math.min(360, Math.max(spaceBelow, spaceAbove) - 24);
+
+          return {
+              top: popoverTop !== undefined ? popoverTop : 0,
+              bottom: popoverBottom !== undefined ? popoverBottom : 0,
+              left,
+              right: left + popoverWidth,
+              width: popoverWidth,
+              height: maxHeight,
+          };
+      };
+
+      const handleOpenHeadingPopover = (question: any, mode: 'teacher' | 'ai', buttonEl: HTMLElement) => {
+          if (activeHeadingPopover && activeHeadingPopover.qId === question.id && activeHeadingPopover.mode === mode) {
+              setActiveHeadingPopover(null);
+              return;
+          }
+          const rect = updateHeadingPopoverPosition(buttonEl);
+          setActiveHeadingPopover({
+              qId: question.id,
+              mode,
+              anchorEl: buttonEl,
+              anchorRect: rect,
+          });
+
+          if (mode === "ai" && !explainMap[question.id] && !explainMap[question.id]?.loading) {
+              const studentAns = rvSubmittedAnswers?.[question.id];
+              void handleAiExplain(question, studentAns, reviewQuiz.quiz);
+          }
+      };
+
       // Render Inline Micro-Action Cluster (4 compact buttons right next to each question/answer)
       const rvRenderInlineMicroCluster = (question: any, studentAnswer?: any, aiQuestion?: any) => {
           if (!question?.id) return null;
@@ -13594,8 +13673,14 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       className={`micro-btn-ai ${openMode === "ai" ? "is-active" : ""}`}
                       onClick={() => rvToggleDrawer(question.id, "ai", aiQuestion || question, studentAnswer)}
                       title="Giải thích AI (3 dòng súc tích)"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 3.5 }}
                   >
-                      {aiState?.loading ? "..." : "AI"}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 18h6" />
+                          <path d="M10 22h4" />
+                          <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                      </svg>
+                      <span>{aiState?.loading ? "..." : "AI"}</span>
                   </button>
               </span>
           );
@@ -13783,7 +13868,28 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
           const sourceLabel = rvActiveIsListening ? "Lời thoại" : "Bài đọc";
 
-          let block3Title = "3. PHÂN TÍCH NGUYÊN DO CHỌN SAI";
+          const isHeadingQuestion = Boolean(
+              question?.type === "DRAG_DROP_HEADING" ||
+              question?.subType === "Matching Headings" ||
+              question?.subType === "Main Idea" ||
+              question?.subType === "Title" ||
+              /heading|main\s*idea/i.test(String(question?.subType || ""))
+          );
+
+          if (isHeadingQuestion) {
+              paraphrasePairs = [];
+          } else if (paraphrasePairs.length > 0) {
+              const qStem = question?.text || "";
+              const qAns = question?.correctAnswer || "";
+              const passageSrc = String(
+                  (rvSections[rvActiveIdx]?.passage || reviewQuiz.quiz.passage || document.getElementById("ielts-passage-content")?.textContent || "")
+              );
+              paraphrasePairs = validateParaphrasePairs(paraphrasePairs, qStem, qAns, passageSrc);
+          }
+
+          let block3Title = isHeadingQuestion
+              ? "VÌ SAO ĐÁP ÁN BẠN CHỌN CHƯA ĐÚNG"
+              : (paraphrasePairs.length > 0 ? "3. PHÂN TÍCH NGUYÊN DO CHỌN SAI" : "PHÂN TÍCH NGUYÊN DO CHỌN SAI");
           let block3Icon = (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
                   <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
@@ -13792,7 +13898,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               </svg>
           );
           if (isBlank) {
-              block3Title = "3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP";
+              block3Title = isHeadingQuestion
+                  ? "NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT XÁC ĐỊNH Ý CHÍNH"
+                  : (paraphrasePairs.length > 0 ? "3. NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP" : "NGUYÊN DO BỎ TRỐNG & CHIẾN THUẬT BẮT NHỊP");
               block3Icon = (
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
                       <circle cx="12" cy="12" r="10" />
@@ -13800,7 +13908,9 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   </svg>
               );
           } else if (isCorrect) {
-              block3Title = "3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH";
+              block3Title = isHeadingQuestion
+                  ? "LƯU Ý BẪY TIỀM ẨN CỦA ĐOẠN NÀY"
+                  : (paraphrasePairs.length > 0 ? "3. LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH" : "LƯU Ý BẪY TIỀM ẨN CẦN TRÁNH");
               block3Icon = (
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
                       <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
@@ -13843,8 +13953,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
                   <div className="rv-ai-block rv-ai-block-evidence">
                       <div className="rv-ai-block-title">
-                          <span className="rv-ai-block-num">{paraphrasePairs.length > 0 ? "2." : "1."}</span>
-                          DẪN CHỨNG CHÍNH XÁC VÀ GIẢI THÍCH CHI TIẾT
+                          {paraphrasePairs.length > 0 && <span className="rv-ai-block-num">2.</span>}
+                          {isHeadingQuestion ? "Ý CHÍNH CỦA ĐOẠN & DẪN CHỨNG CỐT LÕI" : "DẪN CHỨNG CHÍNH XÁC VÀ GIẢI THÍCH CHI TIẾT"}
                       </div>
                       <div className="rv-ai-evidence-content">
                           {evidenceQuote ? (
@@ -13889,7 +13999,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   {(trapTitle || trapReason) && (
                       <div className={`rv-ai-block rv-ai-block-trap ${isWrong ? "is-wrong" : isBlank ? "is-blank" : "is-correct"}`}>
                           <div className="rv-ai-block-title">
-                              <span className="rv-ai-block-num">{paraphrasePairs.length > 0 ? "3." : "2."}</span>
+                              {!isHeadingQuestion && paraphrasePairs.length > 0 && <span className="rv-ai-block-num">3.</span>}
                               {block3Title}
                           </div>
                           <div className="rv-ai-trap-content">
@@ -13906,6 +14016,44 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               </div>
           );
       };
+
+      useEffect(() => {
+          if (!activeHeadingPopover) return;
+          const handleKeyDown = (e: KeyboardEvent) => {
+              if (e.key === "Escape") setActiveHeadingPopover(null);
+          };
+          const handleClickOutside = (e: MouseEvent) => {
+              const popEl = document.getElementById("rv-heading-popover");
+              if (popEl && !popEl.contains(e.target as Node)) {
+                  const target = e.target as HTMLElement;
+                  if (!target.closest('.micro-btn-bulb') && !target.closest('.micro-btn-ai')) {
+                      setActiveHeadingPopover(null);
+                  }
+              }
+          };
+          const onScrollOrResize = () => {
+              if (!activeHeadingPopover?.anchorEl) return;
+              const barRect = activeHeadingPopover.anchorEl.getBoundingClientRect();
+              if (barRect.bottom < 0 || barRect.top > window.innerHeight) {
+                  setActiveHeadingPopover(null);
+                  return;
+              }
+              const newRect = updateHeadingPopoverPosition(activeHeadingPopover.anchorEl);
+              setActiveHeadingPopover(prev => prev ? { ...prev, anchorRect: newRect } : null);
+          };
+
+          const leftPaneEl = document.querySelector('.rv-pane-left-scroll');
+          leftPaneEl?.addEventListener('scroll', onScrollOrResize, { passive: true });
+          window.addEventListener('resize', onScrollOrResize, { passive: true });
+          window.addEventListener('keydown', handleKeyDown);
+          document.addEventListener('mousedown', handleClickOutside);
+          return () => {
+              leftPaneEl?.removeEventListener('scroll', onScrollOrResize);
+              window.removeEventListener('resize', onScrollOrResize);
+              window.removeEventListener('keydown', handleKeyDown);
+              document.removeEventListener('mousedown', handleClickOutside);
+          };
+      }, [activeHeadingPopover?.anchorEl, activeHeadingPopover?.qId]);
 
       // Render Expandable Inline Drawer (Teacher or AI) directly below the question line/row
       const rvRenderInlineDrawer = (question: any, studentAnswer?: any, aiQuestion?: any) => {
@@ -15857,27 +16005,210 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
                               <div className="rv-pane-left-scroll rv-transcript-panel">
                                   {!rvActiveIsListening ? (() => {
-                                      const passageHtml = (rvSections[rvActiveIdx]?.passage || rvSections[rvActiveIdx]?.passageHtml || reviewQuiz.quiz.passage || (reviewQuiz.quiz as any).passageHtml || "");
-                                      return (
-                                          <>
-                                              {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
-                                                  <img
-                                                      key={idx}
-                                                      src={cleanMediaUrl(imgUrl)}
-                                                      referrerPolicy="no-referrer"
-                                                      loading="lazy"
-                                                      alt="Reading passage illustration"
-                                                      style={{ maxWidth: "100%", height: "auto", objectFit: "contain", borderRadius: 8, display: "block", marginBottom: 16 }}
-                                                  />
-                                              ))}
-                                              <div
-                                                  id="ielts-passage-content"
-                                                  style={{ whiteSpace: "pre-wrap" }}
-                                                  dangerouslySetInnerHTML={{ __html: formatContent(passageHtml) }}
-                                              />
-                                          </>
-                                      );
-                                  })() : (() => {
+                                       const rawPassageHtml = (rvSections[rvActiveIdx]?.passage || rvSections[rvActiveIdx]?.passageHtml || reviewQuiz.quiz.passage || (reviewQuiz.quiz as any).passageHtml || "");
+                                       const headingSlotPattern = String.raw`(?:<(?:div|p)[^>]*>\s*)?(?:<(?:span|strong|b|em|i)[^>]*>\s*)*\[HEADING_SLOT\]\s*(?:<\/(?:span|strong|b|em|i)>\s*)*(?:<\/(?:div|p)>)?`;
+                                       const SLOT_RE = new RegExp(headingSlotPattern, "i");
+                                       const headingQs = rvActiveQuestions.filter((q: any) => q.type === "DRAG_DROP_HEADING");
+
+                                       const cleanChunk = (htmlChunk: string) => String(htmlChunk || "").replace(new RegExp(headingSlotPattern, "gi"), "").replace(/\[HEADING_SLOT\]/gi, "");
+
+                                       if (headingQs.length > 0 && SLOT_RE.test(rawPassageHtml)) {
+                                           const chunks = rawPassageHtml.split(new RegExp(headingSlotPattern, "gi"));
+                                           const allHeadingQuestions = [
+                                               ...headingQs,
+                                               ...(reviewQuiz.quiz?.questions || []),
+                                               ...((reviewQuiz.quiz?.sections || []).flatMap((section: any) => section?.questions || [])),
+                                           ].filter((question: any) => question?.type === "DRAG_DROP_HEADING");
+                                           const headingSources = [
+                                               ...headingQs,
+                                               rvSections?.[rvActiveIdx],
+                                               reviewQuiz.quiz,
+                                               ...allHeadingQuestions,
+                                           ];
+                                           const headingCatalog = getHeadingCatalog(headingSources);
+                                           const headingOptions = Array.from(headingCatalog.values());
+
+                                           return (
+                                               <>
+                                                   {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
+                                                       <img
+                                                           key={idx}
+                                                           src={cleanMediaUrl(imgUrl)}
+                                                           referrerPolicy="no-referrer"
+                                                           loading="lazy"
+                                                           alt="Reading passage illustration"
+                                                           style={{ maxWidth: "100%", height: "auto", objectFit: "contain", borderRadius: 8, display: "block", marginBottom: 16 }}
+                                                       />
+                                                   ))}
+                                                   <div id="ielts-passage-content" style={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}>
+                                                       {chunks[0] && cleanChunk(chunks[0]).trim() && (
+                                                           <div dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(chunks[0])) }} />
+                                                       )}
+                                                       {headingQs.map((hq: any, hi: number) => {
+                                                           const paragraphLetter = String.fromCharCode(65 + hi);
+                                                           const qNum = rvQuestionNumber(hq);
+                                                           const rawAns = rvSubmittedAnswers?.[hq.id];
+                                                           const disp = rvFormatDisplayAnswers({ ...hq, options: headingOptions }, rvSubmittedAnswers);
+                                                           const isCorrect = Boolean(disp.correct);
+                                                           const isSkipped = Boolean(disp.blank);
+
+                                                           const expectedMeta = resolveHeadingAnswerMeta({ ...hq, options: headingOptions }, hq.correctAnswer);
+                                                           const expectedId = normalizeHeadingId(expectedMeta.id || hq.correctAnswer);
+                                                           const expectedFormatted = formatCleanHeadingLabel(expectedId, expectedMeta.text || hq.correctAnswer);
+
+                                                           const givenMeta = resolveHeadingAnswerMeta({ ...hq, options: headingOptions }, rawAns);
+                                                           const givenId = normalizeHeadingId(givenMeta.id || rawAns);
+                                                           const givenFormatted = givenId ? formatCleanHeadingLabel(givenId, givenMeta.text || rawAns) : "";
+
+                                                           return (
+                                                               <React.Fragment key={hq.id}>
+                                                                   <div
+                                                                       id={`heading-slot-review-${hq.id}`}
+                                                                       className="rv-heading-slot-review-bar notranslate"
+                                                                       translate="no"
+                                                                       style={{
+                                                                           margin: "20px 0 10px",
+                                                                           padding: "8px 12px",
+                                                                           borderRadius: 8,
+                                                                           background: isCorrect ? "#F0FDF4" : isSkipped ? "#FFFBEB" : "#FEF2F2",
+                                                                           border: `1.5px ${isCorrect ? "solid #86EFAC" : isSkipped ? "dashed #FCD34D" : "solid #FCA5A5"}`,
+                                                                           display: "flex",
+                                                                           alignItems: "center",
+                                                                           justifyContent: "space-between",
+                                                                           flexWrap: "wrap",
+                                                                           gap: 10,
+                                                                       }}
+                                                                   >
+                                                                       <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 auto", minWidth: 0, flexWrap: "wrap" }}>
+                                                                           <span
+                                                                               className="rv-qnum-badge"
+                                                                               style={{
+                                                                                   display: "inline-flex",
+                                                                                   alignItems: "center",
+                                                                                   justifyContent: "center",
+                                                                                   minWidth: 26,
+                                                                                   height: 24,
+                                                                                   padding: "0 6px",
+                                                                                   borderRadius: 6,
+                                                                                   background: "#292524",
+                                                                                   color: "#FFFFFF",
+                                                                                   fontWeight: 800,
+                                                                                   fontSize: 12,
+                                                                               }}
+                                                                           >
+                                                                               {qNum}
+                                                                           </span>
+                                                                           <span style={{ fontSize: 13, fontWeight: 700, color: "#57534E", marginRight: 2 }}>
+                                                                               Paragraph {paragraphLetter}
+                                                                           </span>
+
+                                                                           {isCorrect ? (
+                                                                               <span style={{ fontSize: 13, fontWeight: 700, color: "#15803D", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                                                                                   <span style={{ fontWeight: 800, color: "#16A34A" }}>✓</span>
+                                                                                   <span>{expectedFormatted}</span>
+                                                                               </span>
+                                                                           ) : (
+                                                                               <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                                                                   <span
+                                                                                       title={givenFormatted || (isSkipped ? "Chưa chọn heading" : String(rawAns || ""))}
+                                                                                       style={{
+                                                                                           textDecoration: "line-through",
+                                                                                           color: isSkipped ? "#D97706" : "#B91C1C",
+                                                                                           fontWeight: 700,
+                                                                                           cursor: "help",
+                                                                                       }}
+                                                                                   >
+                                                                                       {givenId || (isSkipped ? "Bỏ trống" : String(rawAns || ""))}
+                                                                                   </span>
+                                                                                   <span style={{ color: "#78716C", fontWeight: 700 }}>→</span>
+                                                                                   <span style={{ color: "#15803D", fontWeight: 800 }}>
+                                                                                       {expectedFormatted}
+                                                                                   </span>
+                                                                               </span>
+                                                                           )}
+                                                                       </div>
+
+                                                                       <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                                                           {(userRole === "TEACHER" || rvManualExplanationOf(hq)?.rawText) && (
+                                                                               <button
+                                                                                   type="button"
+                                                                                   className={`micro-btn-bulb ${activeHeadingPopover?.qId === hq.id && activeHeadingPopover?.mode === "teacher" ? "is-active" : ""}`}
+                                                                                   onClick={(e) => handleOpenHeadingPopover(hq, "teacher", e.currentTarget)}
+                                                                                   title="Giải thích của Giáo viên"
+                                                                               >
+                                                                                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                                                                       <path d="M9 18h6" />
+                                                                                       <path d="M10 22h4" />
+                                                                                       <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                                                                                   </svg>
+                                                                               </button>
+                                                                           )}
+
+                                                                           <button
+                                                                               type="button"
+                                                                               className="micro-btn-loc"
+                                                                               onClick={() => rvLocateHeadingEvidence(hq, hi, cleanChunk(chunks[hi + 1] || ""))}
+                                                                               title="Định vị dẫn chứng trong đoạn văn này"
+                                                                           >
+                                                                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                                                                   <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                                                                                   <circle cx="12" cy="10" r="3" />
+                                                                               </svg>
+                                                                           </button>
+
+                                                                           <button
+                                                                               type="button"
+                                                                               className={`micro-btn-ai ${activeHeadingPopover?.qId === hq.id && activeHeadingPopover?.mode === "ai" ? "is-active" : ""}`}
+                                                                               onClick={(e) => handleOpenHeadingPopover(hq, "ai", e.currentTarget)}
+                                                                               title="Giải thích AI cho Heading này"
+                                                                               style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px" }}
+                                                                           >
+                                                                               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                                                                   <path d="M9 18h6" />
+                                                                                   <path d="M10 22h4" />
+                                                                                   <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                                                                               </svg>
+                                                                               <strong style={{ fontSize: 11.5, letterSpacing: "0.02em" }}>{explainMap[hq.id]?.loading ? "..." : "AI"}</strong>
+                                                                           </button>
+                                                                       </div>
+                                                                   </div>
+                                                                   {chunks[hi + 1] && cleanChunk(chunks[hi + 1]).trim() && (
+                                                                       <div dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(chunks[hi + 1])) }} />
+                                                                   )}
+                                                               </React.Fragment>
+                                                           );
+                                                       })}
+                                                       {chunks.slice(headingQs.length + 1).map((extraChunk, cIdx) => (
+                                                           cleanChunk(extraChunk).trim() ? (
+                                                               <div key={`extra-${cIdx}`} dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(extraChunk)) }} />
+                                                           ) : null
+                                                       ))}
+                                                   </div>
+                                               </>
+                                           );
+                                       }
+
+                                       const cleanedPassage = cleanChunk(rawPassageHtml);
+                                       return (
+                                           <>
+                                               {reviewQuiz.quiz.images?.map((imgUrl, idx) => (
+                                                   <img
+                                                       key={idx}
+                                                       src={cleanMediaUrl(imgUrl)}
+                                                       referrerPolicy="no-referrer"
+                                                       loading="lazy"
+                                                       alt="Reading passage illustration"
+                                                       style={{ maxWidth: "100%", height: "auto", objectFit: "contain", borderRadius: 8, display: "block", marginBottom: 16 }}
+                                                   />
+                                               ))}
+                                               <div
+                                                   id="ielts-passage-content"
+                                                   style={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                                                   dangerouslySetInnerHTML={{ __html: formatContent(cleanedPassage) }}
+                                               />
+                                           </>
+                                       );
+                                   })() : (() => {
                                       // Multi-tier transcript fallback so DOCX-imported Listening tests NEVER show empty transcript
                                       const rawTranscript =
                                           rvSections[rvActiveIdx]?.transcript ||
@@ -16203,61 +16534,100 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           );
                                       }
 
-                                      // 3. DRAG_DROP_HEADING (Matching Headings)
-                                      if (q.type === "DRAG_DROP_HEADING") {
-                                          const cGrp = rvContiguousGroupByQId.get(q.id);
-                                          const headingQuestions = cGrp ? cGrp.questions : [q];
-                                          if (headingQuestions[0]?.id !== q.id) return null;
-                                          if (rvFilterWrongOnly && headingQuestions.every((hq: any) => rvQuestionStatus(hq) === "correct")) return null;
+                                      // 3. DRAG_DROP_HEADING (Matching Headings: List of Headings reference card + left pane guide)
+                                       if (q.type === "DRAG_DROP_HEADING") {
+                                           const cGrp = rvContiguousGroupByQId.get(q.id);
+                                           const headingQuestions = cGrp ? cGrp.questions : [q];
+                                           if (headingQuestions[0]?.id !== q.id) return null;
+                                           if (rvFilterWrongOnly && headingQuestions.every((hq: any) => rvQuestionStatus(hq) === "correct")) return null;
 
-                                          const headingCatalog = getHeadingCatalog([
-                                              q,
-                                              reviewQuiz.quiz,
-                                              rvSections[rvActiveIdx],
-                                              ...headingQuestions,
-                                              ...rvAllQuestions,
-                                          ]);
-                                          const headingOptions = Array.from(headingCatalog.values());
-                                          const grpIns = cGrp?.instruction || q.instruction || "";
+                                           const headingCatalog = getHeadingCatalog([
+                                               q,
+                                               reviewQuiz.quiz,
+                                               rvSections[rvActiveIdx],
+                                               ...headingQuestions,
+                                               ...rvAllQuestions,
+                                           ]);
+                                           const headingOptions = Array.from(headingCatalog.values());
+                                           const grpIns = cGrp?.instruction || q.instruction || "";
 
-                                          return (
-                                              <section key={`heading-${q.id}`} className="rv-task-group-card">
-                                                  {grpIns && (
-                                                      <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
-                                                  )}
-                                                  {headingOptions.length > 0 && (
-                                                      <div className="rv-word-bank">
-                                                          <div className="rv-word-bank-title">List of Headings</div>
-                                                          <div style={{ display: "grid", gap: 4 }}>
-                                                              {headingOptions.map((h: any, hIdx: number) => (
-                                                                  <div key={hIdx} style={{ fontSize: 13, color: "#1C1917" }}>
-                                                                      <strong className="rv-mono" style={{ color: "#92400E", marginRight: 8 }}>{normalizeHeadingId(h.id)}.</strong>
-                                                                      <span>{headingPlainText(h.text)}</span>
-                                                                  </div>
-                                                              ))}
-                                                          </div>
-                                                      </div>
-                                                  )}
-                                                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                                                      {headingQuestions.map((hq: any, hIdx: number) => {
-                                                          if (rvFilterWrongOnly && rvQuestionStatus(hq) === "correct") return null;
-                                                          const paraLabel = headingPlainText(hq.text).replace(/^paragraph\s+/i, "") || String.fromCharCode(65 + hIdx);
-                                                          return (
-                                                              <div key={hq.id} style={{ padding: "8px 10px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
-                                                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                                                                      <strong style={{ fontSize: 13.5 }}>Paragraph {paraLabel}</strong>
-                                                                      {rvRenderInlineSlotBox({ ...hq, options: headingOptions }, true)}
-                                                                  </div>
-                                                                  {rvRenderInlineDrawer(hq, rvSubmittedAnswers?.[hq.id], { ...hq, options: headingOptions })}
-                                                              </div>
-                                                          );
-                                                      })}
-                                                  </div>
-                                              </section>
-                                          );
-                                      }
+                                           const correctHeadingIds = new Set<string>();
+                                           headingQuestions.forEach((hq: any) => {
+                                               const meta = resolveHeadingAnswerMeta({ ...hq, options: headingOptions }, hq.correctAnswer);
+                                               const id = normalizeHeadingId(meta.id || hq.correctAnswer);
+                                               if (id) correctHeadingIds.add(id);
+                                           });
 
-                                      // 4. MAP_DRAG & DIAGRAM_LABEL
+                                           return (
+                                               <section key={`heading-${q.id}`} className="rv-task-group-card">
+                                                   {grpIns && (
+                                                       <div className="rv-task-instruction" dangerouslySetInnerHTML={{ __html: formatContent(grpIns) }} />
+                                                   )}
+                                                   {headingOptions.length > 0 && (
+                                                       <div className="rv-word-bank" style={{ padding: "12px 14px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
+                                                           <div className="rv-word-bank-title" style={{ fontSize: 13, fontWeight: 800, color: "#44403C", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                                               <span>List of Headings</span>
+                                                               <span style={{ fontSize: 11.5, fontWeight: 600, color: "#15803D" }}>✓ Tô xanh = Đáp án đúng</span>
+                                                           </div>
+                                                           <div style={{ display: "grid", gap: 6 }}>
+                                                               {headingOptions.map((h: any, hIdx: number) => {
+                                                                   const normId = normalizeHeadingId(h.id);
+                                                                   const isCorrectHeading = correctHeadingIds.has(normId);
+                                                                   const cleanText = formatCleanHeadingLabel(normId, h.text);
+                                                                   return (
+                                                                       <div
+                                                                           key={hIdx}
+                                                                           style={{
+                                                                               fontSize: 13,
+                                                                               lineHeight: 1.45,
+                                                                               padding: "4px 8px",
+                                                                               borderRadius: 6,
+                                                                               background: isCorrectHeading ? "rgba(22, 163, 74, 0.08)" : "transparent",
+                                                                               border: isCorrectHeading ? "1px solid rgba(22, 163, 74, 0.3)" : "1px solid transparent",
+                                                                               color: isCorrectHeading ? "#15803D" : "#1C1917",
+                                                                               fontWeight: isCorrectHeading ? 700 : 400,
+                                                                               display: "flex",
+                                                                               alignItems: "baseline",
+                                                                               gap: 8,
+                                                                           }}
+                                                                       >
+                                                                           <strong className="rv-mono" style={{ color: isCorrectHeading ? "#15803D" : "#92400E", minWidth: 26 }}>
+                                                                               {normId}.
+                                                                           </strong>
+                                                                           <span>{cleanText.replace(/^[ivxlcdm]+[\.\)]\s*/i, "")}</span>
+                                                                           {isCorrectHeading && (
+                                                                               <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#16A34A" }}>
+                                                                                   ✓ Đúng
+                                                                               </span>
+                                                                           )}
+                                                                       </div>
+                                                                   );
+                                                               })}
+                                                           </div>
+                                                       </div>
+                                                   )}
+                                                   <div style={{
+                                                       margin: "10px 0 4px",
+                                                       padding: "8px 12px",
+                                                       borderRadius: 6,
+                                                       background: "#EFF6FF",
+                                                       border: "1px solid #BFDBFE",
+                                                       fontSize: 12.5,
+                                                       color: "#1E40AF",
+                                                       display: "flex",
+                                                       alignItems: "center",
+                                                       gap: 8,
+                                                   }}>
+                                                       <span style={{ fontSize: 14 }}>📍</span>
+                                                       <span>
+                                                           Kết quả từng đoạn và nút giải thích <strong>[💡] [📍] [💡 AI]</strong> được đặt trực tiếp ở đầu mỗi đoạn văn bên cột Bài đọc.
+                                                       </span>
+                                                   </div>
+                                               </section>
+                                           );
+                                       }
+
+                                       // 4. MAP_DRAG & DIAGRAM_LABEL
                                       if (q.type === "MAP_DRAG" || q.type === "DIAGRAM_LABEL") {
                                           const isMap = q.type === "MAP_DRAG";
                                           const mediaUrl = isMap ? resolveQuestionMapUrl(q) : String((q as any).diagramImageUrl || "").trim();
@@ -16710,6 +17080,116 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       </div>
                   </aside>
               )}
+                  {/* Floating Auto-Flip Explanation Popover for Matching Headings in Left Pane */}
+                  {activeHeadingPopover && (() => {
+                      const hq = rvAllQuestions.find((q: any) => q.id === activeHeadingPopover.qId);
+                      if (!hq) return null;
+                      const qNum = rvQuestionNumber(hq);
+                      const manual = rvManualExplanationOf(hq);
+                      const aiState = explainMap[hq.id];
+                      const studentAns = rvSubmittedAnswers?.[hq.id];
+                      const rect = activeHeadingPopover.anchorRect;
+                      const isTeacher = activeHeadingPopover.mode === "teacher";
+
+                      return (
+                          <div
+                              id="rv-heading-popover"
+                              style={{
+                                  position: "fixed",
+                                  top: rect?.top ? `${rect.top}px` : "auto",
+                                  bottom: rect?.bottom ? `${rect.bottom}px` : "auto",
+                                  left: `${rect?.left || 20}px`,
+                                  width: `${rect?.width || 480}px`,
+                                  maxHeight: `${rect?.height || 360}px`,
+                                  zIndex: 9999,
+                                  background: "#FFFFFF",
+                                  borderRadius: 10,
+                                  boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.08)",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  overflow: "hidden",
+                                  animation: "rvFadeIn 0.15s ease-out",
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                          >
+                              <div
+                                  style={{
+                                      padding: "10px 14px",
+                                      background: isTeacher ? "#FFFBEB" : "#F8FAFC",
+                                      borderBottom: "1px solid #E2E8F0",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      flexShrink: 0,
+                                  }}
+                              >
+                                  <div style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 800, fontSize: 13, color: isTeacher ? "#92400E" : "#1E293B" }}>
+                                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={isTeacher ? "#D97706" : "#2563EB"} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                          <path d="M9 18h6" />
+                                          <path d="M10 22h4" />
+                                          <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                                      </svg>
+                                      <span>{isTeacher ? `GIẢI THÍCH GIÁO VIÊN — CÂU ${qNum}` : `GIẢI THÍCH CHI TIẾT — CÂU ${qNum}`}</span>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                      {!isTeacher && !aiState?.loading && (
+                                          <button
+                                              type="button"
+                                              className="rv-drawer-reanalyze-btn"
+                                              onClick={() => void handleAiExplain(hq, studentAns, reviewQuiz.quiz)}
+                                              style={{ fontSize: 11.5, padding: "3px 8px" }}
+                                          >
+                                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                                                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                                  <path d="M3 3v5h5" />
+                                              </svg>
+                                              Phân tích lại
+                                          </button>
+                                      )}
+                                      <button
+                                          type="button"
+                                          className="rv-drawer-close"
+                                          onClick={() => setActiveHeadingPopover(null)}
+                                          aria-label="Đóng"
+                                          style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: "none", background: "transparent", cursor: "pointer", borderRadius: 4, color: "#64748B" }}
+                                      >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                                      </button>
+                                  </div>
+                              </div>
+
+                              <div style={{ padding: "12px 14px", overflowY: "auto", flex: 1, fontSize: 13, lineHeight: 1.6 }}>
+                                  {isTeacher ? (
+                                      manual?.rawText ? (
+                                          rvRenderRichText(manual.rawText, hq)
+                                      ) : (
+                                          <div style={{ color: "#78716C", fontStyle: "italic", textAlign: "center", padding: "16px 0" }}>
+                                              Chưa có ghi chú thủ công của Giáo viên cho câu này.
+                                          </div>
+                                      )
+                                  ) : (
+                                      aiState?.loading ? (
+                                          <div style={{ textAlign: "center", padding: "20px 0", color: "#64748B" }}>
+                                              Đang phân tích ý chính đoạn văn và đối chiếu heading...
+                                          </div>
+                                      ) : (aiState?.structured || aiState?.text) ? (
+                                          rvRenderDetailedAiExplanation(aiState, hq, studentAns)
+                                      ) : (
+                                          <div style={{ textAlign: "center", padding: "16px 0" }}>
+                                              <button
+                                                  type="button"
+                                                  className="rv-drawer-switch-ai"
+                                                  onClick={() => void handleAiExplain(hq, studentAns, reviewQuiz.quiz)}
+                                              >
+                                                  Tạo phân tích AI
+                                              </button>
+                                          </div>
+                                      )
+                                  )}
+                              </div>
+                          </div>
+                      );
+                  })()}
           </div>
       );
   }

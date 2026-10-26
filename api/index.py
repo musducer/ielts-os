@@ -5317,7 +5317,14 @@ async def ai_explain(
     matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
     matching_target_text = str(payload.get("matchingTargetText", "") or "")[:4500]
     is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
-    evidence_passage = matching_target_text if is_paragraph_information_matching else reading_passage
+    is_heading_task = (
+        question_type in ("DRAG_DROP_HEADING",)
+        or matching_kind == "headings"
+        or "heading" in str(question_subtype or "").lower()
+        or "main idea" in str(question_subtype or "").lower()
+        or "heading" in str(question or "").lower()
+    )
+    evidence_passage = matching_target_text if (is_paragraph_information_matching or (is_heading_task and matching_target_text.strip())) else reading_passage
     integrated_part = int(payload.get("integratedPart", 0) or 0)
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     is_listening_item = bool(payload.get("isListening"))
@@ -5397,13 +5404,21 @@ async def ai_explain(
         " Đây là Integrated Part %d tiếng Anh THPT. Giải thích bẫy trực tiếp."
     ) % integrated_part if is_vietnamese_high_school_integrated else ""
 
+    heading_rule_en = (
+        " MATCHING HEADINGS RULE: This task tests paragraph main ideas. 'paraphrasePairs' MUST be []. Do NOT output word-level synonyms. 'detailedExplanation' must state the core thesis of the paragraph and why it proves the correct heading. 'trapAnalysis' must explain in 1 sentence why the student's chosen heading was a distractor/trap."
+    ) if is_heading_task else ""
+    heading_rule_vi = (
+        " QUY TẮC MATCHING HEADINGS: Dạng bài này kiểm tra ý chính toàn đoạn văn. 'paraphrasePairs' BẮT BUỘC LÀ []. TUYỆT ĐỐI KHÔNG xuất từ đồng nghĩa cấp độ từ lẻ tẻ. 'detailedExplanation' tập trung giải thích luận điểm cốt lõi của đoạn chứng minh heading đúng. 'trapAnalysis' giải thích ngắn gọn trong 1 câu vì sao heading học viên chọn là bẫy/chưa chính xác."
+    ) if is_heading_task else ""
+
     # STEP 1.2: Build single deduplicated source_block
     norm_ctx = re.sub(r"\s+", " ", context).strip().lower()
     norm_reading = re.sub(r"\s+", " ", reading_passage).strip().lower()
 
-    if is_paragraph_information_matching:
+    if is_paragraph_information_matching or (is_heading_task and matching_target_text.strip()):
         source_label = "TARGET PARAGRAPH" if lang == "en" else "ĐOẠN MỤC TIÊU"
-        source_block = f"{source_label} ({matching_target_label}):\n{matching_target_text[:4500]}"
+        label_suffix = f" ({matching_target_label})" if matching_target_label else ""
+        source_block = f"{source_label}{label_suffix}:\n{matching_target_text[:4500]}"
         if norm_ctx and norm_ctx not in norm_reading and norm_ctx not in matching_target_text.lower():
             group_label = "QUESTION GROUP CONTEXT" if lang == "en" else "BỐI CẢNH NHÓM CÂU HỎI"
             source_block += f"\n\n{group_label}:\n{context[:2500]}"
@@ -5440,7 +5455,7 @@ async def ai_explain(
             "2. FOCUS ON STUDENT ANSWER: Explain only why Correct is right and why studentAnswer was wrong. Do not list other unselected options.\n"
             "3. ACCURACY: evidence.quote MUST be an exact verbatim excerpt from the source text.\n"
             "4. 100% English for all labels and explanations.\n"
-            + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
+            + heading_rule_en + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
         user_prompt = (
             f"{source_block}\n\n"
@@ -5471,7 +5486,7 @@ async def ai_explain(
             "2. CHỈ TẬP TRUNG LỖI HỌC VIÊN: Chỉ giải thích đáp án đúng và phân tích lý do sai của phương án học viên chọn; không liệt kê các lựa chọn khác.\n"
             "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC là trích đoạn liên tục, đúng từng từ từ nguồn.\n"
             "4. 100% tiếng Việt cho lời giải thích và tên bẫy.\n"
-            + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
+            + heading_rule_vi + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
         user_prompt = (
             f"{source_block}\n\n"
@@ -5496,15 +5511,65 @@ async def ai_explain(
     if not isinstance(parsed_json, dict):
         parsed_json = {}
 
-    # Extract & clean paraphrasePairs
+    # Extract & clean paraphrasePairs with strict Rule A & Rule B validation
     cleaned_pairs = []
-    for p in parsed_json.get("paraphrasePairs") or []:
-        if isinstance(p, dict):
-            q_term = str(p.get("questionTerm") or p.get("questionPhrase") or "").strip()
-            p_term = str(p.get("passageTerm") or p.get("sourcePhrase") or "").strip()
-            p_note = str(p.get("note") or p.get("explanation") or "").strip()
-            if q_term and p_term and q_term != "-" and p_term != "-":
-                cleaned_pairs.append({"questionTerm": q_term, "passageTerm": p_term, "note": p_note})
+    if not is_heading_task:
+        raw_pairs = []
+        for p in parsed_json.get("paraphrasePairs") or []:
+            if isinstance(p, dict):
+                q_term = str(p.get("questionTerm") or p.get("questionPhrase") or "").strip()
+                p_term = str(p.get("passageTerm") or p.get("sourcePhrase") or "").strip()
+                p_note = str(p.get("note") or p.get("explanation") or "").strip()
+                if q_term and p_term and q_term != "-" and p_term != "-":
+                    raw_pairs.append({"questionTerm": q_term, "passageTerm": p_term, "note": p_note})
+
+        norm_q_stem = re.sub(r"[^\w\s]", " ", f"{question} {correct} {options}").lower()
+        norm_source = re.sub(r"[^\w\s]", " ", f"{evidence_passage} {context}").lower()
+        stop_words = {"the", "a", "an", "of", "to", "in", "for", "on", "with", "at", "by", "from", "and", "or"}
+
+        for p in raw_pairs:
+            q_term = str(p.get("questionTerm") or "").strip()
+            p_term = str(p.get("passageTerm") or "").strip()
+            note = str(p.get("note") or "").strip()
+            if not q_term or not p_term:
+                continue
+
+            nq = re.sub(r"[^\w\s]", " ", q_term).lower().strip()
+            np = re.sub(r"[^\w\s]", " ", p_term).lower().strip()
+
+            # Auto-swap if inverted
+            if nq not in norm_q_stem and nq in norm_source and np in norm_q_stem and np not in norm_source:
+                q_term, p_term = p_term, q_term
+                nq, np = np, nq
+
+            # Rule A: True Source Membership
+            q_words = [w for w in nq.split() if w not in stop_words and len(w) >= 3]
+            p_words = [w for w in np.split() if w not in stop_words and len(w) >= 3]
+            q_in_stem = (nq in norm_q_stem) or (len(q_words) >= 2 and all(w in norm_q_stem for w in q_words)) if norm_q_stem else True
+            p_in_source = (np in norm_source) or (len(p_words) >= 2 and all(w in norm_source for w in p_words)) if norm_source else True
+
+            if not (q_in_stem and p_in_source):
+                continue
+
+            # Rule B: No Identical or Trivial Substring Echoes
+            clean_q = " ".join([w for w in nq.split() if w not in stop_words])
+            clean_p = " ".join([w for w in np.split() if w not in stop_words])
+            if clean_q == clean_p:
+                continue
+
+            words_q = set(clean_q.split())
+            words_p = set(clean_p.split())
+            if not words_q or not words_p:
+                continue
+            common = words_q & words_p
+            max_len = max(len(words_q), len(words_p))
+            min_len = min(len(words_q), len(words_p))
+            if max_len > 0 and len(common) / max_len >= 0.7:
+                continue
+            if min_len > 0 and len(common) / min_len >= 0.85 and (clean_q in clean_p or clean_p in clean_q):
+                continue
+
+            cleaned_pairs.append({"questionTerm": q_term, "passageTerm": p_term, "note": note})
 
     # Extract & clean evidence
     raw_ev = parsed_json.get("evidence")
@@ -5599,7 +5664,7 @@ async def ai_explain(
                 def _score_s(s: str) -> tuple:
                     swords = _ev_words(s)
                     overlap = len(swords & query_words)
-                    exact_ans = int(bool(correct and len(correct) > 2 and _norm_ev(correct) in _norm_ev(s)))
+                    exact_ans = int(bool(not is_heading_task and correct and len(correct) > 2 and _norm_ev(correct) in _norm_ev(s)))
                     return (exact_ans, overlap, -abs(len(s) - 140))
                 best_s = max(sentences, key=_score_s)
                 if len(best_s) > 300:

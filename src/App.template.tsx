@@ -4231,6 +4231,12 @@ export default function IeltsSupremeOS() {
   const [rvRetryMode, setRvRetryMode] = useState(false);
   const [rvRetryAnswers, setRvRetryAnswers] = useState<Record<string, any>>({});
   const [rvOpenDrawers, setRvOpenDrawers] = useState<Record<string, "teacher" | "ai" | null>>({});
+  const [activeHeadingPopover, setActiveHeadingPopover] = useState<{
+    qId: string;
+    mode: 'teacher' | 'ai';
+    anchorEl?: HTMLElement | null;
+    anchorRect?: { top: number; bottom: number; left: number; right: number; width: number; height: number };
+  } | null>(null);
   const [rvFlashQuestionNum, setRvFlashQuestionNum] = useState<number | null>(null);
   const [reviewActiveQuestionId, setReviewActiveQuestionId] = useState<string | null>(null);
   const [manualExplanationQuestion, setManualExplanationQuestion] = useState<QuizQuestion | null>(null);
@@ -8087,7 +8093,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const headingLabel = (value: any) => {
           const heading = headingFor(value);
           const id = heading?.id || normalizeHeadingId(value);
-          return heading?.text ? `${id}. ${headingPlainText(heading.text)}` : String(value ?? "");
+          const rawText = heading?.text ? headingPlainText(heading.text) : String(value ?? "");
+          const cleanText = rawText.replace(/^\s*(?:[ivxlcdm]+[\.\)]\s*)?(?:[A-Z][\.\)]\s*)?(?:[ivxlcdm]+[\.\)]\s*)?/i, "").trim();
+          return id ? `${id}. ${cleanText}` : cleanText;
         };
         correctStr = headingLabel(q.correctAnswer);
         stuStr = blank ? "(trống)" : headingLabel(studentAnsRaw);
@@ -8170,7 +8178,15 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
         return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
       })();
-      const matchingTargetLabel = matchingKind === 'paragraph_information' ? correctStr.trim().toUpperCase().replace(/[.)]$/, '') : '';
+      const matchingTargetLabel = (() => {
+        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
+        if (matchingKind === 'headings') {
+          const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
+          if (m) return m[1].toUpperCase();
+          if (timestampQuestionIndex >= 0) return String.fromCharCode(65 + timestampQuestionIndex);
+        }
+        return '';
+      })();
       const matchingTargetText = (() => {
         if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
         const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
