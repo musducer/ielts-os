@@ -21077,11 +21077,25 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
           )}
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}>
-             <div className="st-nav-sync-badge" style={{ fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, background: isTimeSynced ? `${C.succ}15` : `${C.warn}15`, color: isTimeSynced ? C.succ : C.warn, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }} title={t('tip_sync_server')}>
-                  <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: isTimeSynced ? C.succ : C.warn }} />
-                  <span className="st-nav-sync-text">{isTimeSynced ? t('time_synced') : t('time_syncing')}</span>
+             {/* SERVER SYNC STATUS BEACON */}
+             <div
+               style={{
+                 display: 'inline-flex',
+                 alignItems: 'center',
+                 justifyContent: 'center',
+                 width: 28,
+                 height: 28,
+                 borderRadius: '50%',
+                 background: isTimeSynced ? `${C.succ}18` : `${C.warn}18`,
+                 color: isTimeSynced ? C.succ : C.warn,
+                 flexShrink: 0,
+                 cursor: 'help'
+               }}
+               title={isTimeSynced ? `${t('time_synced')} (${t('tip_sync_server')})` : t('time_syncing')}
+             >
+               <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: isTimeSynced ? C.succ : C.warn, boxShadow: isTimeSynced ? `0 0 6px ${C.succ}` : 'none' }} />
              </div>
-             {lastLoginTime && <div className="st-nav-last-login" style={{ fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 4, whiteSpace: 'nowrap' }} title={`${t('last_login')} ${lastLoginTime}`}>{t('last_login')} {lastLoginTime}</div>}
+
              <LanguageToggle role="STUDENT" />
              <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", border: 'none', cursor: 'pointer', padding: "6px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5, flexShrink: 0 }} title={t('contrast_mode')}><Ico name="eye" size={17} /></button>
              <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, border: 'none', borderRadius: 8, cursor: 'pointer', padding: "7px 14px", fontSize: 12.5, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' }}>{t('logout')}</button>
