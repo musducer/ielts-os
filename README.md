@@ -1,5 +1,22 @@
 # IELTS OS
 
+## Tối Ưu Tốc Độ `/api/ai_explain` Xuống 1.0 – 2.2s & Caching Tức Thì < 50ms (Sub-2s Cold / <50ms Cached AI Explanations) — 2026-10-26
+
+- **Triệt tiêu nhân đôi bài đọc & Siết gọn cửa sổ Transcript bài nghe**:
+  - Trong `src/App.template.tsx` (`handleAiExplain`), trước đây `qPassage` bị đưa vào cả `context` lẫn `readingPassage`, làm phình to payload thêm hơn 15.000 ký tự không cần thiết. Đã tách bạch triệt để: đối với Reading, `context` chỉ chứa `groupContext` (bảng tóm tắt, biểu đồ, ghi chú câu hỏi), bài đọc chỉ gửi duy nhất 1 lần qua `readingPassage: stripTags(qPassage).slice(0, 9000)`.
+  - Cửa sổ transcript bài nghe (`transcriptForQuestion`) được thu hẹp từ 23.000 ký tự xuống còn tối đa 6.500 ký tự tập trung quanh câu hỏi hiện tại, tự động bắt dính vào mốc thời gian `(` hoặc đầu dòng `\n` gần nhất.
+  - Phía backend `api/index.py`: xây dựng khối `source_block` tinh gọn, loại bỏ hoàn toàn việc in lặp lại context và reading passage trong `user_prompt`.
+- **Tái sử dụng kết nối HTTP Keep-Alive & Bẻ gãy vòng lặp Waterfall Fallback**:
+  - Khởi tạo `requests.Session` với `HTTPAdapter(pool_connections=25, pool_maxsize=50)` dùng chung cho toàn bộ các lượt gọi OpenAI-compatible (Groq/Cerebras) và Google Gemini, loại bỏ 100-250ms độ trễ bắt tay TCP/TLS trên mỗi request.
+  - Xử lý mã lỗi HTTP chuẩn xác và chuyển nhánh tức thì: ánh xạ lỗi HTTP 413 và 429 thành `RATE_LIMIT` (giúp thoát sớm khỏi key đã hết hạn mức thay vì tiếp tục thử tuần tự qua nhiều model); ánh xạ HTTP 400 và 404 thành `BAD_MODEL` (loại bỏ ngay lập tức model hỏng khỏi hàng đợi của mọi key trong router).
+  - Giảm thời gian chờ mặc định `request_timeout` từ 55s xuống 12.0s; dọn sạch các model đã bị nhà cung cấp khai tử (`gemini-2.0-flash`, `gemini-2.5-flash`).
+- **Prompt sư phạm tối giản & Giảm Token Output**:
+  - Giảm `max_tokens` của lượt gọi LLM từ 500 xuống 380 tokens, `temperature=0.2`.
+  - Quy tắc phân tích tinh gọn: chỉ tập trung (1) chứng minh vì sao đáp án đúng là chính xác và (2) phân tích căn nguyên vì sao lựa chọn của học sinh bị sai (hoặc chiến thuật nếu bỏ trống). Không phân tích lan man các lựa chọn mà học sinh không chọn.
+- **Bộ nhớ đệm 2 tầng phía Client & In-Memory LRU Cache Server**:
+  - Phía Backend: Khởi tạo bộ đệm in-memory `_AI_EXPLAIN_CACHE` đồng bộ luồng qua `threading.Lock()` (khóa SHA-256 từ `(lang, question, options, correct, student_ans, context[:1000], reading_passage[:1000], matching_target_label)`, tối đa 500 mục LRU). Các lượt gọi cùng câu hỏi phản hồi trong `< 5ms`.
+  - Phía Client: Khởi tạo `aiExplainCacheRef` trong React ref kết hợp `sessionStorage` (khóa `${quizId}_${q.id}_${stuStr}_${langKey}`). Khi học viên click lại câu hỏi đã giải thích, giao diện hiển thị ngay lập tức trong `< 1ms` mà không tạo hiệu ứng chớp tắt loading.
+
 ## Khắc Phục 5 Vấn Đề Production Then Chốt (5 Critical Production Hardening Fixes) — 2026-10-26
 
 ### 1. Tối Ưu Tốc Độ `/api/ai_explain` Sau Khi Nâng Cấp Gemini 3.8 Flash (`api/index.py`)

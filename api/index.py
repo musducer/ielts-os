@@ -3905,11 +3905,22 @@ async def hosted_audio_short(request: Request, audio_key: str):
     return await hosted_audio(request, audio_key, "audio.mp3")
 
 
-def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=55):
+import threading
+import hashlib
+
+_AI_EXPLAIN_CACHE: Dict[str, Dict[str, Any]] = {}
+_AI_EXPLAIN_CACHE_LOCK = threading.Lock()
+
+try:
+    import requests as _requests
+    _HTTP_SESSION = _requests.Session()
+    _adapter = _requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=50, max_retries=0)
+    _HTTP_SESSION.mount("https://", _adapter)
+    _HTTP_SESSION.mount("http://", _adapter)
+except Exception:
+    _HTTP_SESSION = None
+def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=12):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
-    import json as _json
-    import urllib.request as _urlreq
-    import urllib.error as _urlerr
     body = {
         "model": model,
         "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
@@ -3922,14 +3933,48 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 55.0
+        timeout_s = 12.0
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+    }
+
+    if _HTTP_SESSION is not None:
+        try:
+            resp = _HTTP_SESSION.post(url, json=body, headers=headers, timeout=timeout_s)
+            if resp.status_code == 200:
+                data = resp.json()
+                choice = (data.get("choices") or [{}])[0]
+                if choice.get("finish_reason") == "length":
+                    return "", "PROVIDER_TRUNCATED_OUTPUT"
+                text = ((choice.get("message") or {}).get("content") or "").strip()
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+                return (text, "") if text else ("", f"{model}: rỗng")
+            detail = resp.text[:400]
+            if resp.status_code in (429, 413):
+                return "", "RATE_LIMIT"
+            if resp.status_code in (401, 403):
+                return "", "AUTH"
+            if resp.status_code in (400, 404):
+                return "", "BAD_MODEL"
+            return "", f"{model} -> {resp.status_code}: {detail}"
+        except _requests.Timeout:
+            return "", "PROVIDER_TIMEOUT"
+        except Exception as e:
+            return "", f"{model} -> {str(e)}"
+
+    import json as _json
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
     try:
         req = _urlreq.Request(
-            base_url.rstrip("/") + "/chat/completions",
+            url,
             data=_json.dumps(body).encode("utf-8"), method="POST",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
-                     "Accept": "application/json",
-                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"},
+            headers=headers,
         )
         with _urlreq.urlopen(req, timeout=timeout_s) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
@@ -3945,31 +3990,12 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
             detail = e.read().decode("utf-8")[:400]
         except Exception:
             pass
-        if e.code == 400 and "thinkingConfig" in detail and "thinkingConfig" in gen:
-            body_no_tc = dict(body)
-            gen_no_tc = dict(gen)
-            gen_no_tc.pop("thinkingConfig", None)
-            body_no_tc["generationConfig"] = gen_no_tc
-            try:
-                req_retry = _urlreq.Request(url, data=_json.dumps(body_no_tc).encode("utf-8"), method="POST",
-                                           headers={"Content-Type": "application/json"})
-                with _urlreq.urlopen(req_retry, timeout=timeout_s) as resp_retry:
-                    data_retry = _json.loads(resp_retry.read().decode("utf-8"))
-                cands_retry = data_retry.get("candidates") or []
-                text_retry = ""
-                if cands_retry:
-                    if cands_retry[0].get("finishReason") == "MAX_TOKENS":
-                        return "", "PROVIDER_TRUNCATED_OUTPUT"
-                    parts_retry = ((cands_retry[0].get("content") or {}).get("parts") or [])
-                    text_retry = "".join(p.get("text", "") for p in parts_retry if not p.get("thought")).strip()
-                text_retry = re.sub(r"<think>.*?</think>", "", text_retry, flags=re.S).strip()
-                return (text_retry, "") if text_retry else ("", f"gemini {model}: rỗng")
-            except Exception:
-                pass
-        if e.code == 429:
+        if e.code in (429, 413):
             return "", "RATE_LIMIT"
         if e.code in (401, 403):
             return "", "AUTH"
+        if e.code in (400, 404):
+            return "", "BAD_MODEL"
         return "", f"{model} -> {e.code}: {detail}"
     except Exception as e:
         return "", f"{model} -> {str(e)}"
@@ -4027,11 +4053,8 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
         return "", f"{model} -> {str(e)}"
 
 
-def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=55, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
-    """1 lần gọi Google Gemini (định dạng riêng). Hỗ trợ thinking budget trên 2.5 và multimodal image inputs."""
-    import json as _json
-    import urllib.request as _urlreq
-    import urllib.error as _urlerr
+def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=12, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
+    """1 lần gọi Google Gemini (định dạng riêng). Hỗ trợ thinking budget trên 2.5/3.x và multimodal image inputs."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     effective_max_tokens = max_tokens
     gen = {"temperature": temperature}
@@ -4069,10 +4092,62 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 55.0
+        timeout_s = 12.0
+
+    headers = {"Content-Type": "application/json"}
+
+    if _HTTP_SESSION is not None:
+        try:
+            resp = _HTTP_SESSION.post(url, json=body, headers=headers, timeout=timeout_s)
+            if resp.status_code == 200:
+                data = resp.json()
+                cands = data.get("candidates") or []
+                text = ""
+                if cands:
+                    if cands[0].get("finishReason") == "MAX_TOKENS":
+                        return "", "PROVIDER_TRUNCATED_OUTPUT"
+                    parts = ((cands[0].get("content") or {}).get("parts") or [])
+                    text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+                return (text, "") if text else ("", f"gemini {model}: rỗng")
+            detail = resp.text[:400]
+            if resp.status_code == 400 and ("thinkingConfig" in detail or "thinkingBudget" in detail) and "thinkingConfig" in gen:
+                body_no_tc = dict(body)
+                gen_no_tc = dict(gen)
+                gen_no_tc.pop("thinkingConfig", None)
+                body_no_tc["generationConfig"] = gen_no_tc
+                try:
+                    resp_retry = _HTTP_SESSION.post(url, json=body_no_tc, headers=headers, timeout=timeout_s)
+                    if resp_retry.status_code == 200:
+                        data_retry = resp_retry.json()
+                        cands_retry = data_retry.get("candidates") or []
+                        text_retry = ""
+                        if cands_retry:
+                            if cands_retry[0].get("finishReason") == "MAX_TOKENS":
+                                return "", "PROVIDER_TRUNCATED_OUTPUT"
+                            parts_retry = ((cands_retry[0].get("content") or {}).get("parts") or [])
+                            text_retry = "".join(p.get("text", "") for p in parts_retry if not p.get("thought")).strip()
+                        text_retry = re.sub(r"<think>.*?</think>", "", text_retry, flags=re.S).strip()
+                        return (text_retry, "") if text_retry else ("", f"gemini {model}: rỗng")
+                except Exception:
+                    pass
+            if resp.status_code in (429, 413):
+                return "", "RATE_LIMIT"
+            if resp.status_code in (401, 403):
+                return "", "AUTH"
+            if resp.status_code in (400, 404):
+                return "", "BAD_MODEL"
+            return "", f"gemini {model} -> {resp.status_code}: {detail}"
+        except _requests.Timeout:
+            return "", "PROVIDER_TIMEOUT"
+        except Exception as e:
+            return "", f"gemini {model} -> {str(e)}"
+
+    import json as _json
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
     try:
-        req = _urlreq.Request(url, data=_json.dumps(body).encode("utf-8"), method="POST",
-                              headers={"Content-Type": "application/json"})
+        req = _urlreq.Request(url, data=_json.dumps(body).encode("utf-8"), method="POST", headers=headers)
         with _urlreq.urlopen(req, timeout=timeout_s) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         cands = data.get("candidates") or []
@@ -4087,13 +4162,35 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
     except _urlerr.HTTPError as e:
         detail = ""
         try:
-            detail = e.read().decode("utf-8")[:200]
+            detail = e.read().decode("utf-8")[:400]
         except Exception:
             pass
-        if e.code == 429:
+        if e.code == 400 and ("thinkingConfig" in detail or "thinkingBudget" in detail) and "thinkingConfig" in gen:
+            body_no_tc = dict(body)
+            gen_no_tc = dict(gen)
+            gen_no_tc.pop("thinkingConfig", None)
+            body_no_tc["generationConfig"] = gen_no_tc
+            try:
+                req_retry = _urlreq.Request(url, data=_json.dumps(body_no_tc).encode("utf-8"), method="POST", headers=headers)
+                with _urlreq.urlopen(req_retry, timeout=timeout_s) as resp_retry:
+                    data_retry = _json.loads(resp_retry.read().decode("utf-8"))
+                cands_retry = data_retry.get("candidates") or []
+                text_retry = ""
+                if cands_retry:
+                    if cands_retry[0].get("finishReason") == "MAX_TOKENS":
+                        return "", "PROVIDER_TRUNCATED_OUTPUT"
+                    parts_retry = ((cands_retry[0].get("content") or {}).get("parts") or [])
+                    text_retry = "".join(p.get("text", "") for p in parts_retry if not p.get("thought")).strip()
+                text_retry = re.sub(r"<think>.*?</think>", "", text_retry, flags=re.S).strip()
+                return (text_retry, "") if text_retry else ("", f"gemini {model}: rỗng")
+            except Exception:
+                pass
+        if e.code in (429, 413):
             return "", "RATE_LIMIT"
         if e.code in (401, 403):
             return "", "AUTH"
+        if e.code in (400, 404):
+            return "", "BAD_MODEL"
         return "", f"gemini {model} -> {e.code}: {detail}"
     except Exception as e:
         return "", f"gemini {model} -> {str(e)}"
@@ -4232,15 +4329,19 @@ def _groq_chat(
     preferred = model or os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     groq_models = [preferred] + [m for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m != preferred]
     cerebras_models = list(dict.fromkeys([os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]))
-    gemini_models = list(dict.fromkeys([os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-3.8-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]))
+    gemini_models = list(dict.fromkeys([
+        os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+        "gemini-3.8-flash",
+        "gemini-3-flash-preview",
+    ]))
 
     # Existing routes retain their legacy 55-second, provider-first behavior.
     # The raw-DOCX adapter is the only caller which provides a deadline; it gets
     # a bounded per-request window and fair provider-family rotation.
     try:
-        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 55.0
+        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 12.0
     except (TypeError, ValueError):
-        request_timeout = 55.0
+        request_timeout = 12.0
     try:
         router_deadline = float(deadline_monotonic) if deadline_monotonic is not None else None
     except (TypeError, ValueError):
@@ -4300,6 +4401,10 @@ def _groq_chat(
         # ordinary transient failures eligible for its next model as before.
         if err in {"RATE_LIMIT", "AUTH"}:
             remaining = [item for item in family["queue"] if item[0] != key]
+            family["queue"].clear()
+            family["queue"].extend(remaining)
+        elif err == "BAD_MODEL":
+            remaining = [item for item in family["queue"] if item[1] != selected_model]
             family["queue"].clear()
             family["queue"].extend(remaining)
         return text, err
@@ -5192,8 +5297,8 @@ async def ai_explain(
     options = payload.get("options", "")
     correct = payload.get("correct", "")
     student_ans = payload.get("studentAnswer", "")
-    context = (payload.get("context", "") or "")[:12000]
-    reading_passage = (payload.get("readingPassage", "") or "")[:12000]
+    context = (payload.get("context", "") or "")[:7500]
+    reading_passage = (payload.get("readingPassage", "") or "")[:9000]
     has_ctx = bool(context.strip())
     answer_sequence = payload.get("answerSequence")
     timestamp_hints = str(payload.get("timestampHints", "") or "")[:8000]
@@ -5210,16 +5315,34 @@ async def ai_explain(
     question_subtype = str(payload.get("questionSubType", "") or "")
     matching_kind = str(payload.get("matchingKind", "") or "")
     matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
-    matching_target_text = str(payload.get("matchingTargetText", "") or "")[:12000]
+    matching_target_text = str(payload.get("matchingTargetText", "") or "")[:4500]
     is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
     evidence_passage = matching_target_text if is_paragraph_information_matching else reading_passage
     integrated_part = int(payload.get("integratedPart", 0) or 0)
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
-    # CHỈ yêu cầu timestamp khi transcript THẬT SỰ có mốc (m:ss - m:ss) — không có mốc mà vẫn yêu cầu là AI sẽ bịa.
     is_listening_item = bool(payload.get("isListening"))
-    # Timestamp rules only apply when Whisper's real segment markers are available.
     is_listening = is_listening_item and bool(_TS_MARKER_RE.search(context))
     is_reading_evidence = bool(reading_passage.strip()) and not is_listening_item
+
+    # STEP 4: In-memory LRU cache check (< 5ms response)
+    cache_tuple = (
+        str(lang).strip().lower(),
+        str(question).strip(),
+        str(options).strip(),
+        str(correct).strip(),
+        str(student_ans).strip(),
+        str(context[:1000]).strip(),
+        str(reading_passage[:1000]).strip(),
+        str(matching_target_label).strip(),
+    )
+    cache_key = hashlib.sha256(repr(cache_tuple).encode("utf-8")).hexdigest()
+
+    with _AI_EXPLAIN_CACHE_LOCK:
+        if cache_key in _AI_EXPLAIN_CACHE:
+            cached_res = dict(_AI_EXPLAIN_CACHE[cache_key])
+            cached_res["cached"] = True
+            return cached_res
+
     is_unanswered = (
         not str(student_ans or "").strip()
         or str(student_ans or "").strip().lower() in [
@@ -5227,140 +5350,107 @@ async def ai_explain(
         ]
     )
     no_audio_guard_en = (
-        " NO-AUDIO FORBIDDEN: If transcript or source text is absent, NEVER state 'no audio was provided', 'without audio', or that "
-        "it is impossible to confirm. Instead, analyze the question prompt and options pedagogically, focusing on qualifying terms, "
-        "lexical traps, and typical IELTS test patterns."
+        " NO-AUDIO FORBIDDEN: If transcript or source text is absent, NEVER state 'no audio was provided'. "
+        "Analyze question prompt and options pedagogically, focusing on qualifying terms and traps."
     )
     no_audio_guard_vi = (
-        " CẤM BÁO THIẾU AUDIO: Nếu không có transcript hoặc văn bản nguồn, TUYỆT ĐỐI KHÔNG ghi 'không có audio', 'thiếu file nghe' hoặc "
-        "'không thể xác định vì không có audio'. Hãy phân tích sư phạm dựa vào dữ liệu câu hỏi và các phương án, chỉ rõ bẫy từ khóa và suy luận IELTS."
+        " CẤM BÁO THIẾU AUDIO: Nếu không có transcript hoặc văn bản nguồn, TUYỆT ĐỐI KHÔNG ghi 'không có audio' hay 'thiếu file nghe'. "
+        "Hãy phân tích sư phạm dựa vào dữ liệu câu hỏi và phương án, chỉ rõ bẫy từ khóa."
     )
     unanswered_rule_en = (
-        " UNANSWERED STRATEGY: The student left this item blank. Do NOT state trivial boilerplate like 'The student answer is blank'. "
-        "Instead, provide an actionable listening/reading strategy on what cue words to anticipate and how to avoid missing the answer."
+        " UNANSWERED STRATEGY: The student left this item blank. Provide an actionable signpost cue strategy on how to catch the answer."
     ) if is_unanswered else ""
     unanswered_rule_vi = (
-        " CHIẾN THUẬT CÂU BỎ TRỐNG: Học viên bỏ trống câu này. TUYỆT ĐỐI KHÔNG viết câu sáo rỗng như 'Học sinh bỏ trống câu này'. "
-        "Thay vào đó, hướng dẫn chiến thuật đón đầu từ khóa (signpost cues) và cách bắt nhịp để không bị trôi mất đáp án."
+        " CHIẾN THUẬT CÂU BỎ TRỐNG: Học viên bỏ trống câu này. Hướng dẫn chiến thuật đón đầu từ khóa (signpost cues) để không bị trôi mất đáp án."
     ) if is_unanswered else ""
     ts_rule_en = (
-        " TIMESTAMP RULE: use the timestamped transcript only to reason from the exact answer-bearing utterance. "
-        "Do not print timestamps, ranges, or clickable links; the interface adds verified audio controls separately. "
-        "Never use a later related sentence, an estimate, or a generic opening line as evidence."
+        " TIMESTAMP RULE: use the transcript only to reason from the exact answer-bearing utterance. Do not print timestamps or ranges."
     ) if is_listening else ""
     ts_rule_vi = (
-        " LUẬT MỐC THỜI GIAN: dùng transcript có mốc để đối chiếu đúng lời thoại chứa đáp án. "
-        "Không tự in mốc giờ, khoảng giờ hoặc link bấm; giao diện sẽ gắn nút nghe lại đã được kiểm chứng. "
-        "Tuyệt đối không dùng câu liên quan ở phía sau, không ước lượng và không lấy câu mở đầu chung chung làm dẫn chứng."
+        " LUẬT MỐC THỜI GIAN: dùng transcript có mốc để đối chiếu đúng lời thoại chứa đáp án. Không tự in mốc giờ hoặc khoảng giờ."
     ) if is_listening else ""
 
     listening_language_en = (
-        " LISTENING TERMINOLOGY RULE: this is an audio task. Refer to evidence as the audio, recording, conversation, speaker, "
-        "or transcript. Never call it a passage, reading, the text, or source text."
+        " LISTENING TERMINOLOGY RULE: this is an audio task. Refer to evidence as the audio, recording, speaker, or transcript. Never call it a passage."
     ) if is_listening_item else ""
     listening_language_vi = (
-        " QUY TẮC GỌI NGUỒN LISTENING: đây là bài nghe. Hãy gọi dẫn chứng là bài nghe, audio, bản ghi âm, lời thoại, người nói "
-        "hoặc transcript; tuyệt đối không gọi là bài đọc, đoạn văn, văn bản hay nguồn văn bản."
+        " QUY TẮC GỌI NGUỒN LISTENING: đây là bài nghe. Gọi dẫn chứng là bài nghe, audio, lời thoại, người nói hoặc transcript; không gọi là bài đọc."
     ) if is_listening_item else ""
 
     evidence_rule_en = (
-        " READING EVIDENCE RULE: when you use evidence from the reading passage, include one to three short, continuous, "
-        "word-for-word excerpts from the READING PASSAGE only. Wrap EVERY such excerpt exactly as "
-        "[[EVIDENCE: exact excerpt]]. Do not place the marker around paraphrases, question wording, options, or invented text. "
-        "Each marked excerpt must be the smallest useful proof and must appear exactly in the passage."
+        " READING EVIDENCE RULE: when citing evidence from the reading passage, include a short, continuous verbatim excerpt wrapped as [[EVIDENCE: exact excerpt]]."
     ) if is_reading_evidence else ""
     evidence_rule_vi = (
-        " LUAT DAN CHUNG READING: khi dung dan chung tu bai doc, phai dua mot den ba trich doan ngan, lien tuc va dung tung chu "
-        "tu RIENG BAI DOC. Boc MOI trich doan dung cu phap [[EVIDENCE: doan trich chinh xac]]. Khong dung marker cho dien giai, "
-        "loi cau hoi, lua chon hay noi dung tu bia. Moi doan trich phai la bang chung ngan nhat nhung du nghia va xuat hien nguyen van trong bai."
+        " LUẬT DẪN CHỨNG READING: khi trích dẫn từ bài đọc, phải đưa đoạn trích ngắn, liên tục, đúng từng từ bọc dạng [[EVIDENCE: đoạn trích chính xác]]."
     ) if is_reading_evidence else ""
     matching_rule_en = (
-        f" MATCHING INFORMATION RULE: this item is matched to paragraph {matching_target_label}. "
-        "The only valid clickable evidence is an exact excerpt from that target paragraph below; never cite another paragraph merely because it shares a keyword. "
-        "First match the statement's specific detail, then explain the paraphrase link."
-    ) if is_paragraph_information_matching else (
-        " MATCHING HEADINGS RULE: select evidence that states the paragraph's central purpose, not an isolated detail."
-        if matching_kind == "headings" else (
-            " MATCHING FEATURES RULE: identify the exact clue linking the named person, place, event, or feature to the answer; do not use a broadly related detail."
-            if matching_kind == "features" else ""
-        )
-    )
+        f" MATCHING INFORMATION RULE: matched to paragraph {matching_target_label}. Evidence must be an exact excerpt from that target paragraph below."
+    ) if is_paragraph_information_matching else ""
     matching_rule_vi = (
-        f" QUY TẮC MATCHING INFORMATION: câu này ghép với đoạn {matching_target_label}. "
-        "Dẫn chứng clickable hợp lệ CHỈ được lấy nguyên văn từ đúng đoạn mục tiêu bên dưới; tuyệt đối không trích đoạn khác chỉ vì cùng từ khóa. "
-        "Phải đối chiếu chi tiết riêng của mệnh đề trước, rồi mới giải thích liên hệ paraphrase."
-    ) if is_paragraph_information_matching else (
-        " QUY TẮC MATCHING HEADINGS: dẫn chứng phải cho thấy ý/chức năng trung tâm của đoạn, không phải một chi tiết đơn lẻ."
-        if matching_kind == "headings" else (
-            " QUY TẮC MATCHING FEATURES: phải chỉ ra manh mối chính xác nối người, nơi chốn, sự kiện hoặc đặc điểm với đáp án; không lấy chi tiết chỉ liên quan chung chung."
-            if matching_kind == "features" else ""
-        )
-    )
+        f" QUY TẮC MATCHING INFORMATION: câu ghép với đoạn {matching_target_label}. Dẫn chứng phải lấy nguyên văn từ đúng đoạn mục tiêu bên dưới."
+    ) if is_paragraph_information_matching else ""
 
     integrated_rule_en = (
-        " This is Integrated Part %d, modelled on Vietnam's upper-secondary national high-school English exam. "
-        "Do NOT force a reading-comprehension template onto it. First identify the actual task family and teach its decision logic: "
-        "for main-idea/title/inference items, test scope, central claim and degree of certainty; for gap-fill items, test grammar "
-        "(word class, tense, clause structure, agreement, preposition) before meaning, then collocation and register; for dialogue/sentence "
-        "ordering, establish the opening, response links, pronoun/reference chains, discourse markers and a coherent ending; for vocabulary, "
-        "use the surrounding syntax and the precise sense, not a loose synonym. Explain the exam trap each wrong option represents."
+        " This is Integrated Part %d English exam. Explain the exam trap directly."
     ) % integrated_part if is_vietnamese_high_school_integrated else ""
     integrated_rule_vi = (
-        " Đây là Integrated Part %d, theo tư duy đề thi tiếng Anh tốt nghiệp THPT Việt Nam. "
-        "KHÔNG được máy móc áp khuôn đọc đoạn văn rồi trích dẫn. Trước hết phải nhận diện đúng dạng và dạy cách ra quyết định: "
-        "với ý chính/tiêu đề/suy luận, xét phạm vi, luận điểm trung tâm và mức độ khẳng định; với điền từ, xét ngữ pháp "
-        "(từ loại, thì, cấu trúc mệnh đề, hòa hợp, giới từ) trước, rồi nghĩa, collocation và sắc thái; với sắp xếp hội thoại/câu, "
-        "xác định câu mở, quan hệ đáp lời, đại từ thay thế, từ nối và câu kết mạch lạc; với từ vựng, dựa vào cú pháp xung quanh "
-        "và nghĩa chính xác, không chọn từ đồng nghĩa chung chung. Chỉ rõ bẫy mà từng phương án sai đang tạo ra."
+        " Đây là Integrated Part %d tiếng Anh THPT. Giải thích bẫy trực tiếp."
     ) % integrated_part if is_vietnamese_high_school_integrated else ""
-    matching_target_prompt_en = (
-        f"TARGET PARAGRAPH {matching_target_label} (ONLY VALID EVIDENCE SOURCE):\n{matching_target_text}\n\n"
-        if is_paragraph_information_matching else ""
-    )
-    matching_target_prompt_vi = (
-        f"ĐOẠN {matching_target_label} MỤC TIÊU (NGUỒN DẪN CHỨNG DUY NHẤT):\n{matching_target_text}\n\n"
-        if is_paragraph_information_matching else ""
-    )
+
+    # STEP 1.2: Build single deduplicated source_block
+    norm_ctx = re.sub(r"\s+", " ", context).strip().lower()
+    norm_reading = re.sub(r"\s+", " ", reading_passage).strip().lower()
+
+    if is_paragraph_information_matching:
+        source_label = "TARGET PARAGRAPH" if lang == "en" else "ĐOẠN MỤC TIÊU"
+        source_block = f"{source_label} ({matching_target_label}):\n{matching_target_text[:4500]}"
+        if norm_ctx and norm_ctx not in norm_reading and norm_ctx not in matching_target_text.lower():
+            group_label = "QUESTION GROUP CONTEXT" if lang == "en" else "BỐI CẢNH NHÓM CÂU HỎI"
+            source_block += f"\n\n{group_label}:\n{context[:2500]}"
+    elif is_reading_evidence:
+        source_label = "READING PASSAGE" if lang == "en" else "BÀI ĐỌC"
+        source_block = f"{source_label}:\n{reading_passage[:8500]}"
+        if norm_ctx and norm_ctx not in norm_reading:
+            group_label = "QUESTION GROUP CONTEXT" if lang == "en" else "BỐI CẢNH NHÓM CÂU HỎI"
+            source_block += f"\n\n{group_label}:\n{context[:2500]}"
+    else:
+        source_label = "AUDIO TRANSCRIPT" if lang == "en" else "TRANSCRIPT BÀI NGHE"
+        source_block = f"{source_label}:\n{context[:7500] if has_ctx else ('(no transcript provided)' if lang == 'en' else '(không có transcript)')}"
 
     if lang == "en":
         sys_prompt = (
-            "You are an expert IELTS tutor. Provide a sharp, structured, high-signal pedagogical explanation for the reviewed question.\n"
+            "You are an expert IELTS tutor. Provide an ultra-focused, sharp 3-sentence pedagogical explanation.\n"
             "Return strictly a valid JSON object matching this schema:\n"
             "{\n"
             '  "paraphrasePairs": [\n'
-            '    { "questionTerm": "key phrase in question/option", "passageTerm": "equivalent phrase in passage/transcript", "note": "" }\n'
+            '    { "questionTerm": "key phrase in question/option", "passageTerm": "equivalent phrase in source", "note": "" }\n'
             '  ],\n'
             '  "evidence": {\n'
             '    "location": "e.g. Paragraph E, line 7 or Section 2 [01:23]",\n'
-            '    "quote": "Short verbatim continuous proof from passage/transcript (10-250 chars)."\n'
+            '    "quote": "Short verbatim continuous excerpt from source (10-250 chars)."\n'
             '  },\n'
-            '  "detailedExplanation": "1-3 concise sentences explaining why the evidence proves the correct answer.",\n'
+            '  "detailedExplanation": "1-2 sentences stating the logical proof directly without any meta-filler.",\n'
             '  "trapAnalysis": {\n'
-            '    "trapTitle": "Trap name (e.g. Scope Trap, Premature Match, or Signpost Cue Strategy)",\n'
-            '    "trapReason": "1-2 sentences explaining why the student answer is wrong, or actionable strategy if blank, or potential distractor trap if correct."\n'
+            '    "trapTitle": "Trap Name (e.g. Scope Trap, Distractor Trap, or Signpost Cue Strategy)",\n'
+            '    "trapReason": "1-2 sentences specifically explaining why studentAnswer was wrong, or strategy if blank. Do NOT analyze unselected options."\n'
             '  }\n'
             "}\n"
-            "CRITICAL RULES:\n"
-            "1. NO META-FILLER: NEVER start detailedExplanation with 'The question tests...', 'The question asks the candidate...', or 'The passage mentions...'. State the logical proof directly.\n"
-            "2. NO QUOTE DUPLICATION: Do not repeat the exact quote verbatim inside detailedExplanation; detailedExplanation must only explain the logical meaning.\n"
-            "3. ACCURACY: evidence.quote MUST be a continuous verbatim excerpt from the source text/transcript.\n"
-            "4. LANGUAGE: 100% English for all explanations and labels.\n"
-            "5. FOCUSED SCOPE FOR MULTIPLE CHOICE / MATCHING: Only explain (1) why the correct answer is right and (2) why the student's selected answer is wrong. Do NOT analyze unselected options.\n"
+            "RULES:\n"
+            "1. NO META-FILLER: Never say 'The question tests...' or repeat the quote verbatim in detailedExplanation.\n"
+            "2. FOCUS ON STUDENT ANSWER: Explain only why Correct is right and why studentAnswer was wrong. Do not list other unselected options.\n"
+            "3. ACCURACY: evidence.quote MUST be an exact verbatim excerpt from the source text.\n"
+            "4. 100% English for all labels and explanations.\n"
             + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
         )
-        source_label = "TIMESTAMPED AUDIO TRANSCRIPT (Listening; each range is an audio block)" if is_listening_item else "SOURCE TEXT (read it fully)"
-        source_empty = "(no audio transcript was provided for this item)" if is_listening_item else "(no source text was provided for this item)"
         user_prompt = (
-            f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
-            f"READING PASSAGE FOR CLICKABLE EVIDENCE:\n{reading_passage if is_reading_evidence else '(not applicable)'}\n\n"
-            f"{matching_target_prompt_en}"
-            f"Question type: {question_type or '(unspecified)'}; subtype: {question_subtype or '(none)'}\n"
+            f"{source_block}\n\n"
+            f"Question Type: {question_type or '(unspecified)'}; Subtype: {question_subtype or '(none)'}\n"
             f"Question: {question}\nOptions: {options or '(n/a)'}\n"
             f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nOutput ONLY the JSON object."
         )
     else:
         sys_prompt = (
-            "Bạn là chuyên gia luyện thi IELTS 8.5+. Hãy phân tích câu hỏi thi theo cấu trúc sư phạm 3 khối chuẩn mực, sắc bén, loại bỏ hoàn toàn từ thừa.\n"
+            "Bạn là chuyên gia luyện thi IELTS 8.5+. Hãy phân tích câu hỏi thi theo cấu trúc sư phạm siêu tinh gọn (3 câu súc tích), loại bỏ hoàn toàn từ thừa.\n"
             "Trả về DUY NHẤT một JSON object theo đúng cấu trúc sau:\n"
             "{\n"
             '  "paraphrasePairs": [\n'
@@ -5368,43 +5458,36 @@ async def ai_explain(
             '  ],\n'
             '  "evidence": {\n'
             '    "location": "ví dụ: Đoạn E, dòng 7 hoặc Lời thoại [01:23]",\n'
-            '    "quote": "Đoạn trích NGUYÊN VĂN từ bài đọc/transcript chứng minh đáp án (10-250 ký tự)."\n'
+            '    "quote": "Đoạn trích NGUYÊN VĂN từ nguồn chứng minh đáp án (10-250 ký tự).\n'
             '  },\n'
-            '  "detailedExplanation": "1-3 câu giải thích chi tiết, cặn kẽ vì sao dẫn chứng này chứng minh đáp án đúng.",\n'
+            '  "detailedExplanation": "1-2 câu đi thẳng vào bản chất logic chứng minh đáp án đúng, không dùng câu dẫn rườm rà.",\n'
             '  "trapAnalysis": {\n'
-            '    "trapTitle": "Tên bẫy (ví dụ: Bẫy phạm vi / Bẫy từ khóa gây nhiễu / Bẫy suy diễn thái quá / Chiến thuật bắt nhịp từ khóa)",\n'
-            '    "trapReason": "1-2 câu chỉ rõ tại sao phương án học viên chọn bị sai hoặc cách phòng tránh bẫy; nếu học viên bỏ trống, hướng dẫn chiến thuật bắt nhịp từ khóa."\n'
+            '    "trapTitle": "Tên bẫy (ví dụ: Bẫy phạm vi / Bẫy từ khóa gây nhiễu / Chiến thuật bắt nhịp)",\n'
+            '    "trapReason": "1-2 câu chỉ rõ tại sao phương án học viên chọn bị sai hoặc chiến thuật nếu bỏ trống. TUYỆT ĐỐI KHÔNG phân tích các phương án học viên không chọn."\n'
             '  }\n'
             "}\n"
-            "QUY TẮC SƯ PHẠM BẮT BUỘC:\n"
-            "1. TUYỆT ĐỐI KHÔNG DÙNG CÂU DẪN RƯỜM RÀ: Không bao giờ mở đầu detailedExplanation bằng 'Câu hỏi kiểm tra...', 'Câu hỏi yêu cầu thí sinh...', 'Bài đọc đề cập...'. Đi thẳng vào logic chứng minh.\n"
-            "2. KHÔNG LẶP LẠI DẪN CHỨNG: Không chép lại toàn bộ câu trích dẫn trong detailedExplanation; detailedExplanation chỉ giải thích bản chất nghĩa và mối liên kết logic.\n"
-            "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC phải là trích đoạn liên tục, đúng từng từ trong bài đọc/transcript.\n"
-            "4. NGÔN NGỮ: 100% tiếng Việt cho phần diễn giải và tên bẫy. Các từ trích dẫn trong đề thi tiếng Anh giữ nguyên tiếng Anh.\n"
-            "5. PHẠM VI TRỌNG TÂM CHO TRẮC NGHIỆM / NỐI: Chỉ giải thích (1) vì sao đáp án đúng là chính xác và (2) vì sao phương án học viên chọn bị sai. TUYỆT ĐỐI KHÔNG phân tích lan man các lựa chọn mà học viên không chọn.\n"
+            "QUY TẮC BẮT BUỘC:\n"
+            "1. KHÔNG DÙNG CÂU DẪN RƯỜM RÀ: Không bao giờ mở đầu bằng 'Câu hỏi kiểm tra...', 'Bài đọc đề cập...'. Không chép lại dẫn chứng trong detailedExplanation.\n"
+            "2. CHỈ TẬP TRUNG LỖI HỌC VIÊN: Chỉ giải thích đáp án đúng và phân tích lý do sai của phương án học viên chọn; không liệt kê các lựa chọn khác.\n"
+            "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC là trích đoạn liên tục, đúng từng từ từ nguồn.\n"
+            "4. 100% tiếng Việt cho lời giải thích và tên bẫy.\n"
             + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
         )
-        source_label = "TRANSCRIPT BÀI NGHE CÓ MỐC THỜI GIAN (Listening; mỗi khoảng là một đoạn audio)" if is_listening_item else "VĂN BẢN NGUỒN (đọc hết)"
-        source_empty = "(không có transcript bài nghe cho câu này)" if is_listening_item else "(không có văn bản nguồn cho câu này)"
         user_prompt = (
-            f"{source_label}:\n{context if has_ctx else source_empty}\n\n"
-            f"BÀI ĐỌC DÙNG LÀM DẪN CHỨNG CLICKABLE:\n{reading_passage if is_reading_evidence else '(không áp dụng)'}\n\n"
-            f"{matching_target_prompt_vi}"
-            f"Dạng câu: {question_type or '(chưa xác định)'}; dạng phụ: {question_subtype or '(không có)'}\n"
+            f"{source_block}\n\n"
+            f"Dạng câu: {question_type or '(chưa xác định)'}; Dạng phụ: {question_subtype or '(không có)'}\n"
             f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
         )
 
-    vertex_explain_model = os.environ.get("VERTEX_EXPLAIN_MODEL", "gemini-3.8-flash")
     raw_response, err = await asyncio.to_thread(
-        _pedagogical_ai_call,
+        _groq_chat,
         sys_prompt,
         user_prompt,
-        max_tokens=500,
-        temperature=0.15,
+        max_tokens=380,
+        temperature=0.2,
         json_mode=True,
-        model=vertex_explain_model,
-        timeout_s=25.0,
+        per_request_timeout_s=12.0,
     )
     if not raw_response and err:
         return {"success": False, "error": _friendly_err(err, lang)}
@@ -5601,7 +5684,7 @@ async def ai_explain(
         },
     }
 
-    return {
+    response_payload = {
         "success": True,
         "explanation": text,
         "audioEvidence": audio_evidence,
@@ -5613,6 +5696,16 @@ async def ai_explain(
         },
         "structured": structured_data,
     }
+    with _AI_EXPLAIN_CACHE_LOCK:
+        if len(_AI_EXPLAIN_CACHE) >= 500:
+            try:
+                oldest_key = next(iter(_AI_EXPLAIN_CACHE))
+                _AI_EXPLAIN_CACHE.pop(oldest_key, None)
+            except Exception:
+                pass
+        _AI_EXPLAIN_CACHE[cache_key] = response_payload
+
+    return response_payload
 
 
 @app.post("/api/analyze_error_dna")

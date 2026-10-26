@@ -4167,6 +4167,7 @@ export default function IeltsSupremeOS() {
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
+  const aiExplainCacheRef = useRef<Map<string, any>>(new Map());
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -8052,7 +8053,6 @@ const applyWorkspaceSnapshot = (snap: any) => {
   // #5: Giải thích từng câu sai bằng AI trong màn Review
   const handleAiExplain = async (q: QuizQuestion, studentAnsRaw: any, quiz: Quiz) => {
     if (explainMap[q.id]?.loading) return;
-    setExplainMap(prev => ({ ...prev, [q.id]: { loading: true, text: "" } }));
     try {
       // Keep paragraph boundaries for reading evidence. Removing tags without a
       // separator makes two separate paragraphs look like one AI quotation.
@@ -8113,6 +8113,27 @@ const applyWorkspaceSnapshot = (snap: any) => {
         correctStr = stripTags(q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
+
+      const langKey = i18n.language === "vi" ? "vi" : "en";
+      const quizKey = quiz?.id || (quiz as any)?.title || 'quiz';
+      const cacheKey = `${quizKey}_${q.id}_${stuStr}_${langKey}`;
+
+      const memCached = aiExplainCacheRef.current.get(cacheKey);
+      if (memCached) {
+        setExplainMap(prev => ({ ...prev, [q.id]: memCached }));
+        return;
+      }
+      try {
+        const sessCached = sessionStorage.getItem('ielts_ai_exp_' + cacheKey);
+        if (sessCached) {
+          const parsed = JSON.parse(sessCached);
+          aiExplainCacheRef.current.set(cacheKey, parsed);
+          setExplainMap(prev => ({ ...prev, [q.id]: parsed }));
+          return;
+        }
+      } catch {}
+
+      setExplainMap(prev => ({ ...prev, [q.id]: { loading: true, text: "" } }));
       const resolvedCtx = resolveReviewQuestionContext(q, quiz, reviewSectionIdx);
       const fullQuiz = resolvedCtx.fullQuiz;
       const secs = resolvedCtx.secs;
@@ -8180,9 +8201,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         }
       }
       // A full 30-minute transcript can exceed the model context. Keep the slice
-      // belonging to this part/question, rather than always truncating at Part 1.
+      // belonging to this part/question, tightly bounded (< 6,500 chars) around the question.
       const transcriptForQuestion = (() => {
-        const limit = 23000;
+        const limit = 6500;
         if (!isListeningQuestion || fullTranscript.length <= limit) return fullTranscript;
         const partCount = Array.isArray(secs) && secs.length ? secs.length : 1;
         const partIndex = qSectionIndex >= 0 ? qSectionIndex : 0;
@@ -8193,22 +8214,23 @@ const applyWorkspaceSnapshot = (snap: any) => {
         let start = Math.max(0, Math.min(fullTranscript.length - limit, center - Math.floor(limit / 2)));
         if (start > 0) {
           const markerStart = fullTranscript.indexOf('(', start);
-          if (markerStart >= 0 && markerStart < start + 500) start = markerStart;
+          if (markerStart >= 0 && markerStart < start + 500) {
+            start = markerStart;
+          } else {
+            const newlineStart = fullTranscript.indexOf('\n', start);
+            if (newlineStart >= 0 && newlineStart < start + 300) start = newlineStart + 1;
+          }
         }
         return fullTranscript.slice(start, start + limit);
       })();
-      // Listening transcript first so its answer-bearing timestamp markers survive the API context limit.
-      const ctxParts = isListeningQuestion
-        ? [transcriptForQuestion, stripTags(qPassage), stripTags(q.groupContext)].filter(Boolean)
-        : [stripTags(q.groupContext), stripTags(qPassage), stripTags(fullQuiz?.transcript)].filter(Boolean);
-      const seenCtx = new Set<string>();
-      const uniqueCtxParts = ctxParts.filter((part) => {
-        const trimmed = part.trim();
-        if (!trimmed || seenCtx.has(trimmed)) return false;
-        seenCtx.add(trimmed);
-        return true;
-      });
-      const context = uniqueCtxParts.join("\n\n").trim().slice(0, 24000);
+
+      // Deduplicate context and reading passage:
+      // For Reading: context contains only question group context (table/notes/summary); passage is sent once via readingPassage.
+      // For Listening: context contains the focused transcript slice (+ groupContext if any); readingPassage is empty.
+      const context = isListeningQuestion
+        ? [transcriptForQuestion, stripTags(q.groupContext)].filter(Boolean).join("\n\n").trim().slice(0, 7500)
+        : stripTags(q.groupContext).slice(0, 4000);
+      const readingPassage = isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000);
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
         if (question.type === "CHOICE") {
@@ -8236,7 +8258,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           correct: correctStr,
           studentAnswer: stuStr,
           context,
-          readingPassage: isListeningQuestion ? "" : stripTags(qPassage).slice(0, 24000),
+          readingPassage,
           isListening: isListeningQuestion,
           questionType: q.type,
           questionSubType: q.subType || "",
@@ -8258,7 +8280,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
           ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
           : undefined;
-        setExplainMap(prev => ({ ...prev, [q.id]: {
+        const explainResult = {
           loading: false,
           text: data.explanation || "",
           audioEvidence: data.audioEvidence && typeof data.audioEvidence.timestamp === 'string' && typeof data.audioEvidence.quote === 'string'
@@ -8267,7 +8289,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
           audioEvidenceSegments,
           deconstruction: data.deconstruction || undefined,
           structured: data.structured || undefined,
-        } }));
+        };
+        aiExplainCacheRef.current.set(cacheKey, explainResult);
+        try {
+          sessionStorage.setItem('ielts_ai_exp_' + cacheKey, JSON.stringify(explainResult));
+        } catch {}
+        setExplainMap(prev => ({ ...prev, [q.id]: explainResult }));
       }
       else {
         const message = "" + (data.error || "Could not generate explanation. Please try again.");
