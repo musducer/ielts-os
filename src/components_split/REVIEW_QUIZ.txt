@@ -591,7 +591,12 @@
           }
       };
 
-      const handleOpenHeadingPopover = (question: any, mode: 'teacher' | 'ai', buttonEl: HTMLElement) => {
+      const handleOpenHeadingPopover = (
+          question: any,
+          mode: 'teacher' | 'ai',
+          buttonEl: HTMLElement,
+          overrideCtx?: { paragraphLabel?: string; paragraphText?: string; headingOptions?: Array<{ id: string; text: string }> }
+      ) => {
           if (activeHeadingPopover && activeHeadingPopover.qId === question.id && activeHeadingPopover.mode === mode) {
               setActiveHeadingPopover(null);
               return;
@@ -604,9 +609,11 @@
               anchorRect: rect,
           });
 
-          if (mode === "ai" && !explainMap[question.id] && !explainMap[question.id]?.loading) {
+          // Auto-trigger: never show an empty popover that needs a second click.
+          const existing = explainMap[question.id];
+          if (mode === "ai" && !existing?.loading && !existing?.text && !existing?.structured) {
               const studentAns = rvSubmittedAnswers?.[question.id];
-              void handleAiExplain(question, studentAns, reviewQuiz.quiz);
+              void handleAiExplain(question, studentAns, reviewQuiz.quiz, overrideCtx);
           }
       };
 
@@ -1212,7 +1219,7 @@
                                       className={`rv-retry-result-pill ${retryDisp.correct ? "is-right" : "is-wrong"}`}
                                       title={retryDisp.correct ? "Làm lại: Đúng" : "Làm lại: Sai"}
                                   >
-                                      Làm lại: {retryDisp.given} {retryDisp.correct ? "✓" : "✗"}
+                                      Làm lại: {retryDisp.given} {retryDisp.correct ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px" }}><polyline points="20 6 9 17 4 12" /></svg> : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px" }}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>}
                                   </span>
                               )}
                               <span className="rv-ans-arrow">→</span>
@@ -3060,7 +3067,7 @@
 
                                                                            {isCorrect ? (
                                                                                <span style={{ fontSize: 13, fontWeight: 700, color: "#15803D", display: "inline-flex", alignItems: "center", gap: 5 }}>
-                                                                                   <span style={{ fontWeight: 800, color: "#16A34A" }}>✓</span>
+                                                                                   <span style={{ fontWeight: 800, color: "#16A34A", display: "inline-flex" }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px" }}><polyline points="20 6 9 17 4 12" /></svg></span>
                                                                                    <span>{expectedFormatted}</span>
                                                                                </span>
                                                                            ) : (
@@ -3115,7 +3122,11 @@
                                                                            <button
                                                                                type="button"
                                                                                className={`micro-btn-ai ${activeHeadingPopover?.qId === hq.id && activeHeadingPopover?.mode === "ai" ? "is-active" : ""}`}
-                                                                               onClick={(e) => handleOpenHeadingPopover(hq, "ai", e.currentTarget)}
+                                                                               onClick={(e) => handleOpenHeadingPopover(hq, "ai", e.currentTarget, {
+                                                                                    paragraphLabel: paragraphLetter,
+                                                                                    paragraphText: cleanChunk(chunks[hi + 1] || ""),
+                                                                                    headingOptions: headingOptions as Array<{ id: string; text: string }>,
+                                                                                })}
                                                                                title="Giải thích AI cho Heading này"
                                                                                style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px" }}
                                                                            >
@@ -3523,7 +3534,7 @@
                                                        <div className="rv-word-bank" style={{ padding: "12px 14px", borderRadius: 8, background: "#FAF7F2", border: "1px solid #E6DFD3" }}>
                                                            <div className="rv-word-bank-title" style={{ fontSize: 13, fontWeight: 800, color: "#44403C", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                                                                <span>List of Headings</span>
-                                                               <span style={{ fontSize: 11.5, fontWeight: 600, color: "#15803D" }}>✓ Tô xanh = Đáp án đúng</span>
+                                                               <span style={{ fontSize: 11.5, fontWeight: 600, color: "#15803D", display: "inline-flex", alignItems: "center", gap: 4 }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px" }}><polyline points="20 6 9 17 4 12" /></svg> Tô xanh = Đáp án đúng</span>
                                                            </div>
                                                            <div style={{ display: "grid", gap: 6 }}>
                                                                {headingOptions.map((h: any, hIdx: number) => {
@@ -3552,8 +3563,8 @@
                                                                            </strong>
                                                                            <span>{cleanText.replace(/^[ivxlcdm]+[\.\)]\s*/i, "")}</span>
                                                                            {isCorrectHeading && (
-                                                                               <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#16A34A" }}>
-                                                                                   ✓ Đúng
+                                                                               <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#16A34A", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                                                                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-1px" }}><polyline points="20 6 9 17 4 12" /></svg> Đúng
                                                                                </span>
                                                                            )}
                                                                        </div>
@@ -3561,24 +3572,7 @@
                                                                })}
                                                            </div>
                                                        </div>
-                                                   )}
-                                                   <div style={{
-                                                       margin: "10px 0 4px",
-                                                       padding: "8px 12px",
-                                                       borderRadius: 6,
-                                                       background: "#EFF6FF",
-                                                       border: "1px solid #BFDBFE",
-                                                       fontSize: 12.5,
-                                                       color: "#1E40AF",
-                                                       display: "flex",
-                                                       alignItems: "center",
-                                                       gap: 8,
-                                                   }}>
-                                                       <span style={{ fontSize: 14 }}>📍</span>
-                                                       <span>
-                                                           Kết quả từng đoạn và nút giải thích <strong>[💡] [📍] [💡 AI]</strong> được đặt trực tiếp ở đầu mỗi đoạn văn bên cột Bài đọc.
-                                                       </span>
-                                                   </div>
+                                                   )}
                                                </section>
                                            );
                                        }
@@ -4124,20 +4118,28 @@
                                           </div>
                                       )
                                   ) : (
-                                      aiState?.loading ? (
-                                          <div style={{ textAlign: "center", padding: "20px 0", color: "#64748B" }}>
-                                              Đang phân tích ý chính đoạn văn và đối chiếu heading...
-                                          </div>
-                                      ) : (aiState?.structured || aiState?.text) ? (
+                                      (aiState?.structured || aiState?.text) ? (
                                           rvRenderDetailedAiExplanation(aiState, hq, studentAns)
+                                      ) : aiState?.loading ? (
+                                          <div role="status" aria-live="polite" style={{ padding: "6px 0 2px" }}>
+                                              <style>{"@keyframes rvSpin{to{transform:rotate(360deg)}}@keyframes rvPulse{0%,100%{opacity:.45}50%{opacity:1}}@keyframes rvFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}"}</style>
+                                              <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#475569", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
+                                                  <span style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #CBD5E1", borderTopColor: "#2563EB", animation: "rvSpin 0.8s linear infinite", display: "inline-block" }} />
+                                                  Đang đọc đoạn văn và đối chiếu heading...
+                                              </div>
+                                              {[92, 78, 64].map((w, k) => (
+                                                  <div key={k} style={{ height: 10, width: `${w}%`, borderRadius: 4, background: "#E2E8F0", marginBottom: 8, animation: `rvPulse 1.2s ease-in-out ${k * 0.15}s infinite` }} />
+                                              ))}
+                                          </div>
                                       ) : (
-                                          <div style={{ textAlign: "center", padding: "16px 0" }}>
+                                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 0", color: "#64748B", fontSize: 12.5 }}>
+                                              <span>Chưa tải được phân tích cho đoạn này.</span>
                                               <button
                                                   type="button"
                                                   className="rv-drawer-switch-ai"
                                                   onClick={() => void handleAiExplain(hq, studentAns, reviewQuiz.quiz)}
                                               >
-                                                  Tạo phân tích AI
+                                                  Thử lại
                                               </button>
                                           </div>
                                       )

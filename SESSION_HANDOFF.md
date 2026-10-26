@@ -1,5 +1,22 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-26)
 
+## Triệt Tiêu PROVIDER_TIMEOUT Khi Giải Thích Matching Headings & Tinh Gọn UI Review (Zero-Emoji & Auto-Trigger AI) — 2026-10-26
+
+- **Khắc phục triệt để lỗi `PROVIDER_TIMEOUT` ở dạng bài Matching Headings (`DRAG_DROP_HEADING`)**:
+  - *Client (`src/App.template.tsx` & `src/components_split/REVIEW_QUIZ.txt`)*:
+    - Sửa lỗi ép kiểu `(q.options || []).map(...)` làm biến đổi các object `{ id, text }` của heading thành `"[object Object]"`. Chuẩn hóa `optStr` bằng `headingCatalog` thành chuỗi `i. Title | ii. Title`.
+    - Tự động bóc tách chính xác duy nhất 1 đoạn văn mục tiêu (~500 ký tự) từ mốc `[HEADING_SLOT]` tương ứng với câu hỏi hiện tại, truyền qua `overrideContext.paragraphText` hoặc tự động cắt qua regex `SLOT_RE`, không còn gửi toàn bộ bài đọc dài hơn 15.000 ký tự chứa tag `[HEADING_SLOT]` thô lên API.
+    - Định danh câu hỏi rõ ràng: `Paragraph X (Question Y): Choose the correct heading for Paragraph X`.
+  - *Backend Fast-Path (`api/index.py`)*:
+    - Xây dựng luồng xử lý siêu tốc cho `is_heading_task`: chỉ nạp đoạn văn mục tiêu `passage_for_ai[:3500]`, prompt tập trung vào ý chính đoạn và lý do loại trừ bẫy của học viên, `max_tokens=320`, không xuất bảng từ đồng nghĩa và không gọi LLM thẩm định lần 2.
+    - Nâng thời gian chờ mỗi request từ 12s lên 18s; khi gặp timeout hoặc lỗi 5xx (`PROVIDER_UNAVAILABLE`), router tự động thử tiếp provider kế tiếp thay vì ngắt giữa chừng với `PROVIDER_TIMEOUT`.
+- **Tự động kích hoạt giải thích AI (Auto-Trigger) khi click nút `[AI]`**:
+  - Khi học viên bấm vào nút `[AI]` ở thanh Heading Slot trên cột bài đọc, hệ thống mở popover và **ngay lập tức** gọi `handleAiExplain`.
+  - Hiển thị skeleton loading nhấp nháy chuyên nghiệp thay vì popover rỗng bắt bấm nút `"Tạo phân tích AI"` lần 2.
+- **Loại bỏ thông báo thừa & Quy tắc Zero-Emoji trên toàn bộ giao diện Review**:
+  - Xóa bỏ hoàn toàn hộp thông báo màu xanh dương thừa thãi trên cột phải (`"Kết quả từng đoạn và nút giải thích..."`). Cột phải chỉ giữ lại thẻ hướng dẫn và bảng tham chiếu `List of Headings` tinh gọn.
+  - Loại bỏ triệt để các emoji Unicode (`📍`, `💡`, `✓`, `✗`), thay thế hoàn toàn bằng inline vector SVG chuẩn mực.
+
 ## Khắc Phục Lỗi Trắng Trang Minified React Error #310 (Hook Order Mismatch) — 2026-10-26
 
 - **Nguyên nhân gốc rễ (Root Cause)**:

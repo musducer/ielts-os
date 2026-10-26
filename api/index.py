@@ -3919,7 +3919,7 @@ try:
     _HTTP_SESSION.mount("http://", _adapter)
 except Exception:
     _HTTP_SESSION = None
-def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=12):
+def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=18):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
     body = {
         "model": model,
@@ -3933,7 +3933,7 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 12.0
+        timeout_s = 18.0
 
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -3961,6 +3961,8 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
                 return "", "AUTH"
             if resp.status_code in (400, 404):
                 return "", "BAD_MODEL"
+            if resp.status_code in (500, 502, 503, 504):
+                return "", "PROVIDER_UNAVAILABLE"
             return "", f"{model} -> {resp.status_code}: {detail}"
         except _requests.Timeout:
             return "", "PROVIDER_TIMEOUT"
@@ -4053,7 +4055,7 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
         return "", f"{model} -> {str(e)}"
 
 
-def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=12, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
+def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=18, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
     """1 lần gọi Google Gemini (định dạng riêng). Hỗ trợ thinking budget trên 2.5/3.x và multimodal image inputs."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     effective_max_tokens = max_tokens
@@ -4092,7 +4094,7 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 12.0
+        timeout_s = 18.0
 
     headers = {"Content-Type": "application/json"}
 
@@ -4137,6 +4139,8 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
                 return "", "AUTH"
             if resp.status_code in (400, 404):
                 return "", "BAD_MODEL"
+            if resp.status_code in (500, 502, 503, 504):
+                return "", "PROVIDER_UNAVAILABLE"
             return "", f"gemini {model} -> {resp.status_code}: {detail}"
         except _requests.Timeout:
             return "", "PROVIDER_TIMEOUT"
@@ -4339,9 +4343,9 @@ def _groq_chat(
     # The raw-DOCX adapter is the only caller which provides a deadline; it gets
     # a bounded per-request window and fair provider-family rotation.
     try:
-        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 12.0
+        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 18.0
     except (TypeError, ValueError):
-        request_timeout = 12.0
+        request_timeout = 18.0
     try:
         router_deadline = float(deadline_monotonic) if deadline_monotonic is not None else None
     except (TypeError, ValueError):
@@ -4399,7 +4403,7 @@ def _groq_chat(
             )
         # A rejected/rate-limited key cannot help with its other models. Keep
         # ordinary transient failures eligible for its next model as before.
-        if err in {"RATE_LIMIT", "AUTH"}:
+        if err in {"RATE_LIMIT", "AUTH", "PROVIDER_UNAVAILABLE"}:
             remaining = [item for item in family["queue"] if item[0] != key]
             family["queue"].clear()
             family["queue"].extend(remaining)
@@ -4421,7 +4425,14 @@ def _groq_chat(
             if text:
                 return text, ""
             if err == "PROVIDER_TIMEOUT":
-                return "", err
+                # A slow provider family must not sink the whole request: skip the
+                # rest of this family and fall through to the next provider. Only
+                # abort when the caller's overall deadline has been exhausted.
+                family["queue"].clear()
+                if router_deadline is not None and remaining_timeout() <= 0:
+                    return "", err
+                last_err = err
+                continue
             last_err = err
             if err == "RATE_LIMIT":
                 any_rate = True
@@ -5495,14 +5506,58 @@ async def ai_explain(
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
         )
 
+    explain_max_tokens = 380
+    if is_heading_task:
+        # Fast path: ONE target paragraph, no synonym table, no verification call.
+        passage_for_ai = (matching_target_text or reading_passage or context)[:3500]
+        para_label = matching_target_label or "?"
+        stu_label = student_ans or ("(blank)" if lang == "en" else "(bỏ trống)")
+        if lang == "en":
+            sys_prompt = (
+                "You are an expert IELTS Reading tutor for Matching Headings. Be extremely brief.\n"
+                "Return strictly one JSON object:\n"
+                "{\n"
+                '  "paraphrasePairs": [],\n'
+                '  "evidence": { "location": "Paragraph X", "quote": "ONE exact verbatim core sentence from the paragraph (10-250 chars)" },\n'
+                '  "detailedExplanation": "1-2 short sentences: how the key sentence(s) of this paragraph lead to the correct heading. Include [[EVIDENCE: exact sentence]] once.",\n'
+                '  "trapAnalysis": { "trapTitle": "Trap to avoid", "trapReason": "1 short sentence: why the student\'s heading does not fit this paragraph (or a skimming tip if blank)." }\n'
+                "}\n"
+                "RULES: paraphrasePairs MUST be []. No word-level synonyms. evidence.quote MUST be copied verbatim from the paragraph. 100% English."
+            )
+            user_prompt = (
+                f"PARAGRAPH {para_label}:\n{passage_for_ai}\n\n"
+                f"List of headings: {options or '(n/a)'}\n"
+                f"Correct heading: {correct}\nStudent chose: {stu_label}\n\nOutput ONLY the JSON object."
+            )
+        else:
+            sys_prompt = (
+                "Bạn là chuyên gia IELTS Reading dạng Matching Headings. Trả lời cực ngắn gọn.\n"
+                "Trả về DUY NHẤT một JSON object:\n"
+                "{\n"
+                '  "paraphrasePairs": [],\n'
+                '  "evidence": { "location": "Đoạn X", "quote": "MỘT câu cốt lõi trích NGUYÊN VĂN từ đoạn (10-250 ký tự)" },\n'
+                '  "detailedExplanation": "1-2 câu ngắn: các câu then chốt của đoạn dẫn tới heading đúng như thế nào. Chèn đúng 1 lần [[EVIDENCE: câu nguyên văn]].",\n'
+                '  "trapAnalysis": { "trapTitle": "Bẫy cần tránh", "trapReason": "1 câu ngắn: vì sao heading học viên chọn không khớp đoạn này (hoặc mẹo đọc lướt nếu bỏ trống)." }\n'
+                "}\n"
+                "QUY TẮC: paraphrasePairs BẮT BUỘC là []. Không liệt kê từ đồng nghĩa. evidence.quote phải chép nguyên văn từ đoạn. 100% tiếng Việt."
+            )
+            user_prompt = (
+                f"ĐOẠN {para_label}:\n{passage_for_ai}\n\n"
+                f"Danh sách heading: {options or '(không có)'}\n"
+                f"Heading đúng: {correct}\nHọc viên chọn: {stu_label}\n\nChỉ xuất ra duy nhất JSON object."
+            )
+        explain_max_tokens = 320
+        evidence_passage = passage_for_ai
+
     raw_response, err = await asyncio.to_thread(
         _groq_chat,
         sys_prompt,
         user_prompt,
-        max_tokens=380,
+        max_tokens=explain_max_tokens,
         temperature=0.2,
         json_mode=True,
-        per_request_timeout_s=12.0,
+        per_request_timeout_s=18.0,
+        deadline_monotonic=time.monotonic() + 45.0,
     )
     if not raw_response and err:
         return {"success": False, "error": _friendly_err(err, lang)}

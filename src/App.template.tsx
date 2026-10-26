@@ -8124,7 +8124,12 @@ const applyWorkspaceSnapshot = (snap: any) => {
   };
 
   // #5: Giải thích từng câu sai bằng AI trong màn Review
-  const handleAiExplain = async (q: QuizQuestion, studentAnsRaw: any, quiz: Quiz) => {
+  const handleAiExplain = async (
+    q: QuizQuestion,
+    studentAnsRaw: any,
+    quiz: Quiz,
+    overrideContext?: { paragraphLabel?: string; paragraphText?: string; headingOptions?: Array<{ id: string; text: string }> }
+  ) => {
     if (explainMap[q.id]?.loading) return;
     try {
       // Keep paragraph boundaries for reading evidence. Removing tags without a
@@ -8144,18 +8149,31 @@ const applyWorkspaceSnapshot = (snap: any) => {
         }
         return s;
       };
-      const optStr = q.type === 'MATCHING'
-        ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
-        : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${cleanOptText(o)}`).join(" | ");
+      const isHeadingQuestion = q.type === 'DRAG_DROP_HEADING';
+      const headingCatalogAll = isHeadingQuestion
+        ? getHeadingCatalog([
+            q,
+            quiz,
+            ...((quiz as any)?.questions || []),
+            ...(((quiz as any)?.sections || []).flatMap((section: any) => [section, ...(section?.questions || [])])),
+          ])
+        : null;
+      const headingOptionList: Array<{ id: string; text: string }> = isHeadingQuestion
+        ? ((overrideContext?.headingOptions && overrideContext.headingOptions.length)
+            ? overrideContext.headingOptions
+            : Array.from((headingCatalogAll as Map<string, any>).values()))
+        : [];
+      const optStr = isHeadingQuestion
+        ? headingOptionList
+            .map((h: any) => `${normalizeHeadingId(h?.id)}. ${headingPlainText(h?.text)}`)
+            .join(" | ")
+        : q.type === 'MATCHING'
+          ? (q.options || []).map((o) => stripTags(cleanOptionAnswerText(o))).join(" | ")
+          : (q.options || []).map((o, idx) => `${String.fromCharCode(65 + idx)}. ${cleanOptText(o)}`).join(" | ");
       let correctStr = "", stuStr = "";
       const blank = studentAnsRaw === undefined || studentAnsRaw === "" || studentAnsRaw === null || (Array.isArray(studentAnsRaw) && studentAnsRaw.length === 0);
       if (q.type === 'DRAG_DROP_HEADING') {
-        const headingCatalog = getHeadingCatalog([
-          q,
-          quiz,
-          ...((quiz as any)?.questions || []),
-          ...(((quiz as any)?.sections || []).flatMap((section: any) => [section, ...(section?.questions || [])])),
-        ]);
+        const headingCatalog = headingCatalogAll as Map<string, any>;
         const headingFor = (value: any) => headingCatalog.get(normalizeHeadingId(value));
         const headingLabel = (value: any) => {
           const heading = headingFor(value);
@@ -8245,19 +8263,35 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
         return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
       })();
+      // Matching Headings: locate the exact paragraph behind this question's [HEADING_SLOT]
+      // so the AI only reads ONE paragraph (~500 chars) instead of the whole passage.
+      const headingSlotIndex = (() => {
+        if (!isHeadingQuestion) return -1;
+        const activeSecQs = Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []);
+        const headingQs = activeSecQs.filter((item: any) => item?.type === 'DRAG_DROP_HEADING');
+        return headingQs.findIndex((item: any) => String(item?.id || "") === String(q.id || ""));
+      })();
+      const headingParagraphPlain = (() => {
+        if (!isHeadingQuestion) return '';
+        if (overrideContext?.paragraphText) return stripTags(overrideContext.paragraphText);
+        const slotRe = /(?:<(?:div|p)[^>]*>\s*)?(?:<(?:span|strong|b|em|i)[^>]*>\s*)*\[HEADING_SLOT\]\s*(?:<\/(?:span|strong|b|em|i)>\s*)*(?:<\/(?:div|p)>)?/gi;
+        const chunks = String(qPassage || '').split(slotRe);
+        if (chunks.length < 2 || headingSlotIndex < 0) return '';
+        const targetParaHtml = chunks[headingSlotIndex + 1] || chunks[headingSlotIndex] || '';
+        return stripTags(targetParaHtml);
+      })();
       const matchingTargetLabel = (() => {
         if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
         if (matchingKind === 'headings') {
+          if (overrideContext?.paragraphLabel) return String(overrideContext.paragraphLabel).trim().toUpperCase();
           const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
           if (m) return m[1].toUpperCase();
-          const activeSecQs = Array.isArray(secs) && qSectionIndex >= 0 ? (secs[qSectionIndex]?.questions || []) : (fullQuiz?.questions || []);
-          const headingQs = activeSecQs.filter((item: any) => item?.type === 'DRAG_DROP_HEADING');
-          const hIdx = headingQs.findIndex((item: any) => String(item?.id || "") === String(q.id || ""));
-          if (hIdx >= 0) return String.fromCharCode(65 + hIdx);
+          return String.fromCharCode(65 + Math.max(0, headingSlotIndex));
         }
         return '';
       })();
       const matchingTargetText = (() => {
+        if (isHeadingQuestion && headingParagraphPlain) return headingParagraphPlain;
         if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
         const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
         const paragraphs = Array.from(doc.body.children)
@@ -8313,10 +8347,18 @@ const applyWorkspaceSnapshot = (snap: any) => {
       // Deduplicate context and reading passage:
       // For Reading: context contains only question group context (table/notes/summary); passage is sent once via readingPassage.
       // For Listening: context contains the focused transcript slice (+ groupContext if any); readingPassage is empty.
-      const context = isListeningQuestion
-        ? [transcriptForQuestion, stripTags(q.groupContext)].filter(Boolean).join("\n\n").trim().slice(0, 7500)
-        : stripTags(q.groupContext).slice(0, 4000);
-      const readingPassage = isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000);
+      const headingParaForAi = isHeadingQuestion
+        ? (matchingTargetText || stripTags(String(qPassage || '').replace(/\[HEADING_SLOT\]/gi, ''))).slice(0, 3500)
+        : '';
+      const context = isHeadingQuestion
+        ? headingParaForAi
+        : isListeningQuestion
+          ? [transcriptForQuestion, stripTags(q.groupContext)].filter(Boolean).join("\n\n").trim().slice(0, 7500)
+          : stripTags(q.groupContext).slice(0, 4000);
+      const readingPassage = isHeadingQuestion ? headingParaForAi : (isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000));
+      const headingQuestionText = isHeadingQuestion
+        ? `Paragraph ${matchingTargetLabel} (Question ${Math.max(0, headingSlotIndex) + 1}): Choose the correct heading for Paragraph ${matchingTargetLabel}`
+        : '';
       const answerTextForTimestamp = (question: any) => {
         if (!question) return "";
         if (question.type === "CHOICE") {
@@ -8339,7 +8381,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
-          question: resolvedCtx.effectiveQuestionText || stripTags(q.text),
+          question: headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text),
           options: optStr,
           correct: correctStr,
           studentAnswer: stuStr,
@@ -8350,7 +8392,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
           questionSubType: q.subType || "",
           matchingKind,
           matchingTargetLabel,
-          matchingTargetText,
+          matchingTargetText: isHeadingQuestion ? headingParaForAi : matchingTargetText,
           integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
           answerSequence,
