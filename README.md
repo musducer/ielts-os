@@ -1,5 +1,15 @@
 # IELTS OS
 
+## Tối Ưu Đáp Ứng & Chống Tràn Viền Thanh Điều Hướng Học Viên (Responsive Student Navbar) — 2026-10-26
+
+- **Khắc phục triệt để lỗi tràn viền và mất nút Đăng xuất (Logout Button Clipping)**:
+  - Khi học viên chuyển đổi ngôn ngữ (VI ⇄ EN), các nhãn tab tiếng Anh ("Vocabulary", "Progress", "Test Room",...) và chuỗi trạng thái dài hơn đã đẩy thanh điều hướng (`<nav>`) vượt quá 100vw trên các màn hình laptop phổ biến (1280px, 1366px hoặc 1920x1080 scaling 125%/150%), dẫn đến nút Đăng xuất (`Logout`) ở góc phải bị đẩy khỏi khung nhìn.
+  - **Neo cố định cụm hành động bên phải (`flexShrink: 0`, `marginLeft: 'auto'`)**: Cụm trạng thái đồng bộ, đổi ngôn ngữ, chế độ tương phản và nút Đăng xuất luôn nằm gọn trong khung nhìn, không bao giờ bị cắt xén.
+  - **Tự động thu gọn thông minh theo Breakpoint CSS chuẩn mực**:
+    - Dưới `1440px`: Tự động ẩn chuỗi thời gian đăng nhập dài (`Last login: ...`) trên thanh navbar, chuyển hiển thị tinh tế dưới lời chào ở Student Masthead (`· Last login: ...`) để học viên vẫn theo dõi được phiên bảo mật mà không chiếm dụng không gian thanh điều hướng.
+    - Dưới `1200px`: Thu gọn nhãn chữ của trạng thái đồng bộ (`TIME SYNCED` / `ĐÃ ĐỒNG BỘ`), chỉ giữ lại chấm tròn trạng thái tín hiệu xanh/vàng nhỏ gọn kèm tooltip giải thích.
+    - Kẹp biên co giãn (`clamp(7px, 0.85vw, 13px)`) cho các nút tab và padding thanh điều hướng, bọc thanh tab với `flex: '1 1 auto'`, `minWidth: 0`, `overflowX: 'auto'` ẩn thanh cuộn để triệt tiêu mọi khả năng đẩy xô lệch giao diện.
+
 ## Giải Thích AI 3 Khối Sư Phạm & Giao Diện Review Chuẩn Mực (3-Block Structured AI Explanation) — 2026-10-25
 
 - **Loại bỏ triệt để vấn đề rườm rà và ô nhiễm highlight ("Highlight Pollution")**:

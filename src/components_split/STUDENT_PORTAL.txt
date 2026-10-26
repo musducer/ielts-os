@@ -668,6 +668,20 @@
           .quest-step-status { border:1px solid color-mix(in srgb, var(--quest-step-color) 38%, transparent); border-radius:999px; padding:4px 7px; color:var(--quest-step-color); font-size:9px; font-weight:900; line-height:1; white-space:nowrap; }
           .quest-step-connector { position:relative; height:25px; margin-left:21px; }
           .quest-step-connector::before { content:""; position:absolute; top:0; bottom:0; left:0; width:2px; border-radius:2px; background:var(--quest-connector-color); }
+          /* STUDENT NAVBAR RESPONSIVE ANCHORING */
+          .st-nav-root { box-sizing: border-box; width: 100%; max-width: 100vw; }
+          .st-nav-tabs-wrapper::-webkit-scrollbar { display: none; }
+          .st-nav-last-login { display: block; }
+          .st-nav-sync-text { display: inline; }
+          @media (max-width: 1440px) {
+            .st-nav-last-login { display: none !important; }
+          }
+          @media (max-width: 1200px) {
+            .st-nav-sync-text { display: none !important; }
+          }
+          @media (max-width: 768px) {
+            .st-nav-sync-badge { display: none !important; }
+          }
           .quest-step-reward { position:absolute; z-index:2; top:50%; left:0; display:grid; width:24px; height:24px; place-items:center; border:1px solid var(--quest-reward-color); border-radius:50%; background:var(--quest-step-bg); color:var(--quest-reward-color); cursor:help; transform:translate(-50%,-50%); animation:questRewardPulse 2.8s ease-in-out infinite; }
           .quest-detail-column { position:relative; min-width:0; }
           .quest-detail-panel { position:sticky; top:18px; overflow:hidden; border:1px solid var(--quest-detail-border); border-top:3px solid var(--quest-detail-accent); border-radius:12px; background:var(--quest-detail-bg); background:color-mix(in srgb, var(--quest-detail-bg) 88%, transparent); color:var(--quest-detail-text); box-shadow:0 16px 35px rgba(8,20,42,.16), inset 0 1px 0 rgba(255,255,255,.16); backdrop-filter:blur(16px) saturate(1.06); -webkit-backdrop-filter:blur(16px) saturate(1.06); }
@@ -750,42 +764,45 @@
             </div>
         )}
 
-        <nav style={{ background: C.card, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, padding: isMobile ? "12px 16px" : "12px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, gap: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            <BrandLogo size={36} />
-            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 8 }}><BrandWordmark size={18} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 11, fontWeight: 800, padding: '2px 7px', borderRadius: 6 }}>STUDENT</span></h1>
+        <nav className="st-nav-root" style={{ background: C.card, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, padding: isMobile ? "10px 14px" : "10px clamp(12px, 1.6vw, 24px)", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, gap: 'clamp(8px, 1.2vw, 16px)' }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <BrandLogo size={34} />
+            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 800, letterSpacing: -0.5, display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}><BrandWordmark size={17} color={C.text} /> <span style={{ background: `${C.accent}14`, color: C.accent, fontSize: 10.5, fontWeight: 800, padding: '2px 6px', borderRadius: 6 }}>STUDENT</span></h1>
           </div>
 
           {/* 6 DESKTOP TABS IN STICKY NAVBAR */}
           {!isMobile && (
-            <div style={{ display: 'flex', gap: 4, background: C.bg, padding: '3px 4px', borderRadius: 10, border: `1px solid ${C.border}` }}>
-              {([
-                { k: 'home', icon: 'home', label: t('ptab_home') },
-                { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
-                { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
-                { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
-                { k: 'progress', icon: 'trending', label: t('ptab_progress') },
-                { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
-              ] as const).map(tb => {
-                const on = portalTab === tb.k;
-                return (
-                  <button key={tb.k} onClick={() => setPortalTab(tb.k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 700, background: on ? C.card : 'transparent', color: on ? C.text : C.sub, boxShadow: on ? '0 1px 3px rgba(0,0,0,0.08)' : 'none', transition: 'all .15s ease' }}>
-                    <Ico name={tb.icon} size={15} color={on ? C.accent : C.sub} />
-                    <span>{tb.label}</span>
-                  </button>
-                );
-              })}
+            <div className="st-nav-tabs-wrapper" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', justifyContent: 'center', overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch', padding: '2px 4px' }}>
+              <div style={{ display: 'inline-flex', gap: 3, background: C.bg, padding: '3px 4px', borderRadius: 10, border: `1px solid ${C.border}`, flexShrink: 0 }}>
+                {([
+                  { k: 'home', icon: 'home', label: t('ptab_home') },
+                  { k: 'exams', icon: 'monitor', label: t('ptab_exams') },
+                  { k: 'quests', icon: 'target', label: tx('Chuyên đề', 'Quests') },
+                  { k: 'vocab', icon: 'book', label: t('ptab_vocab') },
+                  { k: 'progress', icon: 'trending', label: t('ptab_progress') },
+                  { k: 'rewards', icon: 'gift', label: t('ptab_rewards') },
+                ] as const).map(tb => {
+                  const on = portalTab === tb.k;
+                  return (
+                    <button key={tb.k} onClick={() => setPortalTab(tb.k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px clamp(7px, 0.85vw, 13px)', borderRadius: 7, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 'clamp(11.5px, 0.85vw, 13px)', fontWeight: 700, background: on ? C.card : 'transparent', color: on ? C.text : C.sub, boxShadow: on ? '0 1px 3px rgba(0,0,0,0.08)' : 'none', transition: 'all .15s ease', flexShrink: 0 }}>
+                      <Ico name={tb.icon} size={15} color={on ? C.accent : C.sub} />
+                      <span>{tb.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 
-          <div style={{display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0}}>
-             <div style={{fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, background: isTimeSynced ? `${C.succ}15` : `${C.warn}15`, color: isTimeSynced ? C.succ : C.warn, display: window.innerWidth > 600 ? 'block' : 'none'}} title={t('tip_sync_server')}>
-                  {isTimeSynced ? t('time_synced') : t('time_syncing')}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, marginLeft: 'auto' }}>
+             <div className="st-nav-sync-badge" style={{ fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 20, background: isTimeSynced ? `${C.succ}15` : `${C.warn}15`, color: isTimeSynced ? C.succ : C.warn, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }} title={t('tip_sync_server')}>
+                  <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: isTimeSynced ? C.succ : C.warn }} />
+                  <span className="st-nav-sync-text">{isTimeSynced ? t('time_synced') : t('time_syncing')}</span>
              </div>
-             {lastLoginTime && <div style={{fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 8, display: window.innerWidth > 768 ? 'block' : 'none'}}>{t('last_login')} {lastLoginTime}</div>}
+             {lastLoginTime && <div className="st-nav-last-login" style={{ fontSize: 12, color: C.sub, fontWeight: 600, marginRight: 4, whiteSpace: 'nowrap' }} title={`${t('last_login')} ${lastLoginTime}`}>{t('last_login')} {lastLoginTime}</div>}
              <LanguageToggle role="STUDENT" />
-             <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", border: 'none', cursor: 'pointer', padding: "4px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5 }} title={t('contrast_mode')}><Ico name="eye" size={18} /></button>
-             <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, border: 'none', borderRadius: 8, cursor: 'pointer', padding: "8px 14px", fontSize: 12.5, fontWeight: 700, marginLeft: 4 }}>{t('logout')}</button>
+             <button onClick={() => setColorblind(!colorblind)} style={{ background: "transparent", border: 'none', cursor: 'pointer', padding: "6px 8px", display: 'flex', alignItems: 'center', color: C.text, opacity: colorblind ? 1 : 0.5, flexShrink: 0 }} title={t('contrast_mode')}><Ico name="eye" size={17} /></button>
+             <button onClick={handleLogout} style={{ background: `${C.err}15`, color: C.err, border: 'none', borderRadius: 8, cursor: 'pointer', padding: "7px 14px", fontSize: 12.5, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' }}>{t('logout')}</button>
           </div>
         </nav>
 
@@ -824,7 +841,10 @@
               <div>
                 <h2 style={{fontFamily: 'var(--display)', marginTop: 0, fontSize: isMobile ? 19 : 24, fontWeight: 500, letterSpacing: -0.4, marginBottom: isMobile ? 3 : 5}}>{greetingText}, <span style={{color: C.accent, fontStyle: 'italic'}}>{me.name || tx("bạn", "friend")}</span></h2>
                 {me.inventory?.equippedTitle && <div style={{background: '#0F172A', color: '#FCD34D', padding: '3px 12px', borderRadius: 20, display: 'inline-block', fontSize: 11, fontWeight: 700, marginBottom: 5, letterSpacing: 0.5}}>{me.inventory!.equippedTitle}</div>}
-                <p style={{color: C.sub, margin: 0, fontSize: 13}}>{t('ready_conquer')}</p>
+                <p style={{color: C.sub, margin: 0, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap'}}>
+                  <span>{t('ready_conquer')}</span>
+                  {lastLoginTime && <span style={{ opacity: 0.75, fontSize: 12 }}>· {t('last_login')} {lastLoginTime}</span>}
+                </p>
               </div>
             </div>
             <div style={{display: 'flex', gap: 10, zIndex: 1, alignItems: 'center', flexWrap: 'wrap'}}>

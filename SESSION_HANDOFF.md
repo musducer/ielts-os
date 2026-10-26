@@ -1,4 +1,18 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-25)
+# IELTS OS — Session Handoff (cập nhật 2026-10-26)
+
+## Khắc Phục Lỗi Tràn Viền Thanh Điều Hướng & Biến Mất Nút Đăng Xuất Khi Đổi Ngôn Ngữ (Student Portal Responsive Navbar) — 2026-10-26
+
+- **Nguyên nhân gốc rễ (Root Cause)**:
+  - Khi chuyển từ tiếng Việt sang tiếng Anh (`VI ⇄ EN`), các nhãn của 6 tab điều hướng (`Overview`, `Test Room`, `Quests`, `Vocabulary`, `Progress`, `Rewards`), cụm trạng thái đồng bộ (`TIME SYNCED`), nút đăng xuất (`Logout`) và đặc biệt là chuỗi thời gian đăng nhập (`Last login: hh:mm:ss dd/mm/yyyy`, chiếm tới ~230px) có độ dài ký tự lớn hơn đáng kể so với tiếng Việt.
+  - Trên màn hình laptop tiêu chuẩn (1366×768) hoặc màn hình Full HD với tỉ lệ thu phóng hệ thống Windows 125%/150% (độ rộng viewport khả dụng chỉ từ 1280px đến 1366px), tổng chiều rộng của các phần tử (`Left Brand: ~210px` + `6 Tabs: ~570px` + `Right Cluster: ~550px` + `Navbar Padding & Gaps: ~120px` = ~1450px) đã vượt quá 100vw.
+  - Do thanh `<nav>` sử dụng `justifyContent: 'space-between'` với `flexShrink: 0` trên cụm tác vụ bên phải trong khi container cha `.student-portal` có `overflowX: 'hidden'`, các phần tử ở mép ngoài cùng bên phải (cụ thể là nút Đăng xuất) đã bị đẩy ra ngoài khung nhìn và bị xén cụt.
+- **Giải pháp xử lý triệt để & Luật bất biến (Core Fix & Rules)**:
+  - **Khai báo hộp kích thước chuẩn**: Đặt `boxSizing: 'border-box'`, `width: '100%'`, `maxWidth: '100vw'` cho `<nav className="st-nav-root">`.
+  - **Bọc thanh Tab Desktop co giãn linh hoạt**: Đặt `flex: '1 1 auto'`, `minWidth: 0`, `display: 'flex'`, `justifyContent: 'center'`, `overflowX: 'auto'`, `scrollbarWidth: 'none'` cho `.st-nav-tabs-wrapper`. Kẹp biên co giãn kích thước nút tab `padding: '6px clamp(7px, 0.85vw, 13px)'`, `fontSize: 'clamp(11.5px, 0.85vw, 13px)'` để thanh tab co giãn mềm mại mà không bao giờ chèn ép các khối khác.
+  - **Neo vững chắc cụm hành động bên phải (`flexShrink: 0`, `marginLeft: 'auto'`)**: Đảm bảo cụm nút chuyển đổi ngôn ngữ, bật/tắt chế độ tương phản và nút Đăng xuất luôn được neo chắc chắn ở góc phải viewport và không bao giờ bị đẩy rớt ra ngoài.
+  - **Xử lý Breakpoint thông minh cho thông tin thứ cấp**:
+    - Dưới `1440px`: Ẩn chuỗi `lastLoginTime` trên navbar (`.st-nav-last-login { display: none !important; }`), đồng thời đưa thông tin này vào Student Masthead (`· Last login: ...`) ngay dưới lời chào để học viên không bao giờ mất thông tin phiên bảo mật.
+    - Dưới `1200px`: Ẩn chữ `TIME SYNCED` / `ĐÃ ĐỒNG BỘ` (`.st-nav-sync-text { display: none !important; }`), chỉ giữ lại chấm tín hiệu xanh/vàng nhỏ gọn có tooltip.
 
 ## Tái Thiết Kế Ngăn Giải Thích AI 3 Khối Sư Phạm & Giao Diện Review (3-Block Structured AI Explanation) — 2026-10-25
 
