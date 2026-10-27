@@ -1,5 +1,23 @@
 # IELTS OS
 
+## Khắc Phục Triệt Để BAD_MODEL Matching Headings, Đồng Bộ Trải Nghiệm Skeleton & Tối Ưu Hiệu Năng Exam Builder — 2026-10-27
+
+- **Khắc phục tận gốc lỗi `BAD_MODEL` khi giải thích Matching Headings (`api/index.py`)**:
+  - *Tách biệt phân loại mã lỗi HTTP*: Tách riêng lỗi HTTP 404 (thực sự là `BAD_MODEL`) khỏi HTTP 400 (`BAD_REQUEST` / `UNSUPPORTED_PARAMETER`). Tự động retry một lần duy nhất lược bỏ các tham số không tương thích (`thinkingConfig`, `response_format`, `responseMimeType`) trước khi báo lỗi.
+  - *Cập nhật danh mục Model Gemini đang hoạt động*: Thay thế model bị nghẽn/timeout (`gemini-3.8-flash`) và model cũ (`gemini-2.5-flash`) bằng các model hoạt động ổn định và phản hồi siêu tốc: `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemini-flash-latest`.
+  - *Bảo vệ Router khi gặp `PROVIDER_TIMEOUT`*: Loại bỏ hiện tượng timeout đơn lẻ của một model làm ngắt toàn bộ router. Router ghi nhận model chậm và tiếp tục thử các model / provider kế tiếp cho đến khi hết hạn mức tổng thể.
+  - *Thông báo lỗi thân thiện (`_friendly_err`)*: Chuẩn hóa toàn bộ thông báo lỗi trả về cho học viên bằng tiếng Việt/tiếng Anh rõ ràng, loại bỏ hoàn toàn các mã lỗi kỹ thuật như `BAD_MODEL` hay chuỗi stack trace thô.
+
+- **Đồng bộ hiệu ứng Skeleton Loading cho toàn bộ trải nghiệm AI & Trợ lý AI (`REVIEW_QUIZ.txt`, `App.template.tsx`)**:
+  - *Hàm dùng chung `rvRenderAiSkeleton`*: Tái sử dụng giao diện skeleton chuyên nghiệp (thanh loading shimmer mượt mà, spinner xoay, mô phỏng khối giải thích, dẫn chứng và bẫy) trên tất cả các điểm mở giải thích (ngăn kéo inline drawer của câu hỏi thường lẫn popover nổi của Matching Headings).
+  - *Bảo vệ truy vấn chồng chéo (`activeExplainReqIdRef`)*: Áp dụng monotonic request ID guard để ngăn các phản hồi chậm của câu hỏi trước ghi đè lên câu hỏi đang xem.
+  - *Trạng thái suy nghĩ & Thử lại cho "Trợ lý AI"*: Thay thế dòng chữ thô `"Đang trả lời..."` bằng bong bóng suy nghĩ có hiệu ứng sóng nhịp pulse tinh tế. Khi gặp lỗi, hiển thị card cảnh báo gọn gàng kèm nút "Thử lại" trực tiếp. Tự động cuộn hội thoại thông minh chỉ khi người dùng đang ở đáy khung chat.
+
+- **Triệt tiêu hiện tượng đơ/giật lag (Freeze/Jank) trong Exam Builder (`App.template.tsx`, `EXAM_BUILDER.txt`)**:
+  - *Xóa đề thi bằng Delta Tombstone (`__quizDeletedIds`)*: Khi xóa 1 hoặc nhiều đề thi, chỉ gửi mảng `__quizDeletedIds` tới `syncData` mà không gửi lại toàn bộ danh mục đề thi (`quizzes`). Kích hoạt nhánh xóa batch Firestore gọn gàng, giảm thiểu 100% thời gian serialize dữ liệu khổng lồ trên main thread.
+  - *Bổ sung nút xóa đơn lẻ trên thẻ đề thi*: Bổ sung nút thùng rác trực tiếp trên mỗi thẻ đề thi kèm xác nhận thân thiện, không cần phải chọn checkbox và kéo thanh tác vụ hàng loạt.
+  - *Không nghẽn luồng khi lưu bản nháp và tạo Transcript*: Bọc tác vụ lưu bản nháp `ielts_exam_draft` vào `requestIdleCallback` (fallback `setTimeout`) để không gây gián đoạn khi gõ phím. Cập nhật `handleTranscribe` đồng bộ qua `__quizUpserts: [updatedQuiz]` không làm serialize lại toàn bộ kho đề.
+
 ## Triệt Tiêu PROVIDER_TIMEOUT Khi Giải Thích Matching Headings & Tinh Gọn UI Review (Zero-Emoji & Auto-Trigger AI) — 2026-10-26
 
 - **Khắc phục triệt để lỗi `PROVIDER_TIMEOUT` ở dạng bài Matching Headings (`DRAG_DROP_HEADING`)**:

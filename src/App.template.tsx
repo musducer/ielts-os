@@ -4168,6 +4168,7 @@ export default function IeltsSupremeOS() {
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const aiExplainCacheRef = useRef<Map<string, any>>(new Map());
+  const activeExplainReqIdRef = useRef<Record<string, number>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -4327,7 +4328,7 @@ export default function IeltsSupremeOS() {
 
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [copilotActiveQ, setCopilotActiveQ] = useState<any>(null);
-  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string }>>([]);
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string; error?: boolean; retryText?: string }>>([]);
   const [copilotInput, setCopilotInput] = useState("");
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotExpanded, setCopilotExpanded] = useState(false);
@@ -4336,7 +4337,11 @@ export default function IeltsSupremeOS() {
 
   useEffect(() => {
     if (copilotChatBoxRef.current && (copilotOpen || copilotMessages.length > copilotMsgCountRef.current)) {
-      copilotChatBoxRef.current.scrollTop = copilotChatBoxRef.current.scrollHeight;
+      const el = copilotChatBoxRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      if (isNearBottom || copilotMessages.length <= 2) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
     copilotMsgCountRef.current = copilotMessages.length;
   }, [copilotOpen, copilotMessages.length, copilotLoading]);
@@ -4532,7 +4537,7 @@ export default function IeltsSupremeOS() {
         setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
       }
     } catch (err: any) {
-      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again.") }]);
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again."), error: true, retryText: textToSend }]);
     } finally {
       setCopilotLoading(false);
     }
@@ -7299,21 +7304,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
   useEffect(() => {
     if (editingQuiz) {
         const timeout = setTimeout(() => {
-            try {
-                localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
-            } catch (err: any) {
+            const doSave = () => {
                 try {
-                    // Quota exceeded: strip large base64 data URLs before caching draft
-                    const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
-                        if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
-                            return '';
-                        }
-                        return value;
-                    }));
-                    localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
-                } catch {
-                    // Gracefully ignore local draft caching if still over quota
+                    localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
+                } catch (err: any) {
+                    try {
+                        // Quota exceeded: strip large base64 data URLs before caching draft
+                        const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
+                            if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
+                                return '';
+                            }
+                            return value;
+                        }));
+                        localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
+                    } catch {
+                        // Gracefully ignore local draft caching if still over quota
+                    }
                 }
+            };
+            if (typeof window.requestIdleCallback === 'function') {
+                window.requestIdleCallback(() => doSave(), { timeout: 2000 });
+            } else {
+                setTimeout(doSave, 0);
             }
         }, 4000);
         const handleSaveShortcut = (e: KeyboardEvent) => {
@@ -7525,7 +7537,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const quizUpserts = Array.isArray(newData.__quizUpserts)
       ? newData.__quizUpserts
       : (Array.isArray(newData.quizzes) ? newData.quizzes : []);
-    const hasQuizCatalogWrite = quizUpserts.length > 0 && userRole === "TEACHER";
+    const hasQuizCatalogWrite = (quizUpserts.length > 0 || quizDeleteIds.length > 0) && userRole === "TEACHER";
     const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
       ? newData.topicAssignments as TopicAssignment[]
       : topicAssignments;
@@ -8131,6 +8143,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     overrideContext?: { paragraphLabel?: string; paragraphText?: string; headingOptions?: Array<{ id: string; text: string }> }
   ) => {
     if (explainMap[q.id]?.loading) return;
+    const reqId = Date.now();
+    activeExplainReqIdRef.current[q.id] = reqId;
     try {
       // Keep paragraph boundaries for reading evidence. Removing tags without a
       // separator makes two separate paragraphs look like one AI quotation.
@@ -8404,6 +8418,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         })
       });
       const data = await resp.json();
+      if (activeExplainReqIdRef.current[q.id] !== reqId) return;
       if (data.success && (data.explanation || data.structured)) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
           ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
@@ -8425,6 +8440,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         setExplainMap(prev => ({ ...prev, [q.id]: explainResult }));
       }
       else {
+        if (activeExplainReqIdRef.current[q.id] !== reqId) return;
         const message = "" + (data.error || "Could not generate explanation. Please try again.");
         setExplainMap(prev => {
           const next = { ...prev };
@@ -8434,6 +8450,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         alert(message);
       }
     } catch (e: any) {
+      if (activeExplainReqIdRef.current[q.id] !== reqId) return;
       const message = "" + (e?.message || String(e));
       setExplainMap(prev => {
         const next = { ...prev };
@@ -8630,8 +8647,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const transcript = data.transcript;
         setEditingQuiz((prev: any) => prev ? { ...prev, transcript } : prev);
         const updatedQuiz = { ...quiz, transcript, updatedAt: getTrueTime() };
-        const nx = quizzes.map(q => q.id === quiz.id ? updatedQuiz : q);
-        setQuizzes(nx); syncData({ __quizUpserts: [updatedQuiz] });
+        const nx = quizzesRef.current.map(q => q.id === quiz.id ? updatedQuiz : q);
+        setQuizCatalogState(nx);
+        window.setTimeout(() => {
+          void syncData({ __quizUpserts: [updatedQuiz] });
+        }, 0);
         alert(`Đã nghe & tạo transcript (${transcript.length} ký tự) và lưu vào đề. Nút "Vì sao" giờ trích dẫn được lời thoại.`);
       } else {
         alert("" + (data.error || "Lỗi tạo transcript"));
@@ -10707,7 +10727,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           title: q.title + " (Copy)",
           active: false
       })));
-      setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
+      setQuizCatalogState([newQuiz, ...quizzesRef.current.filter(x => x.id !== newQuiz.id)]);
       void syncData({ __quizUpserts: [newQuiz] }).then(saved => {
           alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
@@ -12026,9 +12046,27 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   
   const handleBulkDeleteQuizzes = () => {
-      if(!confirm(`Delete ${selectedQuizzes.length} selected exams?`)) return;
-      const nx = quizzes.filter(q => !selectedQuizzes.includes(q.id));
-      setQuizzes(nx); syncData({ quizzes: nx, __quizDeletedIds: selectedQuizzes }); setSelectedQuizzes([]);
+    if (!selectedQuizzes.length) return;
+    if (!confirm(tx(`Xóa ${selectedQuizzes.length} đề thi đã chọn?`, `Delete ${selectedQuizzes.length} selected exams?`))) return;
+    const deletedIds = [...selectedQuizzes];
+    setSelectedQuizzes([]);
+    const nx = quizzesRef.current.filter(q => !deletedIds.includes(q.id));
+    setQuizCatalogState(nx);
+    window.setTimeout(() => {
+      void syncData({ __quizDeletedIds: deletedIds });
+    }, 0);
+  };
+
+  const handleDeleteSingleQuiz = (quizId: string, quizTitle?: string) => {
+    const label = quizTitle || quizId;
+    if (!confirm(tx(`Xóa đề thi "${label}"?`, `Delete exam "${label}"?`))) return;
+    const targetId = String(quizId);
+    setSelectedQuizzes(prev => prev.filter(id => id !== targetId));
+    const nx = quizzesRef.current.filter(q => q.id !== targetId);
+    setQuizCatalogState(nx);
+    window.setTimeout(() => {
+      void syncData({ __quizDeletedIds: [targetId] });
+    }, 0);
   };
 
   const syncData = async (newData: any) => {

@@ -1813,6 +1813,16 @@
                                                     <button className="ebx-primary" onClick={() => setEditingQuiz(JSON.parse(JSON.stringify(q)))} style={{background: EB.accent, color: '#fff', padding: '6px 14px', fontSize: 12.5, border: 'none', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}>
                                                         <Ico name="edit" size={13} /> {t('eb_edit_exam')}
                                                     </button>
+                                                    {typeof handleDeleteSingleQuiz === 'function' && (
+                                                        <button
+                                                            className="ebx-soft"
+                                                            onClick={() => handleDeleteSingleQuiz(q.id, q.title)}
+                                                            title={tx('Xóa đề thi', 'Delete exam')}
+                                                            style={{...ghostBtn, color: EB.err, borderColor: `${C.err}33`}}
+                                                        >
+                                                            <Ico name="trash" size={13} />
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
                                         );

@@ -454,7 +454,7 @@ def _validate_safe_external_url(raw_url: str) -> str:
 
     # Resolve DNS and verify all resolved IPs are public
     try:
-        addr_info = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+        addr_info = sockevt.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         if host.endswith((".test", ".example", ".example.com", ".example.org", ".example.net")):
             return url
@@ -2605,7 +2605,7 @@ async def scan_exam_page(
             g_text, g_err = await asyncio.to_thread(
                 _gemini_chat_once,
                 g_key,
-                "gemini-2.5-flash",
+                "gemini-3-flash-preview",
                 sys_prompt,
                 user_parts[0]["text"],
                 8192,
@@ -3919,7 +3919,7 @@ try:
     _HTTP_SESSION.mount("http://", _adapter)
 except Exception:
     _HTTP_SESSION = None
-def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=18):
+def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, reasoning_effort, timeout_s=12):
     """1 lần gọi API OpenAI-compatible (Groq/Cerebras). Trả (text, err). err: 'RATE_LIMIT'/'AUTH'/chi tiết."""
     body = {
         "model": model,
@@ -3933,7 +3933,7 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 18.0
+        timeout_s = 12.0
 
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -3955,12 +3955,31 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
                 text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
                 return (text, "") if text else ("", f"{model}: rỗng")
             detail = resp.text[:400]
+            if resp.status_code == 400 and ("response_format" in detail.lower() or "json_object" in detail.lower()) and "response_format" in body:
+                body_retry = dict(body)
+                body_retry.pop("response_format", None)
+                try:
+                    resp_retry = _HTTP_SESSION.post(url, json=body_retry, headers=headers, timeout=timeout_s)
+                    if resp_retry.status_code == 200:
+                        data_retry = resp_retry.json()
+                        choice = (data_retry.get("choices") or [{}])[0]
+                        if choice.get("finish_reason") == "length":
+                            return "", "PROVIDER_TRUNCATED_OUTPUT"
+                        text = ((choice.get("message") or {}).get("content") or "").strip()
+                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+                        return (text, "") if text else ("", f"{model}: rỗng")
+                except Exception:
+                    pass
             if resp.status_code in (429, 413):
                 return "", "RATE_LIMIT"
             if resp.status_code in (401, 403):
                 return "", "AUTH"
-            if resp.status_code in (400, 404):
+            if resp.status_code == 404 or (resp.status_code == 400 and any(p in detail.lower() for p in ("model_not_found", "does not exist", "unknown model", "no longer available"))):
                 return "", "BAD_MODEL"
+            if resp.status_code == 400:
+                if any(param_kw in detail.lower() for param_kw in ("parameter", "field", "unsupported", "invalid argument", "response_format")):
+                    return "", "UNSUPPORTED_PARAMETER"
+                return "", "BAD_REQUEST"
             if resp.status_code in (500, 502, 503, 504):
                 return "", "PROVIDER_UNAVAILABLE"
             return "", f"{model} -> {resp.status_code}: {detail}"
@@ -3992,12 +4011,33 @@ def _oai_chat_once(base_url, api_key, model, sys_prompt, user_prompt, max_tokens
             detail = e.read().decode("utf-8")[:400]
         except Exception:
             pass
+        if e.code == 400 and ("response_format" in detail.lower() or "json_object" in detail.lower()) and "response_format" in body:
+            body_retry = dict(body)
+            body_retry.pop("response_format", None)
+            try:
+                req_retry = _urlreq.Request(url, data=_json.dumps(body_retry).encode("utf-8"), method="POST", headers=headers)
+                with _urlreq.urlopen(req_retry, timeout=timeout_s) as resp_retry:
+                    data_retry = _json.loads(resp_retry.read().decode("utf-8"))
+                choice = (data_retry.get("choices") or [{}])[0]
+                if choice.get("finish_reason") == "length":
+                    return "", "PROVIDER_TRUNCATED_OUTPUT"
+                text = ((choice.get("message") or {}).get("content") or "").strip()
+                text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+                return (text, "") if text else ("", f"{model}: rỗng")
+            except Exception:
+                pass
         if e.code in (429, 413):
             return "", "RATE_LIMIT"
         if e.code in (401, 403):
             return "", "AUTH"
-        if e.code in (400, 404):
+        if e.code == 404 or (e.code == 400 and any(p in detail.lower() for p in ("model_not_found", "does not exist", "unknown model", "no longer available"))):
             return "", "BAD_MODEL"
+        if e.code == 400:
+            if any(param_kw in detail.lower() for param_kw in ("parameter", "field", "unsupported", "invalid argument", "response_format")):
+                return "", "UNSUPPORTED_PARAMETER"
+            return "", "BAD_REQUEST"
+        if e.code in (500, 502, 503, 504):
+            return "", "PROVIDER_UNAVAILABLE"
         return "", f"{model} -> {e.code}: {detail}"
     except Exception as e:
         return "", f"{model} -> {str(e)}"
@@ -4055,7 +4095,7 @@ def _openai_responses_once(api_key, model, sys_prompt, user_prompt, max_tokens, 
         return "", f"{model} -> {str(e)}"
 
 
-def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=18, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
+def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, temperature, json_mode, timeout_s=12, image_inputs=None, thinking_budget: int = 0, image_part: Optional[Dict[str, str]] = None):
     """1 lần gọi Google Gemini (định dạng riêng). Hỗ trợ thinking budget trên 2.5/3.x và multimodal image inputs."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     effective_max_tokens = max_tokens
@@ -4094,7 +4134,7 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
     try:
         timeout_s = max(0.1, float(timeout_s))
     except (TypeError, ValueError):
-        timeout_s = 18.0
+        timeout_s = 12.0
 
     headers = {"Content-Type": "application/json"}
 
@@ -4113,13 +4153,20 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
                 text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
                 return (text, "") if text else ("", f"gemini {model}: rỗng")
             detail = resp.text[:400]
-            if resp.status_code == 400 and ("thinkingConfig" in detail or "thinkingBudget" in detail) and "thinkingConfig" in gen:
-                body_no_tc = dict(body)
-                gen_no_tc = dict(gen)
-                gen_no_tc.pop("thinkingConfig", None)
-                body_no_tc["generationConfig"] = gen_no_tc
+            if resp.status_code == 400 and ("thinkingConfig" in gen or "responseMimeType" in gen):
+                body_retry = dict(body)
+                gen_retry = dict(gen)
+                detail_l = detail.lower()
+                if ("thinking" in detail_l or "budget" in detail_l) and "thinkingConfig" in gen_retry:
+                    gen_retry.pop("thinkingConfig", None)
+                elif ("mime" in detail_l or "json" in detail_l or "response" in detail_l) and "responseMimeType" in gen_retry:
+                    gen_retry.pop("responseMimeType", None)
+                else:
+                    gen_retry.pop("thinkingConfig", None)
+                    gen_retry.pop("responseMimeType", None)
+                body_retry["generationConfig"] = gen_retry
                 try:
-                    resp_retry = _HTTP_SESSION.post(url, json=body_no_tc, headers=headers, timeout=timeout_s)
+                    resp_retry = _HTTP_SESSION.post(url, json=body_retry, headers=headers, timeout=timeout_s)
                     if resp_retry.status_code == 200:
                         data_retry = resp_retry.json()
                         cands_retry = data_retry.get("candidates") or []
@@ -4137,8 +4184,12 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
                 return "", "RATE_LIMIT"
             if resp.status_code in (401, 403):
                 return "", "AUTH"
-            if resp.status_code in (400, 404):
+            if resp.status_code == 404 or (resp.status_code == 400 and any(p in detail.lower() for p in ("not found", "does not exist", "unknown model", "no longer available"))):
                 return "", "BAD_MODEL"
+            if resp.status_code == 400:
+                if any(param_kw in detail.lower() for param_kw in ("parameter", "field", "unsupported", "invalid argument", "thinking", "mime")):
+                    return "", "UNSUPPORTED_PARAMETER"
+                return "", "BAD_REQUEST"
             if resp.status_code in (500, 502, 503, 504):
                 return "", "PROVIDER_UNAVAILABLE"
             return "", f"gemini {model} -> {resp.status_code}: {detail}"
@@ -4169,13 +4220,20 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
             detail = e.read().decode("utf-8")[:400]
         except Exception:
             pass
-        if e.code == 400 and ("thinkingConfig" in detail or "thinkingBudget" in detail) and "thinkingConfig" in gen:
-            body_no_tc = dict(body)
-            gen_no_tc = dict(gen)
-            gen_no_tc.pop("thinkingConfig", None)
-            body_no_tc["generationConfig"] = gen_no_tc
+        if e.code == 400 and ("thinkingConfig" in gen or "responseMimeType" in gen):
+            body_retry = dict(body)
+            gen_retry = dict(gen)
+            detail_l = detail.lower()
+            if ("thinking" in detail_l or "budget" in detail_l) and "thinkingConfig" in gen_retry:
+                gen_retry.pop("thinkingConfig", None)
+            elif ("mime" in detail_l or "json" in detail_l or "response" in detail_l) and "responseMimeType" in gen_retry:
+                gen_retry.pop("responseMimeType", None)
+            else:
+                gen_retry.pop("thinkingConfig", None)
+                gen_retry.pop("responseMimeType", None)
+            body_retry["generationConfig"] = gen_retry
             try:
-                req_retry = _urlreq.Request(url, data=_json.dumps(body_no_tc).encode("utf-8"), method="POST", headers=headers)
+                req_retry = _urlreq.Request(url, data=_json.dumps(body_retry).encode("utf-8"), method="POST", headers=headers)
                 with _urlreq.urlopen(req_retry, timeout=timeout_s) as resp_retry:
                     data_retry = _json.loads(resp_retry.read().decode("utf-8"))
                 cands_retry = data_retry.get("candidates") or []
@@ -4193,8 +4251,14 @@ def _gemini_chat_once(api_key, model, sys_prompt, user_prompt, max_tokens, tempe
             return "", "RATE_LIMIT"
         if e.code in (401, 403):
             return "", "AUTH"
-        if e.code in (400, 404):
+        if e.code == 404 or (e.code == 400 and any(p in detail.lower() for p in ("not found", "does not exist", "unknown model", "no longer available"))):
             return "", "BAD_MODEL"
+        if e.code == 400:
+            if any(param_kw in detail.lower() for param_kw in ("parameter", "field", "unsupported", "invalid argument", "thinking", "mime")):
+                return "", "UNSUPPORTED_PARAMETER"
+            return "", "BAD_REQUEST"
+        if e.code in (500, 502, 503, 504):
+            return "", "PROVIDER_UNAVAILABLE"
         return "", f"gemini {model} -> {e.code}: {detail}"
     except Exception as e:
         return "", f"gemini {model} -> {str(e)}"
@@ -4334,18 +4398,19 @@ def _groq_chat(
     groq_models = [preferred] + [m for m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] if m != preferred]
     cerebras_models = list(dict.fromkeys([os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b"), "llama-3.3-70b"]))
     gemini_models = list(dict.fromkeys([
-        os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
-        "gemini-3.8-flash",
+        os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
         "gemini-3-flash-preview",
+        "gemini-3.5-flash",
+        "gemini-flash-latest",
     ]))
 
     # Existing routes retain their legacy 55-second, provider-first behavior.
     # The raw-DOCX adapter is the only caller which provides a deadline; it gets
     # a bounded per-request window and fair provider-family rotation.
     try:
-        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 18.0
+        request_timeout = max(0.1, min(55.0, float(per_request_timeout_s))) if per_request_timeout_s is not None else 12.0
     except (TypeError, ValueError):
-        request_timeout = 18.0
+        request_timeout = 12.0
     try:
         router_deadline = float(deadline_monotonic) if deadline_monotonic is not None else None
     except (TypeError, ValueError):
@@ -4403,11 +4468,11 @@ def _groq_chat(
             )
         # A rejected/rate-limited key cannot help with its other models. Keep
         # ordinary transient failures eligible for its next model as before.
-        if err in {"RATE_LIMIT", "AUTH", "PROVIDER_UNAVAILABLE"}:
+        if err in {"RATE_LIMIT", "AUTH"}:
             remaining = [item for item in family["queue"] if item[0] != key]
             family["queue"].clear()
             family["queue"].extend(remaining)
-        elif err == "BAD_MODEL":
+        elif err in {"BAD_MODEL", "UNSUPPORTED_PARAMETER"}:
             remaining = [item for item in family["queue"] if item[1] != selected_model]
             family["queue"].clear()
             family["queue"].extend(remaining)
@@ -4425,12 +4490,8 @@ def _groq_chat(
             if text:
                 return text, ""
             if err == "PROVIDER_TIMEOUT":
-                # A slow provider family must not sink the whole request: skip the
-                # rest of this family and fall through to the next provider. Only
-                # abort when the caller's overall deadline has been exhausted.
-                family["queue"].clear()
-                if router_deadline is not None and remaining_timeout() <= 0:
-                    return "", err
+                if router_deadline is not None and time.monotonic() >= router_deadline:
+                    return "", "PROVIDER_TIMEOUT"
                 last_err = err
                 continue
             last_err = err
@@ -4477,7 +4538,7 @@ def _pedagogical_ai_call(
     temperature: float = 0.2,
     json_mode: bool = False,
     thinking_budget: int = 0,
-    model: str = "gemini-3.8-flash",
+    model: str = "gemini-3-flash-preview",
     timeout_s: float = 45.0,
 ) -> Tuple[str, str]:
     """Route pedagogical AI calls to Vertex AI first, with automatic fallback to AI Studio / Groq / Cerebras."""
@@ -4499,7 +4560,7 @@ def _pedagogical_ai_call(
         try:
             g_text, g_err = _gemini_chat_once(
                 k,
-                model=model or "gemini-3.8-flash",
+                model=model or "gemini-3-flash-preview",
                 sys_prompt=sys_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -4674,7 +4735,8 @@ def _writing_eval_chat(
     # Tier 1: Gemini Reasoning & Multimodal
     writing_gemini_models = list(dict.fromkeys([
         os.environ.get("GEMINI_WRITING_MODEL", "gemini-2.5-pro"),
-        "gemini-2.5-flash",
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash",
     ]))
     for key in gemini_keys:
         for model in writing_gemini_models:
@@ -4729,11 +4791,32 @@ def _writing_eval_chat(
 
 
 def _friendly_err(err: str, lang: str) -> str:
-    if err == "RATE_LIMIT":
+    err_str = str(err or "").strip()
+    if err_str == "RATE_LIMIT":
         return ("Rate limit reached (too many requests in a short time). Please wait a moment and try again."
                 if lang == "en" else
                 "Đạt giới hạn tốc độ (quá nhiều yêu cầu trong thời gian ngắn). Vui lòng đợi chút rồi thử lại.")
-    return err
+    if err_str == "PROVIDER_TIMEOUT":
+        return ("The AI service took too long to respond. Please try again."
+                if lang == "en" else
+                "Hệ thống AI phản hồi chậm hoặc quá thời gian. Vui lòng thử lại sau giây lát.")
+    if err_str in {"BAD_MODEL", "BAD_REQUEST", "UNSUPPORTED_PARAMETER", "PROVIDER_UNAVAILABLE", "AI_GENERATION_FAILED"}:
+        return ("Unable to generate explanation at this time. Please try again in a moment."
+                if lang == "en" else
+                "Không thể tạo giải thích lúc này. Vui lòng thử lại sau giây lát.")
+    if err_str == "AUTH":
+        return ("AI service authentication error. Please check configuration."
+                if lang == "en" else
+                "Lỗi xác thực hệ thống AI. Vui lòng kiểm tra cấu hình.")
+    if err_str == "PROVIDER_REFUSAL":
+        return ("The AI provider declined to generate content for this item."
+                if lang == "en" else
+                "Bộ lọc an toàn của nhà cung cấp AI đã từ chối nội dung câu hỏi này.")
+    if any(technical_cue in err_str.lower() for technical_cue in ("traceback", "status_code", "gemini-", "llama-", "http", "bad_model", "connection")):
+        return ("Unable to generate explanation at this time. Please try again in a moment."
+                if lang == "en" else
+                "Không thể tạo giải thích lúc này. Vui lòng thử lại sau giây lát.")
+    return err_str
 
 
 def _clean_and_parse_critique_json(raw_text: str) -> Optional[Dict[str, Any]]:
@@ -5506,58 +5589,14 @@ async def ai_explain(
             f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
         )
 
-    explain_max_tokens = 380
-    if is_heading_task:
-        # Fast path: ONE target paragraph, no synonym table, no verification call.
-        passage_for_ai = (matching_target_text or reading_passage or context)[:3500]
-        para_label = matching_target_label or "?"
-        stu_label = student_ans or ("(blank)" if lang == "en" else "(bỏ trống)")
-        if lang == "en":
-            sys_prompt = (
-                "You are an expert IELTS Reading tutor for Matching Headings. Be extremely brief.\n"
-                "Return strictly one JSON object:\n"
-                "{\n"
-                '  "paraphrasePairs": [],\n'
-                '  "evidence": { "location": "Paragraph X", "quote": "ONE exact verbatim core sentence from the paragraph (10-250 chars)" },\n'
-                '  "detailedExplanation": "1-2 short sentences: how the key sentence(s) of this paragraph lead to the correct heading. Include [[EVIDENCE: exact sentence]] once.",\n'
-                '  "trapAnalysis": { "trapTitle": "Trap to avoid", "trapReason": "1 short sentence: why the student\'s heading does not fit this paragraph (or a skimming tip if blank)." }\n'
-                "}\n"
-                "RULES: paraphrasePairs MUST be []. No word-level synonyms. evidence.quote MUST be copied verbatim from the paragraph. 100% English."
-            )
-            user_prompt = (
-                f"PARAGRAPH {para_label}:\n{passage_for_ai}\n\n"
-                f"List of headings: {options or '(n/a)'}\n"
-                f"Correct heading: {correct}\nStudent chose: {stu_label}\n\nOutput ONLY the JSON object."
-            )
-        else:
-            sys_prompt = (
-                "Bạn là chuyên gia IELTS Reading dạng Matching Headings. Trả lời cực ngắn gọn.\n"
-                "Trả về DUY NHẤT một JSON object:\n"
-                "{\n"
-                '  "paraphrasePairs": [],\n'
-                '  "evidence": { "location": "Đoạn X", "quote": "MỘT câu cốt lõi trích NGUYÊN VĂN từ đoạn (10-250 ký tự)" },\n'
-                '  "detailedExplanation": "1-2 câu ngắn: các câu then chốt của đoạn dẫn tới heading đúng như thế nào. Chèn đúng 1 lần [[EVIDENCE: câu nguyên văn]].",\n'
-                '  "trapAnalysis": { "trapTitle": "Bẫy cần tránh", "trapReason": "1 câu ngắn: vì sao heading học viên chọn không khớp đoạn này (hoặc mẹo đọc lướt nếu bỏ trống)." }\n'
-                "}\n"
-                "QUY TẮC: paraphrasePairs BẮT BUỘC là []. Không liệt kê từ đồng nghĩa. evidence.quote phải chép nguyên văn từ đoạn. 100% tiếng Việt."
-            )
-            user_prompt = (
-                f"ĐOẠN {para_label}:\n{passage_for_ai}\n\n"
-                f"Danh sách heading: {options or '(không có)'}\n"
-                f"Heading đúng: {correct}\nHọc viên chọn: {stu_label}\n\nChỉ xuất ra duy nhất JSON object."
-            )
-        explain_max_tokens = 320
-        evidence_passage = passage_for_ai
-
     raw_response, err = await asyncio.to_thread(
         _groq_chat,
         sys_prompt,
         user_prompt,
-        max_tokens=explain_max_tokens,
+        max_tokens=380,
         temperature=0.2,
         json_mode=True,
-        per_request_timeout_s=18.0,
-        deadline_monotonic=time.monotonic() + 45.0,
+        per_request_timeout_s=12.0,
     )
     if not raw_response and err:
         return {"success": False, "error": _friendly_err(err, lang)}
@@ -5880,7 +5919,7 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Reques
         max_tokens=2500,
         temperature=0.2,
         json_mode=True,
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
     )
 
     if not text:
@@ -6023,7 +6062,7 @@ async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request =
         max_tokens=1200,
         temperature=0.3,
         json_mode=False,
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
     )
 
     if not reply_text:
@@ -6086,7 +6125,7 @@ async def ai_review_chat(payload: Dict[str, Any] = Body(...), request: Request =
         max_tokens=900,
         temperature=0.25,
         json_mode=False,
-        model="gemini-2.5-flash",
+        model="gemini-3-flash-preview",
     )
 
     if not reply_text:
@@ -6164,7 +6203,7 @@ async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...), request: Re
             max_tokens=2000,
             temperature=0.3,
             json_mode=True,
-            model="gemini-2.5-flash",
+            model="gemini-3-flash-preview",
         )
         parsed = _extract_json_object(text) if text else None
         if not parsed or not isinstance(parsed, dict):
@@ -6257,7 +6296,7 @@ async def writing_sandbox_coach(payload: Dict[str, Any] = Body(...), request: Re
             max_tokens=1500,
             temperature=0.2,
             json_mode=True,
-            model="gemini-2.5-flash",
+            model="gemini-3-flash-preview",
         )
         parsed = _extract_json_object(text) if text else None
         if not parsed or not isinstance(parsed, dict):
@@ -7313,8 +7352,8 @@ def _transcribe_audio_bytes(raw: bytes, mime: str, lang: str, *, timeout_s: floa
     # Gemini is an explicit bounded fallback. It can return a plain transcript
     # (without Whisper ranges), so Groq remains the timestamp source of record.
     gemini_models = list(dict.fromkeys([
-        os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-        "gemini-2.0-flash",
+        os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
+        "gemini-3-flash-preview",
     ]))
     for key in gemini_keys:
         for gem_model in gemini_models:
@@ -7643,7 +7682,7 @@ def _gemini_file_upload_and_transcribe_once(api_key: str, source_path: str, veri
             else:
                 return "", "GEMINI_FILE_PROCESSING_TIMEOUT"
 
-            model = os.environ.get("GEMINI_FILE_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            model = os.environ.get("GEMINI_FILE_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_TRANSCRIBE_MODEL") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
             prompt = (
                 "Transcribe this IELTS Listening recording in English. Return only the spoken transcript, "
                 "without headings, commentary, answer keys, or invented timestamps."
@@ -7713,7 +7752,7 @@ def _vertex_transcribe_audio_chunk(raw_chunk: bytes) -> Tuple[str, str]:
     return _vertex_gemini_generate(
         contents,
         system_instruction="You are a professional IELTS listening audio transcriber.",
-        model="gemini-2.5-flash",
+        model=os.environ.get("GEMINI_TRANSCRIBE_MODEL", "gemini-3-flash-preview"),
         temperature=0.1,
         max_output_tokens=4096,
         thinking_budget=0,

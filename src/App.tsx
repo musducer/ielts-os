@@ -4168,6 +4168,7 @@ export default function IeltsSupremeOS() {
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const aiExplainCacheRef = useRef<Map<string, any>>(new Map());
+  const activeExplainReqIdRef = useRef<Record<string, number>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
   const [transcribeLoading, setTranscribeLoading] = useState(false);
   const [transcribeMsg, setTranscribeMsg] = useState("");
@@ -4327,7 +4328,7 @@ export default function IeltsSupremeOS() {
 
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [copilotActiveQ, setCopilotActiveQ] = useState<any>(null);
-  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string }>>([]);
+  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "copilot"; text: string; error?: boolean; retryText?: string }>>([]);
   const [copilotInput, setCopilotInput] = useState("");
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotExpanded, setCopilotExpanded] = useState(false);
@@ -4336,7 +4337,11 @@ export default function IeltsSupremeOS() {
 
   useEffect(() => {
     if (copilotChatBoxRef.current && (copilotOpen || copilotMessages.length > copilotMsgCountRef.current)) {
-      copilotChatBoxRef.current.scrollTop = copilotChatBoxRef.current.scrollHeight;
+      const el = copilotChatBoxRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+      if (isNearBottom || copilotMessages.length <= 2) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
     copilotMsgCountRef.current = copilotMessages.length;
   }, [copilotOpen, copilotMessages.length, copilotLoading]);
@@ -4532,7 +4537,7 @@ export default function IeltsSupremeOS() {
         setCopilotMessages([...newMessages, { role: "copilot", text: data.reply }]);
       }
     } catch (err: any) {
-      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again.") }]);
+      setCopilotMessages([...newMessages, { role: "copilot", text: tx("Đã xảy ra lỗi khi kết nối Trợ lý AI. Vui lòng thử lại sau.", "An error occurred connecting to AI Assistant. Please try again."), error: true, retryText: textToSend }]);
     } finally {
       setCopilotLoading(false);
     }
@@ -7299,21 +7304,28 @@ const applyWorkspaceSnapshot = (snap: any) => {
   useEffect(() => {
     if (editingQuiz) {
         const timeout = setTimeout(() => {
-            try {
-                localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
-            } catch (err: any) {
+            const doSave = () => {
                 try {
-                    // Quota exceeded: strip large base64 data URLs before caching draft
-                    const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
-                        if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
-                            return '';
-                        }
-                        return value;
-                    }));
-                    localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
-                } catch {
-                    // Gracefully ignore local draft caching if still over quota
+                    localStorage.setItem('ielts_exam_draft', JSON.stringify(editingQuiz));
+                } catch (err: any) {
+                    try {
+                        // Quota exceeded: strip large base64 data URLs before caching draft
+                        const sanitized = JSON.parse(JSON.stringify(editingQuiz, (key, value) => {
+                            if (typeof value === 'string' && value.startsWith('data:image/') && value.length > 1000) {
+                                return '';
+                            }
+                            return value;
+                        }));
+                        localStorage.setItem('ielts_exam_draft', JSON.stringify(sanitized));
+                    } catch {
+                        // Gracefully ignore local draft caching if still over quota
+                    }
                 }
+            };
+            if (typeof window.requestIdleCallback === 'function') {
+                window.requestIdleCallback(() => doSave(), { timeout: 2000 });
+            } else {
+                setTimeout(doSave, 0);
             }
         }, 4000);
         const handleSaveShortcut = (e: KeyboardEvent) => {
@@ -7525,7 +7537,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     const quizUpserts = Array.isArray(newData.__quizUpserts)
       ? newData.__quizUpserts
       : (Array.isArray(newData.quizzes) ? newData.quizzes : []);
-    const hasQuizCatalogWrite = quizUpserts.length > 0 && userRole === "TEACHER";
+    const hasQuizCatalogWrite = (quizUpserts.length > 0 || quizDeleteIds.length > 0) && userRole === "TEACHER";
     const questAssignmentsForMerge = Array.isArray(newData.topicAssignments)
       ? newData.topicAssignments as TopicAssignment[]
       : topicAssignments;
@@ -8131,6 +8143,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
     overrideContext?: { paragraphLabel?: string; paragraphText?: string; headingOptions?: Array<{ id: string; text: string }> }
   ) => {
     if (explainMap[q.id]?.loading) return;
+    const reqId = Date.now();
+    activeExplainReqIdRef.current[q.id] = reqId;
     try {
       // Keep paragraph boundaries for reading evidence. Removing tags without a
       // separator makes two separate paragraphs look like one AI quotation.
@@ -8404,6 +8418,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         })
       });
       const data = await resp.json();
+      if (activeExplainReqIdRef.current[q.id] !== reqId) return;
       if (data.success && (data.explanation || data.structured)) {
         const audioEvidenceSegments = Array.isArray(data.audioEvidenceSegments)
           ? data.audioEvidenceSegments.filter((item: any) => item && typeof item.timestamp === 'string' && typeof item.quote === 'string').slice(0, 1)
@@ -8425,6 +8440,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         setExplainMap(prev => ({ ...prev, [q.id]: explainResult }));
       }
       else {
+        if (activeExplainReqIdRef.current[q.id] !== reqId) return;
         const message = "" + (data.error || "Could not generate explanation. Please try again.");
         setExplainMap(prev => {
           const next = { ...prev };
@@ -8434,6 +8450,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         alert(message);
       }
     } catch (e: any) {
+      if (activeExplainReqIdRef.current[q.id] !== reqId) return;
       const message = "" + (e?.message || String(e));
       setExplainMap(prev => {
         const next = { ...prev };
@@ -8630,8 +8647,11 @@ const applyWorkspaceSnapshot = (snap: any) => {
         const transcript = data.transcript;
         setEditingQuiz((prev: any) => prev ? { ...prev, transcript } : prev);
         const updatedQuiz = { ...quiz, transcript, updatedAt: getTrueTime() };
-        const nx = quizzes.map(q => q.id === quiz.id ? updatedQuiz : q);
-        setQuizzes(nx); syncData({ __quizUpserts: [updatedQuiz] });
+        const nx = quizzesRef.current.map(q => q.id === quiz.id ? updatedQuiz : q);
+        setQuizCatalogState(nx);
+        window.setTimeout(() => {
+          void syncData({ __quizUpserts: [updatedQuiz] });
+        }, 0);
         alert(`Đã nghe & tạo transcript (${transcript.length} ký tự) và lưu vào đề. Nút "Vì sao" giờ trích dẫn được lời thoại.`);
       } else {
         alert("" + (data.error || "Lỗi tạo transcript"));
@@ -10707,7 +10727,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           title: q.title + " (Copy)",
           active: false
       })));
-      setQuizzes(prev => [newQuiz, ...prev.filter(x => x.id !== newQuiz.id)]);
+      setQuizCatalogState([newQuiz, ...quizzesRef.current.filter(x => x.id !== newQuiz.id)]);
       void syncData({ __quizUpserts: [newQuiz] }).then(saved => {
           alert(saved ? tx("Đã nhân bản đề thi thành công!", "Exam duplicated successfully!") : tx("Bản sao được lưu trên thiết bị này và sẽ tự thử lại khi có kết nối.", "The copy is saved on this device and will retry automatically when the connection returns."));
       });
@@ -12026,9 +12046,27 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   };
   
   const handleBulkDeleteQuizzes = () => {
-      if(!confirm(`Delete ${selectedQuizzes.length} selected exams?`)) return;
-      const nx = quizzes.filter(q => !selectedQuizzes.includes(q.id));
-      setQuizzes(nx); syncData({ quizzes: nx, __quizDeletedIds: selectedQuizzes }); setSelectedQuizzes([]);
+    if (!selectedQuizzes.length) return;
+    if (!confirm(tx(`Xóa ${selectedQuizzes.length} đề thi đã chọn?`, `Delete ${selectedQuizzes.length} selected exams?`))) return;
+    const deletedIds = [...selectedQuizzes];
+    setSelectedQuizzes([]);
+    const nx = quizzesRef.current.filter(q => !deletedIds.includes(q.id));
+    setQuizCatalogState(nx);
+    window.setTimeout(() => {
+      void syncData({ __quizDeletedIds: deletedIds });
+    }, 0);
+  };
+
+  const handleDeleteSingleQuiz = (quizId: string, quizTitle?: string) => {
+    const label = quizTitle || quizId;
+    if (!confirm(tx(`Xóa đề thi "${label}"?`, `Delete exam "${label}"?`))) return;
+    const targetId = String(quizId);
+    setSelectedQuizzes(prev => prev.filter(id => id !== targetId));
+    const nx = quizzesRef.current.filter(q => q.id !== targetId);
+    setQuizCatalogState(nx);
+    window.setTimeout(() => {
+      void syncData({ __quizDeletedIds: [targetId] });
+    }, 0);
   };
 
   const syncData = async (newData: any) => {
@@ -13975,6 +14013,58 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           );
       };
 
+      const rvRenderAiSkeleton = (label?: string, qNum?: any) => {
+          const displayLabel = label || (qNum ? `Đang phân tích cấu trúc và trích xuất dẫn chứng câu ${qNum}...` : "Đang đọc ngữ cảnh và đối chiếu bài làm...");
+          return (
+              <div
+                  className="rv-ai-skeleton-container"
+                  role="status"
+                  aria-live="polite"
+                  aria-busy="true"
+                  style={{
+                      padding: "14px 16px",
+                      borderRadius: 8,
+                      background: "#FAF7F2",
+                      border: "1px solid #E6DFD3",
+                  }}
+              >
+                  <style>{`
+                      @keyframes rvSpin { to { transform: rotate(360deg); } }
+                      @keyframes rvShimmer {
+                          0% { opacity: 0.45; }
+                          50% { opacity: 0.95; }
+                          100% { opacity: 0.45; }
+                      }
+                      @media (prefers-reduced-motion: reduce) {
+                          .rv-sk-bar { animation: none !important; opacity: 0.7 !important; }
+                          .rv-sk-spinner { animation: none !important; }
+                      }
+                  `}</style>
+                  {/* Header bar */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#475569", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
+                      <span className="rv-sk-spinner" style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #CBD5E1", borderTopColor: "#2563EB", animation: "rvSpin 0.8s linear infinite", display: "inline-block", flexShrink: 0 }} />
+                      <span>{displayLabel}</span>
+                  </div>
+                  {/* Detailed explanation placeholder bars */}
+                  <div style={{ marginBottom: 12 }}>
+                      <div className="rv-sk-bar" style={{ height: 11, width: "94%", borderRadius: 4, background: "#E2E8F0", marginBottom: 6, animation: "rvShimmer 1.3s ease-in-out infinite" }} />
+                      <div className="rv-sk-bar" style={{ height: 11, width: "82%", borderRadius: 4, background: "#E2E8F0", marginBottom: 6, animation: "rvShimmer 1.3s ease-in-out 0.15s infinite" }} />
+                      <div className="rv-sk-bar" style={{ height: 11, width: "65%", borderRadius: 4, background: "#E2E8F0", animation: "rvShimmer 1.3s ease-in-out 0.3s infinite" }} />
+                  </div>
+                  {/* Evidence quote block simulation */}
+                  <div style={{ padding: "8px 12px", background: "#FFFFFF", borderRadius: 6, border: "1px solid #E2E8F0", marginBottom: 10 }}>
+                      <div className="rv-sk-bar" style={{ height: 9, width: "32%", borderRadius: 3, background: "#CBD5E1", marginBottom: 6, animation: "rvShimmer 1.3s ease-in-out 0.1s infinite" }} />
+                      <div className="rv-sk-bar" style={{ height: 10, width: "88%", borderRadius: 4, background: "#E2E8F0", animation: "rvShimmer 1.3s ease-in-out 0.25s infinite" }} />
+                  </div>
+                  {/* Trap analysis block simulation */}
+                  <div style={{ padding: "8px 12px", background: "#FFFBEB", borderRadius: 6, border: "1px solid #FEF3C7" }}>
+                      <div className="rv-sk-bar" style={{ height: 9, width: "38%", borderRadius: 3, background: "#FCD34D", marginBottom: 6, animation: "rvShimmer 1.3s ease-in-out 0.2s infinite" }} />
+                      <div className="rv-sk-bar" style={{ height: 10, width: "75%", borderRadius: 4, background: "#FDE68A", animation: "rvShimmer 1.3s ease-in-out 0.35s infinite" }} />
+                  </div>
+              </div>
+          );
+      };
+
       const rvRenderDetailedAiExplanation = (aiState: any, question: any, studentAnswer: any) => {
           let paraphrasePairs: Array<{ questionTerm: string; passageTerm: string; note?: string }> = [];
           let evidenceLoc = "";
@@ -14285,7 +14375,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                       </div>
                   </div>
                   {aiState?.loading ? (
-                      <div className="rv-drawer-loading">Đang phân tích cấu trúc và trích xuất dẫn chứng câu {qNum}...</div>
+                      rvRenderAiSkeleton(undefined, qNum)
                   ) : (aiState?.structured || aiState?.text) ? (
                       rvRenderDetailedAiExplanation(aiState, question, studentAnswer)
                   ) : (
@@ -17132,17 +17222,18 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                               background: "#FAF7F2",
                           }}
                       >
-                          {(copilotMessages.length > 0 ? copilotMessages : [{ role: "copilot" as const, text: "Chào bạn, bạn cần hỗ trợ gì?" }]).map((msg, mIdx) => {
+                          {(copilotMessages.length > 0 ? copilotMessages : [{ role: "copilot" as const, text: "Chào bạn, bạn cần hỗ trợ gì?" }]).map((msg: any, mIdx) => {
                               const isUser = msg.role === "user";
+                              const isError = Boolean(msg.error);
                               return (
                                   <div
                                       key={mIdx}
                                       style={{
                                           alignSelf: isUser ? "flex-end" : "flex-start",
                                           maxWidth: "90%",
-                                          background: isUser ? "#1C1917" : "#F4EFE6",
-                                          color: isUser ? "#FFFFFF" : "#1C1917",
-                                          border: isUser ? "none" : "1px solid #E6DFD3",
+                                          background: isUser ? "#1C1917" : (isError ? "#FEF2F2" : "#F4EFE6"),
+                                          color: isUser ? "#FFFFFF" : (isError ? "#991B1B" : "#1C1917"),
+                                          border: isUser ? "none" : (isError ? "1px solid #FECACA" : "1px solid #E6DFD3"),
                                           borderRadius: isUser ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
                                           padding: "10px 13px",
                                           fontSize: 13.5,
@@ -17150,13 +17241,59 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           wordBreak: "break-word",
                                       }}
                                   >
-                                      {isUser ? msg.text : rvRenderRichText(msg.text)}
+                                      {isUser ? msg.text : isError ? (
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                              <div>{msg.text}</div>
+                                              {msg.retryText && (
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => void handleSendCopilotMessage(msg.retryText)}
+                                                      style={{
+                                                          alignSelf: "flex-start",
+                                                          padding: "4px 10px",
+                                                          borderRadius: 5,
+                                                          border: "1px solid #FCA5A5",
+                                                          background: "#FFFFFF",
+                                                          color: "#B91C1C",
+                                                          fontSize: 12,
+                                                          fontWeight: 700,
+                                                          cursor: "pointer",
+                                                          display: "inline-flex",
+                                                          alignItems: "center",
+                                                          gap: 4,
+                                                      }}
+                                                  >
+                                                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+                                                      {tx("Thử lại", "Retry")}
+                                                  </button>
+                                              )}
+                                          </div>
+                                      ) : rvRenderRichText(msg.text)}
                                   </div>
                               );
                           })}
                           {copilotLoading && (
-                              <div style={{ alignSelf: "flex-start", background: "#F4EFE6", border: "1px solid #E6DFD3", borderRadius: "12px 12px 12px 2px", padding: "8px 12px", fontSize: 12.5, color: "#57534E" }}>
-                                  Đang trả lời...
+                              <div
+                                  role="status"
+                                  aria-live="polite"
+                                  style={{
+                                      alignSelf: "flex-start",
+                                      background: "#F4EFE6",
+                                      border: "1px solid #E6DFD3",
+                                      borderRadius: "12px 12px 12px 2px",
+                                      padding: "10px 14px",
+                                      maxWidth: "85%",
+                                      boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                                  }}
+                              >
+                                  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 600, color: "#78716C", marginBottom: 8 }}>
+                                      <span style={{ width: 12, height: 12, borderRadius: "50%", border: "2px solid #CBD5E1", borderTopColor: "#2563EB", animation: "rvSpin 0.8s linear infinite", display: "inline-block", flexShrink: 0 }} />
+                                      <span>{tx("Trợ lý AI đang phân tích bài làm...", "AI Assistant is analyzing your test...")}</span>
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                      <div className="rv-sk-bar" style={{ height: 8, width: "90%", borderRadius: 4, background: "#E2E8F0", animation: "rvShimmer 1.3s ease-in-out infinite" }} />
+                                      <div className="rv-sk-bar" style={{ height: 8, width: "70%", borderRadius: 4, background: "#E2E8F0", animation: "rvShimmer 1.3s ease-in-out 0.2s infinite" }} />
+                                  </div>
                               </div>
                           )}
                       </div>
@@ -17294,16 +17431,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                       (aiState?.structured || aiState?.text) ? (
                                           rvRenderDetailedAiExplanation(aiState, hq, studentAns)
                                       ) : aiState?.loading ? (
-                                          <div role="status" aria-live="polite" style={{ padding: "6px 0 2px" }}>
-                                              <style>{"@keyframes rvSpin{to{transform:rotate(360deg)}}@keyframes rvPulse{0%,100%{opacity:.45}50%{opacity:1}}@keyframes rvFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}"}</style>
-                                              <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#475569", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
-                                                  <span style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #CBD5E1", borderTopColor: "#2563EB", animation: "rvSpin 0.8s linear infinite", display: "inline-block" }} />
-                                                  Đang đọc đoạn văn và đối chiếu heading...
-                                              </div>
-                                              {[92, 78, 64].map((w, k) => (
-                                                  <div key={k} style={{ height: 10, width: `${w}%`, borderRadius: 4, background: "#E2E8F0", marginBottom: 8, animation: `rvPulse 1.2s ease-in-out ${k * 0.15}s infinite` }} />
-                                              ))}
-                                          </div>
+                                          rvRenderAiSkeleton("Đang đọc đoạn văn và đối chiếu heading...", qNum)
                                       ) : (
                                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 0", color: "#64748B", fontSize: 12.5 }}>
                                               <span>Chưa tải được phân tích cho đoạn này.</span>
@@ -26151,6 +26279,16 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                     <button className="ebx-primary" onClick={() => setEditingQuiz(JSON.parse(JSON.stringify(q)))} style={{background: EB.accent, color: '#fff', padding: '6px 14px', fontSize: 12.5, border: 'none', borderRadius: EB.radiusSm, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6}}>
                                                         <Ico name="edit" size={13} /> {t('eb_edit_exam')}
                                                     </button>
+                                                    {typeof handleDeleteSingleQuiz === 'function' && (
+                                                        <button
+                                                            className="ebx-soft"
+                                                            onClick={() => handleDeleteSingleQuiz(q.id, q.title)}
+                                                            title={tx('Xóa đề thi', 'Delete exam')}
+                                                            style={{...ghostBtn, color: EB.err, borderColor: `${C.err}33`}}
+                                                        >
+                                                            <Ico name="trash" size={13} />
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
                                         );
