@@ -5379,6 +5379,128 @@ def _clean_option_text(raw: Any) -> str:
     return s
 
 
+def _parse_paragraph_label(val: Any, options: Any = None) -> str:
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        idx = int(s)
+        opt_list = options if isinstance(options, list) else [o.strip() for o in str(options).split("|") if o.strip()]
+        if opt_list and 0 <= idx < len(opt_list):
+            s = opt_list[idx]
+        elif 0 <= idx < 26:
+            return chr(ord('A') + idx)
+    m = re.search(r'\b(?:paragraph|section|đoạn)?\s*([A-I])\b', s, re.I)
+    if m:
+        return m.group(1).upper()
+    m2 = re.match(r'^([A-I])(?:\.|\:|\)|$)', s, re.I)
+    if m2:
+        return m2.group(1).upper()
+    return ""
+
+
+def split_passage_into_labeled_paragraphs(passage: str) -> Dict[str, str]:
+    if not passage or not passage.strip():
+        return {}
+
+    raw = str(passage).strip()
+
+    def _strip_tags(html: str) -> str:
+        return re.sub(r"<[^>]+>", " ", html).replace("&nbsp;", " ").strip()
+
+    # 1. Look for explicit paragraph headings / markers:
+    pattern = re.compile(
+        r"(?:^|[\r\n]+|<(?:p|div|h[1-6]|section|article)[^>]*>)\s*"
+        r"(?:<(?:strong|b|em|span|i)[^>]*>)?\s*"
+        r"(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])"
+        r"(?:\.|\:|\s*[-–—]\s*|\s+)"
+        r"(?:<\/(?:strong|b|em|span|i)>)?",
+        re.IGNORECASE,
+    )
+
+    matches = list(pattern.finditer(raw))
+    found_letters = [m.group(1).upper() for m in matches]
+
+    if len(matches) >= 2 and len(set(found_letters)) >= 2:
+        result: Dict[str, str] = {}
+        for i, match in enumerate(matches):
+            label = match.group(1).upper()
+            start_pos = match.end()
+            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+            chunk = raw[start_pos:end_pos]
+            clean_chunk = re.sub(r"\s+", " ", _strip_tags(chunk)).strip()
+            if label not in result or len(clean_chunk) > len(result[label]):
+                result[label] = clean_chunk
+        if len(result) >= 2:
+            return result
+
+    # 2. Fallback: split by HTML paragraph / div blocks
+    html_blocks = re.findall(r"<(?:p|div|section|article)[^>]*>([\s\S]*?)<\/(?:p|div|section|article)>", raw, re.IGNORECASE)
+    cleaned_blocks = [re.sub(r"\s+", " ", _strip_tags(b)).strip() for b in html_blocks]
+    cleaned_blocks = [b for b in cleaned_blocks if len(b) >= 30 and not re.match(r"^(reading passage|part \d|test \d)", b, re.I)]
+
+    if len(cleaned_blocks) >= 2:
+        result = {}
+        for idx, block in enumerate(cleaned_blocks):
+            if idx < 26:
+                label = chr(ord("A") + idx)
+                m_start = re.match(r"^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)", block, re.I)
+                if m_start:
+                    lbl = m_start.group(1).upper()
+                    result[lbl] = m_start.group(2).strip()
+                else:
+                    result[label] = block
+        if result:
+            return result
+
+    # 3. Fallback: split by double newlines
+    lines = [re.sub(r"\s+", " ", _strip_tags(p)).strip() for p in re.split(r"\n\s*\n+", raw)]
+    lines = [p for p in lines if len(p) >= 30 and not re.match(r"^(reading passage|part \d|test \d)", p, re.I)]
+    result = {}
+    for idx, line in enumerate(lines):
+        if idx < 26:
+            label = chr(ord("A") + idx)
+            m_start = re.match(r"^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)", line, re.I)
+            if m_start:
+                lbl = m_start.group(1).upper()
+                result[lbl] = m_start.group(2).strip()
+            else:
+                result[label] = line
+    return result
+
+
+def _find_best_sentence_in_paragraph(paragraph_text: str, question: str, correct: str) -> str:
+    if not paragraph_text:
+        return ""
+    clean_p = re.sub(r"[\s\u200b]+", " ", str(paragraph_text)).strip()
+    sentences = [
+        re.sub(r"\s+", " ", s).strip(" -\t\r\n")
+        for s in re.split(r"(?<=[.!?])\s+|\n+", clean_p)
+        if len(s.strip()) >= 15
+    ]
+    if not sentences:
+        return clean_p[:280].rsplit(" ", 1)[0] if len(clean_p) > 280 else clean_p
+
+    def _ev_words(val: str) -> set:
+        return {
+            w for w in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(val or "").lower())
+            if w not in {"the", "and", "for", "with", "that", "this", "from", "which", "what", "answer", "passage", "paragraph", "section"}
+        }
+
+    q_words = _ev_words(question) | _ev_words(correct)
+
+    def _score(s: str) -> tuple:
+        swords = _ev_words(s)
+        overlap = len(swords & q_words)
+        return (overlap, -abs(len(s) - 140))
+
+    best_s = max(sentences, key=_score)
+    if len(best_s) > 300:
+        best_s = best_s[:300].rsplit(" ", 1)[0].strip()
+    return best_s
+
+
+
 @app.post("/api/ai_explain")
 async def ai_explain(
     payload: Dict[str, Any] = Body(...),
@@ -5408,10 +5530,13 @@ async def ai_explain(
         question_count = None
     question_type = str(payload.get("questionType", "") or "")
     question_subtype = str(payload.get("questionSubType", "") or "")
+    category_id = str(payload.get("categoryId", "") or "").upper()
     matching_kind = str(payload.get("matchingKind", "") or "")
     matching_target_label = str(payload.get("matchingTargetLabel", "") or "").strip().upper()
     matching_target_text = str(payload.get("matchingTargetText", "") or "")[:4500]
-    is_paragraph_information_matching = matching_kind == "paragraph_information" and bool(matching_target_text.strip())
+    wrong_choice_label = str(payload.get("wrongChoiceLabel", "") or "").strip().upper()
+    wrong_choice_text = str(payload.get("wrongChoiceText", "") or "")[:4500]
+
     is_heading_task = (
         question_type in ("DRAG_DROP_HEADING",)
         or matching_kind == "headings"
@@ -5419,7 +5544,41 @@ async def ai_explain(
         or "main idea" in str(question_subtype or "").lower()
         or "heading" in str(question or "").lower()
     )
-    evidence_passage = matching_target_text if (is_paragraph_information_matching or (is_heading_task and matching_target_text.strip())) else reading_passage
+
+    is_matching_info_or_features = (
+        (
+            matching_kind in ("paragraph_information", "features", "matching_info_features")
+            or question_type in ("R_MATCHING_INFO", "R_MATCHING_FEATURES")
+            or category_id in ("R_MATCHING_INFO", "R_MATCHING_FEATURES")
+            or any(cat in str(question_subtype or "").upper() for cat in ("R_MATCHING_INFO", "R_MATCHING_FEATURES", "MATCHING INFORMATION", "MATCHING FEATURES", "PARAGRAPH_INFORMATION"))
+            or ("which paragraph" in str(question).lower() or "which section" in str(question).lower())
+        )
+        and not is_heading_task
+    )
+
+    # Answer-bound target paragraph resolution for Matching Information / Features
+    if is_matching_info_or_features:
+        parsed_target = _parse_paragraph_label(correct, options)
+        if parsed_target:
+            matching_target_label = parsed_target
+        parsed_wrong = _parse_paragraph_label(student_ans, options)
+        if parsed_wrong and parsed_wrong != matching_target_label:
+            wrong_choice_label = parsed_wrong
+
+        if (not matching_target_text or not wrong_choice_text) and reading_passage:
+            passage_paragraphs = split_passage_into_labeled_paragraphs(reading_passage)
+            if not matching_target_text and matching_target_label:
+                matching_target_text = passage_paragraphs.get(matching_target_label, "")
+            if not wrong_choice_text and wrong_choice_label:
+                wrong_choice_text = passage_paragraphs.get(wrong_choice_label, "")
+
+    is_paragraph_information_matching = is_matching_info_or_features and bool(matching_target_text.strip())
+
+    evidence_passage = (
+        matching_target_text
+        if (is_paragraph_information_matching or (is_heading_task and matching_target_text.strip()))
+        else reading_passage
+    )
     integrated_part = int(payload.get("integratedPart", 0) or 0)
     is_vietnamese_high_school_integrated = bool(payload.get("isVietnameseHighSchoolIntegrated")) and 2 <= integrated_part <= 7
     is_listening_item = bool(payload.get("isListening"))
@@ -5489,7 +5648,13 @@ async def ai_explain(
         f" MATCHING INFORMATION RULE: matched to paragraph {matching_target_label}. Evidence must be an exact excerpt from that target paragraph below."
     ) if is_paragraph_information_matching else ""
     matching_rule_vi = (
-        f" QUY TẮC MATCHING INFORMATION: câu ghép với đoạn {matching_target_label}. Dẫn chứng phải lấy nguyên văn từ đúng đoạn mục tiêu bên dưới."
+        f" QUY TẮC MATCHING INFORMATION / MATCHING FEATURES:\n"
+        f"- ĐÁP ÁN ĐÚNG LÀ ĐOẠN {matching_target_label}. Dẫn chứng (evidence.quote) BẮT BUỘC trích nguyên văn tiếng Anh từ ĐOẠN {matching_target_label} ở trên. TUYỆT ĐỐI KHÔNG trích dẫn từ bất kỳ đoạn nào khác.\n"
+        f"- Vị trí dẫn chứng (evidence.location) BẮT BUỘC ghi là 'Đoạn {matching_target_label}'.\n"
+        f"- detailedExplanation: 1-2 câu tiếng Việt tự nhiên chứng minh tại sao thông tin trong ĐOẠN {matching_target_label} khớp với câu hỏi.\n"
+        f"- trapAnalysis: 1-2 câu tiếng Việt tự nhiên giải thích vì sao lựa chọn của học viên"
+        + (f" (Đoạn {wrong_choice_label})" if wrong_choice_label else "")
+        + " là bẫy/chưa chính xác so với câu hỏi.\n"
     ) if is_paragraph_information_matching else ""
 
     integrated_rule_en = (
@@ -5510,18 +5675,25 @@ async def ai_explain(
     norm_ctx = re.sub(r"\s+", " ", context).strip().lower()
     norm_reading = re.sub(r"\s+", " ", reading_passage).strip().lower()
 
-    if is_paragraph_information_matching or (is_heading_task and matching_target_text.strip()):
-        source_label = "TARGET PARAGRAPH" if lang == "en" else "ĐOẠN MỤC TIÊU"
-        label_suffix = f" ({matching_target_label})" if matching_target_label else ""
-        source_block = f"{source_label}{label_suffix}:\n{matching_target_text[:4500]}"
+    if is_paragraph_information_matching:
+        source_label = f"ĐOẠN MỤC TIÊU ĐÁP ÁN ĐÚNG (ĐOẠN {matching_target_label})"
+        source_block = f"{source_label}:\n{matching_target_text[:4500]}"
+        if wrong_choice_text and wrong_choice_label and wrong_choice_label != matching_target_label:
+            source_block += f"\n\nĐOẠN HỌC VIÊN CHỌN SAI (ĐOẠN {wrong_choice_label} — DÙNG ĐỂ GIẢI THÍCH VÌ SAO SAI/BẪY):\n{wrong_choice_text[:3500]}"
         if norm_ctx and norm_ctx not in norm_reading and norm_ctx not in matching_target_text.lower():
-            group_label = "QUESTION GROUP CONTEXT" if lang == "en" else "BỐI CẢNH NHÓM CÂU HỎI"
+            group_label = "BỐI CẢNH NHÓM CÂU HỎI"
+            source_block += f"\n\n{group_label}:\n{context[:2500]}"
+    elif is_heading_task and matching_target_text.strip():
+        source_label = f"ĐOẠN MỤC TIÊU ({matching_target_label})" if matching_target_label else "ĐOẠN MỤC TIÊU"
+        source_block = f"{source_label}:\n{matching_target_text[:4500]}"
+        if norm_ctx and norm_ctx not in norm_reading and norm_ctx not in matching_target_text.lower():
+            group_label = "BỐI CẢNH NHÓM CÂU HỎI"
             source_block += f"\n\n{group_label}:\n{context[:2500]}"
     elif is_reading_evidence:
-        source_label = "READING PASSAGE" if lang == "en" else "BÀI ĐỌC"
+        source_label = "BÀI ĐỌC"
         source_block = f"{source_label}:\n{reading_passage[:8500]}"
         if norm_ctx and norm_ctx not in norm_reading:
-            group_label = "QUESTION GROUP CONTEXT" if lang == "en" else "BỐI CẢNH NHÓM CÂU HỎI"
+            group_label = "BỐI CẢNH NHÓM CÂU HỎI"
             source_block += f"\n\n{group_label}:\n{context[:2500]}"
     else:
         source_label = "AUDIO TRANSCRIPT" if lang == "en" else "TRANSCRIPT BÀI NGHE"
@@ -5671,7 +5843,7 @@ async def ai_explain(
         ev_loc = f"Lời thoại [{audio_evidence['timestamp']}]" if lang == "vi" else f"Audio [{audio_evidence['timestamp']}]"
 
     # Reading passage evidence verification (deterministic verbatim fuzzy window + fast ranker in <1ms)
-    if is_reading_evidence:
+    if is_reading_evidence or is_paragraph_information_matching:
         def _clean_str(val: str) -> str:
             return re.sub(r"[\s\u200b]+", " ", str(val or "").replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')).strip()
 
@@ -5683,13 +5855,13 @@ async def ai_explain(
         ev_norm = _norm_ev(ev_quote)
 
         matched_verbatim = ""
-        # 1. Exact or normalized continuous match
+        # 1. Exact or normalized continuous match in evidence_passage
         if ev_norm and 10 <= len(ev_norm) <= 350 and ev_norm in passage_norm:
             p_idx = passage_norm.find(ev_norm)
             if p_idx >= 0:
                 matched_verbatim = passage_clean[p_idx:p_idx + len(ev_norm)]
 
-        # 2. Contiguous 6+ word window fuzzy substring match
+        # 2. Contiguous 6+ word window fuzzy substring match in evidence_passage
         if not matched_verbatim and ev_norm:
             words = ev_norm.split()
             for window_size in range(min(len(words), 12), 5, -1):
@@ -5712,12 +5884,17 @@ async def ai_explain(
 
         if matched_verbatim:
             ev_quote = matched_verbatim
+        elif is_paragraph_information_matching:
+            # Enforce that for matching information, quote MUST come from target paragraph!
+            # Never fall back to whole reading passage.
+            best_s = _find_best_sentence_in_paragraph(evidence_passage, question, correct)
+            ev_quote = best_s if best_s else ""
         else:
-            # 3. Deterministic Python sentence ranker (_score_evidence in <1ms)
+            # 3. Deterministic Python sentence ranker (_score_evidence in <1ms) for normal reading
             def _ev_words(val: str) -> set:
                 return {
                     w for w in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(val or "").lower())
-                    if w not in {"the", "and", "for", "with", "that", "this", "from", "which", "what", "answer", "passage"}
+                    if w not in {"the", "and", "for", "with", "that", "this", "from", "which", "what", "answer", "passage", "paragraph", "section"}
                 }
             query_words = _ev_words(ev_quote) | _ev_words(question) | _ev_words(correct)
             sentences = [
@@ -5801,9 +5978,15 @@ async def ai_explain(
         text_lines.append(f"• {('Phân tích:' if lang == 'vi' else 'Trap analysis:')} {t_str}{trap_reason}")
     text = "\n".join(text_lines)
 
+    if is_paragraph_information_matching and matching_target_label:
+        ev_loc = f"Đoạn {matching_target_label}"
+
+    ev_para = matching_target_label if (is_paragraph_information_matching and matching_target_label) else (matching_target_label or "")
+
     structured_data = {
         "paraphrasePairs": cleaned_pairs,
         "evidence": {
+            "paragraph": ev_para,
             "location": ev_loc,
             "quote": ev_quote,
         },

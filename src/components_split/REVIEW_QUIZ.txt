@@ -258,8 +258,35 @@
           void requestReviewAudioPlayback();
       };
 
-      const rvReadingEvidenceNodes = () => {
-          const root = document.getElementById("ielts-passage-content");
+      const rvFindParagraphBlock = (root: HTMLElement, label: string): HTMLElement | null => {
+          if (!root || !label) return null;
+          const cleanLabel = label.trim().toUpperCase();
+          const byAttr = root.querySelector<HTMLElement>(`[data-paragraph="${cleanLabel}"], #paragraph-${cleanLabel}, #para-${cleanLabel}`);
+          if (byAttr) return byAttr;
+
+          const labelRe = new RegExp(`^(?:paragraph|section|đoạn)?\\s*${cleanLabel}(?:\\.|\\:|\\s*[-–—]|\\s+|$)`, "i");
+          const directChildren = Array.from(root.children).filter(el => !el.closest("button")) as HTMLElement[];
+          const candidates = directChildren.length > 1
+              ? directChildren
+              : Array.from(root.querySelectorAll<HTMLElement>("p, div, section, article, li")).filter(el => (el.textContent || "").trim().length >= 20);
+
+          for (const el of candidates) {
+              const strongOrHeading = el.querySelector("strong, b, h1, h2, h3, h4, h5, h6, span");
+              const headerText = (strongOrHeading?.textContent || "").trim();
+              if (headerText && labelRe.test(headerText)) return el;
+              const text = (el.textContent || "").trim();
+              if (labelRe.test(text)) return el;
+          }
+
+          const charCode = cleanLabel.charCodeAt(0) - 65;
+          if (charCode >= 0 && charCode < candidates.length) {
+              return candidates[charCode];
+          }
+          return null;
+      };
+
+      const rvReadingEvidenceNodes = (searchRoot?: HTMLElement | null) => {
+          const root = searchRoot || document.getElementById("ielts-passage-content");
           if (!root) return [];
           const nodes = Array.from(root.querySelectorAll<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div"))
               .filter(node => !node.closest("button") && (node.textContent || "").trim().length > 0)
@@ -267,20 +294,25 @@
           return [...nodes, root];
       };
 
-      const rvJumpToEvidence = (quote: string | string[]) => {
+      const rvJumpToEvidence = (quote: string | string[], paragraphTarget?: string) => {
           const root = document.getElementById("ielts-passage-content");
           const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || "").replace(/\s+/g, " ").trim()).filter(value => value.length >= 4);
           if (!root || !quotes.length) return;
           root.querySelectorAll<HTMLElement>("mark.rv-reading-evidence-mark").forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || "")));
           root.querySelectorAll<HTMLElement>(".rv-reading-evidence-block").forEach(node => node.classList.remove("rv-reading-evidence-block", "rv-reading-evidence-target", "rv-reading-evidence-located"));
           root.normalize();
+
+          const targetPara = paragraphTarget ? rvFindParagraphBlock(root, paragraphTarget) : null;
+          const searchContainer = targetPara || root;
+
           let firstTarget: HTMLElement | null = null;
           quotes.forEach(needle => {
               const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
               const matcher = new RegExp(escaped, "i");
               const normalizedNeedle = rvNormalizeEvidenceText(needle);
-              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ""))
-                  || rvReadingEvidenceNodes().find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
+              const nodes = rvReadingEvidenceNodes(searchContainer);
+              const target = nodes.find(node => matcher.test(node.textContent || ""))
+                  || nodes.find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
               if (!target) return;
               if (!firstTarget) firstTarget = target;
               const match = (target.textContent || "").match(matcher);
@@ -289,16 +321,16 @@
                   return;
               }
               const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-              const nodes: Array<{ node: Text; start: number; end: number }> = [];
+              const textNodes: Array<{ node: Text; start: number; end: number }> = [];
               let cursor = 0;
               for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
                   const length = textNode.data.length;
-                  nodes.push({ node: textNode, start: cursor, end: cursor + length });
+                  textNodes.push({ node: textNode, start: cursor, end: cursor + length });
                   cursor += length;
               }
               const start = match.index;
               const end = start + match[0].length;
-              nodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+              textNodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
                   const from = Math.max(start, nodeStart);
                   const to = Math.min(end, nodeEnd);
                   if (from >= to || !node.parentNode) return;
@@ -314,6 +346,12 @@
                   node.parentNode.replaceChild(fragment, node);
               });
           });
+
+          if (!firstTarget && targetPara) {
+              targetPara.classList.add("rv-reading-evidence-block", "rv-reading-evidence-target");
+              firstTarget = targetPara;
+          }
+
           const scrollTarget = firstTarget as HTMLElement | null;
           if (scrollTarget) scrollTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
       };
@@ -352,12 +390,25 @@
               if (expected.length >= 3) rvJumpToTranscriptQuote([expected]);
               return;
           }
+          const isMatchingInfoOrFeatures = (
+              question?.categoryId === "R_MATCHING_INFO" ||
+              question?.categoryId === "R_MATCHING_FEATURES" ||
+              question?.type === "MATCHING" ||
+              /matching/i.test(String(question?.subType || ""))
+          ) && question?.type !== "DRAG_DROP_HEADING";
+
+          const evidencePara = String(
+              aiState?.structured?.evidence?.paragraph
+              || (isMatchingInfoOrFeatures ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")
+              || ""
+          ).trim().toUpperCase();
+
           if (quotes.length) {
-              rvJumpToEvidence(quotes);
+              rvJumpToEvidence(quotes, evidencePara || undefined);
               return;
           }
           const expected = String(question?.correctAnswer || "").split("/")[0].trim();
-          if (expected.length >= 4 && question?.type !== "DRAG_DROP_HEADING") rvJumpToEvidence([expected]);
+          if (expected.length >= 4 && question?.type !== "DRAG_DROP_HEADING") rvJumpToEvidence([expected], evidencePara || undefined);
       };
 
       const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
@@ -1010,6 +1061,15 @@
 
           const sourceLabel = rvActiveIsListening ? "Lời thoại" : "Bài đọc";
 
+                    const isMatchingQuestion = Boolean(
+              (
+                  question?.categoryId === "R_MATCHING_INFO" ||
+                  question?.categoryId === "R_MATCHING_FEATURES" ||
+                  question?.type === "MATCHING" ||
+                  /matching/i.test(String(question?.subType || ""))
+              ) && question?.type !== "DRAG_DROP_HEADING"
+          );
+
           const isHeadingQuestion = Boolean(
               question?.type === "DRAG_DROP_HEADING" ||
               question?.subType === "Matching Headings" ||
@@ -1108,7 +1168,7 @@
                                           className="rv-ai-quote-text is-clickable"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
                                           }}
                                           title="Nhấn để định vị câu trích dẫn trong bài"
                                       >
@@ -1118,7 +1178,7 @@
                                           className="rv-ai-jump-hint"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
                                           }}
                                       >
                                           (nhấn để định vị trong bài)

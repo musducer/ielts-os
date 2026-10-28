@@ -4166,7 +4166,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { paragraph?: string; location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const aiExplainCacheRef = useRef<Map<string, any>>(new Map());
   const activeExplainReqIdRef = useRef<Record<string, number>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
@@ -8281,8 +8281,99 @@ const applyWorkspaceSnapshot = (snap: any) => {
           (Array.isArray(secs) ? secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage : "")
         ) : "")
       );
+      const qCategory = (q as any)?.categoryId || inferQuestionCategory(q, fullQuiz || quiz, qSectionIndex).id;
+      const isMatchingInfo = qCategory === 'R_MATCHING_INFO';
+      const isMatchingFeatures = qCategory === 'R_MATCHING_FEATURES';
+      const isMatchingInfoOrFeatures = (isMatchingInfo || isMatchingFeatures) && !isHeadingQuestion;
+
+      const parseLetterAnswer = (val: any) => {
+        const s = stripTags(String(val ?? "")).trim();
+        const m = s.match(/\b(?:paragraph|section|đoạn)?\s*([A-I])\b/i) || s.match(/^([A-I])(?:\.|\:|\)|$)/i);
+        if (m) return m[1].toUpperCase();
+        if (/^\d+$/.test(s)) {
+          const idx = Number(s);
+          if (Array.isArray(q.options) && idx >= 0 && idx < q.options.length) {
+            const optText = stripTags(q.options[idx]);
+            const optM = optText.match(/\b(?:paragraph|section|đoạn)?\s*([A-I])\b/i) || optText.match(/^([A-I])(?:\.|\:|\)|$)/i);
+            if (optM) return optM[1].toUpperCase();
+          }
+          if (idx >= 0 && idx < 26) return String.fromCharCode(65 + idx);
+        }
+        return "";
+      };
+
+      const correctTargetLabel = isMatchingInfoOrFeatures ? (parseLetterAnswer(q.correctAnswer) || parseLetterAnswer(correctStr)) : "";
+      const studentTargetLabel = isMatchingInfoOrFeatures ? (parseLetterAnswer(studentAnsRaw) || parseLetterAnswer(stuStr)) : "";
+
+      const splitPassageParagraphs = (passageStr: string): Map<string, string> => {
+        const resMap = new Map<string, string>();
+        if (!passageStr || !passageStr.trim()) return resMap;
+        const raw = passageStr.trim();
+        const markerRe = /(?:^|[\r\n]+|<(?:p|div|h[1-6]|section|article)[^>]*>)\s*(?:<(?:strong|b|em|span|i)[^>]*>)?\s*(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s*[-–—]\s*|\s+)(?:<\/(?:strong|b|em|span|i)>)?/gi;
+        const matches: Array<{ label: string; start: number; end: number }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = markerRe.exec(raw)) !== null) {
+          matches.push({ label: m[1].toUpperCase(), start: m.index, end: markerRe.lastIndex });
+        }
+        const distinctLetters = new Set(matches.map(it => it.label));
+        if (matches.length >= 2 && distinctLetters.size >= 2) {
+          for (let i = 0; i < matches.length; i++) {
+            const label = matches[i].label;
+            const startPos = matches[i].end;
+            const endPos = i + 1 < matches.length ? matches[i + 1].start : raw.length;
+            const chunk = stripTags(raw.slice(startPos, endPos)).trim();
+            if (!resMap.has(label) || chunk.length > (resMap.get(label)?.length || 0)) {
+              resMap.set(label, chunk);
+            }
+          }
+          if (resMap.size >= 2) return resMap;
+        }
+        const doc = new DOMParser().parseFromString(raw, 'text/html');
+        const blocks = Array.from(doc.body.children)
+          .filter(el => !el.querySelector('h1,h2,h3,h4,h5,h6') && !el.closest('button'))
+          .map(el => stripTags(el.innerHTML))
+          .filter(t => t.length >= 30 && !/^(reading passage|part \d|test \d)/i.test(t));
+        if (blocks.length >= 2) {
+          blocks.forEach((blk, idx) => {
+            if (idx < 26) {
+              const label = String.fromCharCode(65 + idx);
+              const mStart = blk.match(/^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)/i);
+              if (mStart) {
+                resMap.set(mStart[1].toUpperCase(), mStart[2].trim());
+              } else {
+                resMap.set(label, blk);
+              }
+            }
+          });
+          if (resMap.size >= 2) return resMap;
+        }
+        const lines = raw.split(/\n\s*\n+/).map(stripTags).filter(t => t.length >= 30 && !/^(reading passage|part \d|test \d)/i.test(t));
+        lines.forEach((line, idx) => {
+          if (idx < 26) {
+            const label = String.fromCharCode(65 + idx);
+            const mStart = line.match(/^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)/i);
+            if (mStart) {
+              resMap.set(mStart[1].toUpperCase(), mStart[2].trim());
+            } else {
+              resMap.set(label, line);
+            }
+          }
+        });
+        return resMap;
+      };
+
+      const passageParagraphMap = isMatchingInfoOrFeatures ? splitPassageParagraphs(qPassage || '') : null;
+      const correctTargetParagraphText = (isMatchingInfoOrFeatures && passageParagraphMap && correctTargetLabel)
+        ? (passageParagraphMap.get(correctTargetLabel) || '')
+        : '';
+      const wrongChoiceParagraphText = (isMatchingInfoOrFeatures && passageParagraphMap && studentTargetLabel && studentTargetLabel !== correctTargetLabel)
+        ? (passageParagraphMap.get(studentTargetLabel) || '')
+        : '';
+
       const matchingKind = (() => {
         if (q.type === 'DRAG_DROP_HEADING') return 'headings';
+        if (isMatchingInfo) return 'paragraph_information';
+        if (isMatchingFeatures) return 'features';
         if (q.type !== 'MATCHING') return '';
         const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
         return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
@@ -8305,17 +8396,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         return stripTags(targetParaHtml);
       })();
       const matchingTargetLabel = (() => {
-        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
-        if (matchingKind === 'headings') {
+        if (isHeadingQuestion) {
           if (overrideContext?.paragraphLabel) return String(overrideContext.paragraphLabel).trim().toUpperCase();
           const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
           if (m) return m[1].toUpperCase();
           return String.fromCharCode(65 + Math.max(0, headingSlotIndex));
         }
+        if (isMatchingInfoOrFeatures && correctTargetLabel) return correctTargetLabel;
+        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
         return '';
       })();
       const matchingTargetText = (() => {
         if (isHeadingQuestion && headingParagraphPlain) return headingParagraphPlain;
+        if (isMatchingInfoOrFeatures && correctTargetParagraphText) return correctTargetParagraphText;
         if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
         const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
         const paragraphs = Array.from(doc.body.children)
@@ -8379,7 +8472,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         : isListeningQuestion
           ? [transcriptForQuestion, stripTags(q.groupContext)].filter(Boolean).join("\n\n").trim().slice(0, 7500)
           : stripTags(q.groupContext).slice(0, 4000);
-      const readingPassage = isHeadingQuestion ? headingParaForAi : (isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000));
+      const readingPassage = isHeadingQuestion
+        ? headingParaForAi
+        : (isMatchingInfoOrFeatures && matchingTargetText ? matchingTargetText : (isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000)));
       const headingQuestionText = isHeadingQuestion
         ? `Paragraph ${matchingTargetLabel} (Question ${Math.max(0, headingSlotIndex) + 1}): Choose the correct heading for Paragraph ${matchingTargetLabel}`
         : '';
@@ -8419,6 +8514,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
           matchingKind,
           matchingTargetLabel,
           matchingTargetText: isHeadingQuestion ? headingParaForAi : matchingTargetText,
+          wrongChoiceLabel: (studentTargetLabel && studentTargetLabel !== correctTargetLabel) ? studentTargetLabel : undefined,
+          wrongChoiceText: wrongChoiceParagraphText || undefined,
           integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
           answerSequence,

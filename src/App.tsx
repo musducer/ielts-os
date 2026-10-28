@@ -4166,7 +4166,7 @@ export default function IeltsSupremeOS() {
   const [showSchedForm, setShowSchedForm] = useState(false);
   const [schedForm, setSchedForm] = useState({ time: "08:00", location: "Online", studentId: "", duration: 90, lessonContent: "", materialsText: "" });
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
-  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
+  const [explainMap, setExplainMap] = useState<Record<string, { loading: boolean; text: string; audioEvidence?: { timestamp: string; quote: string; segments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }> }; audioEvidenceSegments?: Array<{ timestamp: string; endTimestamp?: string; formattedRange?: string; quote: string; focusCue?: string; role?: string }>; deconstruction?: { trapType?: string; whyStudentWrong?: string; paraphrasePairs?: Array<{ questionTerm?: string; questionPhrase?: string; passageTerm?: string; sourcePhrase?: string; explanation?: string; note?: string }>; distractorBreakdown?: Array<{ option: string; status?: string; verdict?: string; reason?: string; trapReason?: string }> }; structured?: { paraphrasePairs?: Array<{ questionTerm: string; passageTerm: string; note?: string }>; evidence?: { paragraph?: string; location?: string; quote?: string }; detailedExplanation?: string; trapAnalysis?: { trapTitle?: string; trapReason?: string } } }>>({});
   const aiExplainCacheRef = useRef<Map<string, any>>(new Map());
   const activeExplainReqIdRef = useRef<Record<string, number>>({});
   const [vocabGenLoading, setVocabGenLoading] = useState(false);
@@ -8281,8 +8281,99 @@ const applyWorkspaceSnapshot = (snap: any) => {
           (Array.isArray(secs) ? secs.find((s: any) => s?.passage && stripTags(s.passage).length > 20)?.passage : "")
         ) : "")
       );
+      const qCategory = (q as any)?.categoryId || inferQuestionCategory(q, fullQuiz || quiz, qSectionIndex).id;
+      const isMatchingInfo = qCategory === 'R_MATCHING_INFO';
+      const isMatchingFeatures = qCategory === 'R_MATCHING_FEATURES';
+      const isMatchingInfoOrFeatures = (isMatchingInfo || isMatchingFeatures) && !isHeadingQuestion;
+
+      const parseLetterAnswer = (val: any) => {
+        const s = stripTags(String(val ?? "")).trim();
+        const m = s.match(/\b(?:paragraph|section|đoạn)?\s*([A-I])\b/i) || s.match(/^([A-I])(?:\.|\:|\)|$)/i);
+        if (m) return m[1].toUpperCase();
+        if (/^\d+$/.test(s)) {
+          const idx = Number(s);
+          if (Array.isArray(q.options) && idx >= 0 && idx < q.options.length) {
+            const optText = stripTags(q.options[idx]);
+            const optM = optText.match(/\b(?:paragraph|section|đoạn)?\s*([A-I])\b/i) || optText.match(/^([A-I])(?:\.|\:|\)|$)/i);
+            if (optM) return optM[1].toUpperCase();
+          }
+          if (idx >= 0 && idx < 26) return String.fromCharCode(65 + idx);
+        }
+        return "";
+      };
+
+      const correctTargetLabel = isMatchingInfoOrFeatures ? (parseLetterAnswer(q.correctAnswer) || parseLetterAnswer(correctStr)) : "";
+      const studentTargetLabel = isMatchingInfoOrFeatures ? (parseLetterAnswer(studentAnsRaw) || parseLetterAnswer(stuStr)) : "";
+
+      const splitPassageParagraphs = (passageStr: string): Map<string, string> => {
+        const resMap = new Map<string, string>();
+        if (!passageStr || !passageStr.trim()) return resMap;
+        const raw = passageStr.trim();
+        const markerRe = /(?:^|[\r\n]+|<(?:p|div|h[1-6]|section|article)[^>]*>)\s*(?:<(?:strong|b|em|span|i)[^>]*>)?\s*(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s*[-–—]\s*|\s+)(?:<\/(?:strong|b|em|span|i)>)?/gi;
+        const matches: Array<{ label: string; start: number; end: number }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = markerRe.exec(raw)) !== null) {
+          matches.push({ label: m[1].toUpperCase(), start: m.index, end: markerRe.lastIndex });
+        }
+        const distinctLetters = new Set(matches.map(it => it.label));
+        if (matches.length >= 2 && distinctLetters.size >= 2) {
+          for (let i = 0; i < matches.length; i++) {
+            const label = matches[i].label;
+            const startPos = matches[i].end;
+            const endPos = i + 1 < matches.length ? matches[i + 1].start : raw.length;
+            const chunk = stripTags(raw.slice(startPos, endPos)).trim();
+            if (!resMap.has(label) || chunk.length > (resMap.get(label)?.length || 0)) {
+              resMap.set(label, chunk);
+            }
+          }
+          if (resMap.size >= 2) return resMap;
+        }
+        const doc = new DOMParser().parseFromString(raw, 'text/html');
+        const blocks = Array.from(doc.body.children)
+          .filter(el => !el.querySelector('h1,h2,h3,h4,h5,h6') && !el.closest('button'))
+          .map(el => stripTags(el.innerHTML))
+          .filter(t => t.length >= 30 && !/^(reading passage|part \d|test \d)/i.test(t));
+        if (blocks.length >= 2) {
+          blocks.forEach((blk, idx) => {
+            if (idx < 26) {
+              const label = String.fromCharCode(65 + idx);
+              const mStart = blk.match(/^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)/i);
+              if (mStart) {
+                resMap.set(mStart[1].toUpperCase(), mStart[2].trim());
+              } else {
+                resMap.set(label, blk);
+              }
+            }
+          });
+          if (resMap.size >= 2) return resMap;
+        }
+        const lines = raw.split(/\n\s*\n+/).map(stripTags).filter(t => t.length >= 30 && !/^(reading passage|part \d|test \d)/i.test(t));
+        lines.forEach((line, idx) => {
+          if (idx < 26) {
+            const label = String.fromCharCode(65 + idx);
+            const mStart = line.match(/^(?:(?:Paragraph|Section|Đoạn)\s+)?([A-I])(?:\.|\:|\s+)\s*(.*)/i);
+            if (mStart) {
+              resMap.set(mStart[1].toUpperCase(), mStart[2].trim());
+            } else {
+              resMap.set(label, line);
+            }
+          }
+        });
+        return resMap;
+      };
+
+      const passageParagraphMap = isMatchingInfoOrFeatures ? splitPassageParagraphs(qPassage || '') : null;
+      const correctTargetParagraphText = (isMatchingInfoOrFeatures && passageParagraphMap && correctTargetLabel)
+        ? (passageParagraphMap.get(correctTargetLabel) || '')
+        : '';
+      const wrongChoiceParagraphText = (isMatchingInfoOrFeatures && passageParagraphMap && studentTargetLabel && studentTargetLabel !== correctTargetLabel)
+        ? (passageParagraphMap.get(studentTargetLabel) || '')
+        : '';
+
       const matchingKind = (() => {
         if (q.type === 'DRAG_DROP_HEADING') return 'headings';
+        if (isMatchingInfo) return 'paragraph_information';
+        if (isMatchingFeatures) return 'features';
         if (q.type !== 'MATCHING') return '';
         const optionsAreParagraphLabels = (q.options || []).length > 0 && (q.options || []).every((opt: any) => /^[A-Z](?:[.)])?$/i.test(stripTags(opt).trim()));
         return optionsAreParagraphLabels ? 'paragraph_information' : 'features';
@@ -8305,17 +8396,19 @@ const applyWorkspaceSnapshot = (snap: any) => {
         return stripTags(targetParaHtml);
       })();
       const matchingTargetLabel = (() => {
-        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
-        if (matchingKind === 'headings') {
+        if (isHeadingQuestion) {
           if (overrideContext?.paragraphLabel) return String(overrideContext.paragraphLabel).trim().toUpperCase();
           const m = String(q.text || "").match(/paragraph\s+([A-Z])/i);
           if (m) return m[1].toUpperCase();
           return String.fromCharCode(65 + Math.max(0, headingSlotIndex));
         }
+        if (isMatchingInfoOrFeatures && correctTargetLabel) return correctTargetLabel;
+        if (matchingKind === 'paragraph_information') return correctStr.trim().toUpperCase().replace(/[.)]$/, '');
         return '';
       })();
       const matchingTargetText = (() => {
         if (isHeadingQuestion && headingParagraphPlain) return headingParagraphPlain;
+        if (isMatchingInfoOrFeatures && correctTargetParagraphText) return correctTargetParagraphText;
         if (!matchingTargetLabel || !/^[A-Z]$/.test(matchingTargetLabel)) return '';
         const doc = new DOMParser().parseFromString(qPassage || '', 'text/html');
         const paragraphs = Array.from(doc.body.children)
@@ -8379,7 +8472,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         : isListeningQuestion
           ? [transcriptForQuestion, stripTags(q.groupContext)].filter(Boolean).join("\n\n").trim().slice(0, 7500)
           : stripTags(q.groupContext).slice(0, 4000);
-      const readingPassage = isHeadingQuestion ? headingParaForAi : (isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000));
+      const readingPassage = isHeadingQuestion
+        ? headingParaForAi
+        : (isMatchingInfoOrFeatures && matchingTargetText ? matchingTargetText : (isListeningQuestion ? "" : stripTags(qPassage).slice(0, 9000)));
       const headingQuestionText = isHeadingQuestion
         ? `Paragraph ${matchingTargetLabel} (Question ${Math.max(0, headingSlotIndex) + 1}): Choose the correct heading for Paragraph ${matchingTargetLabel}`
         : '';
@@ -8419,6 +8514,8 @@ const applyWorkspaceSnapshot = (snap: any) => {
           matchingKind,
           matchingTargetLabel,
           matchingTargetText: isHeadingQuestion ? headingParaForAi : matchingTargetText,
+          wrongChoiceLabel: (studentTargetLabel && studentTargetLabel !== correctTargetLabel) ? studentTargetLabel : undefined,
+          wrongChoiceText: wrongChoiceParagraphText || undefined,
           integratedPart: quizTypeLower.includes("integrated") && qSectionIndex >= 0 ? qSectionIndex + 1 : 0,
           isVietnameseHighSchoolIntegrated: quizTypeLower.includes("integrated") && qSectionIndex >= 1 && qSectionIndex <= 6,
           answerSequence,
@@ -13480,8 +13577,35 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           void requestReviewAudioPlayback();
       };
 
-      const rvReadingEvidenceNodes = () => {
-          const root = document.getElementById("ielts-passage-content");
+      const rvFindParagraphBlock = (root: HTMLElement, label: string): HTMLElement | null => {
+          if (!root || !label) return null;
+          const cleanLabel = label.trim().toUpperCase();
+          const byAttr = root.querySelector<HTMLElement>(`[data-paragraph="${cleanLabel}"], #paragraph-${cleanLabel}, #para-${cleanLabel}`);
+          if (byAttr) return byAttr;
+
+          const labelRe = new RegExp(`^(?:paragraph|section|đoạn)?\\s*${cleanLabel}(?:\\.|\\:|\\s*[-–—]|\\s+|$)`, "i");
+          const directChildren = Array.from(root.children).filter(el => !el.closest("button")) as HTMLElement[];
+          const candidates = directChildren.length > 1
+              ? directChildren
+              : Array.from(root.querySelectorAll<HTMLElement>("p, div, section, article, li")).filter(el => (el.textContent || "").trim().length >= 20);
+
+          for (const el of candidates) {
+              const strongOrHeading = el.querySelector("strong, b, h1, h2, h3, h4, h5, h6, span");
+              const headerText = (strongOrHeading?.textContent || "").trim();
+              if (headerText && labelRe.test(headerText)) return el;
+              const text = (el.textContent || "").trim();
+              if (labelRe.test(text)) return el;
+          }
+
+          const charCode = cleanLabel.charCodeAt(0) - 65;
+          if (charCode >= 0 && charCode < candidates.length) {
+              return candidates[charCode];
+          }
+          return null;
+      };
+
+      const rvReadingEvidenceNodes = (searchRoot?: HTMLElement | null) => {
+          const root = searchRoot || document.getElementById("ielts-passage-content");
           if (!root) return [];
           const nodes = Array.from(root.querySelectorAll<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6, div"))
               .filter(node => !node.closest("button") && (node.textContent || "").trim().length > 0)
@@ -13489,20 +13613,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
           return [...nodes, root];
       };
 
-      const rvJumpToEvidence = (quote: string | string[]) => {
+      const rvJumpToEvidence = (quote: string | string[], paragraphTarget?: string) => {
           const root = document.getElementById("ielts-passage-content");
           const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || "").replace(/\s+/g, " ").trim()).filter(value => value.length >= 4);
           if (!root || !quotes.length) return;
           root.querySelectorAll<HTMLElement>("mark.rv-reading-evidence-mark").forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || "")));
           root.querySelectorAll<HTMLElement>(".rv-reading-evidence-block").forEach(node => node.classList.remove("rv-reading-evidence-block", "rv-reading-evidence-target", "rv-reading-evidence-located"));
           root.normalize();
+
+          const targetPara = paragraphTarget ? rvFindParagraphBlock(root, paragraphTarget) : null;
+          const searchContainer = targetPara || root;
+
           let firstTarget: HTMLElement | null = null;
           quotes.forEach(needle => {
               const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
               const matcher = new RegExp(escaped, "i");
               const normalizedNeedle = rvNormalizeEvidenceText(needle);
-              const target = rvReadingEvidenceNodes().find(node => matcher.test(node.textContent || ""))
-                  || rvReadingEvidenceNodes().find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
+              const nodes = rvReadingEvidenceNodes(searchContainer);
+              const target = nodes.find(node => matcher.test(node.textContent || ""))
+                  || nodes.find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
               if (!target) return;
               if (!firstTarget) firstTarget = target;
               const match = (target.textContent || "").match(matcher);
@@ -13511,16 +13640,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   return;
               }
               const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-              const nodes: Array<{ node: Text; start: number; end: number }> = [];
+              const textNodes: Array<{ node: Text; start: number; end: number }> = [];
               let cursor = 0;
               for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
                   const length = textNode.data.length;
-                  nodes.push({ node: textNode, start: cursor, end: cursor + length });
+                  textNodes.push({ node: textNode, start: cursor, end: cursor + length });
                   cursor += length;
               }
               const start = match.index;
               const end = start + match[0].length;
-              nodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+              textNodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
                   const from = Math.max(start, nodeStart);
                   const to = Math.min(end, nodeEnd);
                   if (from >= to || !node.parentNode) return;
@@ -13536,6 +13665,12 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                   node.parentNode.replaceChild(fragment, node);
               });
           });
+
+          if (!firstTarget && targetPara) {
+              targetPara.classList.add("rv-reading-evidence-block", "rv-reading-evidence-target");
+              firstTarget = targetPara;
+          }
+
           const scrollTarget = firstTarget as HTMLElement | null;
           if (scrollTarget) scrollTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
       };
@@ -13574,12 +13709,25 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
               if (expected.length >= 3) rvJumpToTranscriptQuote([expected]);
               return;
           }
+          const isMatchingInfoOrFeatures = (
+              question?.categoryId === "R_MATCHING_INFO" ||
+              question?.categoryId === "R_MATCHING_FEATURES" ||
+              question?.type === "MATCHING" ||
+              /matching/i.test(String(question?.subType || ""))
+          ) && question?.type !== "DRAG_DROP_HEADING";
+
+          const evidencePara = String(
+              aiState?.structured?.evidence?.paragraph
+              || (isMatchingInfoOrFeatures ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")
+              || ""
+          ).trim().toUpperCase();
+
           if (quotes.length) {
-              rvJumpToEvidence(quotes);
+              rvJumpToEvidence(quotes, evidencePara || undefined);
               return;
           }
           const expected = String(question?.correctAnswer || "").split("/")[0].trim();
-          if (expected.length >= 4 && question?.type !== "DRAG_DROP_HEADING") rvJumpToEvidence([expected]);
+          if (expected.length >= 4 && question?.type !== "DRAG_DROP_HEADING") rvJumpToEvidence([expected], evidencePara || undefined);
       };
 
       const rvSeekManualTimestamp = (ts: ManualExplanationTimestamp, question: any) => {
@@ -14232,6 +14380,15 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
 
           const sourceLabel = rvActiveIsListening ? "Lời thoại" : "Bài đọc";
 
+                    const isMatchingQuestion = Boolean(
+              (
+                  question?.categoryId === "R_MATCHING_INFO" ||
+                  question?.categoryId === "R_MATCHING_FEATURES" ||
+                  question?.type === "MATCHING" ||
+                  /matching/i.test(String(question?.subType || ""))
+              ) && question?.type !== "DRAG_DROP_HEADING"
+          );
+
           const isHeadingQuestion = Boolean(
               question?.type === "DRAG_DROP_HEADING" ||
               question?.subType === "Matching Headings" ||
@@ -14330,7 +14487,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           className="rv-ai-quote-text is-clickable"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
                                           }}
                                           title="Nhấn để định vị câu trích dẫn trong bài"
                                       >
@@ -14340,7 +14497,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                           className="rv-ai-jump-hint"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote);
+                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
                                           }}
                                       >
                                           (nhấn để định vị trong bài)

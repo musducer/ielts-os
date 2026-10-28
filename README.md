@@ -1,5 +1,24 @@
 # IELTS OS
 
+## Khắc Phục Lỗi Dẫn Chứng AI Cho Reading Matching Information & Matching Features — 2026-10-28
+
+- **Cơ chế Answer-Bound Evidence Resolution (`R_MATCHING_INFO`, `R_MATCHING_FEATURES`)**:
+  - *Nguyên nhân lỗi cũ*: Khi học viên chọn B và đáp án đúng là F, hệ thống quét mờ toàn bộ bài đọc 9.000 ký tự. Nếu Đoạn C chứa các từ khóa trùng lặp mạnh (như "class sizes", "Project STAR"), AI hoặc sentence ranker bị nhầm lẫn và trích dẫn dẫn chứng từ Đoạn C thay vì Đoạn F.
+  - *Phân giải đoạn mục tiêu chính xác tuyệt đối*:
+    - Bóc tách đáp án đúng chính thức (authoritative correct answer, ví dụ "F") ngay từ đầu qua `_parse_paragraph_label`.
+    - Phân tách bài đọc Reading thành các đoạn văn được gán nhãn xác định (A, B, C, D, E, F...) qua `split_passage_into_labeled_paragraphs` (Backend) và `splitPassageParagraphs` (Frontend).
+    - Ngữ cảnh chính gửi cho AI giải thích CHỈ LÀ Đoạn F (`matching_target_text`). Mô hình không được tiếp cận các đoạn văn khác để tìm kiếm mờ.
+    - Đoạn học viên chọn sai (ví dụ Đoạn B) chỉ được gửi kèm riêng biệt dưới dạng `wrongChoiceContext` để AI giải thích lý do/bẫy vì sao học viên bị nhầm, không cho phép trích dẫn làm bằng chứng đúng.
+  - *Hậu kiểm chứng thực Backend (Backend Verification & Rejection Guard)*:
+    - Sau khi AI phản hồi, hệ thống kiểm tra `evidence.quote` có nằm trong Đoạn F hay không.
+    - Nếu quote từ đoạn khác (hoặc bị hallucinate), backend lập tức loại bỏ quote sai và tái tạo quote chính xác nhất độc quyền từ Đoạn F qua `_find_best_sentence_in_paragraph`.
+    - Trả về cấu trúc rõ ràng: `evidence: { paragraph: "F", location: "Đoạn F", quote: "..." }`.
+  - *Hành vi định vị Frontend (`rvJumpToEvidence`)*:
+    - Khi học viên click vào dẫn chứng, hàm `rvJumpToEvidence(quote, paragraphTarget)` sử dụng `rvFindParagraphBlock` để thu hẹp phạm vi tìm kiếm và highlight CHỈ TRONG Đoạn F. Tuyệt đối không nhảy sang Đoạn C.
+    - Bảo toàn 100% tính năng riêng biệt của dạng bài `R_MATCHING_HEADINGS` (inline slot bar, heading catalog).
+  - *Bộ kiểm thử hồi quy (`tests/test_matching_evidence_resolution.py`)*:
+    - 5 unit tests kiểm tra toàn diện: bóc tách nhãn đoạn văn, phân tách HTML/text, bài thi thí sinh chọn B - đúng F không bao giờ trích C dù C trùng từ khóa, loại bỏ quote ngoại lai từ C của LLM, và bài test tương quan giấc ngủ D vs B.
+
 ## Toàn Bộ Giải Thích AI Viết Bằng Tiếng Việt Tự Nhiên (Ngoại Trừ Dẫn Chứng Nguyên Văn) — 2026-10-28
 
 - **Quy chuẩn ngôn ngữ giải thích AI xuyên suốt toàn hệ thống (`/api/ai_explain`, `/api/ai_review_chat`, `/api/review_copilot`)**:
