@@ -434,9 +434,34 @@
           return resolveMatchingAnswerText(q, rawValue) || rawStr;
       };
 
-      const rvFormatDisplayAnswers = (q: any, answerMap: Record<string, any> = rvSubmittedAnswers) => {
-          const raw = answerMap?.[q?.id];
+      const rvFormatDisplayAnswers = (q: any, answerMap: Record<string, any> = rvSubmittedAnswers, overrideAns?: any) => {
+          const group = rvGroupByQuestionId.get(q?.id);
+          const raw = overrideAns !== undefined ? overrideAns : answerMap?.[q?.id];
           const blank = raw === undefined || raw === null || String(raw).trim() === "" || (Array.isArray(raw) && raw.length === 0);
+
+          if (group?.isChoiceMultiple || q?.type === "CHOICE_MULTIPLE" || q?.qNumLabel) {
+              const targetQs = (group?.isChoiceMultiple && group.questions?.length) ? group.questions : (q?.groupQuestions || [q]);
+              const multi = (group?.isChoiceMultiple && group.multiple && overrideAns === undefined && answerMap === rvSubmittedAnswers)
+                  ? group.multiple
+                  : (overrideAns !== undefined
+                      ? getChoiceMultipleOutcome(targetQs, { [targetQs[0].id]: overrideAns })
+                      : getChoiceMultipleOutcome(targetQs, answerMap));
+              const sIndexes = multi.selected || [];
+              const cIndexes = multi.correct || [];
+              const isBlank = sIndexes.length === 0;
+              const expectedStr = cIndexes.map((idx: number) => String.fromCharCode(65 + Number(idx))).sort().join(", ");
+              const givenStr = isBlank ? "(bỏ trống)" : sIndexes.map((idx: number) => String.fromCharCode(65 + Number(idx))).sort().join(", ");
+              return {
+                  blank: isBlank,
+                  given: givenStr,
+                  expected: expectedStr,
+                  expectedFull: expectedStr,
+                  expectedShort: expectedStr,
+                  correct: Boolean(multi.isFullyCorrect),
+                  isChoiceMultiple: true,
+                  multiOutcome: multi,
+              };
+          }
           if (q?.type === "CHOICE") {
               const cIdx = Number(q.correctAnswer);
               const cLetter = !isNaN(cIdx) ? String.fromCharCode(65 + cIdx) : String(q.correctAnswer || "").trim().toUpperCase();
@@ -538,6 +563,70 @@
           window.setTimeout(() => {
               setRvFlashQuestionNum(prev => (prev === qNum ? null : prev));
           }, 1800);
+      };
+
+      const rvGetMergedSectionQuestions = (questions: any[]) => {
+          const list: Array<{
+              key: string;
+              targetQ: any;
+              label: string;
+              qNum: number;
+              qIds: string[];
+              isMerged: boolean;
+          }> = [];
+          const handledIds = new Set<string>();
+          for (let i = 0; i < questions.length; i++) {
+              const q = questions[i];
+              if (handledIds.has(q.id)) continue;
+              const grp = rvGroupByQuestionId.get(q.id);
+              if (grp?.isChoiceMultiple && grp.questions && grp.questions.length > 1) {
+                  grp.questions.forEach((gq: any) => handledIds.add(gq.id));
+                  const firstNum = rvQuestionNumber(grp.questions[0]);
+                  const lastNum = rvQuestionNumber(grp.questions[grp.questions.length - 1]);
+                  list.push({
+                      key: q.id,
+                      targetQ: grp.questions[0],
+                      label: `${firstNum}-${lastNum}`,
+                      qNum: firstNum,
+                      qIds: grp.questions.map((gq: any) => gq.id),
+                      isMerged: true,
+                  });
+                  continue;
+              }
+              if (q.type === 'CHOICE_MULTIPLE') {
+                  let j = i + 1;
+                  const shared = [q];
+                  while (j < questions.length && questions[j].type === 'CHOICE_MULTIPLE' && JSON.stringify(questions[j].options) === JSON.stringify(q.options)) {
+                      shared.push(questions[j]);
+                      j++;
+                  }
+                  if (shared.length > 1) {
+                      shared.forEach((sq: any) => handledIds.add(sq.id));
+                      const firstNum = rvQuestionNumber(shared[0]);
+                      const lastNum = rvQuestionNumber(shared[shared.length - 1]);
+                      list.push({
+                          key: q.id,
+                          targetQ: shared[0],
+                          label: `${firstNum}-${lastNum}`,
+                          qNum: firstNum,
+                          qIds: shared.map((sq: any) => sq.id),
+                          isMerged: true,
+                      });
+                      continue;
+                  }
+              }
+              handledIds.add(q.id);
+              const qNum = rvQuestionNumber(q);
+              list.push({
+                  key: q.id,
+                  targetQ: q,
+                  label: String(qNum),
+                  qNum,
+                  qIds: [q.id],
+                  isMerged: false,
+              });
+          }
+          return list;
       };
 
       // Counts across entire exam
@@ -1138,7 +1227,7 @@
                               <path d="M10 22h4" />
                               <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
                           </svg>
-                          GIẢI THÍCH CHI TIẾT — CÂU {qNum}
+                          GIẢI THÍCH CHI TIẾT — CÂU {aiQuestion?.qNumLabel || question?.qNumLabel || qNum}
                       </span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           {!aiState?.loading && (
@@ -1185,10 +1274,10 @@
       };
 
       // Render an inline answer slot ([num] wrong -> correct + micro-action cluster)
-      const rvRenderInlineSlotBox = (question: any, isDashedDrag = false, showNumberBadge = true) => {
+      const rvRenderInlineSlotBox = (question: any, isDashedDrag = false, showNumberBadge = true, overrideAnswer?: any) => {
           if (!question) return null;
           const qNum = rvQuestionNumber(question);
-          const disp = rvFormatDisplayAnswers(question, rvSubmittedAnswers);
+          const disp = rvFormatDisplayAnswers(question, rvSubmittedAnswers, overrideAnswer);
           const isFlashed = rvFlashQuestionNum === qNum;
           const retryRaw = rvRetryAnswers[question.id];
           const hasRetryVal = retryRaw !== undefined && retryRaw !== null && String(retryRaw).trim() !== "" && !(Array.isArray(retryRaw) && retryRaw.length === 0);
@@ -1265,7 +1354,26 @@
                           <strong className="rv-ans-correct">{disp.given}</strong>
                       ) : (
                           <>
-                              <span className={disp.blank ? "rv-ans-skipped" : "rv-ans-wrong"}>{disp.given}</span>
+                              {disp.isChoiceMultiple && !disp.blank && disp.multiOutcome ? (
+                                  <span className="rv-ans-multi-tokens" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                                      {(disp.multiOutcome.selected || []).map((idx: number, sIdx: number) => {
+                                          const letter = String.fromCharCode(65 + Number(idx));
+                                          const isRight = (disp.multiOutcome.correct || []).includes(idx);
+                                          return (
+                                              <React.Fragment key={idx}>
+                                                  {sIdx > 0 && <span style={{ color: "#78716C", marginRight: 2 }}>,</span>}
+                                                  {isRight ? (
+                                                      <strong style={{ color: "#15803D", fontWeight: 700 }}>{letter}</strong>
+                                                  ) : (
+                                                      <span className="rv-ans-wrong">{letter}</span>
+                                                  )}
+                                              </React.Fragment>
+                                          );
+                                      })}
+                                  </span>
+                              ) : (
+                                  <span className={disp.blank ? "rv-ans-skipped" : "rv-ans-wrong"}>{disp.given}</span>
+                              )}
                               {retryDisp && (
                                   <span
                                       className={`rv-retry-result-pill ${retryDisp.correct ? "is-right" : "is-wrong"}`}
@@ -1279,7 +1387,7 @@
                           </>
                       )}
                   </span>
-                  {rvRenderInlineMicroCluster(question, rvSubmittedAnswers?.[question.id], question)}
+                  {rvRenderInlineMicroCluster(question, (disp.isChoiceMultiple && disp.multiOutcome?.selected) ? disp.multiOutcome.selected : rvSubmittedAnswers?.[question.id], question)}
               </span>
           );
       };
@@ -2807,39 +2915,39 @@
                                                       {label} {sec?.title && sec.title !== label ? `— ${sec.title}` : ""}
                                                   </div>
                                                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                                                      {secQs.map((q: any) => {
-                                                          const qNum = rvQuestionNumber(q);
-                                                          const st = rvQuestionStatus(q);
-                                                          if (rvFilterWrongOnly && st === "correct") return null;
-                                                          const bg = st === "correct" ? "#DCFCE7" : st === "skipped" ? "#FEF3C7" : "#FEE2E2";
-                                                          const border = st === "correct" ? "#BBF7D0" : st === "skipped" ? "#FDE68A" : "#FECACA";
-                                                          const color = st === "correct" ? "#15803D" : st === "skipped" ? "#B45309" : "#B91C1C";
-                                                          return (
-                                                              <button
-                                                                  key={q.id}
-                                                                  type="button"
-                                                                  onClick={() => rvJumpToQuestionFromMatrix(q, qNum)}
-                                                                  className="rv-mono"
-                                                                  style={{
-                                                                      width: 32,
-                                                                      height: 32,
-                                                                      borderRadius: 6,
-                                                                      border: `1px solid ${border}`,
-                                                                      background: bg,
-                                                                      color,
-                                                                      fontSize: 12,
-                                                                      fontWeight: 700,
-                                                                      cursor: "pointer",
-                                                                      display: "inline-flex",
-                                                                      alignItems: "center",
-                                                                      justifyContent: "center",
-                                                                  }}
-                                                                  title={`Câu ${qNum}`}
-                                                              >
-                                                                  {qNum}
-                                                              </button>
-                                                          );
-                                                      })}
+                                                      {rvGetMergedSectionQuestions(secQs).map((mq: any) => {
+                                                           const st = rvQuestionStatus(mq.targetQ);
+                                                           if (rvFilterWrongOnly && st === "correct") return null;
+                                                           const bg = st === "correct" ? "#DCFCE7" : st === "skipped" ? "#FEF3C7" : "#FEE2E2";
+                                                           const border = st === "correct" ? "#BBF7D0" : st === "skipped" ? "#FDE68A" : "#FECACA";
+                                                           const color = st === "correct" ? "#15803D" : st === "skipped" ? "#B45309" : "#B91C1C";
+                                                           return (
+                                                               <button
+                                                                   key={mq.key}
+                                                                   type="button"
+                                                                   onClick={() => rvJumpToQuestionFromMatrix(mq.targetQ, mq.qNum)}
+                                                                   className="rv-mono"
+                                                                   style={{
+                                                                       height: 32,
+                                                                       minWidth: 32,
+                                                                       padding: mq.label.length > 2 ? "0 8px" : "0 4px",
+                                                                       borderRadius: 6,
+                                                                       border: `1px solid ${border}`,
+                                                                       background: bg,
+                                                                       color,
+                                                                       fontSize: 12,
+                                                                       fontWeight: 700,
+                                                                       cursor: "pointer",
+                                                                       display: "inline-flex",
+                                                                       alignItems: "center",
+                                                                       justifyContent: "center",
+                                                                   }}
+                                                                   title={`Câu ${mq.label}`}
+                                                               >
+                                                                   {mq.label}
+                                                               </button>
+                                                           );
+                                                       })}
                                                   </div>
                                               </div>
                                           );
@@ -3736,8 +3844,19 @@
                                       const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
                                       const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
 
-                                      const multiOutcome = rvGroup?.isChoiceMultiple ? rvGroup.multiple : null;
-                                      const studentAns = multiOutcome ? multiOutcome.selected : rvSubmittedAnswers?.[q.id];
+                                      const isMultiGroup = Boolean(rvGroup?.isChoiceMultiple || q.type === "CHOICE_MULTIPLE");
+                                       const multiOutcome = isMultiGroup ? (rvGroup?.multiple || getChoiceMultipleOutcome(rvGroup ? rvGroup.questions : [q], rvSubmittedAnswers)) : null;
+                                       const multiQNumLabel = (rvGroup && rvGroup.questions.length > 1)
+                                           ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}`
+                                           : String(qNum);
+                                       const studentAns = multiOutcome ? multiOutcome.selected : rvSubmittedAnswers?.[q.id];
+                                       const qGrouped = isMultiGroup ? {
+                                           ...qWithOpts,
+                                           type: "CHOICE_MULTIPLE",
+                                           correctAnswer: multiOutcome?.correct || q.correctAnswer,
+                                           qNumLabel: multiQNumLabel,
+                                           groupQuestions: rvGroup?.questions || [q],
+                                       } : qWithOpts;
                                       const questionBodyHtml = rvQuestionBodyHtml(q.text);
                                       const legendTitle = cGrp?.rightTitle
                                           || String(q.rightTitle || "").trim()
@@ -3808,7 +3927,7 @@
                                                           )}
                                                       </div>
                                                       <div className="rv-q-meta-bar">
-                                                          {rvRenderInlineSlotBox(qWithOpts, false, false)}
+                                                          {rvRenderInlineSlotBox(qGrouped, false, false, multiOutcome ? multiOutcome.selected : undefined)}
                                                       </div>
                                                   </div>
 
@@ -3817,12 +3936,12 @@
                                                           {groupOptions.map((opt: any, oIdx: number) => {
                                                               const optLetter = String.fromCharCode(65 + oIdx);
                                                               const cleanText = cleanOptionAnswerText(opt) || String(opt);
-                                                              const isCorrectOpt = q.type === "CHOICE"
-                                                                  ? (Number(q.correctAnswer) === oIdx || String(q.correctAnswer).trim().toUpperCase() === optLetter)
-                                                                  : (multiOutcome?.correct || []).map(Number).includes(oIdx);
-                                                              const isChosenOpt = q.type === "CHOICE"
-                                                                  ? (studentAns !== undefined && studentAns !== "" && (Number(studentAns) === oIdx || String(studentAns).trim().toUpperCase() === optLetter))
-                                                                  : (Array.isArray(studentAns) && studentAns.map(Number).includes(oIdx));
+                                                              const isCorrectOpt = isMultiGroup
+                                                                   ? (multiOutcome?.correct || []).map(Number).includes(oIdx)
+                                                                   : (Number(q.correctAnswer) === oIdx || String(q.correctAnswer).trim().toUpperCase() === optLetter);
+                                                               const isChosenOpt = isMultiGroup
+                                                                   ? (Array.isArray(studentAns) && studentAns.map(Number).includes(oIdx))
+                                                                   : (studentAns !== undefined && studentAns !== "" && (Number(studentAns) === oIdx || String(studentAns).trim().toUpperCase() === optLetter));
                                                               const retryChoice = rvRetryAnswers[q.id];
                                                               const isRetrySelected = q.type === "CHOICE"
                                                                   ? (retryChoice !== undefined && retryChoice !== "" && Number(retryChoice) === oIdx)
@@ -3851,8 +3970,9 @@
                                                                           <strong className="rv-mono" style={{ marginRight: 8 }}>{optLetter}.</strong>
                                                                           <span style={{ textDecoration: !rvRetryMode && isChosenOpt && !isCorrectOpt ? "line-through" : "none" }} dangerouslySetInnerHTML={{ __html: formatContent(cleanText) }} />
                                                                       </div>
-                                                                      {!rvRetryMode && isCorrectOpt && <span className="rv-mcq-tag">(Đáp án đúng)</span>}
-                                                                      {!rvRetryMode && isChosenOpt && !isCorrectOpt && <span className="rv-mcq-tag">(Bạn chọn - Sai)</span>}
+                                                                      {!rvRetryMode && isChosenOpt && isCorrectOpt && <span className="rv-mcq-tag" style={{ color: "#15803D", fontWeight: 700 }}>(Bạn chọn - Đúng)</span>}
+                                                                       {!rvRetryMode && !isChosenOpt && isCorrectOpt && <span className="rv-mcq-tag">(Đáp án đúng)</span>}
+                                                                       {!rvRetryMode && isChosenOpt && !isCorrectOpt && <span className="rv-mcq-tag" style={{ color: "#B91C1C", fontWeight: 700 }}>(Bạn chọn - Sai)</span>}
                                                                       {rvRetryMode && isRetrySelected && <span className="rv-mcq-tag" style={{ color: "#92400E" }}>(Đang chọn lại)</span>}
                                                                   </li>
                                                               );
@@ -3860,7 +3980,7 @@
                                                       </ul>
                                                   )}
 
-                                                  {rvRenderInlineDrawer(qWithOpts, studentAns, multiOutcome ? { ...qWithOpts, correctAnswer: multiOutcome.correct } : qWithOpts)}
+                                                  {rvRenderInlineDrawer(qGrouped, studentAns, qGrouped)}
                                               </div>
                                           </React.Fragment>
                                       );
@@ -3932,26 +4052,28 @@
                                       </div>
                                       {isActive ? (
                                           <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                                              {secQs.map((q: any) => {
-                                                  const qNum = rvQuestionNumber(q);
-                                                  const st = rvQuestionStatus(q);
-                                                  const isCur = reviewActiveQuestionId === q.id;
-                                                  return (
-                                                      <button
-                                                          key={q.id}
-                                                          type="button"
-                                                          className={`rv-palette-btn ${st}`}
-                                                          style={isCur ? { outline: "2px solid #1C1917", outlineOffset: 1 } : undefined}
-                                                          onClick={(e) => {
-                                                              e.stopPropagation();
-                                                              rvJumpToQuestionFromMatrix(q, qNum);
-                                                          }}
-                                                          title={`Câu ${qNum}`}
-                                                      >
-                                                          {qNum}
-                                                      </button>
-                                                  );
-                                              })}
+                                              {rvGetMergedSectionQuestions(secQs).map((mq: any) => {
+                                                   const st = rvQuestionStatus(mq.targetQ);
+                                                   const isCur = mq.qIds.includes(reviewActiveQuestionId || "");
+                                                   return (
+                                                       <button
+                                                           key={mq.key}
+                                                           type="button"
+                                                           className={`rv-palette-btn ${st}`}
+                                                           style={{
+                                                               ...(isCur ? { outline: "2px solid #1C1917", outlineOffset: 1 } : {}),
+                                                               ...(mq.label.length > 2 ? { padding: "0 8px", minWidth: 38 } : {})
+                                                           }}
+                                                           onClick={(e) => {
+                                                               e.stopPropagation();
+                                                               rvJumpToQuestionFromMatrix(mq.targetQ, mq.qNum);
+                                                           }}
+                                                           title={`Câu ${mq.label}`}
+                                                       >
+                                                           {mq.label}
+                                                       </button>
+                                                   );
+                                               })}
                                           </div>
                                       ) : (
                                           <span style={{ fontSize: 12, color: "#78716C", whiteSpace: "nowrap" }}>

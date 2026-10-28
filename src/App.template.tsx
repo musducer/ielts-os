@@ -8211,11 +8211,21 @@ const applyWorkspaceSnapshot = (snap: any) => {
       } else if (q.type === 'MATCHING') {
         correctStr = stripTags(resolveMatchingAnswerText(q, q.correctAnswer));
         stuStr = blank ? "(trống)" : stripTags(resolveMatchingAnswerText(q, studentAnsRaw));
-      } else if (q.type === 'CHOICE_MULTIPLE') {
+      } else if (q.type === 'CHOICE_MULTIPLE' || (q as any)?.qNumLabel || Array.isArray(q.correctAnswer)) {
         const arr = Array.isArray(q.correctAnswer) ? q.correctAnswer : [q.correctAnswer];
-        correctStr = arr.map((idx: any) => stripTags(q.options?.[Number(idx)] ?? idx)).join(" / ");
+        correctStr = arr.map((idx: any) => {
+          const num = Number(idx);
+          const optText = cleanOptText(q.options?.[num] ?? idx);
+          const letter = !isNaN(num) ? `${String.fromCharCode(65 + num)}. ` : "";
+          return `${letter}${optText}`;
+        }).join(" và ");
         const selected = normalizeChoiceMultipleIndexes(studentAnsRaw);
-        stuStr = blank ? "(trống)" : selected.map(index => stripTags(q.options?.[index] ?? index)).join(" / ");
+        stuStr = blank ? "(trống)" : selected.map(index => {
+          const num = Number(index);
+          const optText = cleanOptText(q.options?.[num] ?? index);
+          const letter = !isNaN(num) ? `${String.fromCharCode(65 + num)}. ` : "";
+          return `${letter}${optText}`;
+        }).join(" và ");
       } else {
         correctStr = stripTags(q.correctAnswer);
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
@@ -8395,7 +8405,9 @@ const applyWorkspaceSnapshot = (snap: any) => {
         method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           lang: i18n.language === "vi" ? "vi" : "en",
-          question: headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text),
+          question: (q as any)?.qNumLabel
+            ? `[Questions ${(q as any).qNumLabel}] ${headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text)}`
+            : (headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text)),
           options: optStr,
           correct: correctStr,
           studentAnswer: stuStr,

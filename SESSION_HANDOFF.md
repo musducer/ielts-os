@@ -1,5 +1,25 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-27)
 
+## Đồng Bộ Gộp Câu Trắc Nghiệm Đa Lựa Chọn (Choose TWO/THREE) Trên Navigator & Sửa Lỗi Chấm Gạch Oan Đáp Án Đúng — 2026-10-28
+
+- **Gộp nhóm câu hỏi đa lựa chọn trên Question Navigator (Footer Palette & Top Matrix)**:
+  - Bổ sung helper 
+vGetMergedSectionQuestions(questions) gộp các câu hỏi dạng CHOICE_MULTIPLE liên tiếp hoặc cùng nhóm 
+vGroup.isChoiceMultiple thành duy nhất 1 nút điều hướng đại diện dải câu (ví dụ 21-22).
+  - Nút dải câu hiển thị đúng trạng thái chung: correct (khi trả lời đúng 100%), skipped (khi bỏ trống), hoặc wrong. Khi click vào nút, hệ thống cuộn mượt và highlight đúng thẻ câu hỏi của nhóm.
+
+- **Khắc phục triệt để lỗi chấm sai & gạch oan đáp án đúng trong ô Slot (C̶ → A)**:
+  - *Nguyên nhân*: Card câu hỏi 21-22 chỉ truyền câu 21 vào 
+vRenderInlineSlotBox và 
+vFormatDisplayAnswers. Do câu 21 có đáp án là A nhưng học viên chọn C cho câu 21 và E cho câu 22, hệ thống đối chiếu đơn lẻ C với A, kết luận C sai và gạch ngang C (C̶ → A), dù C là đáp án hoàn toàn chính xác.
+  - *Khắc phục*: 
+vFormatDisplayAnswers tự động nhận diện group.isChoiceMultiple để đánh giá toàn diện dải câu hỏi qua getChoiceMultipleOutcome. Các lựa chọn đúng (như C) được hiển thị màu xanh lá nguyên vẹn không gạch ngang; các lựa chọn sai (như E) được hiển thị màu đỏ gạch ngang; sau mũi tên → là toàn bộ dải đáp án đúng (ví dụ C, E̶ → A, C).
+  - Giao diện danh sách lựa chọn phân biệt rõ ràng 3 trạng thái: (Bạn chọn - Đúng) (xanh đậm), (Bạn chọn - Sai) (đỏ gạch chữ), và (Đáp án đúng) (xanh nhạt cho đáp án đúng bị bỏ sót).
+
+- **Khắc phục ngữ cảnh phân tích AI cho nhóm câu hỏi gộp**:
+  - handleAiExplain trong App.template.tsx gửi đầy đủ danh sách đáp án đúng (A và C) và toàn bộ lựa chọn của học viên (C và E) kèm tiền tố [Questions 21-22], giúp AI nhận diện chính xác học viên đã chọn đúng phương án nào và chỉ ra bẫy ở phương án sai còn lại.
+  - Tiêu đề drawer hiển thị chính xác GIẢI THÍCH CHI TIẾT — CÂU 21-22.
+
 ## Khắc Phục Triệt Để BAD_MODEL Matching Headings, Đồng Bộ Trải Nghiệm Skeleton & Tối Ưu Hiệu Năng Exam Builder — 2026-10-27
 
 - **Khắc phục tận gốc lỗi `BAD_MODEL` khi giải thích Matching Headings (`api/index.py`)**:
