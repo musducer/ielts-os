@@ -1,5 +1,18 @@
 # IELTS OS
 
+## Toàn Bộ Giải Thích AI Viết Bằng Tiếng Việt Tự Nhiên (Ngoại Trừ Dẫn Chứng Nguyên Văn) — 2026-10-28
+
+- **Quy chuẩn ngôn ngữ giải thích AI xuyên suốt toàn hệ thống (`/api/ai_explain`, `/api/ai_review_chat`, `/api/review_copilot`)**:
+  - *Yêu cầu cốt lõi*: 100% nội dung giải thích chi tiết (`detailedExplanation`), phân tích tên bẫy (`trapTitle`), lý do bẫy (`trapReason`), chiến thuật làm bài, và vị trí dẫn chứng (`location`) được tạo và hiển thị bằng **Tiếng Việt tự nhiên**, súc tích, mạch lạc, trực diện vào bản chất logic sư phạm, **bất kể ngôn ngữ giao diện web của học viên** (kể cả khi học viên đang chọn English UI).
+  - *Bảo toàn dẫn chứng nguyên văn (Verbatim Evidence Preservation)*: Riêng trích đoạn dẫn chứng (`evidence.quote`) từ bài đọc hoặc transcript bài nghe và các từ/cụm từ trong bảng đối chiếu paraphrase (`questionTerm`, `passageTerm`) được giữ NGUYÊN VĂN tiếng Anh từ đề thi và nguồn bài đọc/bài nghe (tuyệt đối không dịch hoặc làm biến dạng).
+- **Cập nhật Backend (`api/index.py`)**:
+  - `/api/ai_explain`: Cố định `lang = "vi"` vô điều kiện; chuẩn hóa `sys_prompt` tiếng Việt sư phạm chuyên sâu IELTS 8.5+, loại bỏ hoàn toàn câu dẫn rườm rà; vá lỗi thiếu đóng ngoặc kép trong schema mẫu `evidence.quote`; tiêu đề nhãn khối nguồn và thông báo lỗi fallback chuẩn hóa bằng tiếng Việt tự nhiên.
+  - `/api/ai_review_chat`: Cố định `lang = "vi"`, quy tắc trả lời 100% tiếng Việt tự nhiên cho Trợ lý AI và chỉ trích dẫn tiếng Anh nguyên văn trong dấu ngoặc kép.
+  - `/api/review_copilot`: Quy định trả lời bằng tiếng Việt tự nhiên kèm trích dẫn nguyên văn tiếng Anh từ nguồn.
+- **Cập nhật Frontend (`src/App.template.tsx`)**:
+  - `handleAiExplain`: Cố định `langKey = "vi"` trong `cacheKey` (tránh phân mảnh hoặc nạp lại bộ nhớ đệm tiếng Anh cũ) và truyền `lang: "vi"` trong payload gọi `/api/ai_explain`.
+  - `handleSendCopilotMessage`: Truyền `lang: "vi"` trong payload gọi `/api/ai_review_chat`.
+
 ## Đồng Bộ Gộp Câu Trắc Nghiệm Đa Lựa Chọn (Choose TWO/THREE) Trên Navigator & Sửa Lỗi Chấm Gạch Oan Đáp Án Đúng — 2026-10-28
 
 - **Gộp nhóm câu hỏi đa lựa chọn trên Question Navigator (Footer Palette & Top Matrix)**:

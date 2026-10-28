@@ -148,41 +148,40 @@ class TestAiPedagogicalFeatures(unittest.TestCase):
         req_payload = {
             "question": "What caused the crisis?",
             "options": "A. used up resources | B. higher taxes | C. caused inflation",
-            "correct": "2",  # Index 2 corresponding to Option C
+            "correct": "C. caused inflation",
             "studentAnswer": "",  # Unanswered
             "context": "",
             "isListening": True,
-            "lang": "en"
+            "lang": "en"  # Regardless of requested lang, system returns natural Vietnamese
         }
 
-        mock_decon = json.dumps({
-            "trapType": "TRAP: No Audio Provided",
-            "whyStudentWrong": "The student's answer is blank, indicating they did not answer.",
+        mock_response = json.dumps({
             "paraphrasePairs": [],
-            "distractorBreakdown": [
-                {"option": "A. A. used up resources", "status": "ELIMINATE", "reason": "Without the audio, impossible to verify."},
-                {"option": "B. B. higher taxes", "status": "ELIMINATE", "reason": "Without the audio, impossible to verify."},
-                {"option": "C. C. caused inflation", "status": "ELIMINATE", "reason": "Without the audio, impossible to verify."}
-            ]
+            "evidence": {
+                "location": "Lời thoại [01:23]",
+                "quote": "The rapid expansion of the empire led directly to inflation."
+            },
+            "detailedExplanation": "Dẫn chứng khẳng định việc mở rộng quá nhanh trực tiếp gây ra lạm phát.",
+            "trapAnalysis": {
+                "trapTitle": "TRAP: No Audio Provided",
+                "trapReason": "Học sinh bỏ trống câu này vì không có audio."
+            }
         })
 
-        with patch.object(index, "_vertex_gemini_generate", return_value=("Standard explanation.", None)), \
-             patch.object(index, "_pedagogical_ai_call", return_value=(mock_decon, None)):
+        with patch.object(index, "_groq_chat", return_value=(mock_response, None)):
             res = asyncio.run(index.ai_explain(req_payload))
             self.assertTrue(res.get("success"))
             dec = res.get("deconstruction")
             self.assertIsNotNone(dec)
-            # 1. No audio trap sanitized
+            # 1. No audio trap sanitized into Vietnamese strategy title
             self.assertNotIn("No Audio", dec["trapType"])
-            # 2. Blank student answer converted to strategy
-            self.assertIn("Focus on signpost language", dec["whyStudentWrong"])
-            # 3. Prefixes cleaned and C badged as CORRECT
-            d_breakdown = dec["distractorBreakdown"]
-            self.assertEqual(len(d_breakdown), 3)
-            self.assertEqual(d_breakdown[0]["option"], "A. used up resources")
-            self.assertEqual(d_breakdown[0]["status"], "ELIMINATE")
-            self.assertEqual(d_breakdown[2]["option"], "C. caused inflation")
-            self.assertEqual(d_breakdown[2]["status"], "CORRECT")
+            self.assertIn("từ khóa", dec["trapType"].lower())
+            # 2. Blank student answer converted to Vietnamese signpost strategy
+            self.assertIn("từ nối chuyển ý", dec["whyStudentWrong"])
+            # 3. Evidence quote remains verbatim English
+            self.assertEqual(res["structured"]["evidence"]["quote"], "The rapid expansion of the empire led directly to inflation.")
+            # 4. Detailed explanation in natural Vietnamese
+            self.assertIn("Dẫn chứng khẳng định", res["structured"]["detailedExplanation"])
 
 
 if __name__ == "__main__":

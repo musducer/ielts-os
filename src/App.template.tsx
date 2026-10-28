@@ -4522,7 +4522,7 @@ export default function IeltsSupremeOS() {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          lang: i18n.language === "vi" ? "vi" : "en",
+          lang: "vi",
           message: textToSend,
           history: newMessages.slice(0, -1).map(m => ({ role: m.role === "user" ? "user" : "assistant", text: m.text })),
           quizTitle: rqQuiz?.title || "IELTS Practice Test",
@@ -8231,7 +8231,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
         stuStr = blank ? "(trống)" : stripTags(studentAnsRaw);
       }
 
-      const langKey = i18n.language === "vi" ? "vi" : "en";
+      const langKey = "vi";
       const quizKey = quiz?.id || (quiz as any)?.title || 'quiz';
       const cacheKey = `${quizKey}_${q.id}_${stuStr}_${langKey}`;
 
@@ -8404,7 +8404,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
       const resp = await fetch(`${API_BASE}/api/ai_explain`, {
         method: "POST", headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          lang: i18n.language === "vi" ? "vi" : "en",
+          lang: "vi",
           question: (q as any)?.qNumLabel
             ? `[Questions ${(q as any).qNumLabel}] ${headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text)}`
             : (headingQuestionText || resolvedCtx.effectiveQuestionText || stripTags(q.text)),

@@ -5386,7 +5386,8 @@ async def ai_explain(
 ):
     """Giải thích ngắn vì sao 1 câu đúng/sai (dùng trong màn Review)."""
     _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_explain", max_per_minute=45)
-    lang = (payload.get("lang") or "vi").lower()
+    # Quy tắc: từ nay toàn bộ giải thích viết bằng tiếng Việt tự nhiên (trừ evidence), bất kể ngôn ngữ web của học viên
+    lang = "vi"
     question = payload.get("question", "")
     options = payload.get("options", "")
     correct = payload.get("correct", "")
@@ -5526,68 +5527,38 @@ async def ai_explain(
         source_label = "AUDIO TRANSCRIPT" if lang == "en" else "TRANSCRIPT BÀI NGHE"
         source_block = f"{source_label}:\n{context[:7500] if has_ctx else ('(no transcript provided)' if lang == 'en' else '(không có transcript)')}"
 
-    if lang == "en":
-        sys_prompt = (
-            "You are an expert IELTS tutor. Provide an ultra-focused, sharp 3-sentence pedagogical explanation.\n"
-            "Return strictly a valid JSON object matching this schema:\n"
-            "{\n"
-            '  "paraphrasePairs": [\n'
-            '    { "questionTerm": "key phrase in question/option", "passageTerm": "equivalent phrase in source", "note": "" }\n'
-            '  ],\n'
-            '  "evidence": {\n'
-            '    "location": "e.g. Paragraph E, line 7 or Section 2 [01:23]",\n'
-            '    "quote": "Short verbatim continuous excerpt from source (10-250 chars)."\n'
-            '  },\n'
-            '  "detailedExplanation": "1-2 sentences stating the logical proof directly without any meta-filler.",\n'
-            '  "trapAnalysis": {\n'
-            '    "trapTitle": "Trap Name (e.g. Scope Trap, Distractor Trap, or Signpost Cue Strategy)",\n'
-            '    "trapReason": "1-2 sentences specifically explaining why studentAnswer was wrong, or strategy if blank. Do NOT analyze unselected options."\n'
-            '  }\n'
-            "}\n"
-            "RULES:\n"
-            "1. NO META-FILLER: Never say 'The question tests...' or repeat the quote verbatim in detailedExplanation.\n"
-            "2. FOCUS ON STUDENT ANSWER: Explain only why Correct is right and why studentAnswer was wrong. Do not list other unselected options.\n"
-            "3. ACCURACY: evidence.quote MUST be an exact verbatim excerpt from the source text.\n"
-            "4. 100% English for all labels and explanations.\n"
-            + heading_rule_en + integrated_rule_en + ts_rule_en + listening_language_en + evidence_rule_en + matching_rule_en + no_audio_guard_en + unanswered_rule_en
-        )
-        user_prompt = (
-            f"{source_block}\n\n"
-            f"Question Type: {question_type or '(unspecified)'}; Subtype: {question_subtype or '(none)'}\n"
-            f"Question: {question}\nOptions: {options or '(n/a)'}\n"
-            f"Correct answer: {correct}\nStudent answered: {student_ans or '(blank)'}\n\nOutput ONLY the JSON object."
-        )
-    else:
-        sys_prompt = (
-            "Bạn là chuyên gia luyện thi IELTS 8.5+. Hãy phân tích câu hỏi thi theo cấu trúc sư phạm siêu tinh gọn (3 câu súc tích), loại bỏ hoàn toàn từ thừa.\n"
-            "Trả về DUY NHẤT một JSON object theo đúng cấu trúc sau:\n"
-            "{\n"
-            '  "paraphrasePairs": [\n'
-            '    { "questionTerm": "cụm từ trong câu hỏi/phương án", "passageTerm": "cụm từ tương đương trong bài đọc/bài nghe", "note": "" }\n'
-            '  ],\n'
-            '  "evidence": {\n'
-            '    "location": "ví dụ: Đoạn E, dòng 7 hoặc Lời thoại [01:23]",\n'
-            '    "quote": "Đoạn trích NGUYÊN VĂN từ nguồn chứng minh đáp án (10-250 ký tự).\n'
-            '  },\n'
-            '  "detailedExplanation": "1-2 câu đi thẳng vào bản chất logic chứng minh đáp án đúng, không dùng câu dẫn rườm rà.",\n'
-            '  "trapAnalysis": {\n'
-            '    "trapTitle": "Tên bẫy (ví dụ: Bẫy phạm vi / Bẫy từ khóa gây nhiễu / Chiến thuật bắt nhịp)",\n'
-            '    "trapReason": "1-2 câu chỉ rõ tại sao phương án học viên chọn bị sai hoặc chiến thuật nếu bỏ trống. TUYỆT ĐỐI KHÔNG phân tích các phương án học viên không chọn."\n'
-            '  }\n'
-            "}\n"
-            "QUY TẮC BẮT BUỘC:\n"
-            "1. KHÔNG DÙNG CÂU DẪN RƯỜM RÀ: Không bao giờ mở đầu bằng 'Câu hỏi kiểm tra...', 'Bài đọc đề cập...'. Không chép lại dẫn chứng trong detailedExplanation.\n"
-            "2. CHỈ TẬP TRUNG LỖI HỌC VIÊN: Chỉ giải thích đáp án đúng và phân tích lý do sai của phương án học viên chọn; không liệt kê các lựa chọn khác.\n"
-            "3. DẪN CHỨNG CHÍNH XÁC: evidence.quote BẮT BUỘC là trích đoạn liên tục, đúng từng từ từ nguồn.\n"
-            "4. 100% tiếng Việt cho lời giải thích và tên bẫy.\n"
-            + heading_rule_vi + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
-        )
-        user_prompt = (
-            f"{source_block}\n\n"
-            f"Dạng câu: {question_type or '(chưa xác định)'}; Dạng phụ: {question_subtype or '(không có)'}\n"
-            f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
-            f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object."
-        )
+    sys_prompt = (
+        "Bạn là chuyên gia luyện thi IELTS 8.5+. Hãy phân tích câu hỏi thi theo cấu trúc sư phạm siêu tinh gọn (3 câu súc tích), loại bỏ hoàn toàn từ thừa.\n"
+        "Toàn bộ lời giải thích (detailedExplanation), phân tích bẫy (trapTitle, trapReason) và vị trí dẫn chứng (location) BẮT BUỘC viết 100% bằng TIẾNG VIỆT TỰ NHIÊN, mạch lạc, dễ hiểu.\n"
+        "RIÊNG PHẦN DẪN CHỨNG (evidence.quote) và CỤM TỪ ĐỒNG NGHĨA (questionTerm, passageTerm) BẮT BUỘC giữ nguyên văn tiếng Anh từ đề bài và bài đọc/bài nghe (tuyệt đối không dịch sang tiếng Việt).\n"
+        "Trả về DUY NHẤT một JSON object theo đúng cấu trúc sau:\n"
+        "{\n"
+        '  "paraphrasePairs": [\n'
+        '    { "questionTerm": "cụm từ trong câu hỏi/phương án (tiếng Anh)", "passageTerm": "cụm từ tương đương trong bài đọc/bài nghe (tiếng Anh)", "note": "ghi chú ngắn gọn bằng tiếng Việt nếu cần" }\n'
+        '  ],\n'
+        '  "evidence": {\n'
+        '    "location": "ví dụ: Đoạn E, dòng 7 hoặc Lời thoại [01:23]",\n'
+        '    "quote": "Đoạn trích NGUYÊN VĂN tiếng Anh từ nguồn chứng minh đáp án (10-250 ký tự)."\n'
+        '  },\n'
+        '  "detailedExplanation": "1-2 câu tiếng Việt tự nhiên, trực diện giải thích bản chất logic vì sao dẫn chứng chứng minh đáp án đúng.",\n'
+        '  "trapAnalysis": {\n'
+        '    "trapTitle": "Tên bẫy bằng tiếng Việt tự nhiên (ví dụ: Bẫy phạm vi khẳng định / Bẫy từ khóa gây nhiễu / Chiến thuật bắt nhịp từ khóa)",\n'
+        '    "trapReason": "1-2 câu tiếng Việt tự nhiên chỉ rõ tại sao phương án học viên chọn bị sai, hoặc hướng dẫn chiến thuật đón đầu từ khóa nếu học viên bỏ trống. TUYỆT ĐỐI KHÔNG phân tích các phương án học viên không chọn."\n'
+        '  }\n'
+        "}\n"
+        "QUY TẮC BẮT BUỘC:\n"
+        "1. KHÔNG DÙNG CÂU DẪN RƯỜM RÀ: Không bao giờ mở đầu bằng 'Câu hỏi kiểm tra...', 'Bài đọc đề cập...'. Không chép lại dẫn chứng trong detailedExplanation.\n"
+        "2. CHỈ TẬP TRUNG LỖI HỌC VIÊN: Chỉ giải thích đáp án đúng và phân tích lý do sai của phương án học viên chọn; không liệt kê các lựa chọn khác.\n"
+        "3. DẪN CHỨNG NGUYÊN VĂN: evidence.quote BẮT BUỘC là trích đoạn liên tục, đúng từng từ tiếng Anh từ nguồn (tuyệt đối không dịch sang tiếng Việt).\n"
+        "4. NGÔN NGỮ: Toàn bộ giải thích, tên bẫy, lý do bẫy, vị trí dẫn chứng BẮT BUỘC viết bằng tiếng Việt tự nhiên, bất kể ngôn ngữ giao diện của học viên.\n"
+        + heading_rule_vi + integrated_rule_vi + ts_rule_vi + listening_language_vi + evidence_rule_vi + matching_rule_vi + no_audio_guard_vi + unanswered_rule_vi
+    )
+    user_prompt = (
+        f"{source_block}\n\n"
+        f"Dạng câu: {question_type or '(chưa xác định)'}; Dạng phụ: {question_subtype or '(không có)'}\n"
+        f"Câu hỏi: {question}\nLựa chọn: {options or '(không có)'}\n"
+        f"Đáp án đúng: {correct}\nHọc viên chọn: {student_ans or '(bỏ trống)'}\n\nChỉ xuất ra duy nhất JSON object theo cấu trúc quy định, giải thích hoàn toàn bằng tiếng Việt tự nhiên (trừ evidence trích nguyên văn tiếng Anh)."
+    )
 
     raw_response, err = await asyncio.to_thread(
         _groq_chat,
@@ -5978,7 +5949,7 @@ async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request =
     Supports both question-focused mode and free-form exam review mode with full context.
     """
     _verify_api_request_guard(request, teacher_only=False, rate_bucket="review_copilot", max_per_minute=40)
-    lang = str(payload.get("lang") or "vi").lower()
+    lang = "vi"  # Toàn bộ phản hồi giải thích viết bằng tiếng Việt tự nhiên (trừ evidence trích dẫn)
     quiz_title = str(payload.get("quizTitle") or "IELTS Practice Test")
     quiz_type = str(payload.get("quizType") or "Reading")
     passage_or_transcript = str(payload.get("passageOrTranscript") or payload.get("passage") or payload.get("transcript") or "")[:20000]
@@ -6005,7 +5976,7 @@ async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request =
             "2. When citing verbatim evidence from the passage/transcript, enclose the exact phrase (at least 3-4 words) in straight double quotes, e.g., \"annual revenue grew by 15%\". Do NOT put double quotes around generic labels, question terms, or concepts like Problem, Solution, or Option A (use bold **Problem** or single quotes instead).\n"
             "3. If this is a Listening test and timestamps are present in the transcript, cite timestamps in [mm:ss] format (e.g. [02:15]), which allows the student to seek audio directly.\n"
             "4. Tone: Inspiring, conversational, sharp, and easy to understand (like ChatGPT/Claude with deep pedagogical mastery). Avoid robotic jargon. Give clear takeaways, explain the cognitive traps, and provide actionable tips.\n"
-            f"5. Reply in {'English' if lang == 'en' else 'Vietnamese'}.\n"
+            f"5. Reply in natural Vietnamese. Keep verbatim quotations from the passage/transcript in English.\n"
         )
         context_block = (
             f"--- PASSAGE / TRANSCRIPT ---\n{passage_or_transcript}\n\n"
@@ -6030,7 +6001,7 @@ async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request =
             "4. When citing verbatim evidence from the passage/transcript, enclose the exact phrase (at least 3-4 words) in straight double quotes, e.g., \"annual revenue grew by 15%\". Do NOT put double quotes around generic labels, question terms, or concepts like Problem, Solution, or Option A (use bold **Problem** or single quotes instead).\n"
             "5. If this is a Listening test and timestamps are present in the transcript, cite timestamps in [mm:ss] format (e.g. [02:15]), which allows the student to seek audio directly.\n"
             "6. Tone: Natural, friendly, razor-sharp like a world-class mentor. Format with clean bullet points and bolding for readability.\n"
-            f"7. Reply in {'English' if lang == 'en' else 'Vietnamese'}.\n"
+            f"7. Reply in natural Vietnamese. Keep verbatim quotations from the passage/transcript in English.\n"
         )
         wrong_summary_lines = []
         for w in (exam_overview.get("wrongQuestions") or []):
@@ -6080,7 +6051,7 @@ async def review_copilot(payload: Dict[str, Any] = Body(...), request: Request =
 async def ai_review_chat(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Minimalist free-form AI Review Assistant for the Review Workbench drawer."""
     _verify_api_request_guard(request, teacher_only=False, rate_bucket="ai_review_chat", max_per_minute=40)
-    lang = str(payload.get("lang") or "vi").lower()
+    lang = "vi"  # Toàn bộ phản hồi giải thích viết bằng tiếng Việt tự nhiên (trừ evidence trích dẫn)
     message = str(payload.get("message") or payload.get("userMessage") or "").strip()
     history = payload.get("history") or payload.get("chatHistory") or []
     quiz_title = str(payload.get("quizTitle") or "IELTS Practice Test").strip()
@@ -6102,7 +6073,7 @@ async def ai_review_chat(payload: Dict[str, Any] = Body(...), request: Request =
         "   • **Bản chất:** ...\n"
         "   • **Dẫn chứng & Paraphrase:** ...\n"
         "   • **Kết luận:** ...\n"
-        f"5. Ngôn ngữ trả lời: {'Tiếng Anh' if lang == 'en' else 'Tiếng Việt'}.\n"
+        f"5. Ngôn ngữ trả lời: Luôn trả lời 100% bằng Tiếng Việt tự nhiên, giải thích cặn kẽ, sư phạm. Riêng các dẫn chứng từ văn bản nguồn thì trích dẫn NGUYÊN VĂN tiếng Anh trong ngoặc kép.\n"
     )
 
     convo_parts = [
