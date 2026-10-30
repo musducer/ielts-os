@@ -1,5 +1,25 @@
 # IELTS OS
 
+## Tái Cấu Trúc Khoa Học Khu Vực Session Logs & Feedback — Triệt Tiêu Scroll Vô Tận — 2026-10-30
+
+- **Vấn đề trước khi sửa**:
+  - Toàn bộ danh sách buổi học (`myHistory`) được render phẳng trong một thẻ dài không giới hạn. Học viên học nhiều buổi qua các tháng phải cuộn chuột vô tận (infinite scroll) để tìm lại bài học cũ.
+  - Không có phân cấp thời gian (tháng/năm), không có công cụ tìm kiếm, không lọc theo kỹ năng, và không hiển thị các chỉ số tổng quan.
+- **Kiến trúc giải pháp mới (Month Accordion + KPI Bar + Search & Pagination)**:
+  - **Thanh chỉ số tổng quan (KPI Strip)**: Hiển thị ngay trên đầu thẻ: tổng số buổi đã học, tổng thời lượng tích lũy (giờ), và trạng thái hoàn thành học phí (đã đóng đủ / số buổi chưa thanh toán).
+  - **Băng công cụ tìm kiếm & bộ lọc**:
+    - Ô tìm kiếm thời gian thực (`sessionLogSearch`) tra cứu tức thì theo ngày giờ, tên giảng viên, nội dung ghi chú, và kỹ năng.
+    - Bộ nút lọc theo Tháng (`sessionLogMonth`): Tự động tổng hợp danh sách các tháng có buổi học kèm số lượng buổi (ví dụ `Tháng 10/2026 (8)`, `Tháng 09/2026 (10)`).
+    - Bộ nút lọc theo Kỹ năng (`sessionLogSkill`): Lọc nhanh theo `Mock Test`, `Listening`, `Writing`...
+  - **Accordion Nhóm Theo Tháng (Month Accordion)**:
+    - Các buổi học được gom nhóm khoa học theo từng tháng với thanh header tinh gọn hiển thị số buổi, tổng giờ học và trạng thái học phí của tháng đó.
+    - Tháng mới nhất tự động mở sẵn; các tháng cũ thu gọn thanh lịch và có thể bấm để đóng/mở linh hoạt (`sessionLogCollapsedMonths`).
+  - **Phân trang giới hạn 6 buổi/trang (Pagination Guard)**:
+    - Bọc danh sách buổi học hiển thị tối đa 6 buổi/trang (`sessionLogPage`), đảm bảo chiều cao giao diện luôn gọn gàng, không bao giờ xuất hiện thanh cuộn vô tận trên bất kỳ kích thước màn hình nào.
+    - Thanh điều hướng phân trang hiển thị rõ ràng: `Hiển thị 1–6 trên X buổi`, nút [Trước] và [Sau].
+  - **Thiết kế thẻ buổi học tinh gọn (Compact Session Card)**:
+    - Tách biệt rõ ràng ngày giờ, giảng viên, thời lượng buổi học, huy hiệu học phí, hộp ghi chú tương phản và các chip kỹ năng nổi bật.
+
 ## Khắc Phục Lỗi Dẫn Chứng AI Cho Reading Matching Information & Matching Features — 2026-10-28
 
 - **Cơ chế Answer-Bound Evidence Resolution (`R_MATCHING_INFO`, `R_MATCHING_FEATURES`)**:

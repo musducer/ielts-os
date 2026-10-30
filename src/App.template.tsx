@@ -5174,6 +5174,11 @@ export default function IeltsSupremeOS() {
   const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|TaxonomySkill>("All");
   const [progressSubTab, setProgressSubTab] = useState<"analytics"|"resources">("analytics");
   const [dailyExpSavedFeedback, setDailyExpSavedFeedback] = useState(false);
+  const [sessionLogSearch, setSessionLogSearch] = useState("");
+  const [sessionLogMonth, setSessionLogMonth] = useState("ALL");
+  const [sessionLogSkill, setSessionLogSkill] = useState("ALL");
+  const [sessionLogPage, setSessionLogPage] = useState(1);
+  const [sessionLogCollapsedMonths, setSessionLogCollapsedMonths] = useState<Record<string, boolean>>({});
 
   const [unlockKey, setUnlockKey] = useState("");
   const [showDebtWarning, setShowDebtWarning] = useState(false);

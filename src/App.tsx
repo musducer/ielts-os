@@ -5174,6 +5174,11 @@ export default function IeltsSupremeOS() {
   const [progressSkillFilter, setProgressSkillFilter] = useState<"All"|TaxonomySkill>("All");
   const [progressSubTab, setProgressSubTab] = useState<"analytics"|"resources">("analytics");
   const [dailyExpSavedFeedback, setDailyExpSavedFeedback] = useState(false);
+  const [sessionLogSearch, setSessionLogSearch] = useState("");
+  const [sessionLogMonth, setSessionLogMonth] = useState("ALL");
+  const [sessionLogSkill, setSessionLogSkill] = useState("ALL");
+  const [sessionLogPage, setSessionLogPage] = useState(1);
+  const [sessionLogCollapsedMonths, setSessionLogCollapsedMonths] = useState<Record<string, boolean>>({});
 
   const [unlockKey, setUnlockKey] = useState("");
   const [showDebtWarning, setShowDebtWarning] = useState(false);
@@ -23047,22 +23052,537 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                 </div>
               </div>
 
-              <div className="card">
-                <h3 style={{marginTop: 0, borderBottom: `1px solid ${C.border}`, paddingBottom: 15}}>{t('class_history_title')}</h3>
-                {myHistory.map(h => (
-                  <div key={h.id} style={{ borderBottom: `1px solid ${C.border}`, padding: "20px 0" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center' }}>
-                      <span style={{ fontWeight: 900, fontSize: 15 }}>{h.date}</span>
-                      <span style={{ fontSize: 10, fontWeight: 800, padding: '4px 10px', background: h.isPaid?`${C.succ}15`:`${C.warn}15`, color: h.isPaid?C.succ:C.warn, borderRadius: 12 }}>{h.isPaid ? t('tuition_paid') : t('tuition_debt')}</span>
-                    </div>
-                    <div style={{ color: C.sub, fontSize: 12, marginTop: 6, fontWeight: 600 }}>{t('instructor')}: {h.teacher}</div>
-                    <div style={{ marginTop: 12, fontSize: 14, background: C.bg, padding: 15, borderRadius: 8, border: `1px solid ${C.border}`, lineHeight: 1.5 }}>{h.notes || t('no_additional_notes')}</div>
-                    <div style={{ display: "flex", flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-                      {(Array.isArray(h.skills) ? h.skills : []).map(sk => <span key={sk} style={{ background: C.card, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, color: C.sub }}>{sk}</span>)}
-                    </div>
+              <div className="card" style={{ border: `1px solid ${C.border}`, borderRadius: 14, padding: '20px 22px' }}>
+                {/* 1. HEADER & KPI SUMMARY STRIP */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, borderBottom: `1px solid ${C.border}`, paddingBottom: 15, marginBottom: 16 }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 900, display: 'flex', alignItems: 'center', gap: 8, color: C.text }}>
+                      <Ico name="calendar" size={18} color={C.accent} />
+                      <span>{t('class_history_title')}</span>
+                      <span style={{ fontSize: 12, color: C.sub, fontWeight: 700 }}>({myHistory.length} {tx("buổi", "sessions")})</span>
+                    </h3>
                   </div>
-                ))}
-                {myHistory.length === 0 && <div style={{textAlign: 'center', padding: 30, color: C.sub, fontSize: 13}}>{t('no_history')}</div>}
+                  {/* KPI CHIPS */}
+                  {myHistory.length > 0 && (() => {
+                    const totalHours = (myHistory.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600).toFixed(1);
+                    const unpaidCount = myHistory.filter(h => !h.isPaid).length;
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: C.bg, border: `1px solid ${C.border}`, color: C.sub, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Ico name="clock" size={13} color={C.accent} />
+                          <span>{totalHours}h {tx("học tập", "logged")}</span>
+                        </span>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, padding: '4px 10px', borderRadius: 8, background: unpaidCount === 0 ? `${C.succ}15` : `${C.warn}15`, border: `1px solid ${unpaidCount === 0 ? C.succ + '33' : C.warn + '33'}`, color: unpaidCount === 0 ? C.succ : C.warn, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Ico name={unpaidCount === 0 ? "check" : "alert"} size={13} />
+                          <span>{unpaidCount === 0 ? tx("Học phí đầy đủ", "Fully paid") : tx(`${unpaidCount} buổi nợ học phí`, `${unpaidCount} unpaid`)}</span>
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {myHistory.length > 0 && (() => {
+                  // Helper: parse session date string
+                  const parseSessionDateInfo = (dateStr: string) => {
+                    const str = String(dateStr || "").trim();
+                    const dmy = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                    if (dmy) {
+                      const day = parseInt(dmy[1], 10);
+                      const month = parseInt(dmy[2], 10);
+                      const year = parseInt(dmy[3], 10);
+                      const mPad = month < 10 ? `0${month}` : `${month}`;
+                      const dPad = day < 10 ? `0${day}` : `${day}`;
+                      const timeMatch = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+                      return {
+                        monthKey: `${year}-${mPad}`,
+                        monthLabel: `Tháng ${mPad}/${year}`,
+                        formattedDate: `${dPad}/${mPad}/${year}`,
+                        time: timeMatch ? timeMatch[1] : "",
+                        year,
+                        month
+                      };
+                    }
+                    const ymd = str.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+                    if (ymd) {
+                      const year = parseInt(ymd[1], 10);
+                      const month = parseInt(ymd[2], 10);
+                      const day = parseInt(ymd[3], 10);
+                      const mPad = month < 10 ? `0${month}` : `${month}`;
+                      const dPad = day < 10 ? `0${day}` : `${day}`;
+                      const timeMatch = str.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+                      return {
+                        monthKey: `${year}-${mPad}`,
+                        monthLabel: `Tháng ${mPad}/${year}`,
+                        formattedDate: `${dPad}/${mPad}/${year}`,
+                        time: timeMatch ? timeMatch[1] : "",
+                        year,
+                        month
+                      };
+                    }
+                    return {
+                      monthKey: "other",
+                      monthLabel: tx("Khác", "Other"),
+                      formattedDate: str || tx("Chưa xác định", "Unknown"),
+                      time: "",
+                      year: 0,
+                      month: 0
+                    };
+                  };
+
+                  // Collect all months and skills
+                  const monthsMap = new Map<string, { key: string; label: string; count: number }>();
+                  const allSkillsSet = new Set<string>();
+                  myHistory.forEach(h => {
+                    const info = parseSessionDateInfo(h.date);
+                    const existing = monthsMap.get(info.monthKey);
+                    if (existing) existing.count++;
+                    else monthsMap.set(info.monthKey, { key: info.monthKey, label: info.monthLabel, count: 1 });
+                    if (Array.isArray(h.skills)) {
+                      h.skills.forEach(sk => { if (sk && String(sk).trim()) allSkillsSet.add(String(sk).trim()); });
+                    }
+                  });
+                  const sortedMonths = Array.from(monthsMap.values()).sort((a, b) => b.key.localeCompare(a.key));
+                  const availableSkills = Array.from(allSkillsSet);
+
+                  // Filter sessions
+                  const filtered = myHistory.filter(h => {
+                    const info = parseSessionDateInfo(h.date);
+                    if (sessionLogMonth !== "ALL" && info.monthKey !== sessionLogMonth) return false;
+                    if (sessionLogSkill !== "ALL" && (!Array.isArray(h.skills) || !h.skills.includes(sessionLogSkill))) return false;
+                    if (sessionLogSearch.trim()) {
+                      const q = sessionLogSearch.trim().toLowerCase();
+                      const matchText = `${h.date} ${h.teacher} ${h.notes || ""} ${(h.skills || []).join(" ")}`.toLowerCase();
+                      if (!matchText.includes(q)) return false;
+                    }
+                    return true;
+                  });
+
+                  // Pagination: 6 sessions per page
+                  const PAGE_SIZE = 6;
+                  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+                  const currentPage = Math.min(Math.max(1, sessionLogPage), totalPages);
+                  const pagedSessions = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+                  // Group paged sessions by month
+                  const pagedByMonth = new Map<string, { key: string; label: string; sessions: typeof myHistory }>();
+                  pagedSessions.forEach(h => {
+                    const info = parseSessionDateInfo(h.date);
+                    if (!pagedByMonth.has(info.monthKey)) {
+                      pagedByMonth.set(info.monthKey, { key: info.monthKey, label: info.monthLabel, sessions: [] });
+                    }
+                    pagedByMonth.get(info.monthKey)!.sessions.push(h);
+                  });
+
+                  const newestMonthKey = sortedMonths[0]?.key || "";
+
+                  return (
+                    <>
+                      {/* 2. FILTER & SEARCH TOOLBAR */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+                        {/* SEARCH INPUT */}
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <div style={{ position: 'relative', flex: 1 }}>
+                            <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: C.sub }}>
+                              <Ico name="search" size={14} />
+                            </span>
+                            <input
+                              type="text"
+                              value={sessionLogSearch}
+                              onChange={(e) => {
+                                setSessionLogSearch(e.target.value);
+                                setSessionLogPage(1);
+                              }}
+                              placeholder={tx("Tìm theo ngày, giảng viên, ghi chú...", "Search by date, instructor, notes...")}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px 8px 32px',
+                                fontSize: 13,
+                                borderRadius: 8,
+                                border: `1px solid ${C.border}`,
+                                background: C.bg,
+                                color: C.text,
+                                outline: 'none'
+                              }}
+                            />
+                            {sessionLogSearch && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSessionLogSearch("");
+                                  setSessionLogPage(1);
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  right: 8,
+                                  top: '50%',
+                                  transform: 'translateY(-50%)',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: C.sub,
+                                  cursor: 'pointer',
+                                  padding: 4
+                                }}
+                              >
+                                <Ico name="x" size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* MONTH FILTER PILLS */}
+                        {sortedMonths.length > 1 && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: C.sub, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginRight: 2 }}>
+                              {tx("Tháng:", "Month:")}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => { setSessionLogMonth("ALL"); setSessionLogPage(1); }}
+                              style={{
+                                padding: '4px 10px',
+                                borderRadius: 7,
+                                border: `1px solid ${sessionLogMonth === "ALL" ? C.accent : C.border}`,
+                                background: sessionLogMonth === "ALL" ? C.accent : C.bg,
+                                color: sessionLogMonth === "ALL" ? "#fff" : C.sub,
+                                fontSize: 11.5,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                transition: 'all .15s ease'
+                              }}
+                            >
+                              {tx("Tất cả", "All")} ({myHistory.length})
+                            </button>
+                            {sortedMonths.map(m => {
+                              const active = sessionLogMonth === m.key;
+                              return (
+                                <button
+                                  key={m.key}
+                                  type="button"
+                                  onClick={() => { setSessionLogMonth(m.key); setSessionLogPage(1); }}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: 7,
+                                    border: `1px solid ${active ? C.accent : C.border}`,
+                                    background: active ? C.accent : C.bg,
+                                    color: active ? "#fff" : C.sub,
+                                    fontSize: 11.5,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    transition: 'all .15s ease'
+                                  }}
+                                >
+                                  {m.label} ({m.count})
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* SKILL FILTER PILLS */}
+                        {availableSkills.length > 0 && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: C.sub, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginRight: 2 }}>
+                              {tx("Kỹ năng:", "Skill:")}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => { setSessionLogSkill("ALL"); setSessionLogPage(1); }}
+                              style={{
+                                padding: '3px 9px',
+                                borderRadius: 6,
+                                border: `1px solid ${sessionLogSkill === "ALL" ? C.accent : C.border}`,
+                                background: sessionLogSkill === "ALL" ? `${C.accent}20` : 'transparent',
+                                color: sessionLogSkill === "ALL" ? C.accent : C.sub,
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                              }}
+                            >
+                              {tx("Tất cả kỹ năng", "All Skills")}
+                            </button>
+                            {availableSkills.map(sk => {
+                              const active = sessionLogSkill === sk;
+                              return (
+                                <button
+                                  key={sk}
+                                  type="button"
+                                  onClick={() => { setSessionLogSkill(sk); setSessionLogPage(1); }}
+                                  style={{
+                                    padding: '3px 9px',
+                                    borderRadius: 6,
+                                    border: `1px solid ${active ? C.accent : C.border}`,
+                                    background: active ? `${C.accent}20` : 'transparent',
+                                    color: active ? C.accent : C.sub,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  {sk}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 3. GROUPED MONTH ACCORDION LIST */}
+                      {filtered.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '32px 16px', color: C.sub, fontSize: 13, background: C.bg, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                          {sessionLogSearch || sessionLogMonth !== "ALL" || sessionLogSkill !== "ALL" ? (
+                            <>
+                              <div>{tx("Không tìm thấy buổi học phù hợp với bộ lọc hiện tại.", "No sessions matching the current filters.")}</div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSessionLogSearch("");
+                                  setSessionLogMonth("ALL");
+                                  setSessionLogSkill("ALL");
+                                  setSessionLogPage(1);
+                                }}
+                                style={{ marginTop: 10, background: C.accent, color: "#fff", border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                {tx("Xóa bộ lọc", "Clear Filters")}
+                              </button>
+                            </>
+                          ) : (
+                            t('no_history')
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                          {Array.from(pagedByMonth.values()).map(group => {
+                            const isNewest = group.key === newestMonthKey;
+                            const isCollapsed = sessionLogCollapsedMonths[group.key] !== undefined
+                              ? sessionLogCollapsedMonths[group.key]
+                              : !isNewest;
+                            const isOpen = !isCollapsed;
+
+                            const groupMonthTotalHours = (group.sessions.reduce((s, h) => s + ((h && h.duration) || 0), 0) / 3600).toFixed(1);
+                            const groupUnpaid = group.sessions.filter(h => !h.isPaid).length;
+
+                            return (
+                              <div key={group.key} style={{ border: `1px solid ${C.border}`, borderRadius: 11, overflow: 'hidden', background: C.card }}>
+                                {/* MONTH ACCORDION HEADER */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSessionLogCollapsedMonths(prev => ({
+                                      ...prev,
+                                      [group.key]: isOpen
+                                    }));
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    textAlign: 'left',
+                                    background: isOpen ? `${C.accent}0a` : C.bg,
+                                    border: 'none',
+                                    borderBottom: isOpen ? `1px solid ${C.border}` : 'none',
+                                    padding: '11px 16px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: 10,
+                                    transition: 'background .15s ease'
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                    <Ico name={isOpen ? "chevronUp" : "chevronDown"} size={16} color={C.accent} />
+                                    <strong style={{ fontSize: 14, color: C.text }}>{group.label}</strong>
+                                    <span style={{ fontSize: 11, color: C.sub, background: C.card, padding: '2px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontWeight: 700 }}>
+                                      {group.sessions.length} {tx("buổi trong trang này", "on this page")}
+                                    </span>
+                                    <span style={{ fontSize: 11, color: C.sub }}>
+                                      · {groupMonthTotalHours}h
+                                    </span>
+                                  </div>
+
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                      padding: '2px 8px',
+                                      borderRadius: 10,
+                                      background: groupUnpaid === 0 ? `${C.succ}15` : `${C.warn}15`,
+                                      color: groupUnpaid === 0 ? C.succ : C.warn
+                                    }}>
+                                      {groupUnpaid === 0 ? tx("Đã thu hết", "All paid") : tx(`${groupUnpaid} chưa thu`, `${groupUnpaid} unpaid`)}
+                                    </span>
+                                  </div>
+                                </button>
+
+                                {/* SESSIONS IN MONTH */}
+                                {isOpen && (
+                                  <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {group.sessions.map(h => {
+                                      const dateInfo = parseSessionDateInfo(h.date);
+                                      return (
+                                        <div
+                                          key={h.id}
+                                          style={{
+                                            background: C.bg,
+                                            border: `1px solid ${C.border}`,
+                                            borderRadius: 9,
+                                            padding: '13px 15px',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: 9
+                                          }}
+                                        >
+                                          {/* TOP ROW */}
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                              <span style={{ fontWeight: 800, fontSize: 13.5, color: C.text, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                                <Ico name="calendar" size={13} color={C.accent} />
+                                                <span>{dateInfo.formattedDate}</span>
+                                                {dateInfo.time && <span style={{ color: C.sub, fontWeight: 500, fontSize: 12 }}>({dateInfo.time})</span>}
+                                              </span>
+                                              <span style={{ color: C.sub, fontSize: 12 }}>·</span>
+                                              <span style={{ color: C.sub, fontSize: 12, fontWeight: 600 }}>
+                                                {t('instructor')}: <strong style={{ color: C.text }}>{h.teacher || tx("Chưa phân công", "Unassigned")}</strong>
+                                              </span>
+                                              {h.duration > 0 && (
+                                                <span style={{ fontSize: 10.5, color: C.sub, background: `${C.border}55`, padding: '2px 7px', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                  <Ico name="clock" size={11} /> {Math.round(h.duration / 60)} {tx("phút", "mins")}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span style={{
+                                              fontSize: 10,
+                                              fontWeight: 800,
+                                              padding: '3px 8px',
+                                              borderRadius: 10,
+                                              background: h.isPaid ? `${C.succ}15` : `${C.warn}15`,
+                                              color: h.isPaid ? C.succ : C.warn,
+                                              border: `1px solid ${h.isPaid ? C.succ + '33' : C.warn + '33'}`,
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: 4
+                                            }}>
+                                              <Ico name={h.isPaid ? "check" : "alert"} size={11} />
+                                              {h.isPaid ? t('tuition_paid') : t('tuition_debt')}
+                                            </span>
+                                          </div>
+
+                                          {/* NOTES CONTENT */}
+                                          <div style={{
+                                            fontSize: 13,
+                                            background: C.card,
+                                            padding: '10px 13px',
+                                            borderRadius: 7,
+                                            border: `1px solid ${C.border}`,
+                                            lineHeight: 1.5,
+                                            color: h.notes ? C.text : C.sub,
+                                            fontStyle: h.notes ? 'normal' : 'italic'
+                                          }}>
+                                            {h.notes || t('no_additional_notes')}
+                                          </div>
+
+                                          {/* SKILLS */}
+                                          {Array.isArray(h.skills) && h.skills.length > 0 && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                                              {h.skills.map(sk => (
+                                                <span
+                                                  key={sk}
+                                                  style={{
+                                                    background: `${C.accent}12`,
+                                                    border: `1px solid ${C.accent}33`,
+                                                    padding: '2px 8px',
+                                                    borderRadius: 5,
+                                                    fontSize: 10.5,
+                                                    fontWeight: 700,
+                                                    color: C.accent
+                                                  }}
+                                                >
+                                                  {sk}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* 4. PAGINATION FOOTER (6 SESSIONS PER PAGE) */}
+                      {filtered.length > PAGE_SIZE && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+                          <div style={{ fontSize: 12, color: C.sub }}>
+                            {tx(
+                              `Hiển thị ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, filtered.length)} trên ${filtered.length} buổi`,
+                              `Showing ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, filtered.length)} of ${filtered.length} sessions`
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={currentPage <= 1}
+                              onClick={() => setSessionLogPage(currentPage - 1)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                padding: '6px 12px',
+                                borderRadius: 7,
+                                border: `1px solid ${C.border}`,
+                                background: currentPage <= 1 ? `${C.border}33` : C.bg,
+                                color: currentPage <= 1 ? C.sub : C.text,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: currentPage <= 1 ? 'not-allowed' : 'pointer',
+                                opacity: currentPage <= 1 ? 0.6 : 1
+                              }}
+                            >
+                              <Ico name="chevronLeft" size={14} />
+                              <span>{tx("Trước", "Previous")}</span>
+                            </button>
+
+                            <span style={{ fontSize: 12, fontWeight: 800, padding: '0 8px', color: C.text }}>
+                              {currentPage} / {totalPages}
+                            </span>
+
+                            <button
+                              type="button"
+                              disabled={currentPage >= totalPages}
+                              onClick={() => setSessionLogPage(currentPage + 1)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                padding: '6px 12px',
+                                borderRadius: 7,
+                                border: `1px solid ${C.border}`,
+                                background: currentPage >= totalPages ? `${C.border}33` : C.bg,
+                                color: currentPage >= totalPages ? C.sub : C.text,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer',
+                                opacity: currentPage >= totalPages ? 0.6 : 1
+                              }}
+                            >
+                              <span>{tx("Sau", "Next")}</span>
+                              <Ico name="chevronRight" size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+
+                {myHistory.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '36px 16px', color: C.sub, fontSize: 13 }}>
+                    <Ico name="calendar" size={32} color={C.sub} style={{ marginBottom: 10, opacity: 0.5 }} />
+                    <div>{t('no_history')}</div>
+                  </div>
+                )}
               </div>
             </>)}
           </>)}
