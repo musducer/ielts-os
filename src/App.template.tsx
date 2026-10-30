@@ -5837,6 +5837,16 @@ export default function IeltsSupremeOS() {
   const [stFilterPopoverOpen, setStFilterPopoverOpen] = useState<boolean>(false);
   const [stCategoryMatchMode, setStCategoryMatchMode] = useState<"ANY" | "ALL">("ANY");
   useEffect(() => { setStSelectedCategories([]); setStFilterPopoverOpen(false); }, [studentExamSkillTab]);
+
+  // Bộ lọc, phân trang và lịch sử lượt làm trong tab Kết quả & Review học sinh
+  const [stResultSearch, setStResultSearch] = useState("");
+  const [stResultPage, setStResultPage] = useState(1);
+  const [stResultSort, setStResultSort] = useState<"NEW" | "SCORE_DESC">("NEW");
+  const [stResultScoreFilter, setStResultScoreFilter] = useState<"ALL" | "HIGH" | "LOW">("ALL");
+  const [stExpandedResultExams, setStExpandedResultExams] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setStResultPage(1);
+  }, [studentExamSkillTab, stResultSearch, stResultScoreFilter, stResultSort]);
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
   const [examFolders, setExamFolders] = useState<string[]>(() => {

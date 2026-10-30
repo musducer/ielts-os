@@ -1,5 +1,20 @@
 # IELTS OS
 
+## Tái Cấu Trúc Khoa Học Tab Results & Review — Lọc Bỏ Quest & Triệt Tiêu Scroll Vô Tận — 2026-10-30
+
+- **Lọc sạch bài tập Quest khỏi Results & Review (`isQuestResult`)**:
+  - Loại bỏ hoàn toàn các bài tập mini-quest / chuyên đề ngắn khỏi tab Kết quả & Review (`examRoomTab === "results"`), quy hoạch độc quyền tab này cho các bài thi chính thức (Full Test & Section Test). Các bài tập chuyên đề được xem lại trực tiếp trong tab Chuyên đề (`portalTab === "quests"`).
+- **Thanh chỉ số tổng quan (KPI Strip)**:
+  - Tích hợp 4 thẻ tóm tắt nhanh hiệu suất theo kỹ năng đang chọn: Tổng lượt/đề đã làm, Band cao nhất, Band trung bình và Ngày thi gần nhất.
+- **Thanh công cụ tìm kiếm, lọc Band và sắp xếp**:
+  - Tra cứu thời gian thực theo tên đề thi (`stResultSearch`), phân loại điểm số (`ALL`, `Band ≥ 7.0`, `< 6.0`), và chuyển đổi sắp xếp (`Mới nhất` / `Điểm cao nhất`).
+- **Gom nhóm theo đề thi (Exam Grouping) & Ngăn kéo lịch sử (Attempt Drawer)**:
+  - Thay vì danh sách phẳng lặp lại nhiều dòng cho cùng một đề thi, hệ thống tự động gộp các lượt làm của cùng một bài thi vào 1 thẻ gọn gàng.
+  - Hiển thị điểm số lần mới nhất, huy hiệu số lần làm bài và độ tiến bộ (+1.0 band ↗); cho phép bấm mở ngăn kéo lịch sử để xem lại bất kỳ lượt làm cũ nào.
+- **Phân trang khoa học (6 đề thi / trang)**:
+  - Chấm dứt hoàn toàn hiện tượng cuộn chuột vô tận, giao diện luôn vừa vặn trong khung nhìn.
+
+
 ## Sửa Triệt Để Lỗi Định Vị Dẫn Chứng (Evidence Jump) Cho Matching Headings — 2026-10-30
 
 - **Khắc phục lỗi cuộn nhầm đoạn & không highlight khi bấm dẫn chứng AI**:

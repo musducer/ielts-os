@@ -5837,6 +5837,16 @@ export default function IeltsSupremeOS() {
   const [stFilterPopoverOpen, setStFilterPopoverOpen] = useState<boolean>(false);
   const [stCategoryMatchMode, setStCategoryMatchMode] = useState<"ANY" | "ALL">("ANY");
   useEffect(() => { setStSelectedCategories([]); setStFilterPopoverOpen(false); }, [studentExamSkillTab]);
+
+  // Bộ lọc, phân trang và lịch sử lượt làm trong tab Kết quả & Review học sinh
+  const [stResultSearch, setStResultSearch] = useState("");
+  const [stResultPage, setStResultPage] = useState(1);
+  const [stResultSort, setStResultSort] = useState<"NEW" | "SCORE_DESC">("NEW");
+  const [stResultScoreFilter, setStResultScoreFilter] = useState<"ALL" | "HIGH" | "LOW">("ALL");
+  const [stExpandedResultExams, setStExpandedResultExams] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setStResultPage(1);
+  }, [studentExamSkillTab, stResultSearch, stResultScoreFilter, stResultSort]);
     const [, _setSortQuiz] = useState<"NEW"|"OLD"|"AZ">("NEW");
   const [builderFolder, setBuilderFolder] = useState("Root");
   const [examFolders, setExamFolders] = useState<string[]>(() => {
@@ -21852,6 +21862,30 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
     // A test used as a gated Quest node must not also appear as a free-standing
     // exam card. Otherwise a student could bypass the sequence and see its review.
     const questSourceTestIds = new Set(myTopicAssignments.flatMap(assignment => assignment.nodes.map(node => node.testId)));
+    const allQuestTestIds = new Set<string>([
+      ...topicAssignments.flatMap(a => (a.nodes || []).map(n => n.testId)),
+    ]);
+    const allQuestResultIds = new Set<string>();
+    questProgress.forEach(p => {
+      if (p && p.attempts) {
+        Object.values(p.attempts).forEach(attemptsList => {
+          (attemptsList || []).forEach(att => {
+            if (att && att.resultId) allQuestResultIds.add(att.resultId);
+          });
+        });
+      }
+    });
+    // Lọc bài quest ra khỏi Results & Review (chuyên đề đã có review riêng trong tab Quests)
+    const isQuestResult = (r: QuizResult): boolean => {
+      if (!r) return false;
+      if (r.topicAssignmentId || r.topicNodeId || r.questPassed !== undefined) return true;
+      if (r.questQuestionIds && r.questQuestionIds.length > 0) return true;
+      if (allQuestResultIds.has(r.id)) return true;
+      if (allQuestTestIds.has(r.quizId)) return true;
+      return false;
+    };
+    const myExamResults = myQuizResults.filter(r => !isQuestResult(r));
+
     const activeQuizzes = quizzes.filter(q => {
       if (!q.active || questSourceTestIds.has(q.id)) return false;
       if (realExamSourceTestIds.has(q.id)) return false;
@@ -21869,7 +21903,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
       }
       return stSelectedCategories.some(id => quizCategoryIds.has(id));
     });
-    const resultsForSkill = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
+    const resultsForSkill = myExamResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === studentExamSkillTab);
     const categoryQuizCounts: Record<string, number> = {};
     rawQuizzesForSkill.forEach(quiz => {
       const breakdown = getQuizCategoryBreakdown(quiz);
@@ -24272,7 +24306,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
             <div style={{display: 'flex', gap: 8, marginTop: 14}}>
               {([
                 { k: 'available', label: t('exam_tab_available'), n: activeQuizzes.length + myRealExamPackages.length },
-                { k: 'results', label: t('exam_tab_results'), n: myQuizResults.filter(Boolean).length },
+                { k: 'results', label: t('exam_tab_results'), n: myExamResults.length },
               ] as const).map(sb => {
                 const on = examRoomTab === sb.k;
                 return (
@@ -24286,7 +24320,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               {(["Listening", "Reading", "Writing", "Integrated"] as const).map(skill => {
                 const active = studentExamSkillTab === skill;
                 const availableCount = activeQuizzes.filter(quiz => quizSkill(quiz) === skill).length;
-                const resultCount = myQuizResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length;
+                const resultCount = myExamResults.filter(result => quizSkill(quizzes.find(quiz => quiz.id === result.quizId)) === skill).length;
                 const count = examRoomTab === 'available' ? availableCount : resultCount;
                 return (
                   <button key={skill} onClick={() => setStudentExamSkillTab(skill)} style={{ background: 'transparent', color: active ? C.accent : C.sub, borderRadius: 0, borderBottom: `2px solid ${active ? C.accent : 'transparent'}`, borderTop: 'none', borderLeft: 'none', borderRight: 'none', padding: '9px 14px', fontSize: 12.5, fontWeight: 800, whiteSpace: 'nowrap', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -24667,51 +24701,644 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
               );
             })()}
 
-            {examRoomTab === "results" && (
-                <div style={{marginTop: 14}}>
-                    {resultsForSkill.filter(Boolean).length === 0 && <div style={{color: C.sub, fontSize: 13, textAlign: 'center', padding: 24}}>{tx(`Chưa có kết quả ${studentExamSkillTab}.`, `No ${studentExamSkillTab} results yet.`)}</div>}
-                    {[...resultsForSkill].filter(Boolean).sort((a, b) => parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)).map(r => {
-                        if (!r) return null;
-                        const relatedQuiz = quizzes.find(qz => qz.id === r.quizId);
-                        const rClass = classifyStudentQuiz(relatedQuiz || ({ title: r.quizTitle } as any));
-                        const volBadge = rClass.isVolSeries
-                          ? rClass.volLabel
-                          : (rClass.extraGroupLabel || rClass.volLabel);
+            {examRoomTab === "results" && (() => {
+              const totalSkillResults = resultsForSkill.length;
+              const numericBands = resultsForSkill
+                .map(r => typeof r.band === 'number' ? r.band : parseFloat(String(r.band || '')))
+                .filter(b => !isNaN(b) && b > 0);
+              const highestBand = numericBands.length > 0 ? Math.max(...numericBands) : null;
+              const avgBand = numericBands.length > 0
+                ? (numericBands.reduce((sum, b) => sum + b, 0) / numericBands.length).toFixed(1)
+                : null;
+              const sortedSkillResultsDesc = [...resultsForSkill].sort((a, b) =>
+                parseQuizResultDateMs(b.date, b.submittedAt || b.id) - parseQuizResultDateMs(a.date, a.submittedAt || a.id)
+              );
+              const latestDate = sortedSkillResultsDesc[0]?.date || null;
 
-                        return (
-                        <div key={r.id} style={{display: 'flex', justifyContent: 'space-between', gap: 12, padding: '12px 4px', borderBottom: `1px solid ${C.border}`, alignItems: 'center'}}>
-                            <div style={{minWidth: 0}}>
-                                <div style={{fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6}}>
-                                    {volBadge && (
-                                      <span style={{
-                                        fontSize: 10,
-                                        fontWeight: 800,
-                                        background: rClass.isVolSeries ? `${C.accent}15` : `${C.sub}18`,
-                                        color: rClass.isVolSeries ? C.accent : C.text,
-                                        border: `1px solid ${rClass.isVolSeries ? `${C.accent}40` : C.border}`,
-                                        padding: '1px 6px',
-                                        borderRadius: 4,
-                                        flexShrink: 0,
-                                        letterSpacing: 0.3
-                                      }}>
-                                        {volBadge}
-                                      </span>
-                                    )}
-                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.quizTitle}</span>
-                                </div>
-                                <div style={{fontSize: 11, color: C.sub, marginTop: 3}}>{r.date}</div>
-                            </div>
-                            <div style={{display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0}}>
-                                <div style={{textAlign: 'right'}}>
-                                    <div style={{fontSize: 17, fontWeight: 900, color: C.accent, lineHeight: 1}}>{r.score}/{r.total}</div>
-                                    <div style={{fontSize: 11, fontWeight: 800, color: C.sub, marginTop: 2}}>{t('band_label')} {r.band}</div>
-                                </div>
-                                <button onClick={() => handleReviewQuiz(r)} style={{fontSize: 11, fontWeight: 700, background: C.card, border: `1px solid ${C.border}`, color: C.text, padding: '7px 12px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap'}}>{t('view_review')}</button>
-                            </div>
+              type ExamGroup = {
+                key: string;
+                quizId: string;
+                quizTitle: string;
+                relatedQuiz?: Quiz;
+                attempts: QuizResult[];
+                latestAttempt: QuizResult;
+                bestAttempt: QuizResult;
+                bandDelta: number | null;
+              };
+
+              const examGroupsMap = new Map<string, ExamGroup>();
+              sortedSkillResultsDesc.forEach(r => {
+                const groupKey = r.quizId || r.quizTitle;
+                let g = examGroupsMap.get(groupKey);
+                if (!g) {
+                  const related = quizzes.find(qz => qz.id === r.quizId);
+                  g = {
+                    key: groupKey,
+                    quizId: r.quizId,
+                    quizTitle: r.quizTitle,
+                    relatedQuiz: related,
+                    attempts: [],
+                    latestAttempt: r,
+                    bestAttempt: r,
+                    bandDelta: null,
+                  };
+                  examGroupsMap.set(groupKey, g);
+                }
+                g.attempts.push(r);
+              });
+
+              const examGroups: ExamGroup[] = Array.from(examGroupsMap.values()).map(g => {
+                const latest = g.attempts[0];
+                const oldest = g.attempts[g.attempts.length - 1];
+                let best = g.attempts[0];
+                let bestVal = typeof best.band === 'number' ? best.band : (parseFloat(String(best.band || '0')) || (best.score / (best.total || 1)));
+                for (let i = 1; i < g.attempts.length; i++) {
+                  const att = g.attempts[i];
+                  const val = typeof att.band === 'number' ? att.band : (parseFloat(String(att.band || '0')) || (att.score / (att.total || 1)));
+                  if (val > bestVal) {
+                    bestVal = val;
+                    best = att;
+                  }
+                }
+                let delta: number | null = null;
+                if (g.attempts.length > 1) {
+                  const lBand = typeof latest.band === 'number' ? latest.band : parseFloat(String(latest.band || ''));
+                  const oBand = typeof oldest.band === 'number' ? oldest.band : parseFloat(String(oldest.band || ''));
+                  if (!isNaN(lBand) && !isNaN(oBand)) {
+                    delta = Math.round((lBand - oBand) * 10) / 10;
+                  }
+                }
+                return {
+                  ...g,
+                  latestAttempt: latest,
+                  bestAttempt: best,
+                  bandDelta: delta,
+                };
+              });
+
+              // Filter
+              const filteredGroups = examGroups.filter(g => {
+                if (stResultSearch.trim()) {
+                  const q = stResultSearch.trim().toLowerCase();
+                  const titleMatch = (g.quizTitle || '').toLowerCase().includes(q);
+                  const folderMatch = (g.relatedQuiz?.folder || '').toLowerCase().includes(q);
+                  if (!titleMatch && !folderMatch) return false;
+                }
+                if (stResultScoreFilter === "HIGH") {
+                  const b = typeof g.bestAttempt.band === 'number' ? g.bestAttempt.band : parseFloat(String(g.bestAttempt.band || '0'));
+                  const pct = g.bestAttempt.total > 0 ? (g.bestAttempt.score / g.bestAttempt.total) : 0;
+                  if (b < 7.0 && pct < 0.75) return false;
+                } else if (stResultScoreFilter === "LOW") {
+                  const b = typeof g.latestAttempt.band === 'number' ? g.latestAttempt.band : parseFloat(String(g.latestAttempt.band || '0'));
+                  const pct = g.latestAttempt.total > 0 ? (g.latestAttempt.score / g.latestAttempt.total) : 0;
+                  if (b >= 6.0 || pct >= 0.6) return false;
+                }
+                return true;
+              });
+
+              // Sort
+              if (stResultSort === "SCORE_DESC") {
+                filteredGroups.sort((a, b) => {
+                  const bVal = typeof b.bestAttempt.band === 'number' ? b.bestAttempt.band : (parseFloat(String(b.bestAttempt.band || '0')) || (b.bestAttempt.score / (b.bestAttempt.total || 1)));
+                  const aVal = typeof a.bestAttempt.band === 'number' ? a.bestAttempt.band : (parseFloat(String(a.bestAttempt.band || '0')) || (a.bestAttempt.score / (a.bestAttempt.total || 1)));
+                  return bVal - aVal;
+                });
+              } else {
+                filteredGroups.sort((a, b) =>
+                  parseQuizResultDateMs(b.latestAttempt.date, b.latestAttempt.submittedAt || b.latestAttempt.id) -
+                  parseQuizResultDateMs(a.latestAttempt.date, a.latestAttempt.submittedAt || a.latestAttempt.id)
+                );
+              }
+
+              // Pagination: 6 exams per page
+              const PER_PAGE = 6;
+              const totalPages = Math.ceil(filteredGroups.length / PER_PAGE) || 1;
+              const activePage = Math.min(Math.max(1, stResultPage), totalPages);
+              const pagedGroups = filteredGroups.slice((activePage - 1) * PER_PAGE, activePage * PER_PAGE);
+
+              return (
+                <div style={{ marginTop: 16 }}>
+                  {/* KPI SUMMARY CARDS */}
+                  {totalSkillResults > 0 && (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+                      gap: 10,
+                      marginBottom: 16
+                    }}>
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Ico name="file" size={13} color={C.sub} />
+                          <span>{tx('Đã hoàn thành', 'Completed')}</span>
                         </div>
-                    )})}
+                        <div style={{ fontSize: 18, fontWeight: 900, color: C.text }}>
+                          {totalSkillResults} <span style={{ fontSize: 12, fontWeight: 600, color: C.sub }}>{tx(`lượt (${examGroups.length} đề)`, `attempts (${examGroups.length} exams)`)}</span>
+                        </div>
+                      </div>
+
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Ico name="trophy" size={13} color="#d97706" />
+                          <span>{tx('Band cao nhất', 'Highest Band')}</span>
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: highestBand !== null ? '#d97706' : C.sub }}>
+                          {highestBand !== null ? highestBand : '—'}
+                        </div>
+                      </div>
+
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Ico name="trending" size={13} color={C.accent} />
+                          <span>{tx('Band trung bình', 'Average Band')}</span>
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: avgBand !== null ? C.accent : C.sub }}>
+                          {avgBand !== null ? avgBand : '—'}
+                        </div>
+                      </div>
+
+                      <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: C.sub, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Ico name="clock" size={13} color={C.sub} />
+                          <span>{tx('Gần nhất', 'Latest')}</span>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: C.text, paddingTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {latestDate ? (latestDate.includes(' ') ? latestDate.split(' ')[0] : latestDate) : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TOOLBAR: SEARCH, SCORE FILTER, SORT */}
+                  {totalSkillResults > 0 && (
+                    <div style={{
+                      background: C.card,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      marginBottom: 14,
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 10,
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      {/* Search box */}
+                      <div style={{
+                        position: 'relative',
+                        flex: isMobile ? '1 1 100%' : '1 1 240px',
+                        minWidth: 180,
+                        maxWidth: isMobile ? '100%' : 340
+                      }}>
+                        <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: C.sub, display: 'flex' }}>
+                          <Ico name="search" size={14} />
+                        </div>
+                        <input
+                          type="text"
+                          value={stResultSearch}
+                          onChange={e => setStResultSearch(e.target.value)}
+                          placeholder={tx(`Tìm trong ${examGroups.length} đề thi...`, `Search in ${examGroups.length} exams...`)}
+                          style={{
+                            width: '100%',
+                            padding: '7px 28px 7px 30px',
+                            borderRadius: 6,
+                            border: `1px solid ${C.border}`,
+                            background: C.bg,
+                            color: C.text,
+                            fontSize: 12.5,
+                            outline: 'none',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                        {stResultSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setStResultSearch("")}
+                            style={{
+                              position: 'absolute',
+                              right: 6,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: C.sub,
+                              padding: 2,
+                              display: 'flex'
+                            }}
+                          >
+                            <Ico name="x" size={13} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Filters and Sort */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                        {/* Score Filter */}
+                        <div style={{ display: 'inline-flex', background: C.bg, padding: 2, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                          {([
+                            { id: "ALL", label: tx("Tất cả", "All") },
+                            { id: "HIGH", label: tx("Band ≥ 7.0", "Band ≥ 7.0") },
+                            { id: "LOW", label: tx("< 6.0", "< 6.0") },
+                          ] as const).map(f => {
+                            const active = stResultScoreFilter === f.id;
+                            return (
+                              <button
+                                key={f.id}
+                                type="button"
+                                onClick={() => setStResultScoreFilter(f.id)}
+                                style={{
+                                  padding: '4px 9px',
+                                  fontSize: 11,
+                                  fontWeight: active ? 800 : 600,
+                                  border: 'none',
+                                  borderRadius: 4,
+                                  background: active ? C.accent : 'transparent',
+                                  color: active ? '#fff' : C.sub,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                {f.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Sort */}
+                        <div style={{ display: 'inline-flex', background: C.bg, padding: 2, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                          {([
+                            { id: "NEW", label: tx("Mới nhất", "Newest") },
+                            { id: "SCORE_DESC", label: tx("Điểm cao", "Best score") },
+                          ] as const).map(s => {
+                            const active = stResultSort === s.id;
+                            return (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => setStResultSort(s.id)}
+                                style={{
+                                  padding: '4px 9px',
+                                  fontSize: 11,
+                                  fontWeight: active ? 800 : 600,
+                                  border: 'none',
+                                  borderRadius: 4,
+                                  background: active ? C.accent : 'transparent',
+                                  color: active ? '#fff' : C.sub,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                {s.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* EMPTY STATES */}
+                  {totalSkillResults === 0 && (
+                    <div style={{ color: C.sub, fontSize: 13, textAlign: 'center', padding: '36px 16px', background: C.card, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                      {tx(`Chưa có kết quả thi ${studentExamSkillTab}.`, `No ${studentExamSkillTab} exam results yet.`)}
+                    </div>
+                  )}
+
+                  {totalSkillResults > 0 && filteredGroups.length === 0 && (
+                    <div style={{ color: C.sub, fontSize: 13, textAlign: 'center', padding: '32px 16px', background: C.card, borderRadius: 10, border: `1px dashed ${C.border}` }}>
+                      <p style={{ margin: '0 0 10px 0' }}>{tx('Không tìm thấy đề thi phù hợp với bộ lọc.', 'No exams match your filters.')}</p>
+                      <button
+                        type="button"
+                        onClick={() => { setStResultSearch(''); setStResultScoreFilter('ALL'); }}
+                        style={{ fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, background: C.bg, border: `1px solid ${C.border}`, color: C.accent, cursor: 'pointer' }}
+                      >
+                        {tx('Xóa bộ lọc', 'Clear filters')}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* EXAM GROUPS LIST */}
+                  {pagedGroups.map(group => {
+                    const r = group.latestAttempt;
+                    const rClass = classifyStudentQuiz(group.relatedQuiz || ({ title: group.quizTitle } as any));
+                    const volBadge = rClass.isVolSeries
+                      ? rClass.volLabel
+                      : (rClass.extraGroupLabel || rClass.volLabel);
+                    const isExpanded = Boolean(stExpandedResultExams[group.key]);
+                    const hasMultipleAttempts = group.attempts.length > 1;
+
+                    return (
+                      <div
+                        key={group.key}
+                        style={{
+                          background: C.card,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 10,
+                          padding: '13px 15px',
+                          marginBottom: 10,
+                          transition: 'all 0.15s ease',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 14, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                              {volBadge && (
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  background: rClass.isVolSeries ? `${C.accent}15` : `${C.sub}18`,
+                                  color: rClass.isVolSeries ? C.accent : C.text,
+                                  border: `1px solid ${rClass.isVolSeries ? `${C.accent}40` : C.border}`,
+                                  padding: '1px 6px',
+                                  borderRadius: 4,
+                                  flexShrink: 0,
+                                  letterSpacing: 0.3
+                                }}>
+                                  {volBadge}
+                                </span>
+                              )}
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{group.quizTitle}</span>
+                              {hasMultipleAttempts && (
+                                <span style={{
+                                  fontSize: 10.5,
+                                  fontWeight: 800,
+                                  background: `${C.accent}14`,
+                                  color: C.accent,
+                                  padding: '1px 7px',
+                                  borderRadius: 10,
+                                  border: `1px solid ${C.accent}30`
+                                }}>
+                                  {group.attempts.length} {tx('lần làm', 'attempts')}
+                                </span>
+                              )}
+                              {group.bandDelta !== null && group.bandDelta > 0 && (
+                                <span style={{
+                                  fontSize: 10.5,
+                                  fontWeight: 800,
+                                  background: '#10b98118',
+                                  color: '#059669',
+                                  padding: '1px 6px',
+                                  borderRadius: 10,
+                                  border: '1px solid #10b98135'
+                                }}>
+                                  +{group.bandDelta} band ↗
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: C.sub, marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span>{tx('Gần nhất', 'Latest')}: {r.date}</span>
+                              {hasMultipleAttempts && (
+                                <>
+                                  <span>•</span>
+                                  <span>{tx('Cao nhất', 'Best')}: {group.bestAttempt.score}/{group.bestAttempt.total} (Band {group.bestAttempt.band})</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, justifyContent: isMobile ? 'space-between' : 'flex-end', width: isMobile ? '100%' : 'auto' }}>
+                            <div style={{ textAlign: isMobile ? 'left' : 'right' }}>
+                              <div style={{ fontSize: 17, fontWeight: 900, color: C.accent, lineHeight: 1 }}>{r.score}/{r.total}</div>
+                              <div style={{ fontSize: 11, fontWeight: 800, color: C.sub, marginTop: 2 }}>{t('band_label')} {r.band}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              {hasMultipleAttempts && (
+                                <button
+                                  type="button"
+                                  onClick={() => setStExpandedResultExams(prev => ({ ...prev, [group.key]: !prev[group.key] }))}
+                                  title={tx('Xem toàn bộ lịch sử các lần làm đề này', 'View attempt history')}
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    background: isExpanded ? `${C.accent}12` : C.bg,
+                                    border: `1px solid ${isExpanded ? C.accent : C.border}`,
+                                    color: isExpanded ? C.accent : C.sub,
+                                    padding: '7px 10px',
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  <span>{tx('Lịch sử', 'History')} ({group.attempts.length})</span>
+                                  <Ico name={isExpanded ? 'chevronUp' : 'chevronDown'} size={12} />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleReviewQuiz(r)}
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  background: C.accent,
+                                  border: 'none',
+                                  color: '#fff',
+                                  padding: '7px 14px',
+                                  borderRadius: 6,
+                                  cursor: 'pointer',
+                                  whiteSpace: 'nowrap',
+                                  boxShadow: `0 2px 6px ${C.accent}35`
+                                }}
+                              >
+                                {t('view_review')}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* ATTEMPT HISTORY DRAWER */}
+                        {isExpanded && hasMultipleAttempts && (
+                          <div style={{
+                            marginTop: 12,
+                            paddingTop: 10,
+                            borderTop: `1px dashed ${C.border}`,
+                            background: `${C.bg}80`,
+                            borderRadius: 6,
+                            padding: '10px 12px'
+                          }}>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                              {tx('Chi tiết các lượt làm bài', 'Attempt History Breakdown')}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {group.attempts.map((att, idx) => {
+                                const isLatest = idx === 0;
+                                const isBest = att.id === group.bestAttempt.id;
+                                const attemptNum = group.attempts.length - idx;
+
+                                return (
+                                  <div
+                                    key={att.id}
+                                    style={{
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      gap: 10,
+                                      padding: '7px 10px',
+                                      background: C.card,
+                                      border: `1px solid ${C.border}`,
+                                      borderRadius: 6,
+                                      fontSize: 12
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                      <span style={{ fontWeight: 800, color: C.text, minWidth: 42 }}>
+                                        #{attemptNum}
+                                      </span>
+                                      <span style={{ color: C.sub, fontSize: 11.5 }}>
+                                        {att.date}
+                                      </span>
+                                      {isLatest && (
+                                        <span style={{ fontSize: 9.5, fontWeight: 800, background: `${C.accent}15`, color: C.accent, padding: '1px 5px', borderRadius: 4 }}>
+                                          {tx('Mới nhất', 'Latest')}
+                                        </span>
+                                      )}
+                                      {isBest && (
+                                        <span style={{ fontSize: 9.5, fontWeight: 800, background: '#d9770618', color: '#d97706', padding: '1px 5px', borderRadius: 4 }}>
+                                          ★ {tx('Cao nhất', 'Best')}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                                      <span style={{ fontWeight: 800, color: C.accent }}>
+                                        {att.score}/{att.total}
+                                      </span>
+                                      <span style={{ fontSize: 11, fontWeight: 700, color: C.sub }}>
+                                        Band {att.band}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleReviewQuiz(att)}
+                                        style={{
+                                          fontSize: 10.5,
+                                          fontWeight: 700,
+                                          background: C.bg,
+                                          border: `1px solid ${C.border}`,
+                                          color: C.text,
+                                          padding: '4px 8px',
+                                          borderRadius: 4,
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        {tx('Xem lại', 'Review')}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* PAGINATION CONTROLS */}
+                  {totalPages > 1 && (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 10,
+                      marginTop: 18,
+                      paddingTop: 12,
+                      borderTop: `1px solid ${C.border}`,
+                      flexWrap: 'wrap'
+                    }}>
+                      <div style={{ fontSize: 12, color: C.sub }}>
+                        {tx(
+                          `Hiển thị ${(activePage - 1) * PER_PAGE + 1}–${Math.min(activePage * PER_PAGE, filteredGroups.length)} trong số ${filteredGroups.length} đề thi`,
+                          `Showing ${(activePage - 1) * PER_PAGE + 1}–${Math.min(activePage * PER_PAGE, filteredGroups.length)} of ${filteredGroups.length} exams`
+                        )}
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          disabled={activePage <= 1}
+                          onClick={() => setStResultPage(Math.max(1, activePage - 1))}
+                          style={{
+                            padding: '6px 11px',
+                            fontSize: 11.5,
+                            fontWeight: 700,
+                            borderRadius: 6,
+                            border: `1px solid ${C.border}`,
+                            background: C.card,
+                            color: activePage <= 1 ? `${C.sub}60` : C.text,
+                            cursor: activePage <= 1 ? 'not-allowed' : 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3
+                          }}
+                        >
+                          <Ico name="chevLeft" size={13} />
+                          <span>{tx('Trước', 'Prev')}</span>
+                        </button>
+
+                        {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => {
+                          const isCurrent = p === activePage;
+                          if (totalPages > 7) {
+                            if (p !== 1 && p !== totalPages && Math.abs(p - activePage) > 1) {
+                              if (p === 2 || p === totalPages - 1) {
+                                return <span key={p} style={{ padding: '0 3px', color: C.sub, fontSize: 11 }}>...</span>;
+                              }
+                              return null;
+                            }
+                          }
+
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => setStResultPage(p)}
+                              style={{
+                                minWidth: 30,
+                                height: 30,
+                                padding: '0 6px',
+                                fontSize: 12,
+                                fontWeight: isCurrent ? 900 : 700,
+                                borderRadius: 6,
+                                border: `1px solid ${isCurrent ? C.accent : C.border}`,
+                                background: isCurrent ? C.accent : C.card,
+                                color: isCurrent ? '#fff' : C.text,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              {p}
+                            </button>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          disabled={activePage >= totalPages}
+                          onClick={() => setStResultPage(Math.min(totalPages, activePage + 1))}
+                          style={{
+                            padding: '6px 11px',
+                            fontSize: 11.5,
+                            fontWeight: 700,
+                            borderRadius: 6,
+                            border: `1px solid ${C.border}`,
+                            background: C.card,
+                            color: activePage >= totalPages ? `${C.sub}60` : C.text,
+                            cursor: activePage >= totalPages ? 'not-allowed' : 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3
+                          }}
+                        >
+                          <span>{tx('Sau', 'Next')}</span>
+                          <Ico name="chevRight" size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-            )}
+              );
+            })()}
           </div>
           </>)}
 

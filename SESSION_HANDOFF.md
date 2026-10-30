@@ -1,5 +1,32 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-30)
 
+## Tái Cấu Trúc Khoa Học Tab Results & Review — Lọc Bỏ Quest & Triệt Tiêu Scroll Vô Tận — 2026-10-30
+
+- **Vấn đề trước khi sửa**:
+  1. Tab `Results & Review` trong Phòng thi học sinh (`examRoomTab === "results"`) hiển thị lẫn lộn cả các bài tập mini-quest / chuyên đề ngắn (4-5 câu) khiến số lượng kết quả bị đội lên đột biến (hơn 115 kết quả). Các bài tập này học viên đã có giao diện Review riêng biệt trong tab Chuyên đề (`portalTab === "quests"`).
+  2. Danh sách kết quả thi được render phẳng không giới hạn, không có tìm kiếm, không lọc theo điểm số, không gom nhóm theo bài thi. Học viên làm lại một đề nhiều lần (retakes) sẽ thấy hàng loạt dòng trùng lặp, gây hiện tượng cuộn chuột vô tận (infinite scroll) rất khó theo dõi tiến độ.
+- **Giải pháp xử lý triệt để**:
+  1. **Lọc sạch kết quả Quest khỏi Results & Review (`isQuestResult`)**:
+     - Bổ sung helper `isQuestResult(r: QuizResult): boolean` trong `STUDENT_PORTAL.txt` kiểm tra:
+       - Thuộc tính quest trực tiếp: `topicAssignmentId`, `topicNodeId`, `questPassed`, `questQuestionIds`.
+       - Mọi `resultId` được ghi nhận trong danh sách lần làm bài `questProgress.attempts`.
+       - Mọi `quizId` thuộc danh sách bài tập của các chặng chuyên đề (`allQuestTestIds`).
+     - Tách biệt `myExamResults = myQuizResults.filter(r => !isQuestResult(r))`, cập nhật số lượng badge tab sub-tab `{ k: 'results', n: myExamResults.length }` và đếm lượt làm theo từng kỹ năng (`Listening`, `Reading`, `Writing`, `Integrated`).
+  2. **Thanh chỉ số tổng quan (KPI Strip)**:
+     - 4 thẻ KPI thu nhỏ: Tổng số bài đã hoàn thành (số lượt & số đề), Band cao nhất, Band trung bình, và Ngày thi gần nhất.
+  3. **Thanh công cụ lọc thông minh (Smart Toolbar)**:
+     - Ô tìm kiếm thời gian thực (`stResultSearch`) theo tên đề thi hoặc thư mục/bộ sách kèm nút xóa nhanh `x`.
+     - Bộ nút lọc Band (`stResultScoreFilter`): `Tất cả` (`ALL`), `Band ≥ 7.0` (`HIGH`), `Cần cải thiện (< 6.0)` (`LOW`).
+     - Bộ nút sắp xếp (`stResultSort`): `Mới nhất` (`NEW`) và `Điểm cao nhất` (`SCORE_DESC`).
+  4. **Gom nhóm thông minh theo bài thi & Ngăn kéo lịch sử (Exam Grouping & Attempt Drawer)**:
+     - Tự động gom nhóm các kết quả của cùng một bài thi (`quizId`/`quizTitle`) thành 1 thẻ thống nhất (`ExamGroup`).
+     - Hiển thị nổi bật: Volume/Series badge, Tên đề, Điểm số và Band của lần làm mới nhất, Huy hiệu số lần làm bài (ví dụ `3 lần làm`), và Mức độ cải thiện Band (ví dụ `+1.0 band ↗`).
+     - Với các đề thi làm nhiều lần: Cung cấp nút mở rộng `Lịch sử làm bài (N) ▼` mở ra ngăn kéo (Drawer) hiển thị danh sách dòng thời gian từng lần làm trước đây (ngày, điểm, band, huy hiệu Best) kèm nút "Xem lại" trực tiếp cho từng lần đó.
+  5. **Phân trang khoa học (Pagination Guard)**:
+     - Giới hạn hiển thị 6 đề thi trên mỗi trang (`PER_PAGE = 6`).
+     - Thanh điều hướng phân trang đầy đủ: Thông tin `Hiển thị 1–6 trong số N đề thi`, nút `‹ Trước`, các nút số trang `[1] [2]...`, và nút `Sau ›`. Reset trang về 1 khi đổi kỹ năng hoặc bộ lọc.
+
+
 ## Sửa Triệt Để Lỗi Định Vị Dẫn Chứng (Evidence Jump) Matching Headings — Cuộn Đúng Đoạn & Highlight Chuẩn — 2026-10-30
 
 - **Hiện tượng lỗi**:
