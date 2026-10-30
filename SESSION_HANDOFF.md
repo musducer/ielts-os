@@ -1,4 +1,26 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-27)
+# IELTS OS — Session Handoff (cập nhật 2026-10-30)
+
+## Chuẩn Hóa Chẩn Đoán Điểm Yếu Sư Phạm (Error DNA) — Triệt Tiêu Dẫn Chứng Vụn Vặt & Chỉ Số Khó Hiểu — 2026-10-30
+
+- **Vấn đề trước khi sửa**:
+  - Khu vực *Bẫy đề học viên thường mắc (Recurring Traps Identified)* của Error DNA hiển thị các trích dẫn câu hỏi cũ hoặc chỉ số thô khó hiểu:
+    - Trích dẫn câu/đoạn thi cũ: `"For instance, choosing 'i' instead of 'vi' for Paragraph 14, or 'v' instead of 'i' for Paragraph 3."`
+    - Trích dẫn chỉ số mảng thô (index): `"'engaging in certain activities for the benefit of observers' was chosen as '2' instead of '0'."` (học sinh không hiểu "2 thay vì 0" nghĩa là gì vì đây là số thứ tự trong code).
+    - Học viên không thể nhớ đề thi làm từ nhiều tuần trước; việc dẫn chứng câu lẻ làm mất tập trung khỏi bản chất lỗ hổng tư duy.
+- **Giải pháp chuẩn hóa sư phạm chuyên sâu**:
+  1. **Tập trung 100% vào phân tích tư duy & cơ chế bẫy (Pedagogical Mechanics)**:
+     - Prompt `/api/analyze_error_dna` cấm hoàn toàn việc trích dẫn câu hỏi cũ, số thứ tự đoạn (như Paragraph 14, Đoạn 3), hay chỉ số đáp án ('2 instead of 0', 'i instead of vi').
+     - Bắt buộc đi thẳng vào bản chất: thói quen đọc lướt tìm từ khóa bề nổi mà bỏ qua từ hạn định (qualifying adverbs/negation), nhầm lẫn chi tiết bổ trợ với luận điểm chính, hoặc suy diễn vượt quá thông tin bài cung cấp.
+  2. **Bộ lọc làm sạch Backend (`_clean_trap_detail`)**:
+     - Tự động bóc tách và loại bỏ mọi mẫu câu dẫn chứng vụn vặt (`For instance... instead of...`, `was chosen as '2' instead of '0'`, `ở Đoạn X`, `trong Câu Y`) cả tiếng Việt và tiếng Anh.
+     - Fallback thông minh đảm bảo phân tích luôn giữ tính sư phạm, mạch lạc ngay cả khi LLM rò rỉ dẫn chứng.
+  3. **Làm sạch Payload đầu vào Frontend & Chuyển đổi Index**:
+     - `recentMistakes` trong `App.template.tsx` phân giải các index số nguyên (`0`, `2`) thành nhãn chữ cái và nội dung phương án (`A: ...`, `C: ...`), ngăn LLM đọc phải số thô.
+     - Hàm vệ sinh `cleanTrapDetailClient` ở tầng hiển thị bẫy đề giúp bảo vệ UI khỏi dữ liệu cũ trước khi re-sync.
+  4. **Nâng cấp Cache Signature (`v2_`)**:
+     - Prefix `v2_` trong signature của Error DNA tự động làm mới chẩn đoán cho các học viên có hồ sơ cũ mà không cần can thiệp thủ công.
+  5. **Kiểm thử tự động (`tests/test_ai_pedagogical_features.py`)**:
+     - Bổ sung unit tests kiểm tra toàn diện bộ lọc `_clean_trap_detail` và endpoint `analyze_error_dna`. Đảm bảo 15/15 tests pass.
 
 ## Tái Cấu Trúc Khoa Học Khu Vực Session Logs & Feedback — Triệt Tiêu Scroll Vô Tận — 2026-10-30
 

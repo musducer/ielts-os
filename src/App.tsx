@@ -10638,6 +10638,16 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
     return CANONICAL_IELTS_TYPES.find(t => t.key === bucket) || CANONICAL_IELTS_TYPES[7];
   };
 
+  const cleanTrapDetailClient = (text?: string): string => {
+    if (!text) return "";
+    let t = String(text).trim();
+    t = t.replace(/\b(?:for instance|for example|ví dụ(?: như)?|chẳng hạn(?: như)?|tiêu biểu(?: là)?)\b[^.!?\n]*?(?:instead of|thay vì|chose|chosen|chọn|đoạn|paragraph)[^.!?\n]*([.!?]|$)/gi, "");
+    t = t.replace(/['"]?(?:[0-9]|[ivxlcdm]+)['"]?\s*(?:thay vì|instead of)\s*['"]?(?:[0-9]|[ivxlcdm]+)['"]?/gi, "");
+    t = t.replace(/\b(?:for|in|at|ở|trong)\s+(?:paragraph|đoạn|câu|question)\s+\d+\b/gi, "");
+    t = t.replace(/\s{2,}/g, " ").replace(/\s+([,.:;!?])/g, "$1").replace(/[,;]\s*([.!?])/g, "$1").trim();
+    return t;
+  };
+
   const triggerErrorDnaAnalysis = async (targetStudent: Student, force = false) => {
     if (!targetStudent?.id) return;
     const sid = targetStudent.id;
@@ -10669,9 +10679,24 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
         typeMap[cat.key].correct += group.score;
 
         if (group.score < group.total && recentMistakes.length < 15) {
+          const formatAnsValue = (val: any): string => {
+            if (val === undefined || val === null || val === "") return "(skipped)";
+            if (Array.isArray(val)) return val.map(formatAnsValue).join(", ");
+            const s = String(val).trim();
+            if (/^\d+$/.test(s) && Array.isArray(q.options) && q.options.length > 0) {
+              const idx = parseInt(s, 10);
+              if (idx >= 0 && idx < q.options.length) {
+                const optText = String(q.options[idx] ?? "").trim();
+                const letter = String.fromCharCode(65 + idx);
+                return optText ? `${letter}: ${optText.slice(0, 50)}` : letter;
+              }
+            }
+            return s;
+          };
           const studentAns = r.answers[q.id];
-          const studentAnsStr = Array.isArray(studentAns) ? studentAns.join(", ") : String(studentAns ?? "(skipped)");
-          const correctStr = String(q.correctAnswer ?? q.correct ?? (Array.isArray(q.answers) ? q.answers.join(" / ") : "N/A"));
+          const studentAnsStr = formatAnsValue(studentAns);
+          const correctVal = q.correctAnswer ?? q.correct ?? (Array.isArray(q.answers) ? q.answers : "N/A");
+          const correctStr = formatAnsValue(correctVal);
           recentMistakes.push({
             quizTitle: quiz.title || r.quizTitle || "Exam",
             skill: quizTaxonomySkill(quiz),
@@ -10699,7 +10724,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
       };
     }).filter(item => item.total > 0);
 
-    const signature = `${studentResults.length}_${studentResults[0]?.date || ""}_${totalQuestionsAnalyzed}`;
+    const signature = `v2_${studentResults.length}_${studentResults[0]?.date || ""}_${totalQuestionsAnalyzed}`;
 
     if (!force && targetStudent.errorDna && targetStudent.errorDna.signature === signature && targetStudent.errorDna.categoryBreakdown) {
       return;
@@ -10749,7 +10774,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
   useEffect(() => {
     if (!students || !students.length || !quizResults || !quizResults.length) return;
     const currentSt = students.find(s => s.email && currentUser?.email && s.email.toLowerCase() === currentUser.email.toLowerCase());
-    if (currentSt && (!currentSt.errorDna || !currentSt.errorDna.categoryBreakdown)) {
+    if (currentSt && (!currentSt.errorDna || !currentSt.errorDna.categoryBreakdown || !currentSt.errorDna.signature?.startsWith("v2_"))) {
       void triggerErrorDnaAnalysis(currentSt);
     }
   }, [students, quizResults, currentUser]);
@@ -12538,7 +12563,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   </span>
                                 </div>
                                 <div style={{ fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
-                                  {tx(trap.detailVi, trap.detailEn)}
+                                  {tx(cleanTrapDetailClient(trap.detailVi), cleanTrapDetailClient(trap.detailEn))}
                                 </div>
                               </div>
                             );

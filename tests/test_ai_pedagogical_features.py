@@ -18,6 +18,64 @@ class TestAiPedagogicalFeatures(unittest.TestCase):
         self.assertIsNotNone(data)
         self.assertEqual(data.get("trapType"), "Extrapolation Trap")
 
+    def test_clean_trap_detail_removes_citations_and_indices(self):
+        # 1. Removes citations like "For instance, choosing 'i' instead of 'vi' for Paragraph 14"
+        raw_en = "Distinguishing Main Idea from Supporting Details. For instance, choosing 'i' instead of 'vi' for Paragraph 14, or 'v' instead of 'i' for Paragraph 3."
+        cleaned_en = index._clean_trap_detail(raw_en)
+        self.assertNotIn("Paragraph 14", cleaned_en)
+        self.assertNotIn("instead of", cleaned_en)
+        self.assertEqual(cleaned_en, "Distinguishing Main Idea from Supporting Details.")
+
+        # 2. Removes Vietnamese citations like "Ví dụ, chọn 'i' thay vì 'vi' cho Đoạn 14"
+        raw_vi = "Học sinh thường nhầm lẫn giữa chi tiết hỗ trợ và ý chính. Ví dụ, chọn 'i' thay vì 'vi' cho Đoạn 14."
+        cleaned_vi = index._clean_trap_detail(raw_vi)
+        self.assertNotIn("Đoạn 14", cleaned_vi)
+        self.assertNotIn("thay vì", cleaned_vi)
+        self.assertEqual(cleaned_vi, "Học sinh thường nhầm lẫn giữa chi tiết hỗ trợ và ý chính.")
+
+        # 3. Removes '2' instead of '0' or 'was chosen as 2 instead of 0'
+        raw_idx = "'engaging in certain activities for the benefit of observers' was chosen as '2' instead of '0'. Học sinh bị lừa bởi từ đồng nghĩa."
+        cleaned_idx = index._clean_trap_detail(raw_idx)
+        self.assertNotIn("2", cleaned_idx)
+        self.assertNotIn("0", cleaned_idx)
+        self.assertEqual(cleaned_idx, "Học sinh bị lừa bởi từ đồng nghĩa.")
+
+    def test_analyze_error_dna_sanitizes_leaked_citations(self):
+        req_payload = {
+            "studentName": "Nguyen Van A",
+            "targetBand": "7.5",
+            "typeAccuracy": [
+                {"label": "Multiple Choice", "correct": 2, "total": 5, "accuracy": 40}
+            ],
+            "recentMistakes": []
+        }
+
+        mock_ai_response = json.dumps({
+            "categoryBreakdown": {"lexicalGap": 40, "distractorTrap": 40, "scopeMisread": 20},
+            "recurringTraps": [
+                {
+                    "titleVi": "Bẫy chi tiết phụ",
+                    "titleEn": "Supporting Detail Distractor",
+                    "detailVi": "Học sinh thường vội vàng chọn đáp án chứa từ khóa phụ. Chẳng hạn, chọn '2' thay vì '0' trong Câu 5.",
+                    "detailEn": "Student tends to pick secondary detail keywords. For instance, choosing '2' instead of '0' for Question 5.",
+                    "severity": "high"
+                }
+            ],
+            "actionPlanVi": ["Học cách đọc lướt xác định cấu trúc đoạn"],
+            "actionPlanEn": ["Practice scanning for overall paragraph hierarchy"]
+        })
+
+        with patch.object(index, "_pedagogical_ai_call", return_value=(mock_ai_response, None)):
+            res = asyncio.run(index.analyze_error_dna(req_payload))
+            self.assertTrue(res.get("success"))
+            self.assertEqual(len(res["recurringTraps"]), 1)
+            trap = res["recurringTraps"][0]
+            self.assertNotIn("'2' thay vì '0'", trap["detailVi"])
+            self.assertNotIn("chọn '2' thay vì '0'", trap["detailVi"])
+            self.assertNotIn("'2' instead of '0'", trap["detailEn"])
+            self.assertNotIn("Question 5", trap["detailEn"])
+            self.assertIn("Học sinh thường vội vàng chọn đáp án chứa từ khóa phụ.", trap["detailVi"])
+
     def test_analyze_error_dna_endpoint(self):
         req_payload = {
             "studentName": "Nguyen Van A",

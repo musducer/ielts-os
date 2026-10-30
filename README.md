@@ -1,5 +1,14 @@
 # IELTS OS
 
+## Chuẩn Hóa Chẩn Đoán Điểm Yếu Sư Phạm (Error DNA) — Triệt Tiêu Dẫn Chứng Vụn Vặt & Chỉ Số Khó Hiểu — 2026-10-30
+
+- **Tập trung 100% vào phân tích tư duy & cơ chế bẫy (Pedagogical Weakness Diagnosis)**:
+  - Cắt bỏ hoàn toàn việc trích dẫn câu hỏi cũ, số thứ tự đoạn (như Paragraph 14, Đoạn 3) hoặc chỉ số đáp án ('2 instead of 0', 'i instead of vi').
+  - Đi sâu vào bản chất nhận thức: thói quen đọc lướt tìm từ khóa bề nổi mà bỏ qua từ hạn định/phủ định, nhầm lẫn chi tiết hỗ trợ với luận điểm chính, hoặc suy diễn vượt ngoài văn bản.
+- **Bộ lọc Backend (`_clean_trap_detail`) & Vệ sinh Frontend (`cleanTrapDetailClient`)**:
+  - Tự động làm sạch các câu/mệnh đề trích dẫn ví dụ vụn vặt; chuyển đổi các chỉ số mảng thô trong `recentMistakes` thành nhãn phương án chữ cái rõ nghĩa (`A: ...`, `C: ...`).
+  - Nâng cấp cache signature `v2_` giúp tự động làm mới chẩn đoán cho các hồ sơ học viên cũ.
+
 ## Tái Cấu Trúc Khoa Học Khu Vực Session Logs & Feedback — Triệt Tiêu Scroll Vô Tận — 2026-10-30
 
 - **Vấn đề trước khi sửa**:

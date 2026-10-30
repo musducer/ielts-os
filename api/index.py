@@ -6021,6 +6021,56 @@ async def ai_explain(
     return response_payload
 
 
+def _clean_trap_detail(text: str) -> str:
+    """Sanitizes pedagogical trap explanations to ensure zero citation of isolated questions,
+    paragraph numbers (e.g. Paragraph 14), or raw numeric/letter indices (e.g. '2' instead of '0').
+    Enforces deep, conceptual explanation of error mechanics.
+    """
+    if not text:
+        return ""
+    t = str(text).strip()
+
+    # 1. Remove standalone sentences or trailing clauses introduced by For instance / For example / Ví dụ / Chẳng hạn...
+    t = re.sub(
+        r'(?i)\b(?:for instance|for example|ví dụ(?: như)?|chẳng hạn(?: như)?|tiêu biểu(?: là)?)\b[^.!?\n]*?(?:instead of|thay vì|chose|chosen|chọn|đoạn|paragraph)[^.!?\n]*([.!?]|\Z)',
+        '',
+        t,
+    )
+
+    # 2. Filter out sentences that are purely isolated question/choice citations
+    sentences = re.split(r'(?<=[.!?])\s+', t)
+    kept_sentences = []
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        is_isolated_citation = bool(
+            re.search(r'(?i)(?:was|is)\s+chosen\s+as\s+[\'"]?\w+[\'"]?\s+instead\s+of\b', s_clean) or
+            re.search(r'(?i)(?:được|bị)\s+chọn\s+(?:làm|thành)\s+[\'"]?\w+[\'"]?\s+thay\s+vì\b', s_clean) or
+            re.search(r'(?i)\b(?:for instance|for example|ví dụ|chẳng hạn)\b.*?\b(?:paragraph|đoạn|câu|question)\s+\d+\b', s_clean) or
+            re.search(r'(?i)[\'"]?\d+[\'"]?\s*(?:thay vì|instead of)\s*[\'"]?\d+[\'"]?', s_clean) or
+            re.search(r'(?i)\b(?:paragraph|đoạn)\s+\d+\b.*?(?:instead of|thay vì)', s_clean)
+        )
+        if is_isolated_citation:
+            continue
+
+        # Clean sub-clauses inside valid sentences:
+        s_clean = re.sub(r'(?i),\s*(?:where|như khi)\s+(?:the student|she|he|học sinh|bạn)\s+chose?[^.!?\n]*', '', s_clean)
+        s_clean = re.sub(r'(?i)\([^)]*?(?:instead of|thay vì|chosen as|chọn làm|\b[0-9]\s*thay vì)[^)]*?\)', '', s_clean)
+        s_clean = re.sub(r'(?i)\b(?:for|in|at|ở|trong)\s+(?:paragraph|đoạn|câu|question)\s+\d+\b', '', s_clean)
+        s_clean = re.sub(r'(?i)[\'"]?(?:[0-9]|[ivxlcdm]+)[\'"]?\s*(?:thay vì|instead of)\s*[\'"]?(?:[0-9]|[ivxlcdm]+)[\'"]?', '', s_clean)
+
+        s_clean = re.sub(r'\s{2,}', ' ', s_clean)
+        s_clean = re.sub(r'\s+([,.:;!?])', r'\1', s_clean)
+        s_clean = re.sub(r'[,;]\s*([.!?])', r'\1', s_clean)
+        s_clean = re.sub(r'^[,\s;.:-]+', '', s_clean).strip()
+        if s_clean and len(s_clean) > 5:
+            kept_sentences.append(s_clean)
+
+    result = " ".join(kept_sentences).strip()
+    return result
+
+
 @app.post("/api/analyze_error_dna")
 async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Request = None):
     """Automatic Error DNA & Weakness Diagnostic Engine.
@@ -6043,8 +6093,8 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Reques
         '    {\n'
         '      "titleVi": "<Short diagnostic trap name in Vietnamese>",\n'
         '      "titleEn": "<Short diagnostic trap name in English>",\n'
-        '      "detailVi": "<Direct analysis of why they fell into this trap based on their actual errors in Vietnamese>",\n'
-        '      "detailEn": "<Direct analysis in English>",\n'
+        '      "detailVi": "<In-depth diagnostic analysis of cognitive error and trap mechanics in Vietnamese>",\n'
+        '      "detailEn": "<In-depth diagnostic analysis of cognitive error and trap mechanics in English>",\n'
         '      "severity": "high" | "medium"\n'
         '    }\n'
         '  ],\n'
@@ -6053,9 +6103,13 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Reques
         "}\n"
         "Rules:\n"
         "1. categoryBreakdown: lexicalGap (thiếu từ vựng/paraphrase), distractorTrap (dính bẫy thông tin nhiễu), scopeMisread (đọc lệch phạm vi & từ hạn định). Must sum to 100.\n"
-        "2. recurringTraps: 2-4 real, specific traps observed from their mistakes.\n"
-        "3. Provide 3 actionable, highly specific study actions in actionPlanVi and actionPlanEn.\n"
-        "4. No markdown formatting outside JSON."
+        "2. recurringTraps: 2-4 real, specific cognitive traps observed from their mistake patterns.\n"
+        "3. CRITICAL PEDAGOGICAL INSTRUCTION FOR recurringTraps:\n"
+        "   - Focus 100% on deep, conceptual diagnosis of the student's cognitive weaknesses, habitual thinking errors, and how IELTS traps operate.\n"
+        "   - DO NOT cite isolated question prompts, question numbers, paragraph numbers (e.g. NEVER write 'Paragraph 14' or 'Đoạn 3'), or specific answer choices/indices (NEVER write '2 instead of 0', 'i instead of vi', 'lighting instead of electricity'). Students will not remember individual past questions, and numeric option indices like '0' and '2' are completely meaningless to them.\n"
+        "   - Explain the error MECHANICS (cơ chế bẫy) and the student's thinking pattern (tư duy sai lầm), such as scanning for verbatim words while missing qualifying words, confusing supporting details with main ideas, or jumping to conclusions before evaluating all options.\n"
+        "4. Provide 3 actionable, highly specific study actions in actionPlanVi and actionPlanEn.\n"
+        "5. No markdown formatting outside JSON."
     )
 
     user_prompt = (
@@ -6113,6 +6167,27 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Reques
         dist = round((dist / tot) * 100)
         scope = max(0, 100 - lex - dist)
 
+    raw_traps = parsed.get("recurringTraps") or []
+    cleaned_traps = []
+    for trap in raw_traps:
+        if not isinstance(trap, dict):
+            continue
+        title_vi = str(trap.get("titleVi") or "").strip()
+        title_en = str(trap.get("titleEn") or "").strip()
+        detail_vi = _clean_trap_detail(str(trap.get("detailVi") or ""))
+        detail_en = _clean_trap_detail(str(trap.get("detailEn") or ""))
+        if not detail_vi and title_vi:
+            detail_vi = f"Học viên có xu hướng vấp phải {title_vi.lower()}, cần đọc kỹ ngữ cảnh và phạm vi hạn định để tránh bẫy gây nhiễu."
+        if not detail_en and title_en:
+            detail_en = f"Student tends to fall into {title_en.lower()}, requiring closer contextual reading and attention to scope modifiers."
+        cleaned_traps.append({
+            "titleVi": title_vi or "Bẫy nhận diện thông tin",
+            "titleEn": title_en or "Information Recognition Trap",
+            "detailVi": detail_vi,
+            "detailEn": detail_en,
+            "severity": "high" if trap.get("severity") == "high" else "medium",
+        })
+
     return {
         "success": True,
         "categoryBreakdown": {
@@ -6120,7 +6195,7 @@ async def analyze_error_dna(payload: Dict[str, Any] = Body(...), request: Reques
             "distractorTrap": dist,
             "scopeMisread": scope,
         },
-        "recurringTraps": parsed.get("recurringTraps") or [],
+        "recurringTraps": cleaned_traps,
         "actionPlanVi": parsed.get("actionPlanVi") or [],
         "actionPlanEn": parsed.get("actionPlanEn") or [],
     }
