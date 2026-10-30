@@ -258,19 +258,42 @@
           void requestReviewAudioPlayback();
       };
 
+      const rvResolveTargetParagraph = (q: any, aiEv: any): string => {
+          const p = String(aiEv?.paragraph || "").trim().toUpperCase();
+          if (/^[A-Z]$/.test(p)) return p;
+          const locMatch = String(aiEv?.location || "").match(/(?:paragraph|section|đoạn)\s*([A-Z])/i);
+          if (locMatch) return locMatch[1].toUpperCase();
+          const headingMatch = String(q?.text || q?.prompt || q?.question || "").match(/paragraph\s+([A-Z])/i);
+          if (headingMatch) return headingMatch[1].toUpperCase();
+          const ansMatch = String(q?.correctAnswer || "").match(/\b([A-I])\b/i);
+          if (ansMatch) return ansMatch[1].toUpperCase();
+          return "";
+      };
+
       const rvFindParagraphBlock = (root: HTMLElement, label: string): HTMLElement | null => {
           if (!root || !label) return null;
-          const cleanLabel = label.trim().toUpperCase();
+          const cleanLabel = label.trim().toUpperCase().match(/([A-Z])/)?.[1] || "";
+          if (!cleanLabel) return null;
+
+          // 1. Direct hit for Matching Headings body wrapper
+          const byBody = root.querySelector<HTMLElement>(`[data-paragraph-body="true"][data-paragraph="${cleanLabel}"], #paragraph-block-${cleanLabel}`);
+          if (byBody) return byBody;
+
+          // 2. Generic data-paragraph / id attributes
           const byAttr = root.querySelector<HTMLElement>(`[data-paragraph="${cleanLabel}"], #paragraph-${cleanLabel}, #para-${cleanLabel}`);
-          if (byAttr) return byAttr;
+          if (byAttr) {
+              if (byAttr.hasAttribute("data-heading-slot") && byAttr.nextElementSibling) {
+                  return byAttr.nextElementSibling as HTMLElement;
+              }
+              return byAttr;
+          }
 
-          const labelRe = new RegExp(`^(?:paragraph|section|đoạn)?\\s*${cleanLabel}(?:\\.|\\:|\\s*[-–—]|\\s+|$)`, "i");
-          const directChildren = Array.from(root.children).filter(el => !el.closest("button")) as HTMLElement[];
-          const candidates = directChildren.length > 1
-              ? directChildren
-              : Array.from(root.querySelectorAll<HTMLElement>("p, div, section, article, li")).filter(el => (el.textContent || "").trim().length >= 20);
+          // 3. Scan paragraphs with explicit paragraph header text
+          const labelRe = new RegExp(`^(?:\\d+[\\.\\s]+)?(?:paragraph|section|đoạn)?\\s*${cleanLabel}(?:\\.|\\:|\\s*[-–—]|\\s+|$)`, "i");
+          const allBlocks = Array.from(root.querySelectorAll<HTMLElement>("p, div, section, article, li"))
+              .filter(el => !el.closest("button") && !el.classList.contains("rv-heading-slot-review-bar") && (el.textContent || "").trim().length >= 20);
 
-          for (const el of candidates) {
+          for (const el of allBlocks) {
               const strongOrHeading = el.querySelector("strong, b, h1, h2, h3, h4, h5, h6, span");
               const headerText = (strongOrHeading?.textContent || "").trim();
               if (headerText && labelRe.test(headerText)) return el;
@@ -278,10 +301,6 @@
               if (labelRe.test(text)) return el;
           }
 
-          const charCode = cleanLabel.charCodeAt(0) - 65;
-          if (charCode >= 0 && charCode < candidates.length) {
-              return candidates[charCode];
-          }
           return null;
       };
 
@@ -296,55 +315,105 @@
 
       const rvJumpToEvidence = (quote: string | string[], paragraphTarget?: string) => {
           const root = document.getElementById("ielts-passage-content");
-          const quotes = (Array.isArray(quote) ? quote : [quote]).map(value => String(value || "").replace(/\s+/g, " ").trim()).filter(value => value.length >= 4);
+          const quotes = (Array.isArray(quote) ? quote : [quote])
+              .map(value => String(value || "").replace(/\s+/g, " ").trim())
+              .filter(value => value.length >= 4);
           if (!root || !quotes.length) return;
-          root.querySelectorAll<HTMLElement>("mark.rv-reading-evidence-mark").forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || "")));
-          root.querySelectorAll<HTMLElement>(".rv-reading-evidence-block").forEach(node => node.classList.remove("rv-reading-evidence-block", "rv-reading-evidence-target", "rv-reading-evidence-located"));
+
+          // Clear previous evidence marks and highlights
+          root.querySelectorAll<HTMLElement>("mark.rv-reading-evidence-mark").forEach(mark => {
+              mark.replaceWith(document.createTextNode(mark.textContent || ""));
+          });
+          root.querySelectorAll<HTMLElement>(".rv-reading-evidence-block, .rv-reading-evidence-target, .rv-flash-ring").forEach(node => {
+              node.classList.remove("rv-reading-evidence-block", "rv-reading-evidence-target", "rv-reading-evidence-located", "rv-flash-ring");
+          });
           root.normalize();
 
           const targetPara = paragraphTarget ? rvFindParagraphBlock(root, paragraphTarget) : null;
-          const searchContainer = targetPara || root;
+          let searchContainer: HTMLElement = targetPara || root;
 
           let firstTarget: HTMLElement | null = null;
-          quotes.forEach(needle => {
-              const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-              const matcher = new RegExp(escaped, "i");
-              const normalizedNeedle = rvNormalizeEvidenceText(needle);
-              const nodes = rvReadingEvidenceNodes(searchContainer);
-              const target = nodes.find(node => matcher.test(node.textContent || ""))
-                  || nodes.find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
-              if (!target) return;
-              if (!firstTarget) firstTarget = target;
-              const match = (target.textContent || "").match(matcher);
-              if (!match || match.index === undefined) {
-                  target.classList.add("rv-reading-evidence-block", "rv-reading-evidence-target");
-                  return;
+          let markCount = 0;
+
+          const buildFlexibleMatcher = (str: string): RegExp => {
+              const clean = str.trim()
+                  .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+                  .replace(/['’‘]/g, "['’‘']")
+                  .replace(/[\"“”]/g, '[\"“”"]')
+                  .replace(/[-–—]/g, "[-–—]")
+                  .replace(/\s+/g, "[\\s\\u00a0]+");
+              return new RegExp(clean, "i");
+          };
+
+          quotes.forEach(rawNeedle => {
+              const needle = rawNeedle.replace(/^[\"'“”‘]+|[\"'“”’]+$/g, "").trim();
+              if (needle.length < 4) return;
+
+              const needlesToTry = [
+                  needle,
+                  needle.replace(/[.,:;!?\"'”’]+$/, "").trim(),
+              ].filter(n => n.length >= 6);
+
+              const words = needle.split(/\s+/);
+              if (words.length >= 8) {
+                  needlesToTry.push(words.slice(0, 8).join(" "));
               }
-              const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-              const textNodes: Array<{ node: Text; start: number; end: number }> = [];
-              let cursor = 0;
-              for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
-                  const length = textNode.data.length;
-                  textNodes.push({ node: textNode, start: cursor, end: cursor + length });
-                  cursor += length;
+
+              for (const candNeedle of needlesToTry) {
+                  const matcher = buildFlexibleMatcher(candNeedle);
+                  const normalizedNeedle = rvNormalizeEvidenceText(candNeedle);
+
+                  let nodes = rvReadingEvidenceNodes(searchContainer);
+                  let target = nodes.find(node => matcher.test(node.textContent || ""))
+                      || nodes.find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
+
+                  // Fallback: If not found inside targetPara, search entire root
+                  if (!target && searchContainer !== root) {
+                      const rootNodes = rvReadingEvidenceNodes(root);
+                      target = rootNodes.find(node => matcher.test(node.textContent || ""))
+                          || rootNodes.find(node => rvNormalizeEvidenceText(node.textContent).includes(normalizedNeedle));
+                  }
+
+                  if (!target) continue;
+                  if (!firstTarget) firstTarget = target;
+
+                  const match = (target.textContent || "").match(matcher);
+                  if (!match || match.index === undefined) {
+                      target.classList.add("rv-reading-evidence-block", "rv-reading-evidence-target");
+                      markCount++;
+                      break;
+                  }
+
+                  const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+                  const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+                  let cursor = 0;
+                  for (let textNode = walker.nextNode() as Text | null; textNode; textNode = walker.nextNode() as Text | null) {
+                      const length = textNode.data.length;
+                      textNodes.push({ node: textNode, start: cursor, end: cursor + length });
+                      cursor += length;
+                  }
+
+                  const start = match.index;
+                  const end = start + match[0].length;
+                  textNodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+                      const from = Math.max(start, nodeStart);
+                      const to = Math.min(end, nodeEnd);
+                      if (from >= to || !node.parentNode) return;
+                      const fragment = document.createDocumentFragment();
+                      const localStart = from - nodeStart;
+                      const localEnd = to - nodeStart;
+                      if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
+                      const mark = document.createElement("mark");
+                      mark.className = "rv-reading-evidence-mark rv-reading-evidence-target";
+                      mark.textContent = node.data.slice(localStart, localEnd);
+                      fragment.appendChild(mark);
+                      if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
+                      node.parentNode.replaceChild(fragment, node);
+                      markCount++;
+                  });
+
+                  if (markCount > 0) break;
               }
-              const start = match.index;
-              const end = start + match[0].length;
-              textNodes.slice().reverse().forEach(({ node, start: nodeStart, end: nodeEnd }) => {
-                  const from = Math.max(start, nodeStart);
-                  const to = Math.min(end, nodeEnd);
-                  if (from >= to || !node.parentNode) return;
-                  const fragment = document.createDocumentFragment();
-                  const localStart = from - nodeStart;
-                  const localEnd = to - nodeStart;
-                  if (localStart) fragment.appendChild(document.createTextNode(node.data.slice(0, localStart)));
-                  const mark = document.createElement("mark");
-                  mark.className = "rv-reading-evidence-mark rv-reading-evidence-target";
-                  mark.textContent = node.data.slice(localStart, localEnd);
-                  fragment.appendChild(mark);
-                  if (localEnd < node.data.length) fragment.appendChild(document.createTextNode(node.data.slice(localEnd)));
-                  node.parentNode.replaceChild(fragment, node);
-              });
           });
 
           if (!firstTarget && targetPara) {
@@ -352,8 +421,15 @@
               firstTarget = targetPara;
           }
 
-          const scrollTarget = firstTarget as HTMLElement | null;
-          if (scrollTarget) scrollTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          const createdMark = root.querySelector<HTMLElement>("mark.rv-reading-evidence-mark");
+          const scrollTarget = createdMark || firstTarget || targetPara;
+          if (scrollTarget) {
+              scrollTarget.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+              if (createdMark) {
+                  createdMark.classList.add("rv-evidence-pulse");
+                  setTimeout(() => createdMark.classList.remove("rv-evidence-pulse"), 2500);
+              }
+          }
       };
 
       const rvManualExplanationOf = (question: any) => parseManualExplanation(question?.manualExplanation);
@@ -716,8 +792,9 @@
           const normCand = rvNormalizeEvidenceText(candidateQuote);
           const isHeadingTextEcho = normCand === normCorr || normCand === normHeadingText || normCand === normalizeHeadingId(hq.correctAnswer);
 
+          const targetPara = String.fromCharCode(65 + hi);
           if (candidateQuote && candidateQuote.length >= 10 && !isHeadingTextEcho) {
-              rvJumpToEvidence([candidateQuote]);
+              rvJumpToEvidence([candidateQuote], targetPara);
               return;
           }
 
@@ -1168,7 +1245,10 @@
                                           className="rv-ai-quote-text is-clickable"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
+                                              else {
+                                                   const targetPara = rvResolveTargetParagraph(question, aiState?.structured?.evidence);
+                                                   rvJumpToEvidence(evidenceQuote, targetPara || undefined);
+                                               }
                                           }}
                                           title="Nhấn để định vị câu trích dẫn trong bài"
                                       >
@@ -1178,7 +1258,10 @@
                                           className="rv-ai-jump-hint"
                                           onClick={() => {
                                               if (rvActiveIsListening) rvJumpToTranscript("", evidenceQuote);
-                                              else rvJumpToEvidence(evidenceQuote, (aiState?.structured?.evidence?.paragraph || (isMatchingQuestion ? (String(question?.correctAnswer || "").match(/\b([A-I])\b/i)?.[1] || "") : "")) || undefined);
+                                              else {
+                                                   const targetPara = rvResolveTargetParagraph(question, aiState?.structured?.evidence);
+                                                   rvJumpToEvidence(evidenceQuote, targetPara || undefined);
+                                               }
                                           }}
                                       >
                                           (nhấn để định vị trong bài)
@@ -2543,11 +2626,27 @@
                       background: #FEF3C7;
                   }
                   .rv-transcript-quote, .rv-reading-evidence-mark {
-                      background: #FEF08A;
-                      color: var(--rv-ink);
-                      border-radius: 3px;
-                      padding: 0 3px;
-                      box-shadow: inset 0 -2px 0 #EAB308;
+                      background: #FEF08A !important;
+                      color: #1C1917 !important;
+                      border-radius: 4px;
+                      padding: 2px 5px;
+                      box-shadow: 0 0 0 2px #EAB308, inset 0 -2px 0 #CA8A04 !important;
+                      font-weight: 600;
+                  }
+                  .rv-reading-evidence-block.rv-reading-evidence-target {
+                      background: #FEF9C3 !important;
+                      border-left: 4px solid #EAB308 !important;
+                      padding-left: 8px !important;
+                      border-radius: 4px !important;
+                      transition: background 0.3s ease;
+                  }
+                  @keyframes rvEvidencePulse {
+                      0% { outline: 3px solid #2563EB; box-shadow: 0 0 15px rgba(37, 99, 235, 0.6); }
+                      50% { outline: 4px solid #EAB308; box-shadow: 0 0 20px rgba(234, 179, 8, 0.8); }
+                      100% { outline: 2px solid transparent; box-shadow: none; }
+                  }
+                  .rv-evidence-pulse {
+                      animation: rvEvidencePulse 2.5s cubic-bezier(0.2, 0.8, 0.2, 1);
                   }
                   .rv-transcript-time {
                       display: inline-flex;
@@ -3247,6 +3346,8 @@
                                                                <React.Fragment key={hq.id}>
                                                                    <div
                                                                        id={`heading-slot-review-${hq.id}`}
+                                                                        data-paragraph={paragraphLetter}
+                                                                        data-heading-slot="true"
                                                                        className="rv-heading-slot-review-bar notranslate"
                                                                        translate="no"
                                                                        style={{
@@ -3360,8 +3461,13 @@
                                                                        </div>
                                                                    </div>
                                                                    {chunks[hi + 1] && cleanChunk(chunks[hi + 1]).trim() && (
-                                                                       <div dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(chunks[hi + 1])) }} />
-                                                                   )}
+                                                                        <div
+                                                                            id={`paragraph-block-${paragraphLetter}`}
+                                                                            data-paragraph={paragraphLetter}
+                                                                            data-paragraph-body="true"
+                                                                            dangerouslySetInnerHTML={{ __html: formatContent(cleanChunk(chunks[hi + 1])) }}
+                                                                        />
+                                                                    )}
                                                                </React.Fragment>
                                                            );
                                                        })}

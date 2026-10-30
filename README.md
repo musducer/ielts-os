@@ -1,5 +1,12 @@
 # IELTS OS
 
+## Sửa Triệt Để Lỗi Định Vị Dẫn Chứng (Evidence Jump) Cho Matching Headings — 2026-10-30
+
+- **Khắc phục lỗi cuộn nhầm đoạn & không highlight khi bấm dẫn chứng AI**:
+  - Gán `id="paragraph-block-${paragraphLetter}"` và `data-paragraph-body="true"` vào thẻ `<div>` chứa thân đoạn văn trong layout Matching Headings.
+  - Loại bỏ hoàn toàn fallback index mảng trong `rvFindParagraphBlock`; bổ sung helper `rvResolveTargetParagraph` phân giải chính xác chữ cái đoạn văn từ AI explanation/question metadata.
+  - Cải tiến `rvJumpToEvidence` với `buildFlexibleMatcher` (hỗ trợ ngoặc kép cong, dấu gạch ngang, khoảng trắng không ngắt), tự động fallback tìm kiếm toàn bài nếu không tìm thấy trong container đoạn, và cuộn chuẩn xác tới thẻ `<mark>` được tô màu kèm hiệu ứng chớp sáng `rv-evidence-pulse`.
+
 ## Chuẩn Hóa Chẩn Đoán Điểm Yếu Sư Phạm (Error DNA) — Triệt Tiêu Dẫn Chứng Vụn Vặt & Chỉ Số Khó Hiểu — 2026-10-30
 
 - **Tập trung 100% vào phân tích tư duy & cơ chế bẫy (Pedagogical Weakness Diagnosis)**:

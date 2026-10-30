@@ -1,5 +1,33 @@
 # IELTS OS — Session Handoff (cập nhật 2026-10-30)
 
+## Sửa Triệt Để Lỗi Định Vị Dẫn Chứng (Evidence Jump) Matching Headings — Cuộn Đúng Đoạn & Highlight Chuẩn — 2026-10-30
+
+- **Hiện tượng lỗi**:
+  - Khi học viên bấm vào câu dẫn chứng trong popup giải thích AI của câu 2 (Paragraph B): màn hình bị cuộn ngược lên Đoạn A và không tô vàng bất kỳ câu nào.
+  - Tương tự ở câu 1 (Paragraph A): bấm dẫn chứng bị cuộn lên tiêu đề bài đọc, không highlight.
+- **Nguyên nhân cốt lõi**:
+  1. Trong cấu trúc DOM của dạng bài Matching Headings (`REVIEW_QUIZ.txt`), các thanh slot bar (`#heading-slot-review-q1`, `#heading-slot-review-q2`) và các khối thân đoạn văn (`chunks[hi + 1]`) nằm xen kẽ nhau làm con trực tiếp của `#ielts-passage-content`.
+  2. Hàm cũ `rvFindParagraphBlock` khi không tìm thấy attribute `data-paragraph` đã rơi vào nhánh fallback nguy hiểm: `candidates[cleanLabel.charCodeAt(0) - 65]`. Với Đoạn B (charCode index 1), nó lấy trúng `candidates[1]` chính là thanh slot bar của Đoạn A!
+  3. Sau đó `rvJumpToEvidence` giới hạn phạm vi tìm kiếm vào slot bar Đoạn A, dĩ nhiên không tìm thấy câu văn của Đoạn B. Không tìm thấy text node để bọc thẻ `<mark>`, hàm lại gán `firstTarget = targetPara` (slot bar Đoạn A) và `scrollIntoView`, dẫn đến hiện tượng màn hình bị cuộn ngược lên Đoạn A mà không tô sáng gì.
+  4. Lớp `.rv-reading-evidence-block` trước đó chưa có CSS background/border nên khi fallback cũng không hiển thị màu.
+- **Giải pháp xử lý triệt để**:
+  1. **Định danh chính xác khối đoạn văn trong DOM (`REVIEW_QUIZ.txt`)**:
+     - Gán `id="paragraph-block-${paragraphLetter}"`, `data-paragraph={paragraphLetter}`, `data-paragraph-body="true"` vào thẻ `<div>` bọc thân đoạn văn của từng câu Matching Headings.
+     - Gán `data-paragraph={paragraphLetter}`, `data-heading-slot="true"` vào thanh heading slot bar.
+  2. **Cải tiến `rvFindParagraphBlock` chuẩn xác 100%**:
+     - Ưu tiên tìm selector `[data-paragraph-body="true"][data-paragraph="${cleanLabel}"]`.
+     - Xóa bỏ hoàn toàn nhánh fallback `candidates[charCode]` dễ chọn nhầm phần tử DOM.
+  3. **Cơ chế tìm kiếm linh hoạt & Fallback an toàn trong `rvJumpToEvidence`**:
+     - Hàm `buildFlexibleMatcher`: tự động chuẩn hóa dấu ngoặc đơn, ngoặc kép cong/thẳng, dấu gạch nối/ngang (`-`, `–`, `—`) và khoảng trắng không ngắt (`\u00a0`).
+     - Tự động thử nghiệm các biến thể: câu đầy đủ (bỏ ngoặc kép bao quanh), câu bỏ dấu chấm/phẩy đuôi, và cụm 8 từ đầu câu nếu câu quá dài.
+     - Nếu không tìm thấy câu trích trong `targetPara`, tự động fallback tìm kiếm trên toàn bộ `#ielts-passage-content` chứ không bao giờ bỏ sót.
+     - Khi tìm thấy, cuộn chính xác tới thẻ `<mark>` được sinh ra (`scrollTarget = createdMark || firstTarget`) và kích hoạt hiệu ứng chớp sáng nổi bật (`rv-evidence-pulse`).
+  4. **Bổ sung helper `rvResolveTargetParagraph`**:
+     - Tự động bóc tách ký tự đoạn văn (`A-I`) từ `aiState.evidence.paragraph`, `location` (ví dụ `Đoạn B, dòng 1-5`), hoặc từ `question.text` (`Paragraph B`).
+  5. **Bổ sung hiệu ứng CSS**:
+     - Style nổi bật cho `.rv-reading-evidence-mark` (vàng `#FEF08A` kèm viền `#EAB308`).
+     - Background cho `.rv-reading-evidence-block.rv-reading-evidence-target` và keyframe animation `rvEvidencePulse`.
+
 ## Chuẩn Hóa Chẩn Đoán Điểm Yếu Sư Phạm (Error DNA) — Triệt Tiêu Dẫn Chứng Vụn Vặt & Chỉ Số Khó Hiểu — 2026-10-30
 
 - **Vấn đề trước khi sửa**:
