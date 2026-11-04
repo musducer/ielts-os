@@ -18799,20 +18799,34 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                       .idp-flowchart-bank .idp-wordbank-item { width:fit-content; max-width:100%; min-height:28px; box-sizing:border-box; margin:0; padding:5px 12px; text-align:left; justify-content:flex-start; font:400 13.5px/1.25 Arial,sans-serif; border:1px solid #777; border-radius:4px; background:#fff; color:#000; box-shadow:none; cursor:grab; }
                       .idp-flowchart-bank .idp-wordbank-item:hover:not(.used) { border-color:#0969da; background:#f0f7ff; }
                       .idp-flowchart-bank .idp-wordbank-item.selected { border-color:#0969da; background:#e8f2ff; outline:1px solid #0969da; }
-                      .idp-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #4b5563; border-radius:1px; background:#fff; padding:8px 12px; line-height:1.5; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; margin:0; }
+                      .idp-flowchart-node { width:100%; box-sizing:border-box; border:1px solid #4b5563; border-radius:1px; background:#fff; padding:10px 14px; line-height:1.85; font-size:var(--efont); font-weight:400; color:var(--etext); text-align:left; margin:0; }
                       .idp-flowchart-node .highlightable-content,
-                      .idp-flowchart-node > .idp-flowchart-text,
-                      .idp-flowchart-node > .idp-flowchart-text * { display:inline !important; text-align:left !important; }
+                      .idp-flowchart-node .idp-flowchart-text,
+                      .idp-flowchart-node .idp-flowchart-text *,
+                      .idp-flowchart-node span { display:inline !important; text-align:left !important; }
                       .idp-flowchart-node br { display:none !important; }
                       .idp-flowchart-arrow { width:100%; height:24px; margin:2px 0; font-size:0; line-height:0; color:transparent; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 22'%3E%3Cpath fill='%23111' d='M8 0h4v10h6L10 22 2 10h6z'/%3E%3C/svg%3E") center/20px 22px no-repeat; }
-                      .idp-flowchart-panel .idp-dropzone { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; min-width:100px; height:28px; min-height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000 !important; border-radius:3px; background:#fff !important; color:#000 !important; font:700 13px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; white-space:normal; }
+                      .idp-flowchart-node input,
+                      .idp-flowchart-panel .idp-inline-input { display:inline-block !important; box-sizing:border-box; min-width:90px !important; width:auto !important; height:28px; margin:0 5px; padding:1px 8px; border:1px dashed #000; border-radius:3px; background:#fff; color:#000; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
+                      .idp-flowchart-panel .idp-dropzone { display:inline-flex !important; align-items:center; justify-content:center; box-sizing:border-box; min-width:90px; height:28px; min-height:28px; margin:0 5px; padding:1px 8px; border:1px dashed #000 !important; border-radius:3px; background:#fff !important; color:#000 !important; font:700 13px/1.2 Arial,sans-serif; text-align:center; vertical-align:middle; white-space:normal; }
                       .idp-flowchart-panel .idp-dropzone.filled { border-style:solid !important; border-color:#000 !important; background:#f8fafc !important; font-weight:600; }
                       .idp-flowchart-panel .idp-dropzone:not(.filled):hover { border-color:#0969da !important; background:#f3f8ff !important; }
-                      .idp-flowchart-panel .idp-inline-input { box-sizing:border-box; min-width:100px !important; height:28px; margin:0 4px; padding:1px 10px; border:1px dashed #000; border-radius:3px; background:#fff; color:#000; font:700 13px/1.2 Arial,sans-serif; vertical-align:middle; text-align:center; }
                       .idp-flowchart-title, .idp-flowchart-title * { text-align:center !important; font-weight:700 !important; }
                       .idp-flowchart-title { font-size:16px; margin-bottom:10px; color:var(--etext); }
                       .idp-flowchart-text p, .idp-flowchart-text div { margin: 0; padding: 0; display: inline; }
                       .idp-flow-arrow { display: block !important; width: 28px !important; height: 36px !important; max-width: none !important; object-fit: contain; margin: 8px auto !important; }
+
+                      /* DIAGRAM LABELLING: BOTTOM INPUTS MODE */
+                      .idp-diagram-wrap-bottom-inputs { width: 100%; margin: 14px 0 20px; }
+                      .idp-diagram-stage-clean { width: 100%; text-align: center; }
+                      .idp-diagram-stage-clean img { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+                      .idp-diagram-bottom-inputs-row { display: flex; justify-content: center; align-items: center; gap: 24px; flex-wrap: wrap; margin-top: 20px; margin-bottom: 12px; padding: 10px; }
+                      .idp-diagram-bottom-input-cell { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
+                      .idp-diagram-bottom-input { width: 135px; height: 40px; box-sizing: border-box; border: 1.5px solid #4b5563; border-radius: 4px; background: #fff; color: #111827; font-size: 15px; font-weight: 700; text-align: center; outline: none; transition: border-color .15s, box-shadow .15s; }
+                      .idp-diagram-bottom-input::placeholder { color: #111827; font-weight: 800; font-size: 15.5px; text-align: center; opacity: 0.9; }
+                      .idp-diagram-bottom-input:focus { border-color: #0969da; box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.25); }
+                      .idp-diagram-bottom-input:focus::placeholder { opacity: 0.25; }
+                      .idp-diagram-bottom-input.idp-current-gap { border-color: #0969da; box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.25); }
                       .writing-workspace { display:flex; width:100%; min-width:0; height:100%; background:var(--ebg); }
                       .writing-pane { min-width:0; height:100%; overflow:auto; box-sizing:border-box; }
                       .writing-prompt { padding:28px 36px 44px; line-height:1.62; color:var(--etext); }
@@ -20298,7 +20312,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               onInput={(e: any) => e.target.classList.toggle('filled', !!e.target.value)}
                                               onBlur={(e: any) => handleAnswerChange(q.id, e.target.value, "BLANK")}
                                               onKeyPress={(e: any) => { if(e.key==='Enter') handleAutoScrollNext(qGlobalIdx, (activeExam!.questions || []).length); }}
-                                              style={{ textAlign: 'center', minWidth: 100 }}
+                                              style={{ minWidth: 90 }}
                                            />)}
                                            {afterText && " "}
                                            {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
@@ -20514,7 +20528,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                    const renderDiagramLabels = () => {
                        const source: any = group.questions[0] || {};
                        const imageUrl = String(source.diagramImageUrl || "").trim();
-                       const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOXES")).toUpperCase();
+                       const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? "TEXT_BOXES" : "BOTTOM_INPUTS")).toUpperCase();
+                        const isBottomInputs = imageMode === "BOTTOM_INPUTS" || imageMode === "BELOW" || imageMode === "INPUTS_BELOW" || (!source.diagramTextBoxes?.length && !source.diagramBoxes && imageMode !== "OVERLAY" && imageMode !== "TEXT_BOXES");
                        const isOverlayDiagram = imageMode === "OVERLAY";
                        const isFullCanvasDiagram = imageMode === "TEXT_BOXES" || isOverlayDiagram;
                        const diagramAspectRatio = String(source.diagramImageAspectRatio || "3 / 2").replace(/\s+/g, " ");
@@ -20547,7 +20562,64 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                            const marker = part.match(/^\[(\d+)\]$/);
                            return marker ? renderGap(marker[1], `${box.id}-gap-${index}`) : <StaticHtmlBlock key={`${box.id}-text-${index}`} tagName="span" className="highlightable-content" dataField={`diagramTextBoxes:${box.id}:${index}`} dataQid={source.id} html={sanitizeRichHtml(part)} />;
                        });
-                       return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
+                       if (isBottomInputs) {
+                            return (
+                                <div className="idp-diagram-wrap idp-diagram-wrap-bottom-inputs" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px`, maxWidth: `${diagramMaxWidth}px`, margin: '14px auto' } as React.CSSProperties}>
+                                    <div className="idp-diagram-stage-clean">
+                                        {imageUrl ? (
+                                            <img
+                                                className="idp-diagram-image-clean"
+                                                src={cleanMediaUrl(imageUrl)}
+                                                referrerPolicy="no-referrer"
+                                                loading="lazy"
+                                                alt="Diagram"
+                                                draggable={false}
+                                                style={{ display: 'block', maxWidth: '100%', height: 'auto', margin: '0 auto', borderRadius: 4 }}
+                                            />
+                                        ) : (
+                                            <div style={{ padding: 36, color: 'var(--esub)', textAlign: 'center' }}>
+                                                Diagram image has not been added yet.
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="idp-diagram-bottom-inputs-row" aria-label="Diagram answers">
+                                        {group.questions.map((question: any, index: number) => {
+                                            const qNum = numberFor(question, index);
+                                            const val = String(examAnswers[question.id] ?? "");
+                                            const isFilled = Boolean(val);
+                                            const isCurrent = examCurrentQId === question.id;
+                                            return (
+                                                <div key={question.id} className="idp-diagram-bottom-input-cell">
+                                                    <input
+                                                        id={`question-${question.id}`}
+                                                        data-qid={question.id}
+                                                        data-diagram-number={qNum}
+                                                        data-answer-input="true"
+                                                        aria-label={`Question ${qNum}`}
+                                                        className={`idp-diagram-bottom-input inline-blank-input ${isFilled ? 'filled' : ''} ${isCurrent ? 'idp-current-gap' : ''}`}
+                                                        autoComplete="off"
+                                                        autoCorrect="off"
+                                                        autoCapitalize="off"
+                                                        spellCheck={false}
+                                                        value={val}
+                                                        placeholder={String(qNum)}
+                                                        onChange={(event: any) => handleAnswerChange(question.id, event.target.value, "BLANK")}
+                                                        onKeyPress={(event: any) => {
+                                                            if (event.key === 'Enter') {
+                                                                const qGlobalIdx = (activeExam?.questions || []).findIndex((x: any) => x.id === question.id) + 1;
+                                                                handleAutoScrollNext(qGlobalIdx, (activeExam?.questions || []).length);
+                                                            }
+                                                        }}
+                                                    />
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        }
+
+                        return <div className="idp-diagram-wrap" aria-label="Diagram labelling" style={{ "--idp-diagram-max": `${diagramMaxWidth}px`, "--idp-diagram-canvas": `${diagramMaxWidth}px` } as React.CSSProperties}>
                            <div className="idp-diagram-stage" style={{aspectRatio:letDiagramImageDefineAspect ? 'auto' : diagramAspectRatio}}>
                                {imageUrl ? <img className="idp-diagram-image" src={cleanMediaUrl(imageUrl)} referrerPolicy="no-referrer" loading="lazy" alt="Diagram" draggable={false} style={isFullCanvasDiagram ? (letDiagramImageDefineAspect ? {position:'relative',display:'block',width:'100%',height:'auto'} : {left:'0%',top:'0%',width:'100%',height:'100%'}) : {left:`${imageBounds.x}%`,top:`${imageBounds.y}%`,width:`${imageBounds.width}%`,height:`${imageBounds.height}%`}} /> : <div style={{padding:36,color:'var(--esub)',textAlign:'center'}}>Diagram image has not been added yet.</div>}
                                {isOverlayDiagram ? group.questions.map((question:any,index:number) => { const box=legacyBoxFor(question,index); const number=numberFor(question,index); return <input key={question.id} id={`question-${question.id}`} data-qid={question.id} data-diagram-number={number} aria-label={`Question ${number}`} className={`idp-diagram-overlay-input ${examCurrentQId === question.id ? 'idp-current-gap' : ''}`} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} value={String(examAnswers[question.id] ?? "")} onChange={(event:any) => handleAnswerChange(question.id,event.target.value,"BLANK")} style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 10}%`,height:`${box.height || 5}%`}} />; }) : textBoxes.map((box: DiagramTextBox) => <div key={`diagram-text-box-${box.id}`} className="idp-diagram-box" style={{left:`${box.x}%`,top:`${box.y}%`,width:`${box.width || 26}%`,minHeight:`${box.height || 16}%`,transform:box.anchor === "center" ? "translate(-50%,-50%)" : "none"}}>{renderBoxText(box)}</div>)}
@@ -26872,7 +26944,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                         })() : grp.groupType === 'DIAGRAM_LABEL' ? (() => {
                                             const source: any = grp.questions[0];
                                             const imageUrl = String(source.diagramImageUrl || '');
-                                            const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOXES')).toUpperCase();
+                                            const imageMode = String(source.diagramImageMode || (source.diagramTextBoxes?.length ? 'TEXT_BOXES' : 'BOTTOM_INPUTS')).toUpperCase();
+                                            const isBottomInputs = imageMode === 'BOTTOM_INPUTS' || imageMode === 'BELOW' || (!source.diagramTextBoxes?.length && !source.diagramBoxes && imageMode !== 'OVERLAY' && imageMode !== 'TEXT_BOXES');
                                             const diagramAspectRatio = String(source.diagramImageAspectRatio || '3 / 2').replace(/\s+/g, ' ');
                                             const diagramMaxWidth = String(source.diagramMaxWidth || '860');
                                             // Keep the authoring canvas on the raw image's intrinsic ratio.
@@ -26926,18 +26999,42 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                 setDiagramEditorSelection(id);
                                             };
                                             return <div style={{display:'grid',gap:16}}>
-                                                <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>Each label is one free-positioned text box. A box may contain several gaps, for example <b style={{color:EB.accent}}>Network of [34] ... constant [35] supply</b>. Coordinates are percentages of this exact canvas.</div>
-                                                <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) minmax(180px,.28fr) minmax(150px,.22fr) auto',gap:10,alignItems:'end'}}>
+                                                {/* DIAGRAM MODE SWITCHER */}
+                                                <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',padding:'10px 14px',background:EB.wash,borderRadius:EB.radiusSm,border:`1px solid ${EB.line}`}}>
+                                                    <span style={{fontSize:12,fontWeight:800,color:EB.sub}}>Chế độ hiển thị:</span>
+                                                    <button type="button" onClick={()=>updateDiagram({diagramImageMode:'BOTTOM_INPUTS'})} style={{padding:'6px 14px',borderRadius:7,border:`1.5px solid ${isBottomInputs?EB.accent:EB.line}`,background:isBottomInputs?EB.accentWash:EB.sheet,color:isBottomInputs?EB.accent:EB.ink,fontWeight:800,fontSize:12,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}}>
+                                                        <span>{isBottomInputs ? '●' : '○'} Inputs dưới hình (Tự động — Khuyên dùng)</span>
+                                                    </button>
+                                                    <button type="button" onClick={()=>updateDiagram({diagramImageMode:'TEXT_BOXES'})} style={{padding:'6px 14px',borderRadius:7,border:`1.5px solid ${!isBottomInputs?EB.accent:EB.line}`,background:!isBottomInputs?EB.accentWash:EB.sheet,color:!isBottomInputs?EB.accent:EB.ink,fontWeight:700,fontSize:12,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:5}}>
+                                                        <span>{!isBottomInputs ? '●' : '○'} Text boxes kéo thả trên hình (Thủ công)</span>
+                                                    </button>
+                                                </div>
+
+                                                {isBottomInputs ? (
+                                                    <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.ink,fontSize:13,lineHeight:1.5}}>
+                                                        <b>Chế độ Tự động (Chuẩn IELTS CD):</b> Hình ảnh diagram hiển thị nguyên bản ở trên. Các ô nhập câu trả lời được tự động xếp ngay bên dưới theo thứ tự với số thứ tự in đậm (khi thí sinh gõ đáp án số sẽ ẩn đi). Bạn không cần chỉnh toạ độ hay kéo thả text box thủ công.
+                                                    </div>
+                                                ) : (
+                                                    <div style={{padding:'14px 16px',border:`1px solid ${EB.line}`,borderRadius:EB.radius,background:EB.wash,color:EB.sub,fontSize:13,lineHeight:1.5}}>Each label is one free-positioned text box. A box may contain several gaps, for example <b style={{color:EB.accent}}>Network of [34] ... constant [35] supply</b>. Coordinates are percentages of this exact canvas.</div>
+                                                )}
+
+                                                <div style={{display:'grid',gridTemplateColumns:isBottomInputs ? 'minmax(0,1fr) minmax(180px,.28fr) minmax(150px,.22fr)' : 'minmax(0,1fr) minmax(180px,.28fr) minmax(150px,.22fr) auto',gap:10,alignItems:'end'}}>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Diagram image URL<input value={imageUrl} onChange={(event:any)=>updateDiagram({diagramImageUrl:event.target.value})} placeholder="https://.../diagram.png" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Canvas aspect ratio<input value={diagramAspectRatio} onChange={(event:any)=>updateDiagram({diagramImageAspectRatio:event.target.value})} placeholder="1186 / 400" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
                                                     <label style={{fontSize:12,fontWeight:800,color:EB.sub}}>Max display width<input type="number" min="520" max="1180" step="20" value={diagramMaxWidth} onChange={(event:any)=>updateDiagram({diagramMaxWidth:event.target.value})} placeholder="860" style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:6,padding:'10px 12px',border:`1px solid ${EB.line}`,borderRadius:8,background:EB.sheet,color:EB.ink}} /></label>
-                                                    <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>
+                                                    {!isBottomInputs && <button type="button" onClick={addTextBox} style={{height:38,padding:'0 14px',border:`1px solid ${EB.accent}`,borderRadius:8,background:EB.accentWash,color:EB.accent,fontWeight:800,cursor:'pointer'}}>+ Add text box</button>}
                                                 </div>
-                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash}}>
-                                                    {imageUrl && <img src={imageUrl} alt="Diagram source" draggable={false} style={imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:(letDiagramImageDefineAspect?{position:'relative',display:'block',width:'100%',height:'auto'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'contain'})} />}
-                                                    {textBoxes.map((box:any)=>{
+
+                                                {/* STAGE PREVIEW */}
+                                                <div className="eb-diagram-stage" style={{position:'relative',...(letDiagramImageDefineAspect ? {} : {aspectRatio:diagramAspectRatio}),overflow:'hidden',border:`1px dashed ${EB.line}`,background:EB.wash,textAlign:'center'}}>
+                                                    {imageUrl ? (
+                                                        <img src={imageUrl} alt="Diagram source" draggable={false} style={isBottomInputs ? {display:'block',maxWidth:'100%',height:'auto',margin:'0 auto'} : (imageMode==='BOXES'?{position:'absolute',left:`${bounds.x}%`,top:`${bounds.y}%`,width:`${bounds.width}%`,height:`${bounds.height}%`,objectFit:'contain'}:(letDiagramImageDefineAspect?{position:'relative',display:'block',width:'100%',height:'auto'}:{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'contain'}))} />
+                                                    ) : (
+                                                        <div style={{padding:32,color:EB.sub}}>Chưa có ảnh diagram</div>
+                                                    )}
+                                                    {!isBottomInputs && textBoxes.map((box:any)=>{
                                                         const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
-                                                        const previewText=String(box.text||'').replace(/<br\s*\/?>(\r?\n)?/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ');
+                                                        const previewText = String(box.text || '').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ');
                                                         const parts=previewText.split(/(\[\d+\])/g);
                                                         return <div key={`diagram-box-${box.id}`} className="eb-diagram-box" onClick={(event:any)=>{event.stopPropagation();setDiagramEditorSelection(box.id)}} onPointerDown={(event:any)=>moveBox(box.id,event)} style={{position:'absolute',left:`${Number(box.x)||0}%`,top:`${Number(box.y)||0}%`,width:`${Number(box.width)||24}%`,minHeight:`${Number(box.height)||10}%`,transform:box.anchor==='center'?'translate(-50%,-50%)':'none',padding:'8px 10px',boxSizing:'border-box',border:`2px solid ${box.id===active?EB.accent:EB.line}`,background:'rgba(255,255,255,.96)',color:EB.ink,fontSize:12,lineHeight:1.35,cursor:'grab',touchAction:'none',boxShadow:box.id===active?`0 0 0 3px ${EB.accentWash}`:'0 4px 14px rgba(15,23,42,.08)'}}>
                                                             <div style={{fontFamily:EB.fMono,fontSize:9,fontWeight:800,color:EB.accent,marginBottom:4}}>{markers.length?markers.map((number:string)=>`#${number}`).join(' · '):box.id}</div>
@@ -26948,22 +27045,52 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                                         </div>;
                                                     })}
                                                 </div>
-                                                <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. The exam uses this exact image coordinate surface.</div>
-                                                <div style={{display:'grid',gap:10}}>{textBoxes.map((box:any)=>{
-                                                    const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
-                                                    const setNumber=(field:string,value:any)=>updateBox(box.id,{[field]:clamp(Number(value)||0,field==='width'?6:0,field==='width'?90:field==='height'?60:100)});
-                                                    return <div key={`diagram-editor-${box.id}`} style={{display:'grid',gridTemplateColumns:'minmax(210px,1fr) repeat(4,minmax(58px,.22fr)) auto',gap:8,alignItems:'start',padding:12,border:`1px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:EB.radiusSm,background:EB.sheet}}>
-                                                        <label style={{fontSize:10,color:EB.sub,fontWeight:800}}>TEXT {markers.length?`(${markers.map((number:string)=>`#${number}`).join(', ')})`:''}<textarea value={String(box.text||'')} onFocus={()=>setDiagramEditorSelection(box.id)} onChange={(event:any)=>updateBox(box.id,{text:event.target.value})} placeholder="Network of [34] ... constant [35] supply" style={{display:'block',width:'100%',minHeight:74,boxSizing:'border-box',marginTop:4,padding:'8px 10px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,resize:'vertical'}} /></label>
-                                                        {(['x','y','width','height'] as string[]).map((field:string)=><label key={`${box.id}-${field}`} style={{fontSize:9,color:EB.sub,fontWeight:800,textTransform:'uppercase'}}>{field}<input type="number" step="0.1" value={String(box[field]??'')} onFocus={()=>setDiagramEditorSelection(box.id)} onChange={(event:any)=>setNumber(field,event.target.value)} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:4,padding:'7px 5px',border:`1px solid ${EB.line}`,borderRadius:6,background:EB.wash,color:EB.ink}} /></label>)}
-                                                        <button type="button" onClick={()=>setTextBoxes(textBoxes.filter((entry:any)=>entry.id!==box.id))} aria-label="Delete text box" style={{marginTop:17,width:32,height:32,border:`1px solid ${C.err}55`,borderRadius:7,background:`${C.err}0d`,color:C.err,cursor:'pointer'}}>×</button>
-                                                    </div>;
-                                                })}</div>
-                                                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>{grp.questions.map((item:any,offset:number)=>{
-                                                    const number=getDiagramQuestionNumber(item,offset,editingQuiz.questions||[]);
-                                                    return <label key={`diagram-answer-${item.id}`} style={{display:'grid',gridTemplateColumns:'52px minmax(0,1fr)',gap:8,alignItems:'center',fontFamily:EB.fMono,fontWeight:800,color:EB.accent}}>#{number}<input value={String(item.correctAnswer||'')} onChange={(event:any)=>updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,fontFamily:EB.fBody,fontWeight:600}} /></label>;
-                                                })}</div>
-                                            </div>;
-                                        })() : grp.groupType === 'MAP_DRAG' ? (() => {
+
+                                                {/* BOTTOM INPUTS PREVIEW */}
+                                                {isBottomInputs && (
+                                                    <div style={{padding:'16px',background:EB.wash,borderRadius:EB.radius,border:`1px solid ${EB.line}`}}>
+                                                        <div style={{fontSize:11,fontWeight:800,color:EB.sub,textTransform:'uppercase',letterSpacing:.5,marginBottom:12,textAlign:'center'}}>
+                                                            Xem trước vị trí các ô nhập dưới hình
+                                                        </div>
+                                                        <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:24,flexWrap:'wrap',padding:'10px 0'}}>
+                                                            {grp.questions.map((item:any,offset:number)=>{
+                                                                const number=getDiagramQuestionNumber(item,offset,editingQuiz.questions||[]);
+                                                                return (
+                                                                    <div key={`preview-bottom-${item.id}`} style={{display:'flex',flexDirection:'column',alignItems:'center',gap:6}}>
+                                                                        <div style={{width:130,height:38,borderRadius:4,border:'1.5px solid #4b5563',background:'#fff',color:'#111827',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:15,boxShadow:'inset 0 1px 2px rgba(0,0,0,0.06)'}}>
+                                                                            {number}
+                                                                        </div>
+                                                                        <span style={{fontSize:11,color:EB.sub,fontWeight:600}}>Ô nhập #{number}</span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {!isBottomInputs && (
+                                                    <>
+                                                        <div style={{fontSize:12,color:EB.sub}}>Drag a text box to position it. Drag its right edge, bottom edge, or lower-right handle to resize. The exam uses this exact image coordinate surface.</div>
+                                                        <div style={{display:'grid',gap:10}}>{textBoxes.map((box:any)=>{
+                                                            const markers=Array.from(String(box.text||'').matchAll(/\[(\d+)\]/g)).map((match:any)=>match[1]);
+                                                            const setNumber=(field:string,value:any)=>updateBox(box.id,{[field]:clamp(Number(value)||0,field==='width'?6:0,field==='width'?90:field==='height'?60:100)});
+                                                            return <div key={`diagram-editor-${box.id}`} style={{display:'grid',gridTemplateColumns:'minmax(210px,1fr) repeat(4,minmax(58px,.22fr)) auto',gap:8,alignItems:'start',padding:12,border:`1px solid ${box.id===active?EB.accent:EB.line}`,borderRadius:EB.radiusSm,background:EB.sheet}}>
+                                                                <label style={{fontSize:10,color:EB.sub,fontWeight:800}}>TEXT {markers.length?`(${markers.map((number:string)=>`#${number}`).join(', ')})`:''}<textarea value={String(box.text||'')} onFocus={()=>setDiagramEditorSelection(box.id)} onChange={(event:any)=>updateBox(box.id,{text:event.target.value})} placeholder="Network of [34] ... constant [35] supply" style={{display:'block',width:'100%',minHeight:74,boxSizing:'border-box',marginTop:4,padding:'8px 10px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,resize:'vertical'}} /></label>
+                                                                {(['x','y','width','height'] as string[]).map((field:string)=><label key={`${box.id}-${field}`} style={{fontSize:9,color:EB.sub,fontWeight:800,textTransform:'uppercase'}}>{field}<input type="number" step="0.1" value={String(box[field]??'')} onFocus={()=>setDiagramEditorSelection(box.id)} onChange={(event:any)=>setNumber(field,event.target.value)} style={{display:'block',width:'100%',boxSizing:'border-box',marginTop:4,padding:'7px 5px',border:`1px solid ${EB.line}`,borderRadius:6,background:EB.wash,color:EB.ink}} /></label>)}
+                                                                <button type="button" onClick={()=>setTextBoxes(textBoxes.filter((entry:any)=>entry.id!==box.id))} aria-label="Delete text box" style={{marginTop:17,width:32,height:32,border:`1px solid ${C.err}55`,borderRadius:7,background:`${C.err}0d`,color:C.err,cursor:'pointer'}}>×</button>
+                                                            </div>;
+                                                        })}</div>
+                                                    </>
+                                                )}
+
+                                                {/* ANSWERS SETTING */}
+                                                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:8}}>
+                                                    {grp.questions.map((item:any,offset:number)=>{
+                                                        const number=getDiagramQuestionNumber(item,offset,editingQuiz.questions||[]);
+                                                        return <label key={`diagram-answer-${item.id}`} style={{display:'grid',gridTemplateColumns:'52px minmax(0,1fr)',gap:8,alignItems:'center',fontFamily:EB.fMono,fontWeight:800,color:EB.accent}}>#{number}<input value={String(item.correctAnswer||'')} onChange={(event:any)=>updateGroup((entry:any,entryOffset:number)=>entryOffset===offset?{...entry,correctAnswer:event.target.value}:entry)} placeholder="Correct answer" style={{padding:'9px 11px',border:`1px solid ${EB.line}`,borderRadius:7,background:EB.wash,color:EB.ink,fontFamily:EB.fBody,fontWeight:600}} /></label>;
+                                                    })}
+                                                </div>
+                                            </div>;})() : grp.groupType === 'MAP_DRAG' ? (() => {
                                             const mapSource: any = grp.questions[0];
                                             const mapUrl = resolveQuestionMapUrl(mapSource);
                                             const mapSlots: Record<string, any> = mapSource.mapSlots || {};

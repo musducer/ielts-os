@@ -1,4 +1,23 @@
-# IELTS OS — Session Handoff (cập nhật 2026-10-30)
+# IELTS OS — Session Handoff (cập nhật 2026-11-04)
+
+## Sửa Lỗi Xuống Dòng Gap Flow-chart & Thêm Giao Diện Tự Động Cho Diagram Labelling — 2026-11-04
+
+- **Vấn đề 1: Flow-chart xuống dòng vô tội vạ, dồn gap vào 1 dòng riêng**:
+  - *Nguyên nhân*:
+    1. Trong `src/index.css`, rule căn lề chung `:not(td):not(th)[style*="text-align: center"]` đã áp dụng `display: block !important` lên mọi phần tử có inline style căn giữa, bao gồm cả thẻ `<input style="text-align: center">` của Flow-chart.
+    2. Trong `ACTIVE_EXAM.txt`, ô nhập Flow-chart render inline `style={{ textAlign: 'center', minWidth: 100 }}`, kích hoạt rule trên khiến input bị biến thành block element, tự động ngắt dòng trước và sau nó, dồn gap đứng một mình ở dòng giữa và đẩy câu văn trước/sau thành 3 dòng rời rạc.
+  - *Giải pháp*:
+    1. Giới hạn rule căn lề trong `src/index.css`: `:not(td):not(th):not(input):not(span):not(button):not(label):not(a)[style*="text-align: center"]`.
+    2. Bổ sung CSS tường minh cho `.idp-flowchart-node input, .idp-flowchart-panel .idp-inline-input, .idp-flowchart-node .idp-dropzone`: `display: inline-block !important; vertical-align: middle !important;` và `line-height: 1.85 !important;`.
+    3. Xóa `textAlign: 'center'` khỏi inline style trong `renderFlowChart`, để CSS class `.idp-inline-input` quản lý căn giữa. Câu văn và ô nhập nay nối liền mạch tự nhiên như văn bản chuẩn.
+- **Vấn đề 2: Diagram Labelling thiết kế thủ công chồng chéo, yêu cầu UI xếp input dưới hình**:
+  - *Nguyên nhân*: Các text box kéo thả thủ công trên hình dễ bị lệch toạ độ, chồng đè lên nhau trên các kích thước màn hình khác nhau.
+  - *Giải pháp*:
+    1. Thiết kế chế độ hiển thị mới cho Diagram Labelling: `BOTTOM_INPUTS` (chuẩn IELTS on Computer).
+    2. Hình ảnh diagram hiển thị nguyên bản, sắc nét ở trên.
+    3. Ngay dưới hình là hàng các ô nhập (`.idp-diagram-bottom-inputs-row`) xếp theo đúng thứ tự câu hỏi (ví dụ 24, 25, 26) với khoảng cách hợp lý (`gap: 24px`).
+    4. Mỗi ô nhập hiển thị số thứ tự in đậm ở chính giữa (`font-weight: 800; font-size: 15.5px`). Khi thí sinh click vào gõ câu trả lời, số thứ tự tự động ẩn đi và hiển thị câu trả lời đã gõ.
+    5. Cập nhật `EXAM_BUILDER.txt`: Bổ sung bộ chuyển đổi chế độ `[ Inputs dưới hình (Tự động — Khuyên dùng) ]` và `[ Text boxes kéo thả trên hình (Thủ công) ]` để giáo viên không cần phải kéo thả hay căn chỉnh toạ độ thủ công.
 
 ## Tái Cấu Trúc Khoa Học Tab Results & Review — Lọc Bỏ Quest & Triệt Tiêu Scroll Vô Tận — 2026-10-30
 

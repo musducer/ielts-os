@@ -1,5 +1,16 @@
 # IELTS OS
 
+## Sửa Lỗi Xuống Dòng Gap Flow-chart & Thêm Giao Diện Tự Động Cho Diagram Labelling — 2026-11-04
+
+- **Sửa triệt để lỗi Flow-chart xuống dòng vô tội vạ**:
+  - Khắc phục xung đột CSS căn giữa `:not(td):not(th)[style*="text-align: center"]` ép `display: block !important` lên ô nhập khiến gap bị ngắt dòng và đứng riêng một mình.
+  - Loại trừ toàn bộ các phần tử inline (`input`, `span`, `button`, `label`, `a`) khỏi rule block; ép `display: inline-block !important; vertical-align: middle;` cho ô nhập Flow-chart. Câu văn và ô nhập giờ đây hiển thị liền mạch, tự nhiên như tài liệu thi gốc.
+- **Thêm giao diện chuẩn IELTS on Computer cho Diagram Labelling (`BOTTOM_INPUTS`)**:
+  - Không cần mất công kéo thả text box thủ công trên hình vẽ.
+  - Hình ảnh diagram hiển thị sắc nét ở trên; hàng các ô nhập xếp theo đúng thứ tự câu hỏi ngay bên dưới với khoảng cách đều đặn, chuẩn xác.
+  - Mỗi ô nhập có số thứ tự in đậm ở chính giữa. Khi thí sinh click vào gõ đáp án, số thứ tự tự động biến mất và hiển thị nội dung vừa nhập.
+  - Bổ sung nút chuyển đổi chế độ trong Exam Builder để giáo viên tùy chọn nhanh chóng giữa chế độ Tự động (Khuyên dùng) và Thủ công.
+
 ## Tái Cấu Trúc Khoa Học Tab Results & Review — Lọc Bỏ Quest & Triệt Tiêu Scroll Vô Tận — 2026-10-30
 
 - **Lọc sạch bài tập Quest khỏi Results & Review (`isQuestResult`)**:
