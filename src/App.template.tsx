@@ -4078,6 +4078,11 @@ export default function IeltsSupremeOS() {
       const oldDiagramBoxes = targetQ?.diagramTextBoxes ? JSON.stringify(targetQ.diagramTextBoxes) : null;
       const oldDiagramImage = String(targetQ?.diagramImageUrl || '');
       const isSharedOptionsType = targetQ?.type === 'CHOICE_MULTIPLE' || targetQ?.type === 'MATCHING';
+      const flowTextMatch = /^flowText:([^:]+):(before|after)$/.exec(field);
+      const flowTargetQId = flowTextMatch?.[1] || '';
+      const flowPart = flowTextMatch?.[2] || '';
+      const flowStepMatch = /^flowStep:(\d+)$/.exec(field);
+      const flowStepIdx = flowStepMatch ? Number(flowStepMatch[1]) : -1;
 
       const applyToQ = (qx: any) => {
           let updated: any = { ...qx };
@@ -4100,6 +4105,41 @@ export default function IeltsSupremeOS() {
                       modified = true;
                   }
               }
+          } else if (flowTextMatch && (qx.id === flowTargetQId || qx.id === qId)) {
+              const origHtml = String(qx.text || "");
+              const markerMatch = origHtml.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/) || origHtml.match(/_{2,}|\.{4,}|…+/);
+              const qGlobalIdx = (prev.questions || []).findIndex((x: any) => x.id === qx.id) + 1;
+              const qNum = markerMatch?.[1] || String(qx.questionNumber || qGlobalIdx);
+              const gapToken = `[${qNum}]`;
+
+              if (markerMatch && markerMatch.index !== undefined) {
+                  const origBefore = origHtml.slice(0, markerMatch.index).trim();
+                  const origAfter = origHtml.slice(markerMatch.index + markerMatch[0].length).trim();
+                  if (flowPart === 'before') {
+                      const prefix = cleanHTML.trim();
+                      updated.text = `${prefix ? prefix + ' ' : ''}${gapToken}${origAfter ? ' ' + origAfter : ''}`.trim();
+                  } else if (flowPart === 'after') {
+                      const suffix = cleanHTML.trim();
+                      updated.text = `${origBefore ? origBefore + ' ' : ''}${gapToken}${suffix ? ' ' + suffix : ''}`.trim();
+                  }
+              } else {
+                  if (flowPart === 'before') {
+                      const prefix = cleanHTML.trim();
+                      updated.text = `${prefix ? prefix + ' ' : ''}${gapToken}`.trim();
+                  } else if (flowPart === 'after') {
+                      const suffix = cleanHTML.trim();
+                      updated.text = `${gapToken}${suffix ? ' ' + suffix : ''}`.trim();
+                  }
+              }
+              modified = true;
+          } else if (flowStepIdx >= 0 && (qx.id === qId || qx === targetQ)) {
+              updated.flowStepOverrides = { ...(qx.flowStepOverrides || {}), [flowStepIdx]: cleanHTML };
+              if (Array.isArray(qx.flowSteps) && qx.flowSteps[flowStepIdx]) {
+                  updated.flowSteps = qx.flowSteps.map((st: any, idx: number) =>
+                      idx === flowStepIdx ? { ...st, html: cleanHTML } : st
+                  );
+              }
+              modified = true;
           } else if (field === 'options' && optIndex !== null && optIndex !== undefined) {
               if (qx.id === qId || (isSharedOptionsType && qx.type === targetQ?.type && JSON.stringify(qx.options) === oldOptsStr)) {
                   const newOpts = [...(qx.options || [])];

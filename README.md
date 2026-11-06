@@ -1,5 +1,12 @@
 # IELTS OS
 
+## Sửa Lỗi Highlight Mất Ô Input Điền Đáp Án Dạng Flow-chart — 2026-11-06
+
+- **Khắc phục triệt để lỗi mất ô input khi quét highlight/note câu hỏi Flow-chart**:
+  - Tách bạch định danh phân đoạn dữ liệu trước gap (`flowText:${q.id}:before`) và sau gap (`flowText:${q.id}:after`).
+  - Nâng cấp bộ đồng bộ highlight `syncHighlightState` bảo toàn marker gap `[1]` và các phần văn bản đối ứng khi thí sinh tô sáng ở bất kỳ vị trí nào trong câu.
+  - Thiết lập lưới bảo vệ gap: luôn luôn duy trì và hiển thị ô nhập đáp án cho thí sinh ngay cả khi câu hỏi bị mất marker trong chuỗi nguồn.
+
 ## Sửa Lỗi Xuống Dòng Gap Flow-chart & Thêm Giao Diện Tự Động Cho Diagram Labelling — 2026-11-04
 
 - **Sửa triệt để lỗi Flow-chart xuống dòng vô tội vạ**:

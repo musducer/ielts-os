@@ -4078,6 +4078,11 @@ export default function IeltsSupremeOS() {
       const oldDiagramBoxes = targetQ?.diagramTextBoxes ? JSON.stringify(targetQ.diagramTextBoxes) : null;
       const oldDiagramImage = String(targetQ?.diagramImageUrl || '');
       const isSharedOptionsType = targetQ?.type === 'CHOICE_MULTIPLE' || targetQ?.type === 'MATCHING';
+      const flowTextMatch = /^flowText:([^:]+):(before|after)$/.exec(field);
+      const flowTargetQId = flowTextMatch?.[1] || '';
+      const flowPart = flowTextMatch?.[2] || '';
+      const flowStepMatch = /^flowStep:(\d+)$/.exec(field);
+      const flowStepIdx = flowStepMatch ? Number(flowStepMatch[1]) : -1;
 
       const applyToQ = (qx: any) => {
           let updated: any = { ...qx };
@@ -4100,6 +4105,41 @@ export default function IeltsSupremeOS() {
                       modified = true;
                   }
               }
+          } else if (flowTextMatch && (qx.id === flowTargetQId || qx.id === qId)) {
+              const origHtml = String(qx.text || "");
+              const markerMatch = origHtml.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/) || origHtml.match(/_{2,}|\.{4,}|…+/);
+              const qGlobalIdx = (prev.questions || []).findIndex((x: any) => x.id === qx.id) + 1;
+              const qNum = markerMatch?.[1] || String(qx.questionNumber || qGlobalIdx);
+              const gapToken = `[${qNum}]`;
+
+              if (markerMatch && markerMatch.index !== undefined) {
+                  const origBefore = origHtml.slice(0, markerMatch.index).trim();
+                  const origAfter = origHtml.slice(markerMatch.index + markerMatch[0].length).trim();
+                  if (flowPart === 'before') {
+                      const prefix = cleanHTML.trim();
+                      updated.text = `${prefix ? prefix + ' ' : ''}${gapToken}${origAfter ? ' ' + origAfter : ''}`.trim();
+                  } else if (flowPart === 'after') {
+                      const suffix = cleanHTML.trim();
+                      updated.text = `${origBefore ? origBefore + ' ' : ''}${gapToken}${suffix ? ' ' + suffix : ''}`.trim();
+                  }
+              } else {
+                  if (flowPart === 'before') {
+                      const prefix = cleanHTML.trim();
+                      updated.text = `${prefix ? prefix + ' ' : ''}${gapToken}`.trim();
+                  } else if (flowPart === 'after') {
+                      const suffix = cleanHTML.trim();
+                      updated.text = `${gapToken}${suffix ? ' ' + suffix : ''}`.trim();
+                  }
+              }
+              modified = true;
+          } else if (flowStepIdx >= 0 && (qx.id === qId || qx === targetQ)) {
+              updated.flowStepOverrides = { ...(qx.flowStepOverrides || {}), [flowStepIdx]: cleanHTML };
+              if (Array.isArray(qx.flowSteps) && qx.flowSteps[flowStepIdx]) {
+                  updated.flowSteps = qx.flowSteps.map((st: any, idx: number) =>
+                      idx === flowStepIdx ? { ...st, html: cleanHTML } : st
+                  );
+              }
+              modified = true;
           } else if (field === 'options' && optIndex !== null && optIndex !== undefined) {
               if (qx.id === qId || (isSharedOptionsType && qx.type === targetQ?.type && JSON.stringify(qx.options) === oldOptsStr)) {
                   const newOpts = [...(qx.options || [])];
@@ -20244,8 +20284,10 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           )}
                           {stepsToRender.map((step, flowIdx) => {
                               const q = step.q;
+                              const firstQ: any = group.questions[0] || {};
                               if (!q) {
-                                  const stepCleanHtml = String(step.html || "")
+                                  const stepOverride = (firstQ.flowStepOverrides || {})[flowIdx];
+                                  const stepCleanHtml = String(stepOverride || step.html || "")
                                       .replace(/<br\s*\/?>/gi, " ")
                                       .replace(/<\/?(?:div|p)\b[^>]*>/gi, " ")
                                       .replace(/&nbsp;/gi, " ")
@@ -20254,7 +20296,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                   return (
                                       <React.Fragment key={`flow-step-${flowIdx}`}>
                                           <div className="idp-flowchart-node">
-                                              <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="context" dataQid={group.questions[0]?.id} html={renderSafeHTML(stepCleanHtml)} />
+                                              <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField={`flowStep:${flowIdx}`} dataQid={firstQ.id} html={renderSafeHTML(stepCleanHtml)} />
                                           </div>
                                           {flowIdx < stepsToRender.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                       </React.Fragment>
@@ -20273,15 +20315,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                               const flowMarker = flowHtml.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/);
                               const rawText = flowHtml;
                               const blankMatch = flowMarker || rawText.match(/_{2,}|\.{4,}|…+/);
-                              const hasFlowGap = Boolean(blankMatch);
-                              const flowNumber = flowMarker?.[1] || String(qGlobalIdx);
+                              const hasFlowGap = true;
+                              const flowNumber = flowMarker?.[1] || String(q.questionNumber || qGlobalIdx);
                               const beforeText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(0, blankMatch.index) : flowHtml).trim();
                               const afterText = (blankMatch && blankMatch.index !== undefined ? flowHtml.slice(blankMatch.index + blankMatch[0].length) : "").trim();
                               const isAnsweredFlow = examAnswers[q.id] !== undefined && examAnswers[q.id] !== "";
                               return (
                                   <React.Fragment key={q.id}>
                                       <div id={`question-${q.id}`} className="idp-flowchart-node">
-                                           {beforeText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(beforeText)} />}
+                                           {beforeText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField={`flowText:${q.id}:before`} dataQid={q.id} html={renderSafeHTML(beforeText)} />}
                                            {beforeText && " "}
                                            {hasFlowGap && (isDragFlow ? <span
                                               className={`idp-dropzone ${isAnsweredFlow ? 'filled' : ''} ${examCurrentQId === q.id ? 'idp-current-gap' : ''}`}
@@ -20315,7 +20357,7 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                                               style={{ minWidth: 90 }}
                                            />)}
                                            {afterText && " "}
-                                           {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField="text" dataQid={q.id} html={renderSafeHTML(afterText)} />}
+                                           {afterText && <StaticHtmlBlock tagName="span" className="highlightable-content idp-flowchart-text" dataField={`flowText:${q.id}:after`} dataQid={q.id} html={renderSafeHTML(afterText)} />}
                                       </div>
                                       {flowIdx < stepsToRender.length - 1 && <div className="idp-flowchart-arrow">↓</div>}
                                   </React.Fragment>
@@ -21258,10 +21300,17 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                          const srcQ = (activeExam?.questions || []).find((x: any) => x.id === n.qid);
                          const diagramField = /^diagramTextBoxes:([^:]+)(?::(\d+))?$/.exec(n.field);
                          const diagramBoxText = diagramField ? String(((srcQ as any)?.diagramTextBoxes || []).find((box: any) => String(box?.id || '') === diagramField[1])?.text || '') : '';
+                         const flowField = /^flowText:([^:]+):(before|after)$/.exec(n.field);
+                         const flowQText = flowField ? String(srcQ?.text || '') : '';
+                         const flowMarkerMatch = flowField ? (flowQText.match(/\[(\d+)\](?:\s*(?:_{2,}|\.{3,}|…+))?/) || flowQText.match(/_{2,}|\.{4,}|…+/)) : null;
+                         const flowPartText = flowField && flowMarkerMatch && flowMarkerMatch.index !== undefined
+                             ? (flowField[2] === 'before' ? flowQText.slice(0, flowMarkerMatch.index).trim() : flowQText.slice(flowMarkerMatch.index + flowMarkerMatch[0].length).trim())
+                             : flowQText;
                          const src = n.field === 'passage'
                              ? (secList ? (secList[n.secIdx]?.passage || '') : (activeExam?.passage || ''))
                              : (diagramField ? (diagramField[2] === undefined ? diagramBoxText : (diagramBoxText.split(/(\[\d+\])/g)[Number(diagramField[2])] || ''))
-                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || '')));
+                             : (flowField ? flowPartText
+                             : (n.field === 'options' ? String(((srcQ as any)?.options || [])[n.optIndex!] || '') : String((srcQ as any)?.[n.field] || ''))));
                          if (!src) return;
                          _tmp.innerHTML = annotationHTML(src);
                          const spans = n.noteId

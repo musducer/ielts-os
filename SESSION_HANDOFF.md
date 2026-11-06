@@ -1,4 +1,28 @@
-# IELTS OS — Session Handoff (cập nhật 2026-11-04)
+# IELTS OS — Session Handoff (cập nhật 2026-11-06)
+
+## Sửa Lỗi Highlight Mất Ô Input Điền Đáp Án Dạng Flow-chart — 2026-11-06
+
+- **Hiện tượng lỗi**:
+  - Khi học viên quét highlight hoặc ghi chú (Note) vào câu văn của dạng bài Flow-chart (ví dụ highlight cụm từ "focused on how the" ở Câu 1), ô input điền đáp án `[ 1 ]` biến mất hoàn toàn khỏi giao diện, đồng thời toàn bộ đoạn văn sau gap cũng bị xóa sổ.
+- **Nguyên nhân cốt lõi**:
+  1. Trong `renderFlowChart` (`ACTIVE_EXAM.txt`), câu hỏi flowchart được tách thành 3 phần: `beforeText`, `{hasFlowGap && <input ...>}`, và `afterText`. Cả hai khối `beforeText` và `afterText` đều được bọc riêng biệt trong `<StaticHtmlBlock className="highlightable-content" dataField="text" dataQid={q.id}>`.
+  2. Khi học sinh quét highlight trong `beforeText`, container highlight chỉ bao gồm `beforeText` (không chứa thẻ `<input>` hay `afterText`). Khi lưu highlight, hàm `serializeHighlightHTML(container)` chỉ tuần tự hóa `beforeText` kèm thẻ `<span class="student-highlight">`.
+  3. Hàm `syncHighlightState` nhận `field="text"` và `qId=q.id`, nên đã gán đè `updated.text = cleanHTML`, làm mất vĩnh viễn marker gap `[1]` và toàn bộ `afterText` khỏi `q.text`.
+  4. Ở các lần render tiếp theo, `flowMarker` và `blankMatch` không còn tìm thấy gap nào (`hasFlowGap = false`), khiến khối input `{hasFlowGap && <input ...>}` không render, dẫn đến mất trắng ô nhập.
+- **Giải pháp xử lý triệt để**:
+  1. **Định danh phân đoạn (Segmented Data Fields)**:
+     - Gán `dataField={`flowText:${q.id}:before`}` cho đoạn văn bản trước gap.
+     - Gán `dataField={`flowText:${q.id}:after`}` cho đoạn văn bản sau gap.
+     - Gán `dataField={`flowStep:${flowIdx}`}` cho các bước không có câu hỏi (`!q`).
+  2. **Hợp nhất phân đoạn an toàn trong `syncHighlightState` (`App.template.tsx`)**:
+     - Bổ sung bộ phân giải `flowTextMatch = /^flowText:([^:]+):(before|after)$/`.
+     - Khi nhận highlight ở `before`: giữ nguyên marker gap `[qNum]` và toàn bộ `origAfter`, chỉ cập nhật đoạn text trước gap với `cleanHTML`.
+     - Khi nhận highlight ở `after`: giữ nguyên toàn bộ `origBefore` và marker gap `[qNum]`, chỉ cập nhật đoạn text sau gap với `cleanHTML`.
+     - Hỗ trợ xóa highlight và Note panel (`mutateNote`) tương ứng.
+  3. **Lưới bảo vệ gap (Guaranteed Gap Presence Guard)**:
+     - Trong `renderFlowChart`, đặt `hasFlowGap = true` cho mọi bước có `q`. Nếu vì bất kỳ lý do gì mà marker gap bị thiếu trong `q.text`, ô nhập vẫn luôn được render ở cuối `beforeText` với placeholder `${flowNumber}`, đảm bảo thí sinh luôn có ô nhập để làm bài.
+  4. **Kiểm thử tự động**:
+     - Thêm unit test `tests/test_flowchart_highlight_sync.py` kiểm tra toàn bộ luồng tái cấu trúc chuỗi, bảo toàn marker `[1]`, và bảo toàn đa tầng highlight trước/sau gap.
 
 ## Sửa Lỗi Xuống Dòng Gap Flow-chart & Thêm Giao Diện Tự Động Cho Diagram Labelling — 2026-11-04
 
