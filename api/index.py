@@ -1820,9 +1820,13 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     # Chia sẻ options cho các câu trong nhóm
     shared_options = []
     for q in questions_in_block:
-        if q["options"]: shared_options = q["options"]
-        elif shared_options and q["type"] in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG", "DRAG_DROP"]:
-            q["options"] = shared_options.copy()
+        if q.get("options"):
+            shared_options = q["options"]
+            break
+    if shared_options:
+        for q in questions_in_block:
+            if not q.get("options") and q.get("type") in ["CHOICE", "CHOICE_MULTIPLE", "MATCHING", "DRAG", "DRAG_DROP"]:
+                q["options"] = shared_options.copy()
     
     has_reuse_tag = any(re.search(r'\[REUSE(?:_OPTIONS)?\]', tl, re.IGNORECASE) for tl in text_lines)
     instruction_full = accumulated_instruction + " " + group_context
@@ -1833,14 +1837,22 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
     allow_block_reuse = has_reuse_tag or instruction_allows_reuse or has_duplicate_answers or more_questions_than_options
 
     for q in questions_in_block:
-        lower_txt = (q['instruction'] + q['text']).lower()
+        clean_ins_txt = re.sub(r'<[^>]+>', ' ', q.get('instruction') or '')
+        lower_ins = clean_ins_txt.lower()
+        lower_txt = (clean_ins_txt + " " + (q.get('text') or '')).lower()
         sub_t = "SENTENCE"
-        if ("map" in lower_txt or "plan" in lower_txt) and "label" in lower_txt: sub_t = "MAP_LABELLING"
-        elif "flow-chart" in lower_txt or "flowchart" in lower_txt: sub_t = "FLOWCHART"
-        elif "table" in lower_txt: sub_t = "TABLE"
-        elif "form" in lower_txt: sub_t = "FORM"
-        elif "summary" in lower_txt: sub_t = "SUMMARY"
-        elif "note" in lower_txt: sub_t = "NOTES"
+        if re.search(r'\b(maps?|plans?)\b', lower_txt) and "label" in lower_txt:
+            sub_t = "MAP_LABELLING"
+        elif re.search(r'\bflow-?charts?\b', lower_txt):
+            sub_t = "FLOWCHART"
+        elif re.search(r'\btables?\b', lower_ins) or (re.search(r'\btables?\b', lower_txt) and "<table" in (q.get("groupContext") or "").lower()):
+            sub_t = "TABLE"
+        elif re.search(r'\bforms?\b', lower_ins):
+            sub_t = "FORM"
+        elif re.search(r'\bsummar(?:y|ies)\b', lower_ins):
+            sub_t = "SUMMARY"
+        elif re.search(r'\bnotes?\b', lower_ins):
+            sub_t = "NOTES"
         if q["type"] in ("DRAG", "DRAG_DROP"):
             # Summary drag has numbered placeholders embedded in a continuous
             # context. Independent numbered rows are the Listening two-column
@@ -1875,7 +1887,14 @@ def process_block(block_type: str, lines: List[Any], target_questions: List[Dict
         if is_sentence_ending_drag:
             sub_t = "SENTENCE_ENDING_DRAG"
             q["options"] = [clean_option_answer_text(opt) for opt in (q["options"] or [])]
-        if is_tfng or is_ynng: output_type = "CHOICE"
+        elif output_type == "MATCHING":
+            opts_clean = [re.sub(r'^[A-Z][.)]\s+', '', re.sub(r'<[^>]+>', '', str(o)).strip().upper()) for o in (q.get("options") or [])]
+            letter_only = bool(opts_clean and all(re.match(r'^(paragraph|section)?\s*[A-I]$', o, re.I) for o in opts_clean))
+            if re.search(r'which paragraph|which section|paragraph contains', lower_ins) or letter_only:
+                sub_t = "MATCHING_INFO"
+            else:
+                sub_t = "MATCHING_FEATURES"
+        if is_tfng or is_ynng: output_type = "CHOICE" 
         # SYNC FRONTEND: Short answer = điền từ -> render như Inline Blank để FE có ô nhập
         if output_type == "SHORT_ANSWER": output_type = "BLANK"
         if q["type"] == "DRAG":

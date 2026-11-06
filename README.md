@@ -1,5 +1,12 @@
 # IELTS OS
 
+## Tái Cấu Trúc Khối Matching Features Trong Review Quiz — 2026-11-06
+
+- **Khắc phục lỗi Matching Features bị vỡ khối, cồng kềnh trong Review Quiz**:
+  - Sửa lỗi DOCX Parser nhận diện nhầm từ `"notable"` thành `"NOTES"`, chuẩn hoá nhận diện ranh giới từ (`\bnotes?\b`, `\btables?\b`, `\bforms?\b`) và gán chuẩn xác `MATCHING_FEATURES`.
+  - Nâng cấp thuật toán gom nhóm `rvContiguousGroups` trong Review Quiz dựa trên dấu vân tay options và loại câu hỏi, đảm bảo các câu hỏi trong cùng một bài Matching Features (ví dụ Câu 34-37) luôn được gom vào một khối duy nhất.
+  - Thiết kế giao diện Review tinh gọn mới cho Matching Features: hợp nhất tiêu đề, chỉ dẫn và bảng chú giải ("LIST OF STUDIES") vào 1 card duy nhất; các câu hỏi được xếp thành từng hàng tinh gọn với ô hiển thị kết quả và ngăn kéo giải thích mở rộng ngay tại chỗ, tiết kiệm tối đa diện tích hiển thị và chấm dứt hiện tượng lặp lại bảng chú giải.
+
 ## Sửa Lỗi Highlight Mất Ô Input Điền Đáp Án Dạng Flow-chart — 2026-11-06
 
 - **Khắc phục triệt để lỗi mất ô input khi quét highlight/note câu hỏi Flow-chart**:

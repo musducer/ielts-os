@@ -1,5 +1,38 @@
 # IELTS OS — Session Handoff (cập nhật 2026-11-06)
 
+## Tái Cấu Trúc Khối Matching Features Trong Review — Chống Tách Khối & Tối Ưu Gọn Gàng — 2026-11-06
+
+- **Hiện tượng lỗi**:
+  - Dạng bài Matching Features (ví dụ Questions 34-37 kèm "LIST OF STUDIES") trong Review Quiz bị phân rã ("tách khối") thành 3 cụm riêng biệt: Câu 34-35 (khối 1), Câu 36 (khối 2), Câu 37 (khối 3). Bảng chú giải "LIST OF STUDIES" bị lặp lại 3 lần.
+  - Mỗi câu hỏi hiển thị dưới dạng một thẻ card rời rạc, khổng lồ (`.rv-q-card`) với khoảng cách lớn, khiến giao diện cực kỳ cồng kềnh, người dùng phải cuộn trang liên tục.
+- **Nguyên nhân cốt lõi**:
+  1. *Đột biến subType do so khớp chuỗi con (`api/index.py`)*:
+     - Trong `api/index.py`, logic phân loại câu hỏi sử dụng so khớp chuỗi con `elif "note" in lower_txt: sub_t = "NOTES"`. Câu 36 chứa từ `"notable"` ("...had a notable effect..."), kích hoạt nhầm `"note"`, khiến Câu 36 bị gán `subType = "NOTES"`, trong khi các câu 34, 35, 37 có `subType = "SENTENCE"`.
+  2. *Gom nhóm contiguous quá chặt trong Review Quiz (`REVIEW_QUIZ.txt`)*:
+     - Logic `sameType` trong `rvContiguousGroups` yêu cầu `prevQ.subType === qSub`. Do Câu 36 có `subType = "NOTES"`, thuật toán đã ngắt khối giữa 35 và 36, rồi lại ngắt tiếp giữa 36 và 37.
+  3. *Thiếu bố cục gom nhóm chuyên biệt cho Matching Features*:
+     - Nhánh render rơi vào Section 5 chuẩn thẻ đơn (`.rv-q-card`). Bảng "LIST OF STUDIES" được in ở thẻ tiêu đề nhóm của từng mẩu bị vỡ, và mỗi câu hỏi bên dưới được dựng thành 1 card riêng biệt to đùng.
+- **Giải pháp xử lý triệt để**:
+  1. **Khắc phục lỗi phân loại DOCX Parser (`api/index.py`)**:
+     - Thay thế toàn bộ substring matching bằng regex có ranh giới từ nguyên vẹn: `\bnotes?\b`, `\btables?\b`, `\bforms?\b`, `\bsummar(?:y|ies)\b`. Từ `"notable"` sẽ không bao giờ kích hoạt nhãn `"NOTES"`.
+     - Với câu hỏi `MATCHING`: tự động nhận diện và gán chuẩn xác `subType = "MATCHING_FEATURES"` (hoặc `"MATCHING_INFO"` nếu là dạng paragraph information), đảm bảo toàn bộ các câu trong bài nối tiếp nhau có chung phân loại.
+     - Chia sẻ `options` an toàn: duyệt toàn bộ `questions_in_block` để trích xuất danh sách options chung và gán cho mọi câu hỏi trong block.
+  2. **Gom nhóm bền vững trong Review Quiz (`REVIEW_QUIZ.txt`)**:
+     - Nâng cấp `rvContiguousGroups`: cho phép hai câu hỏi `MATCHING` kế tiếp luôn thuộc cùng một nhóm (`isBothMatching = prevType === "MATCHING" && qType === "MATCHING"`).
+     - Bổ sung nhận diện dấu vân tay options (`sameSharedOptions = curGrpOptFp === qOptFp`): nếu chia sẻ chung danh sách options/bảng chú giải, các câu hỏi luôn được gom vào một nhóm duy nhất bất kể nhãn phụ.
+     - Chuẩn hóa so sánh instruction và context (`normStr`), chống ngắt khối do sai lệch khoảng trắng hoặc thẻ HTML.
+  3. **Thiết kế khối giao diện Gom nhóm Tinh gọn (Unified Compact Group Card)**:
+     - Dạng bài `isMatchingWithLegend` (Matching Features, Sentence Ending Drag, Column Drag) được render thành **1 thẻ nhóm duy nhất**:
+       - Tiêu đề dải câu hỏi (`Questions 34–37`) + Instruction chuẩn.
+       - Bảng chú giải (`LIST OF STUDIES` hoặc `List of Options`) hiển thị **đúng 1 lần duy nhất**, căn chỉnh padding tinh tế (`6px 10px`).
+       - Danh sách câu hỏi hiển thị dạng hàng tinh gọn (`.rv-matching-q-row`) ngay bên dưới bảng:
+         - Bên trái: Badge số thứ tự (`[34]`) + Nội dung câu khẳng định/stem.
+         - Bên phải: Slot pill đáp án (`[Bạn: B (sai)] → [C]`) tích hợp cụm micro-buttons (`[? Hint]`, `[@ Giải thích]`, `[AI Expl]`).
+         - Khi click xem giải thích, ngăn kéo (`rvRenderInlineDrawer`) mở rộng mượt mà ngay trong hàng câu hỏi đó.
+     - Hỗ trợ đầy đủ bộ lọc câu sai (`rvFilterWrongOnly`), chế độ làm lại (`rvRetryMode`), và click nhảy câu hỏi từ palette dưới chân trang (`q-row-${qNum}`).
+  4. **Kiểm thử tự động**:
+     - Thêm unit test `tests/test_matching_features_grouping.py` kiểm tra từ khoá "notable" không gây đột biến subType và mô phỏng thuật toán gom nhóm không bao giờ bị tách khối.
+
 ## Sửa Lỗi Highlight Mất Ô Input Điền Đáp Án Dạng Flow-chart — 2026-11-06
 
 - **Hiện tượng lỗi**:

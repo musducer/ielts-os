@@ -2504,7 +2504,7 @@
                   }
                   .rv-matching-legend-table th, .rv-matching-legend-table td {
                       border: 1px solid var(--rv-border);
-                      padding: 7px 11px;
+                      padding: 6px 10px;
                       text-align: left;
                       vertical-align: top;
                       line-height: 1.45;
@@ -2516,6 +2516,48 @@
                       font-family: 'JetBrains Mono', monospace;
                       font-weight: 800;
                       color: #92400E;
+                  }
+                  /* Compact Matching Features Rows */
+                  .rv-matching-q-list {
+                      display: flex;
+                      flex-direction: column;
+                      gap: 8px;
+                      margin-top: 12px;
+                  }
+                  .rv-matching-q-row {
+                      background: var(--rv-surface, #FFFFFF);
+                      border: 1px solid var(--rv-border, #E6DFD3);
+                      border-radius: 8px;
+                      padding: 10px 14px;
+                      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+                  }
+                  .rv-matching-q-row:hover {
+                      border-color: #D4CBB8;
+                  }
+                  .rv-matching-q-row.rv-flash-ring {
+                      animation: rvFlashPulse 1.8s ease-out;
+                  }
+                  .rv-matching-q-main {
+                      display: flex;
+                      align-items: center;
+                      justify-content: space-between;
+                      gap: 14px;
+                      flex-wrap: wrap;
+                  }
+                  .rv-matching-q-stem {
+                      display: flex;
+                      align-items: baseline;
+                      gap: 10px;
+                      flex: 1 1 300px;
+                      font-size: 14px;
+                      line-height: 1.5;
+                      color: var(--rv-ink, #1C1917);
+                  }
+                  .rv-matching-q-meta {
+                      flex-shrink: 0;
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
                   }
                   .rv-word-bank {
                       background: var(--rv-bg);
@@ -3673,10 +3715,39 @@
                                       const qType = String(q.type || "");
                                       const qSub = String(q.subType || "");
                                       const prevQ = curGrp?.questions[curGrp.questions.length - 1];
-                                      const sameType = Boolean(prevQ && String(prevQ.type || "") === qType && String(prevQ.subType || "") === qSub);
-                                      const sameCtx = !curGrp || ctx === "" || curGrp.context === ctx;
-                                      const sameIns = !curGrp || ins === curGrp.instruction || (ins === "" && curGrp.instruction !== "");
-                                      if (!curGrp || !sameType || !sameCtx || !sameIns) {
+                                      const prevType = String(prevQ?.type || "");
+                                      const prevSub = String(prevQ?.subType || "");
+
+                                      const getOptFp = (opts: any[]) => {
+                                          if (!Array.isArray(opts) || opts.length === 0) return "";
+                                          return opts.map((o: any) => cleanOptionAnswerText(o) || String(o || "")).join("|||").trim().toLowerCase();
+                                      };
+                                      const curGrpOptFp = curGrp ? getOptFp(curGrp.options) : "";
+                                      const qOptFp = getOptFp(q.options);
+                                      const sameSharedOptions = Boolean(curGrpOptFp && qOptFp && curGrpOptFp === qOptFp);
+
+                                      const isBothMatching = prevType === "MATCHING" && qType === "MATCHING";
+                                      const isBothDragMatching = (prevType === "MATCHING" || prevType === "DRAG_DROP") && (qType === "MATCHING" || qType === "DRAG_DROP") && sameSharedOptions;
+                                      const sameType = Boolean(
+                                          prevQ && (
+                                              isBothMatching
+                                              || isBothDragMatching
+                                              || (prevType === qType && (prevSub === qSub || sameSharedOptions))
+                                          )
+                                      );
+
+                                      const normStr = (s: string) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+                                      const curGrpInsNorm = curGrp ? normStr(curGrp.instruction) : "";
+                                      const qInsNorm = normStr(ins);
+                                      const sameIns = !curGrp || !qInsNorm || !curGrpInsNorm || qInsNorm === curGrpInsNorm || sameSharedOptions;
+
+                                      const curGrpCtxNorm = curGrp ? normStr(curGrp.context) : "";
+                                      const qCtxNorm = normStr(ctx);
+                                      const sameCtx = !curGrp || !qCtxNorm || !curGrpCtxNorm || qCtxNorm === curGrpCtxNorm || sameSharedOptions;
+
+                                      const sameSection = !rvHasSections || !prevQ || rvSectionOf(prevQ) === rvSectionOf(q);
+
+                                      if (!curGrp || !sameSection || !sameType || !sameCtx || !sameIns) {
                                           curGrp = {
                                               groupId: `grp-${q.id}`,
                                               instruction: ins,
@@ -3969,116 +4040,191 @@
                                           );
                                       }
 
-                                      // 5. STANDARD & MATCHING / SENTENCE-ENDING / COLUMN-DRAG / MCQ / TFNG / SHORT ANSWER CARDS
-                                      const rvGroup = rvGroupByQuestionId.get(q.id);
-                                      if (!rvIsGroupedReviewQuestion(q) && groupedNumbers.has(String(rvQuestionNumber(q)))) return null;
-                                      if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
-
-                                      const qStatus = rvQuestionStatus(q);
-                                      if (rvFilterWrongOnly && qStatus === "correct") return null;
-
                                       const cGrp = rvContiguousGroupByQId.get(q.id);
-                                      const ownOptions = Array.isArray(q.options) && q.options.length > 0 ? q.options : [];
-                                      const sharedGroupOptions = (cGrp?.options && cGrp.options.length > 0) ? cGrp.options : [];
-                                      const groupOptions = ownOptions.length > 0 ? ownOptions : sharedGroupOptions;
-                                      const qWithOpts = groupOptions.length > 0 && ownOptions.length === 0
-                                          ? { ...q, options: groupOptions }
-                                          : q;
+                                        const ownOptions = Array.isArray(q.options) && q.options.length > 0 ? q.options : [];
+                                        const sharedGroupOptions = (cGrp?.options && cGrp.options.length > 0) ? cGrp.options : [];
+                                        const groupOptions = ownOptions.length > 0 ? ownOptions : sharedGroupOptions;
+                                        const isMatchingWithLegend = Boolean(
+                                            cGrp && groupOptions.length > 0 && (
+                                                (q.type === "MATCHING" && !isMatchingInfoOptionSet(groupOptions))
+                                                || (q.type === "DRAG_DROP" && ["SENTENCE_ENDING_DRAG", "COLUMN_DRAG"].includes(String(q.subType || "").toUpperCase()))
+                                            )
+                                        );
 
-                                      const shouldRenderGroupHeader = Boolean(cGrp && !renderedGroupHeaderIds.has(cGrp.groupId));
-                                      if (cGrp && shouldRenderGroupHeader) {
-                                          renderedGroupHeaderIds.add(cGrp.groupId);
-                                      }
+                                        // 5. MATCHING FEATURES & SENTENCE-ENDING / COLUMN-DRAG (Compact Unified Group Card)
+                                        if (isMatchingWithLegend) {
+                                            const matchingQuestions = cGrp ? cGrp.questions : [q];
+                                            if (matchingQuestions[0]?.id !== q.id) return null;
+                                            if (rvFilterWrongOnly && matchingQuestions.every((mq: any) => rvQuestionStatus(mq) === "correct")) return null;
 
-                                      const qNum = rvQuestionNumber(q);
-                                      const isFlashed = rvFlashQuestionNum === qNum;
-                                      const showContext = Boolean(q.groupContext && q.groupContext !== currentContext && !/\[\d+\]/.test(String(q.groupContext)));
-                                      if (showContext) currentContext = String(q.groupContext);
+                                            if (cGrp) renderedGroupHeaderIds.add(cGrp.groupId);
 
-                                      const isMcq = q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE";
-                                      const isLegendGroup = Boolean(
-                                          groupOptions.length > 0 && (
-                                              (q.type === "MATCHING" && !isMatchingInfoOptionSet(groupOptions))
-                                              || (q.type === "DRAG_DROP" && ["SENTENCE_ENDING_DRAG", "COLUMN_DRAG"].includes(String(q.subType || "").toUpperCase()))
-                                          )
-                                      );
+                                            const grpFirstNum = rvQuestionNumber(matchingQuestions[0]);
+                                            const grpLastQ = matchingQuestions[matchingQuestions.length - 1];
+                                            const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
+                                            const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
+                                            const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
+                                            const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
 
-                                      const grpFirstNum = cGrp ? rvQuestionNumber(cGrp.questions[0]) : qNum;
-                                      const grpLastQ = cGrp ? cGrp.questions[cGrp.questions.length - 1] : q;
-                                      const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
-                                      const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
-                                      const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
-                                      const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+                                            const legendTitle = cGrp?.rightTitle
+                                                || String(q.rightTitle || "").trim()
+                                                || (String(q.subType || "").toUpperCase() === "SENTENCE_ENDING_DRAG"
+                                                    ? "List of Sentence Endings"
+                                                    : "List of Options / Legend");
 
-                                      const isMultiGroup = Boolean(rvGroup?.isChoiceMultiple || q.type === "CHOICE_MULTIPLE");
-                                       const multiOutcome = isMultiGroup ? (rvGroup?.multiple || getChoiceMultipleOutcome(rvGroup ? rvGroup.questions : [q], rvSubmittedAnswers)) : null;
-                                       const multiQNumLabel = (rvGroup && rvGroup.questions.length > 1)
-                                           ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}`
-                                           : String(qNum);
-                                       const studentAns = multiOutcome ? multiOutcome.selected : rvSubmittedAnswers?.[q.id];
-                                       const qGrouped = isMultiGroup ? {
-                                           ...qWithOpts,
-                                           type: "CHOICE_MULTIPLE",
-                                           correctAnswer: multiOutcome?.correct || q.correctAnswer,
-                                           qNumLabel: multiQNumLabel,
-                                           groupQuestions: rvGroup?.questions || [q],
-                                       } : qWithOpts;
-                                      const questionBodyHtml = rvQuestionBodyHtml(q.text);
-                                      const legendTitle = cGrp?.rightTitle
-                                          || String(q.rightTitle || "").trim()
-                                          || (String(q.subType || "").toUpperCase() === "SENTENCE_ENDING_DRAG"
-                                              ? "List of Sentence Endings"
-                                              : "List of Options / Legend");
+                                            return (
+                                                <section key={`matching-group-${q.id}`} className="rv-task-group-card" style={{ marginBottom: 14 }}>
+                                                    {!hasQuestionsHeadingInIns && (
+                                                        <div style={{ fontWeight: 800, fontSize: 14.5, color: "#1C1917", marginBottom: grpInstructionHtml ? 6 : 10 }}>
+                                                            {grpRangeTitle}
+                                                        </div>
+                                                    )}
+                                                    {grpInstructionHtml && (
+                                                        <div
+                                                            className="rv-task-instruction"
+                                                            style={{
+                                                                marginBottom: 10,
+                                                                paddingBottom: 10,
+                                                                borderBottom: "1px solid #E6DFD3",
+                                                            }}
+                                                            dangerouslySetInnerHTML={{ __html: formatContent(grpInstructionHtml) }}
+                                                        />
+                                                    )}
 
-                                      return (
-                                          <React.Fragment key={q.id}>
-                                              {shouldRenderGroupHeader && (grpInstructionHtml || !hasQuestionsHeadingInIns || isLegendGroup) && (
-                                                  <div className="rv-task-group-card" style={{ marginBottom: 12, padding: "14px 18px" }}>
-                                                      {!hasQuestionsHeadingInIns && (
-                                                          <div style={{ fontWeight: 800, fontSize: 14.5, color: "#1C1917", marginBottom: grpInstructionHtml ? 6 : (isLegendGroup ? 10 : 0) }}>
-                                                              {grpRangeTitle}
-                                                          </div>
-                                                      )}
-                                                      {grpInstructionHtml && (
-                                                          <div
-                                                              className="rv-task-instruction"
-                                                              style={{
-                                                                  marginBottom: isLegendGroup ? 12 : 0,
-                                                                  paddingBottom: isLegendGroup ? 12 : 0,
-                                                                  borderBottom: isLegendGroup ? "1px solid #E6DFD3" : "none",
-                                                              }}
-                                                              dangerouslySetInnerHTML={{ __html: formatContent(grpInstructionHtml) }}
-                                                          />
-                                                      )}
-                                                      {isLegendGroup && (
-                                                          <div className="rv-matching-legend">
-                                                              <div className="rv-matching-legend-title" dangerouslySetInnerHTML={{ __html: formatContent(legendTitle) }} />
-                                                              <table className="rv-matching-legend-table">
-                                                                  <tbody>
-                                                                      {groupOptions.map((opt: any, oIdx: number) => {
-                                                                          const letter = matchingOptionLabel(opt, oIdx);
-                                                                          const text = cleanOptionAnswerText(opt) || String(opt);
-                                                                          return (
-                                                                              <tr key={oIdx}>
-                                                                                  <th>{letter}</th>
-                                                                                  <td dangerouslySetInnerHTML={{ __html: formatContent(text) }} />
-                                                                              </tr>
-                                                                          );
-                                                                      })}
-                                                                  </tbody>
-                                                              </table>
-                                                          </div>
-                                                      )}
-                                                  </div>
-                                              )}
+                                                    {Boolean(q.groupContext && !/\[\d+\]/.test(String(q.groupContext))) && (
+                                                        <div className="rv-rich-context-block" style={{ marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
+                                                    )}
 
-                                              {showContext && (
-                                                  <div className="rv-task-group-card">
-                                                      <div className="rv-rich-context-block" dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
-                                                  </div>
-                                              )}
+                                                    <div className="rv-matching-legend" style={{ marginBottom: 12 }}>
+                                                        <div className="rv-matching-legend-title" dangerouslySetInnerHTML={{ __html: formatContent(legendTitle) }} />
+                                                        <table className="rv-matching-legend-table">
+                                                            <tbody>
+                                                                {groupOptions.map((opt: any, oIdx: number) => {
+                                                                    const letter = matchingOptionLabel(opt, oIdx);
+                                                                    const text = cleanOptionAnswerText(opt) || String(opt);
+                                                                    return (
+                                                                        <tr key={oIdx}>
+                                                                            <th>{letter}</th>
+                                                                            <td dangerouslySetInnerHTML={{ __html: formatContent(text) }} />
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
 
-                                              <div id={`q-row-${qNum}`} className={`rv-q-card ${isFlashed ? "rv-flash-ring" : ""}`}>
+                                                    <div className="rv-matching-q-list">
+                                                        {matchingQuestions.map((mq: any) => {
+                                                            const mqStatus = rvQuestionStatus(mq);
+                                                            if (rvFilterWrongOnly && mqStatus === "correct") return null;
+
+                                                            const mqNum = rvQuestionNumber(mq);
+                                                            const mqFlashed = rvFlashQuestionNum === mqNum;
+                                                            const mqWithOpts = groupOptions.length > 0 && (!mq.options || !mq.options.length)
+                                                                ? { ...mq, options: groupOptions }
+                                                                : mq;
+                                                            const mqStudentAns = rvSubmittedAnswers?.[mq.id];
+                                                            const mqBodyHtml = rvQuestionBodyHtml(mq.text);
+
+                                                            return (
+                                                                <div
+                                                                    key={mq.id}
+                                                                    id={`q-row-${mqNum}`}
+                                                                    className={`rv-matching-q-row ${mqFlashed ? "rv-flash-ring" : ""}`}
+                                                                >
+                                                                    <div className="rv-matching-q-main">
+                                                                        <div className="rv-matching-q-stem">
+                                                                            <span className="rv-qnum-badge">{mqNum}</span>
+                                                                            {mqBodyHtml ? (
+                                                                                <span dangerouslySetInnerHTML={{ __html: mqBodyHtml }} />
+                                                                            ) : (
+                                                                                <span>Question {mqNum}</span>
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="rv-matching-q-meta">
+                                                                            {rvRenderInlineSlotBox(mqWithOpts, false, false)}
+                                                                        </div>
+                                                                    </div>
+                                                                    {rvRenderInlineDrawer(mqWithOpts, mqStudentAns, mqWithOpts)}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </section>
+                                            );
+                                        }
+
+                                        // 6. STANDARD CARDS (MCQ / TFNG / MATCHING_INFO / SHORT ANSWER)
+                                        const rvGroup = rvGroupByQuestionId.get(q.id);
+                                        if (!rvIsGroupedReviewQuestion(q) && groupedNumbers.has(String(rvQuestionNumber(q)))) return null;
+                                        if (rvGroup?.isChoiceMultiple && rvGroup.questions[0]?.id !== q.id) return null;
+
+                                        const qStatus = rvQuestionStatus(q);
+                                        if (rvFilterWrongOnly && qStatus === "correct") return null;
+
+                                        const qWithOpts = groupOptions.length > 0 && ownOptions.length === 0
+                                            ? { ...q, options: groupOptions }
+                                            : q;
+
+                                        const shouldRenderGroupHeader = Boolean(cGrp && !renderedGroupHeaderIds.has(cGrp.groupId));
+                                        if (cGrp && shouldRenderGroupHeader) {
+                                            renderedGroupHeaderIds.add(cGrp.groupId);
+                                        }
+
+                                        const qNum = rvQuestionNumber(q);
+                                        const isFlashed = rvFlashQuestionNum === qNum;
+                                        const showContext = Boolean(q.groupContext && q.groupContext !== currentContext && !/\[\d+\]/.test(String(q.groupContext)));
+                                        if (showContext) currentContext = String(q.groupContext);
+
+                                        const isMcq = q.type === "CHOICE" || q.type === "CHOICE_MULTIPLE";
+
+                                        const grpFirstNum = cGrp ? rvQuestionNumber(cGrp.questions[0]) : qNum;
+                                        const grpLastQ = cGrp ? cGrp.questions[cGrp.questions.length - 1] : q;
+                                        const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
+                                        const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
+                                        const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
+                                        const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+
+                                        const isMultiGroup = Boolean(rvGroup?.isChoiceMultiple || q.type === "CHOICE_MULTIPLE");
+                                        const multiOutcome = isMultiGroup ? (rvGroup?.multiple || getChoiceMultipleOutcome(rvGroup ? rvGroup.questions : [q], rvSubmittedAnswers)) : null;
+                                        const multiQNumLabel = (rvGroup && rvGroup.questions.length > 1)
+                                            ? `${rvQuestionNumber(rvGroup.questions[0])}-${rvQuestionNumber(rvGroup.questions[rvGroup.questions.length - 1])}`
+                                            : String(qNum);
+                                        const studentAns = multiOutcome ? multiOutcome.selected : rvSubmittedAnswers?.[q.id];
+                                        const qGrouped = isMultiGroup ? {
+                                            ...qWithOpts,
+                                            type: "CHOICE_MULTIPLE",
+                                            correctAnswer: multiOutcome?.correct || q.correctAnswer,
+                                            qNumLabel: multiQNumLabel,
+                                            groupQuestions: rvGroup?.questions || [q],
+                                        } : qWithOpts;
+                                        const questionBodyHtml = rvQuestionBodyHtml(q.text);
+
+                                        return (
+                                            <React.Fragment key={q.id}>
+                                                {shouldRenderGroupHeader && (grpInstructionHtml || !hasQuestionsHeadingInIns) && (
+                                                    <div className="rv-task-group-card" style={{ marginBottom: 12, padding: "14px 18px" }}>
+                                                        {!hasQuestionsHeadingInIns && (
+                                                            <div style={{ fontWeight: 800, fontSize: 14.5, color: "#1C1917", marginBottom: grpInstructionHtml ? 6 : 0 }}>
+                                                                {grpRangeTitle}
+                                                            </div>
+                                                        )}
+                                                        {grpInstructionHtml && (
+                                                            <div
+                                                                className="rv-task-instruction"
+                                                                dangerouslySetInnerHTML={{ __html: formatContent(grpInstructionHtml) }}
+                                                            />
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {showContext && (
+                                                    <div className="rv-task-group-card">
+                                                        <div className="rv-rich-context-block" dangerouslySetInnerHTML={{ __html: formatContent(q.groupContext || "") }} />
+                                                    </div>
+                                                )}
+
+                                                <div id={`q-row-${qNum}`} className={`rv-q-card ${isFlashed ? "rv-flash-ring" : ""}`}>
                                                   <div className="rv-q-card-head">
                                                       <div className="rv-q-stem">
                                                           <span className="rv-qnum-badge" style={{ marginRight: 8 }}>
