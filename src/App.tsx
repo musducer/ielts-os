@@ -4052,6 +4052,41 @@ export default function IeltsSupremeOS() {
     };
   }, [currentUser?.uid, userRole]);
  
+  // Trích xuất các khối ảnh / media (img tag, IMAGE marker, raw url) để tránh bị mất khi highlight
+  const extractVisualMediaBlocks = (html?: string): Array<{ tag: string; url: string }> => {
+      if (!html) return [];
+      const items: Array<{ tag: string; url: string }> = [];
+      const imgMatches = html.match(/<img\b[^>]*>/gi) || [];
+      for (const tag of imgMatches) {
+          const srcMatch = tag.match(/src=["']([^"']+)["']/i);
+          const url = srcMatch ? srcMatch[1] : tag;
+          items.push({ tag, url });
+      }
+      const markerMatches = html.match(/(?:IMAGE|Url)\s*:\s*(https?:\/\/[^\s<>"'\)]+)/gi) || [];
+      for (const tag of markerMatches) {
+          const urlMatch = tag.match(/https?:\/\/[^\s<>"'\)]+/i);
+          const url = urlMatch ? urlMatch[0] : tag;
+          items.push({ tag: `<div>${tag}</div>`, url });
+      }
+      const rawUrls = html.match(/https?:\/\/[^\s<>"'\)]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s<>"'\)]*)?/gi) || [];
+      for (const url of rawUrls) {
+          if (!items.some(it => it.url.includes(url) || url.includes(it.url))) {
+              items.push({ tag: `<img src="${url}" />`, url });
+          }
+      }
+      return items;
+  };
+
+  const preserveVisualMedia = (cleanHtml: string, oldHtml?: string): string => {
+      if (!oldHtml) return cleanHtml;
+      const oldMedia = extractVisualMediaBlocks(oldHtml);
+      const missing = oldMedia.filter(it => !cleanHtml.includes(it.url)).map(it => it.tag);
+      if (missing.length > 0) {
+          return `${missing.join('\n')}\n${cleanHtml}`;
+      }
+      return cleanHtml;
+  };
+
   // BẢN CANONICAL DUY NHẤT (đã hợp nhất 2 bản trùng tên gây mất dấu quét):
   // 1. Có nhánh 'sections' (quét trong BÀI ĐỌC lưu vào sections[idx].passage — trước đây rơi vào hư không).
   // 2. Mọi cập nhật câu hỏi được MIRROR vào cả prev.questions LẪN prev.sections[].questions
@@ -4148,16 +4183,16 @@ export default function IeltsSupremeOS() {
                   modified = true;
               }
           } else if (qx.id === qId) {
-              updated[field] = cleanHTML;
+              updated[field] = field === 'text' ? preserveVisualMedia(cleanHTML, qx.text) : cleanHTML;
               modified = true;
           }
 
           if (field === 'groupContext' && oldCtx && qx.groupContext === oldCtx) {
-              updated.groupContext = cleanHTML;
+              updated.groupContext = preserveVisualMedia(cleanHTML, oldCtx);
               modified = true;
           }
           if (field === 'instruction' && (qx.id === qId || (oldIns && qx.instruction === oldIns))) {
-              updated.instruction = cleanHTML;
+              updated.instruction = preserveVisualMedia(cleanHTML, oldIns || qx.instruction);
               modified = true;
           }
 
@@ -7017,40 +7052,7 @@ const applyWorkspaceSnapshot = (snap: any) => {
     };
   }, [userRole]);
 
-  useEffect(() => {
-    const isProtectedExam = userRole === "STUDENT" && !!activeExam && !isPreview && !isPracticeQuiz(activeExam);
-    if (!isProtectedExam) return;
-    let consecutiveDimensionSignals = 0;
-    const recordDevToolsIncident = () => {
-      const now = Date.now();
-      if (now - securityIncidentRef.current < 12000) return;
-      securityIncidentRef.current = now;
-      setSecurityNotice("A security tool was detected. Your test has been paused and this event was recorded.");
-      setHardLocked(true);
-      setExamCheatCount(count => count + 1);
-      setSystemLogs(prev => [{
-        id: `security_${now}`,
-        errorType: "DEVTOOLS_OPENED",
-        message: "Student security guard detected a developer-tools signal during an exam.",
-        context: JSON.stringify({ quizId: activeExam.id, email: currentUser?.email || "Unknown" }),
-        timestamp: new Date().toLocaleString("vi-VN"),
-        email: currentUser?.email || "Unknown"
-      }, ...prev].slice(0, 50));
-    };
-    const inspectDimensions = () => {
-      const widthGap = Math.max(0, window.outerWidth - window.innerWidth);
-      const heightGap = Math.max(0, window.outerHeight - window.innerHeight);
-      if (widthGap > 180 || heightGap > 180) consecutiveDimensionSignals += 1;
-      else consecutiveDimensionSignals = 0;
-      if (consecutiveDimensionSignals >= 2) recordDevToolsIncident();
-    };
-    const timer = window.setInterval(inspectDimensions, 2000);
-    window.addEventListener("resize", inspectDimensions);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("resize", inspectDimensions);
-    };
-  }, [activeExam?.id, currentUser?.email, isPreview, userRole]);
+
 
   // FIX: Sync editingQuizRef với editingQuiz state
   useEffect(() => {
@@ -17175,6 +17177,13 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                   const rvContiguousGroupByQId = new Map<string, typeof rvContiguousGroups[0]>();
                                   rvContiguousGroups.forEach(g => g.questions.forEach(gq => rvContiguousGroupByQId.set(gq.id, g)));
                                   const renderedGroupHeaderIds = new Set<string>();
+                                   const cleanHeaderCheckText = (raw: string) =>
+                                       String(raw || "")
+                                           .replace(/<\/?(?:span|strong|b|em|i|u|mark|sup|sub|a|font)[^>]*>/gi, "")
+                                           .replace(/<[^>]+>/g, " ")
+                                           .replace(/&nbsp;/gi, " ")
+                                           .replace(/\s+/g, " ")
+                                           .trim();
 
                                   return rvActiveQuestions.map((q: any, i: number) => {
                                       if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
@@ -17463,7 +17472,8 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                             const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
                                             const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
                                             const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
-                                            const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+
+                                            const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(cleanHeaderCheckText(grpInstructionHtml));
 
                                             const legendTitle = cGrp?.rightTitle
                                                 || String(q.rightTitle || "").trim()
@@ -17582,7 +17592,7 @@ ${sessionRows ? `<div class="sec">Session logs</div><table><thead><tr><th>Date</
                                         const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
                                         const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
                                         const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
-                                        const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+                                        const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(cleanHeaderCheckText(grpInstructionHtml));
 
                                         const isMultiGroup = Boolean(rvGroup?.isChoiceMultiple || q.type === "CHOICE_MULTIPLE");
                                         const multiOutcome = isMultiGroup ? (rvGroup?.multiple || getChoiceMultipleOutcome(rvGroup ? rvGroup.questions : [q], rvSubmittedAnswers)) : null;
@@ -20100,7 +20110,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const sameContext = !tempGroup || ctx === "" || tempGroup.context === ctx;
                           // Instruction can appear only on the first question of a contiguous group.
                           // Keep following empty-instruction questions in that group so 29-34 stays together.
-                          const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "");
+                          const cleanInsForCompare = (s: string) => String(s || "").replace(/<span\s+class="student-(?:highlight|note-hl)"[^>]*>/gi, "").replace(/<\/span>/gi, "").trim();
+                          const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "") || (cleanInsForCompare(ins) === cleanInsForCompare(tempGroup.instruction));
                           const sameMap = !tempGroup || mapKey === tempGroup.mapKey;
                           if (!tempGroup || !sameContext || !sameInstruction || !sameMap) {
                               if (tempGroup) visibleGroups.push(tempGroup);
@@ -20376,8 +20387,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const groupTitle = firstGlobalIdx === lastGlobalIdx ? `Question ${firstGlobalIdx}` : `Questions ${firstGlobalIdx}–${lastGlobalIdx}`;
                   
                   // Kiểm tra xem backend đã parse title vào trong instruction/context chưa, nếu chưa thì render
-                  const hasHeaderInInstruction = (group.instruction || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
-                  const hasHeaderInContext = (group.context || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const cleanHeaderCheckText = (raw: string) =>
+                      String(raw || "")
+                          .replace(/<\/?(?:span|strong|b|em|i|u|mark|sup|sub|a|font)[^>]*>/gi, "")
+                          .replace(/<[^>]+>/g, " ")
+                          .replace(/&nbsp;/gi, " ")
+                          .replace(/\s+/g, " ")
+                          .trim();
+                  const hasHeaderInInstruction = cleanHeaderCheckText(displayInstruction || group.instruction).match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const hasHeaderInContext = cleanHeaderCheckText(group.context).match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
                   const shouldShowAutoHeader = !hasHeaderInInstruction && !hasHeaderInContext;
 
                     const renderFlowChart = () => {

@@ -3776,6 +3776,13 @@
                                   const rvContiguousGroupByQId = new Map<string, typeof rvContiguousGroups[0]>();
                                   rvContiguousGroups.forEach(g => g.questions.forEach(gq => rvContiguousGroupByQId.set(gq.id, g)));
                                   const renderedGroupHeaderIds = new Set<string>();
+                                   const cleanHeaderCheckText = (raw: string) =>
+                                       String(raw || "")
+                                           .replace(/<\/?(?:span|strong|b|em|i|u|mark|sup|sub|a|font)[^>]*>/gi, "")
+                                           .replace(/<[^>]+>/g, " ")
+                                           .replace(/&nbsp;/gi, " ")
+                                           .replace(/\s+/g, " ")
+                                           .trim();
 
                                   return rvActiveQuestions.map((q: any, i: number) => {
                                       if (rvHasSections && rvSectionOf(q) !== rvActiveIdx) return null;
@@ -4064,7 +4071,8 @@
                                             const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
                                             const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
                                             const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
-                                            const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+
+                                            const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(cleanHeaderCheckText(grpInstructionHtml));
 
                                             const legendTitle = cGrp?.rightTitle
                                                 || String(q.rightTitle || "").trim()
@@ -4183,7 +4191,7 @@
                                         const grpLastNum = rvQuestionNumber(grpLastQ) + (getQuestionPointCount(grpLastQ) || 1) - 1;
                                         const grpRangeTitle = grpFirstNum === grpLastNum ? `Question ${grpFirstNum}` : `Questions ${grpFirstNum}–${grpLastNum}`;
                                         const grpInstructionHtml = cGrp?.instruction || q.instruction || "";
-                                        const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(grpInstructionHtml);
+                                        const hasQuestionsHeadingInIns = /(?:Questions?|QUESTIONS?)\s*\d+/i.test(cleanHeaderCheckText(grpInstructionHtml));
 
                                         const isMultiGroup = Boolean(rvGroup?.isChoiceMultiple || q.type === "CHOICE_MULTIPLE");
                                         const multiOutcome = isMultiGroup ? (rvGroup?.multiple || getChoiceMultipleOutcome(rvGroup ? rvGroup.questions : [q], rvSubmittedAnswers)) : null;

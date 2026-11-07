@@ -1,5 +1,16 @@
 # IELTS OS
 
+## Bỏ Cảnh Báo DevTools Khi Zoom & Khắc Phục Lỗi Duplicate Header / Mất Ảnh Khi Highlight Nhóm Câu Hỏi — 2026-11-08
+
+- **Bỏ cảnh báo DevTools khi Zoom in / Zoom out**:
+  - Gỡ bỏ hoàn toàn logic kiểm tra chênh lệch kích thước màn hình cửa sổ (`inspectDimensions`). Thao tác phóng to / thu nhỏ trình duyệt bằng phím tắt (Ctrl + / Ctrl -) hoặc pinch-to-zoom trên touchpad/màn hình cảm ứng không còn bị hệ thống nhận diện nhầm là mở DevTools hay gian lận thi cử.
+  - Tiếp tục duy trì bảo mật phòng thi: chặn phím tắt F12, Ctrl+Shift+I/J/C và chặn menu chuột phải.
+- **Khắc phục lỗi nhân đôi tiêu đề (Duplicate Header) khi học sinh highlight text nhóm câu hỏi**:
+  - Sửa lỗi regex nhận diện tiêu đề bị vô hiệu khi có thẻ `<span class="student-highlight">` xen vào giữa các từ. Tự động bóc tách thẻ inline HTML trước khi kiểm tra tiêu đề nhóm câu hỏi trong cả bài thi trực tiếp (`ACTIVE_EXAM.txt`) và màn hình xem lại (`REVIEW_QUIZ.txt`).
+- **Khắc phục lỗi mất ảnh (Diagram/Map/Plan) khi học sinh highlight trong nhóm câu hỏi**:
+  - Tích hợp cơ chế bảo toàn media tự động (`preserveVisualMedia`) trong `syncHighlightState` (`src/App.template.tsx`). Khi học sinh quét highlight trong phần hướng dẫn hoặc ngữ cảnh có hình ảnh bị ẩn để render riêng ở cột visual, thẻ ảnh `<img>` và đường dẫn media được bảo toàn 100%, không bị chuỗi highlight mới ghi đè làm mất ảnh.
+
+
 ## Tái Cấu Trúc Khối Matching Features Trong Review Quiz — 2026-11-06
 
 - **Khắc phục lỗi Matching Features bị vỡ khối, cồng kềnh trong Review Quiz**:

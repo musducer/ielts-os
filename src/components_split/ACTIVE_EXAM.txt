@@ -1899,7 +1899,8 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                           const sameContext = !tempGroup || ctx === "" || tempGroup.context === ctx;
                           // Instruction can appear only on the first question of a contiguous group.
                           // Keep following empty-instruction questions in that group so 29-34 stays together.
-                          const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "");
+                          const cleanInsForCompare = (s: string) => String(s || "").replace(/<span\s+class="student-(?:highlight|note-hl)"[^>]*>/gi, "").replace(/<\/span>/gi, "").trim();
+                          const sameInstruction = !tempGroup || ins === tempGroup.instruction || (ins === "" && tempGroup.instruction !== "") || (cleanInsForCompare(ins) === cleanInsForCompare(tempGroup.instruction));
                           const sameMap = !tempGroup || mapKey === tempGroup.mapKey;
                           if (!tempGroup || !sameContext || !sameInstruction || !sameMap) {
                               if (tempGroup) visibleGroups.push(tempGroup);
@@ -2175,8 +2176,15 @@ if ((!effectiveOptions || effectiveOptions.length === 0)) {
                   const groupTitle = firstGlobalIdx === lastGlobalIdx ? `Question ${firstGlobalIdx}` : `Questions ${firstGlobalIdx}–${lastGlobalIdx}`;
                   
                   // Kiểm tra xem backend đã parse title vào trong instruction/context chưa, nếu chưa thì render
-                  const hasHeaderInInstruction = (group.instruction || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
-                  const hasHeaderInContext = (group.context || "").match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const cleanHeaderCheckText = (raw: string) =>
+                      String(raw || "")
+                          .replace(/<\/?(?:span|strong|b|em|i|u|mark|sup|sub|a|font)[^>]*>/gi, "")
+                          .replace(/<[^>]+>/g, " ")
+                          .replace(/&nbsp;/gi, " ")
+                          .replace(/\s+/g, " ")
+                          .trim();
+                  const hasHeaderInInstruction = cleanHeaderCheckText(displayInstruction || group.instruction).match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
+                  const hasHeaderInContext = cleanHeaderCheckText(group.context).match(/(?:Questions?|QUESTIONS?)\s*\d+(?:\s*(?:-|–|to)\s*\d+)?/i);
                   const shouldShowAutoHeader = !hasHeaderInInstruction && !hasHeaderInContext;
 
                     const renderFlowChart = () => {
